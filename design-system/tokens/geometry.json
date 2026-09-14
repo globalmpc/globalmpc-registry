@@ -1,0 +1,65 @@
+{
+  "$description": "A deliberately tight radius scale. The ceiling is 10px: the visual language is drawn with rules and hairlines.",
+  "radius": {
+    "radius-sm": {
+      "$value": "2px",
+      "$type": "dimension",
+      "$description": "Badges, tags, inline chips.",
+      "$extensions": {
+        "mpc.group": "geometry",
+        "mpc.use": {
+          "en": "Badges, tags, inline chips.",
+          "ko": "배지·태그·인라인 칩."
+        }
+      }
+    },
+    "radius-md": {
+      "$value": "4px",
+      "$type": "dimension",
+      "$description": "Buttons and inputs. The default.",
+      "$extensions": {
+        "mpc.group": "geometry",
+        "mpc.use": {
+          "en": "Buttons and inputs. The default.",
+          "ko": "버튼·입력 요소. 기본값."
+        }
+      }
+    },
+    "radius-lg": {
+      "$value": "6px",
+      "$type": "dimension",
+      "$description": "Cards and panels.",
+      "$extensions": {
+        "mpc.group": "geometry",
+        "mpc.use": {
+          "en": "Cards and panels.",
+          "ko": "카드·패널."
+        }
+      }
+    },
+    "radius-xl": {
+      "$value": "10px",
+      "$type": "dimension",
+      "$description": "Dialogs and sheets. The ceiling.",
+      "$extensions": {
+        "mpc.group": "geometry",
+        "mpc.use": {
+          "en": "Dialogs and sheets. The ceiling.",
+          "ko": "다이얼로그·시트. 상한값."
+        }
+      }
+    },
+    "radius": {
+      "$value": "4px",
+      "$type": "dimension",
+      "$description": "Base radius consumed by shadcn primitives.",
+      "$extensions": {
+        "mpc.group": "geometry",
+        "mpc.use": {
+          "en": "Base radius consumed by shadcn primitives.",
+          "ko": "shadcn 프리미티브가 참조하는 기준 라운드 값."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,109 @@
+# 최소 알림 규칙.
+#
+# **여기 있는 것이 전부라는 것이 의도다.** 규칙이 많으면 무시되고, 무시되는
+# 알림은 없는 것보다 나쁘다 — 있다고 믿게 만든다. 각 규칙은 "이것이 울리면
+# 사람이 지금 무엇을 하는가"에 답할 수 있어야 한다.
+
+groups:
+  - name: mpc-availability
+    rules:
+      # 수집 자체가 끊긴 것을 가장 먼저 안다. 아래 규칙들은 전부 데이터가
+      # 들어온다는 전제 위에 있고, 끊기면 전부 조용해진다.
+      - alert: MpcApiDown
+        expr: up{job="mpc-api"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "API 스크레이프가 2분간 실패했다"
+
+      # 게이지 조회가 실패하면 anchor·outbox·quarantine 값이 **갱신되지 않은 채**
+      # 남는다. 0으로 떨어지지 않으므로 다른 알림이 울리지 않고, 그것이 위험하다.
+      - alert: MpcGaugeScrapeFailing
+        expr: increase(mpc_gauge_scrape_failed_total[10m]) > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: "운영 게이지 조회가 실패하고 있다 — 아래 지표를 믿을 수 없다"
+
+  - name: mpc-public-surface
+    rules:
+      # 상한에 걸리는 비율. `http_requests_total`의 4xx로는 "상한"과 "잘못된
+      # 요청"이 구분되지 않아 따로 센다.
+      - alert: MpcRateLimitedShare
+        expr: |
+          sum(rate(mpc_rate_limited_total[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "요청의 5% 이상이 상한에 걸리고 있다"
+
+      # 로그인 실패율이 오르는 것은 오타가 아니라 자격증명 시도일 수 있다.
+      # SIWE는 서명 검증이므로 정상 사용에서 실패가 거의 없다.
+      - alert: MpcSiweFailureRate
+        expr: sum(rate(mpc_siwe_verify_failed_total[5m])) > 0.2
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "SIWE 검증 실패가 분당 12건을 넘는다"
+
+  - name: mpc-workers
+    rules:
+      # worker가 살아 있는가.
+      #
+      # 쌓인 행을 세는 아래 규칙들은 **큐가 비어 있으면 조용하다.** 업로드가 아직
+      # 없는 배포에서 `mpc_uploads_quarantined`는 0이고 그 0은 정상과 구분되지
+      # 않는다. worker가 스스로 남기는 신호는 큐와 무관하다.
+      - alert: MpcWorkerHeartbeatStale
+        expr: mpc_worker_seconds_since_heartbeat > 300
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.state }} worker가 5분 넘게 신호를 남기지 않았다"
+
+      # 한 번도 신호를 남기지 않은 worker는 **시계열 자체가 없다.** 없는 것을
+      # `> 0`으로 잡을 수 없으므로 `absent()`가 따로 필요하다.
+      - alert: MpcScanWorkerNeverSeen
+        expr: absent(mpc_worker_seconds_since_heartbeat{state="scan"})
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "검사 worker가 한 번도 보고하지 않았다 — 업로드가 quarantine에 갇힌다"
+
+  - name: mpc-anchor
+    rules:
+      # anchor 제출 실패. worker에 HTTP 표면을 만들지 않고 DB에서 센다 — 죽은
+      # worker는 자기 counter를 보고하지 않지만 쌓인 행은 그대로 보인다.
+      - alert: MpcAnchorSubmissionFailed
+        expr: |
+          sum(mpc_anchor_transactions{state=~"failed|reverted|reconciliation_required"}) > 0
+        for: 15m
+        labels: { severity: page }
+        annotations:
+          summary: "확정되지 못한 anchor 트랜잭션이 있다"
+
+      # 보내지 못한 알림. 앱 안에는 남아 있으므로 정보가 유실되지는 않지만,
+      # "보냈다고 믿는" 상태가 생긴다.
+      - alert: MpcNotificationDeliveryFailed
+        expr: sum(mpc_notification_deliveries{state="failed"}) > 0
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "재시도 상한에 닿아 굳은 알림 배달이 있다"
+
+      # 발행되지 않은 outbox. "사라진 것"과 "늦어진 것"을 구분하는 값이다.
+      - alert: MpcOutboxBacklog
+        expr: sum(mpc_outbox_pending) > 500
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "발행되지 않은 이벤트가 500건을 넘는다"
+
+      # `scan` 프로파일이 꺼진 배포에서는 업로드가 여기서 멈추고 증빙 골든
+      # 경로가 끝까지 돌지 않는다.
+      - alert: MpcUploadsStuckInQuarantine
+        expr: sum(mpc_uploads_quarantined) > 20
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: "quarantine에 머무는 업로드가 20건을 넘는다 — scan이 꺼져 있을 수 있다"

@@ -1,0 +1,238 @@
+# 로컬 전체 스택
+#
+# 이 파일은 **로컬·데모 전용**이다. prod 배포에 쓰지 않는다 — 리전과 키 소유권이
+# OD-17·OD-18로 미정이고, 여기 있는 자격증명은 전부 알려진 값이다.
+#
+# 시크릿을 환경변수 값이 아니라 `file:` 참조로 주는 것이 의도다. 배포 환경과 같은
+# 코드 경로를 지나야 "로컬에서는 되는데 배포에서 안 되는" 구간이 생기지 않는다.
+
+name: mpc-dapp
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mpc_dev
+    # 호스트에 이미 PostgreSQL이 떠 있을 수 있다. 다른 포트로 노출한다.
+    ports: ["55432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # S3 호환 저장소. 실제 배포에서는 관리형 S3를 쓰고 리전은 OD-17이 정한다.
+  minio:
+    # Docker Hub의 `minio/*`는 pull이 거부된다 — 공식 레지스트리(quay.io)에서 받는다.
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 버킷 생성. MinIO는 버킷을 자동으로 만들지 않는다.
+  minio-init:
+    image: quay.io/minio/mc:latest
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/mpc-evidence &&
+      echo 'bucket ready'
+      "
+
+  # 바이러스 검사. 시그니처 DB를 받느라 첫 기동이 몇 분 걸린다.
+  #
+  # 공식 `clamav/clamav`는 **amd64 전용**이라 Apple Silicon에서 에뮬레이션으로
+  # 돌았다. 느린 검사는 확인하지 않게 되고, 확인하지 않는 검사는 `scan`이
+  # 꺼진 배포와 구분되지 않는다. 그래서 Alpine 기반으로 직접 만든다 —
+  # `deploy/clamav/`. 로컬과 배포가 같은 이미지를 쓴다.
+  clamav:
+    build: ./deploy/clamav
+    healthcheck:
+      # Alpine 패키지에는 `clamdcheck.sh`가 없다. `--ping`이 같은 것을 본다 —
+      # clamd가 응답하는가. 시그니처 DB를 받는 동안에는 응답하지 않으므로
+      # `start_period` 안에서 계속 재시도한다.
+      test: ["CMD", "clamdscan", "--config-file=/etc/clamav/clamd.conf", "--ping", "1"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 300s
+
+  # 관측 — `--profile observability`로 켠다.
+  #
+  # 포트를 밖으로 열지 않는다. `/metrics`에 인증이 없으므로(대신 식별 정보를 담지
+  # 않는다) 경계는 네트워크가 만든다. 로컬에서 보려면 포트를 여기서 임시로 연다.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: ["observability"]
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    profiles: ["observability"]
+    volumes:
+      - ./deploy/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    # chain id를 스택 전체와 맞춘다. 다르면 API가 기록한 chain_id와 worker가
+    # 조회하는 체인이 어긋나 트랜잭션이 영원히 집히지 않는다.
+    entrypoint: ["anvil", "--host", "0.0.0.0", "--port", "8545", "--chain-id", "97", "--block-time", "1"]
+    ports: ["8545:8545"]
+
+  migrate:
+    build: &build
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/mpc_dev
+    command: ["pnpm", "--filter", "@mpc/db", "migrate"]
+
+  # login role 생성. SQL을 파일로 두는 이유: compose의 명령 문자열에 `$$`를 쓰면
+  # 셸이 PID로 치환해 PL/pgSQL 블록이 깨진다.
+  login-roles:
+    image: postgres:17-alpine
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./deploy/sql:/sql:ro
+    command: ["psql", "-h", "postgres", "-U", "postgres", "-d", "mpc_dev", "-v", "ON_ERROR_STOP=1", "-f", "/sql/login-roles.sql"]
+
+  api:
+    build: *build
+    depends_on:
+      postgres: { condition: service_healthy }
+      login-roles: { condition: service_completed_successfully }
+      minio-init: { condition: service_completed_successfully }
+    environment:
+      # 값이 아니라 참조다. 프로세스 환경·`docker inspect`에 비밀이 남지 않는다.
+      DATABASE_URL: file:/run/secrets/database_url
+      SESSION_SECRET: file:/run/secrets/session_secret
+      OBJECT_SECRET_ACCESS_KEY: file:/run/secrets/object_secret_key
+      PORT: "3001"
+      SIWE_DOMAIN: localhost:3000
+      SIWE_URI: http://localhost:3000
+      CHAIN_ID: "97"
+      NODE_ENV: development
+      OBJECT_STORE: s3
+      OBJECT_BUCKET: mpc-evidence
+      # 로컬 MinIO에는 리전 개념이 없다. 실제 배포의 리전은 OD-17이 정한다.
+      OBJECT_REGION: us-east-1
+      OBJECT_ENDPOINT: http://minio:9000
+      # 브라우저는 `minio`라는 호스트명을 풀지 못한다. 서명은 호스트를 포함하므로
+      # 서명 시점에 공개 주소를 써야 한다.
+      OBJECT_PUBLIC_ENDPOINT: http://localhost:9000
+      OBJECT_FORCE_PATH_STYLE: "true"
+      # MinIO는 KMS 없이 SSE 요청을 거절한다. 로컬 전용이며 production에서는
+      # loadConfig가 이 값을 막는다.
+      OBJECT_SSE: none
+      OBJECT_ACCESS_KEY_ID: minioadmin
+    secrets: [database_url, session_secret, object_secret_key]
+    ports: ["3001:3001"]
+    command: ["pnpm", "--filter", "@mpc/api", "start"]
+
+  anchor-worker:
+    build: *build
+    depends_on:
+      login-roles: { condition: service_completed_successfully }
+      anvil: { condition: service_started }
+    environment:
+      # worker는 여러 tenant를 가로지르므로 전용 role로 붙는다(0012).
+      DATABASE_URL: file:/run/secrets/worker_database_url
+      ANCHOR_SIGNER_PRIVATE_KEY: file:/run/secrets/anchor_signer_key
+      CHAIN_RPC_URL: http://anvil:8545
+      CHAIN_ID: "97"
+      ANCHOR_CONTRACT_ADDRESS: "${ANCHOR_CONTRACT_ADDRESS:-0x5FbDB2315678afecb367f032d93F642f64180aa3}"
+      ANCHOR_CONFIRMATIONS: "2"
+      ANCHOR_POLL_MS: "2000"
+      ANCHOR_RECHECK_MS: "5000"
+      # 로컬 anvil 전용 값이다. anvil 계정은 실자산을 갖지 않는다. 운영 값을
+      # 정하는 법은 `deploy/README.md`.
+      ANCHOR_DAILY_SPEND_CAP_WEI: "1000000000000000000"
+    secrets: [worker_database_url, anchor_signer_key]
+    command: ["pnpm", "--filter", "@mpc/worker", "start:anchor"]
+
+  # 검사 worker. 감염 파일의 바이트가 API 프로세스를 지나지 않게 분리한다.
+  scan-worker:
+    build: *build
+    depends_on:
+      login-roles: { condition: service_completed_successfully }
+      minio-init: { condition: service_completed_successfully }
+      clamav: { condition: service_healthy }
+    environment:
+      DATABASE_URL: file:/run/secrets/worker_database_url
+      OBJECT_SECRET_ACCESS_KEY: file:/run/secrets/object_secret_key
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      SCAN_POLL_MS: "3000"
+      # 결과는 API로 보고한다. worker도 사람과 같은 SIWE 경로를 지난다.
+      API_BASE_URL: http://api:3001
+      SCAN_SERVICE_PRIVATE_KEY: file:/run/secrets/scan_service_key
+      CHAIN_ID: "97"
+      SIWE_DOMAIN: localhost:3000
+      SIWE_URI: http://localhost:3000
+      # API와 **같은 저장소 설정**을 쓴다. 다르면 worker가 다른 버킷을 보게 되고
+      # 검사 대기가 쌓이는데 원인이 보이지 않는다.
+      OBJECT_STORE: s3
+      OBJECT_BUCKET: mpc-evidence
+      OBJECT_REGION: us-east-1
+      OBJECT_ENDPOINT: http://minio:9000
+      OBJECT_FORCE_PATH_STYLE: "true"
+      OBJECT_SSE: none
+      OBJECT_ACCESS_KEY_ID: minioadmin
+    secrets: [worker_database_url, object_secret_key, scan_service_key]
+    command: ["pnpm", "--filter", "@mpc/worker", "start:scan"]
+
+  web:
+    build: *build
+    depends_on:
+      api: { condition: service_started }
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      # 컨테이너 안에서 localhost는 자기 자신이다. 서비스 이름으로 부른다.
+      API_ORIGIN: http://api:3001
+    ports: ["3000:3000"]
+    command: ["pnpm", "--filter", "@mpc/web", "exec", "next", "start", "--port", "3000"]
+
+# 로컬 전용 값이다. 파일로 마운트하는 것 자체가 목적이며, 값에는 의미가 없다.
+secrets:
+  database_url:
+    file: ./deploy/local-secrets/database_url
+  worker_database_url:
+    file: ./deploy/local-secrets/worker_database_url
+  session_secret:
+    file: ./deploy/local-secrets/session_secret
+  object_secret_key:
+    file: ./deploy/local-secrets/object_secret_key
+  anchor_signer_key:
+    file: ./deploy/local-secrets/anchor_signer_key
+  scan_service_key:
+    file: ./deploy/local-secrets/scan_service_key
+
+volumes:
+  pgdata:
+  miniodata:

@@ -1,0 +1,69 @@
+{
+  "$description": "Three open-licensed faces, self-hosted via @fontsource. Fallbacks matter: they are what renders before the webfont resolves.",
+  "font": {
+    "font-sans": {
+      "$value": "\"Inter\", system-ui, sans-serif",
+      "$type": "fontFamily",
+      "$description": "Body copy and interface text. The document default.",
+      "$extensions": {
+        "mpc.group": "type",
+        "mpc.use": {
+          "en": "Body copy and interface text. The document default.",
+          "ko": "본문·인터페이스 텍스트. 문서 기본 서체."
+        },
+        "mpc.family": "Inter",
+        "mpc.weights": "400 · 500 · 600",
+        "mpc.license": "SIL Open Font License 1.1",
+        "mpc.role": {
+          "en": "Sans — body copy and interface text.",
+          "ko": "산세리프 — 본문과 인터페이스 텍스트."
+        },
+        "mpc.sample": "Institutional-grade real-world assets, on-chain."
+      }
+    },
+    "font-display": {
+      "$value": "\"Space Grotesk\", \"Inter\", sans-serif",
+      "$type": "fontFamily",
+      "$description": "Headlines and figures. Always with -0.02em tracking via .font-display.",
+      "$extensions": {
+        "mpc.group": "type",
+        "mpc.use": {
+          "en": "Headlines and figures. Always with -0.02em tracking via .font-display.",
+          "ko": "헤드라인·수치. 항상 .font-display를 통해 자간 -0.02em과 함께 사용합니다."
+        },
+        "mpc.note": {
+          "en": "Falls back to Inter, not a system serif — a headline that loses its webfont should still look like this site.",
+          "ko": "시스템 세리프가 아닌 Inter로 폴백합니다 — 웹폰트 로드에 실패한 헤드라인도 이 사이트처럼 보여야 하기 때문입니다."
+        },
+        "mpc.family": "Space Grotesk",
+        "mpc.weights": "400 · 500 · 600 · 700",
+        "mpc.license": "SIL Open Font License 1.1",
+        "mpc.role": {
+          "en": "Display — headlines, the wordmark, and figures.",
+          "ko": "디스플레이 — 헤드라인, 워드마크, 수치."
+        },
+        "mpc.sample": "Mining RWA Issuance Infrastructure"
+      }
+    },
+    "font-mono": {
+      "$value": "\"JetBrains Mono\", ui-monospace, monospace",
+      "$type": "fontFamily",
+      "$description": "Eyebrow labels and data. Never body copy.",
+      "$extensions": {
+        "mpc.group": "type",
+        "mpc.use": {
+          "en": "Eyebrow labels and data. Never body copy.",
+          "ko": "라벨과 데이터. 본문에는 쓰지 않습니다."
+        },
+        "mpc.family": "JetBrains Mono",
+        "mpc.weights": "400 · 500",
+        "mpc.license": "SIL Open Font License 1.1",
+        "mpc.role": {
+          "en": "Mono — eyebrow labels (11px, 0.18em tracking, uppercase) and data.",
+          "ko": "모노 — 라벨(11px, 자간 0.18em, 대문자)과 데이터."
+        },
+        "mpc.sample": "MINING RWA REGISTRY · BNB CHAIN · 2026"
+      }
+    }
+  }
+}

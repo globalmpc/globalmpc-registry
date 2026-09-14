@@ -1,0 +1,32 @@
+{
+  "name": "mpc-dapp",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --build --force --noEmit && pnpm --filter @mpc/web typecheck",
+    "build:openapi": "pnpm --filter @mpc/api-contract build",
+    "check:openapi": "pnpm build:openapi && git diff --exit-code -- packages/api-contract/openapi.json",
+    "check:contracts": "cd contracts && forge test",
+    "check:copy": "tsx scripts/lint-ui-copy.ts",
+    "check:brand": "tsx scripts/check-brand-assets.ts",
+    "check:counts": "tsx scripts/check-test-counts.ts",
+    "check:compose": "tsx scripts/check-compose.ts",
+    "check": "pnpm typecheck && pnpm test && pnpm check:openapi && pnpm check:copy && pnpm check:brand && pnpm check:counts && pnpm check:compose"
+  },
+  "devDependencies": {
+    "@mpc/api-contract": "workspace:*",
+    "@mpc/ui": "workspace:*",
+    "@types/node": "^22.13.0",
+    "fast-check": "^3.23.2",
+    "tsx": "^4.23.12",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

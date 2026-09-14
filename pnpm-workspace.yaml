@@ -1,0 +1,21 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+
+# 의존성 버전 고정 — supply-chain 정책(minimumReleaseAge) 때문이다.
+# 범위 지정으로 두면 설치 시점에 따라 정책을 통과하지 못하는 버전이 lockfile에
+# 들어가고, 로컬은 캐시로 통과하는데 clean install만 깨진다.
+# 올릴 때는 `npm view <pkg> time --json`으로 배포 시각을 확인한다.
+overrides:
+  viem: 2.55.13
+  "@smithy/core": 3.32.0
+  "@smithy/node-http-handler": 4.10.0
+  # next의 optional 의존이다. next를 올려도 lockfile이 옛 버전을 붙들 수 있어
+  # 여기서 고정한다 — GHSA-rgj7-g3m4-5g8c(libheif).
+  sharp: 0.35.4
+  # fastify → @fastify/ajv-compiler(직접)와 그 아래 ajv가 서로 다른 major를
+  # 끌어온다. 두 계열을 각각 고정해야 audit가 조용해진다 —
+  # GHSA-5jgf-p345-68v8 · GHSA-f65p-4m7j-42xc · GHSA-fph4-wmhf-6fwf · GHSA-jqff-g426-hqxp.
+  "fast-uri@^3.0.0": 3.1.6
+  "fast-uri@^4.0.0": 4.1.3
+

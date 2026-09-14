@@ -1,0 +1,38 @@
+{
+  "name": "@mpc/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000 --webpack",
+    "build": "next build --webpack",
+    "start": "next start --port 3000",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test:e2e": "playwright test",
+    "seed:e2e": "tsx e2e/seed-cli.ts"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/space-grotesk": "^5.3.0",
+    "@mpc/canonical": "workspace:*",
+    "@mpc/design": "link:../../design-system",
+    "@mpc/domain": "workspace:*",
+    "@mpc/ui": "workspace:*",
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@mpc/db": "workspace:*",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "postgres": "^3.4.5",
+    "tsx": "^4.23.12",
+    "typescript": "^5.7.3",
+    "viem": "^2.21.0"
+  }
+}

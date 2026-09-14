@@ -1,0 +1,356 @@
+{
+  "$description": "Stack-agnostic construction rules. What a project inherits when it adopts the MPC system, independent of framework.",
+  "groups": [
+    {
+      "id": "surface",
+      "title": {
+        "en": "Surfaces",
+        "ko": "표면"
+      },
+      "note": {
+        "en": "Four depths, near-black and cool. Depth is carried by lightness alone — the site has no elevation shadows.",
+        "ko": "차가운 near-black 계열의 네 단계. 깊이는 명도만으로 표현하며, 이 사이트에는 elevation 그림자가 없습니다."
+      }
+    },
+    {
+      "id": "brand",
+      "title": {
+        "en": "Brand & interactive",
+        "ko": "브랜드·인터랙션"
+      },
+      "note": {
+        "en": "Copper in its interface role: the accent a visitor can act on. Two near-identical values exist here for historical reasons — see the note on --primary.",
+        "ko": "인터페이스 역할의 구리색 — 사용자가 조작할 수 있는 요소의 강조색입니다. 거의 동일한 값 두 개가 역사적 이유로 공존합니다(--primary 비고 참조)."
+      }
+    },
+    {
+      "id": "support",
+      "title": {
+        "en": "Support pairs",
+        "ko": "보조 페어"
+      },
+      "note": {
+        "en": "Background/foreground pairs for secondary UI. Always used as a pair: a surface token without its -foreground partner is how contrast bugs start.",
+        "ko": "보조 UI용 배경/전경 쌍입니다. 반드시 쌍으로 사용합니다 — -foreground 짝 없이 배경 토큰만 쓰는 것이 대비 오류의 출발점입니다."
+      }
+    },
+    {
+      "id": "signal",
+      "title": {
+        "en": "Signal colours",
+        "ko": "시그널 색상"
+      },
+      "note": {
+        "en": "Each carries a fixed meaning. Reaching for one because it looks right is the misuse this group exists to prevent.",
+        "ko": "각각 고정된 의미를 가집니다. 보기 좋다는 이유로 선택하는 것이 이 그룹이 막으려는 오용입니다."
+      }
+    },
+    {
+      "id": "line",
+      "title": {
+        "en": "Lines & inputs",
+        "ko": "선·입력"
+      },
+      "note": {
+        "en": "White at low alpha rather than a solid grey, so a hairline reads consistently on all four surface depths without a per-surface variant.",
+        "ko": "단색 회색이 아닌 낮은 알파의 흰색입니다. 표면별 변형 없이 네 단계 표면 모두에서 헤어라인이 일관되게 보입니다."
+      }
+    },
+    {
+      "id": "geometry",
+      "title": {
+        "en": "Geometry",
+        "ko": "지오메트리"
+      },
+      "note": {
+        "en": "A deliberately tight radius scale. The largest value is 10px: the visual language is drawn with rules and hairlines, and rounded corners work against it.",
+        "ko": "의도적으로 좁은 라운드 스케일입니다. 최댓값이 10px인 이유는, 이 사이트의 시각 언어가 직선과 헤어라인으로 구성되어 있어 큰 라운드가 그것과 충돌하기 때문입니다."
+      }
+    },
+    {
+      "id": "type",
+      "title": {
+        "en": "Type stacks",
+        "ko": "타입 스택"
+      },
+      "note": {
+        "en": "Self-hosted via @fontsource — there is no fonts.googleapis.com request. The fallbacks matter: they are what renders before the webfont resolves.",
+        "ko": "@fontsource로 셀프 호스팅하며 fonts.googleapis.com 요청은 없습니다. 폴백은 웹폰트 로드 전에 실제로 렌더되는 서체이므로 중요합니다."
+      }
+    }
+  ],
+  "layers": [
+    {
+      "id": "shell",
+      "title": {
+        "en": "Shells",
+        "ko": "셸"
+      },
+      "rule": {
+        "en": "Own the LocaleProvider, the Nav/Footer frame, and section order. A route file should render a shell and nothing else.",
+        "ko": "LocaleProvider, Nav/Footer 프레임, 섹션 순서를 담당합니다. 라우트 파일은 셸 하나만 렌더하고 그 외에는 아무것도 하지 않습니다."
+      }
+    },
+    {
+      "id": "chrome",
+      "title": {
+        "en": "Chrome",
+        "ko": "크롬"
+      },
+      "rule": {
+        "en": "Rendered by every shell. Links come from one navigation registry, never from a local list.",
+        "ko": "모든 셸이 렌더합니다. 링크는 로컬 배열이 아니라 단일 내비게이션 레지스트리에서 가져옵니다."
+      }
+    },
+    {
+      "id": "section",
+      "title": {
+        "en": "Sections",
+        "ko": "섹션"
+      },
+      "rule": {
+        "en": "One argument each, opened by a `.label-eyebrow`. Carry `py-24 lg:py-32` and a hairline; do not set a custom container.",
+        "ko": "각각 하나의 논지를 담고 `.label-eyebrow`로 시작합니다. `py-24 lg:py-32`와 헤어라인을 유지하며 별도 컨테이너를 정의하지 않습니다."
+      }
+    },
+    {
+      "id": "figure",
+      "title": {
+        "en": "Figures",
+        "ko": "도해"
+      },
+      "rule": {
+        "en": "SVG and CSS only — no charting dependency. Must collapse to a readable static diagram under reduced motion.",
+        "ko": "SVG와 CSS만 사용하며 차트 라이브러리에 의존하지 않습니다. reduced motion에서 읽을 수 있는 정지 도해로 축소되어야 합니다."
+      }
+    },
+    {
+      "id": "overlay",
+      "title": {
+        "en": "Overlays",
+        "ko": "오버레이"
+      },
+      "rule": {
+        "en": "Exactly one may be visible at a time, and each declares how it yields to the others.",
+        "ko": "한 번에 하나만 표시될 수 있으며, 각자 다른 오버레이에 어떻게 자리를 내주는지 명시합니다."
+      }
+    },
+    {
+      "id": "behaviour",
+      "title": {
+        "en": "Behaviours",
+        "ko": "동작"
+      },
+      "rule": {
+        "en": "Wrap content, never replace it. SSR emits the final state so nothing depends on client JS to become visible.",
+        "ko": "콘텐츠를 감싸되 대체하지 않습니다. SSR이 최종 상태를 내보내므로 표시 여부가 클라이언트 JS에 의존하지 않습니다."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "rule": {
+        "en": "Author colour as a token, never as a literal — with one exception below.",
+        "ko": "색은 리터럴이 아닌 토큰으로 작성합니다 — 아래 예외 하나를 제외하고."
+      },
+      "why": {
+        "en": "The published brand kit is derived from `styles.css`. A literal in a component is invisible to that pipeline and cannot be handed to a partner.",
+        "ko": "공개 브랜드 킷은 `styles.css`에서 파생됩니다. 컴포넌트에 박힌 리터럴은 이 파이프라인에 잡히지 않아 파트너에게 전달할 수 없습니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "The exception: the whitepaper viewer (`.wp-*`) fixes its colours on purpose.",
+        "ko": "예외: 백서 뷰어(`.wp-*`)는 의도적으로 색을 고정합니다."
+      },
+      "why": {
+        "en": "It renders paper. A white A4 sheet that followed the dark theme would stop being a document.",
+        "ko": "종이를 렌더링하기 때문입니다. 다크 테마를 따르는 흰 A4 용지는 더 이상 문서가 아닙니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "Every animated utility must have a `prefers-reduced-motion` opt-out, and SSR must render the final state.",
+        "ko": "모든 애니메이션 유틸리티는 `prefers-reduced-motion` 해제 경로를 가져야 하며, SSR은 최종 상태를 렌더해야 합니다."
+      },
+      "why": {
+        "en": "Content that only appears after client JS is invisible to crawlers and to anyone with motion disabled. Reveal and CountUp both ship the finished value from the server.",
+        "ko": "클라이언트 JS 이후에만 나타나는 콘텐츠는 크롤러와 모션 비활성 사용자에게 보이지 않습니다. Reveal과 CountUp 모두 서버에서 완성된 값을 내려보냅니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "Section rhythm is fixed: `py-24 lg:py-32`, separated by a hairline.",
+        "ko": "섹션 리듬은 고정입니다 — `py-24 lg:py-32`, 헤어라인으로 구분."
+      },
+      "why": {
+        "en": "The home page is one continuous argument. Varying the spacing per section reads as unrelated pages stacked together.",
+        "ko": "홈페이지는 하나의 연속된 논지입니다. 섹션마다 간격이 달라지면 서로 무관한 페이지를 쌓아놓은 것처럼 읽힙니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "Content width is `max-w-7xl px-6 lg:px-10`. Nothing sets its own container.",
+        "ko": "콘텐츠 폭은 `max-w-7xl px-6 lg:px-10`입니다. 개별 컴포넌트가 자체 컨테이너를 정의하지 않습니다."
+      },
+      "why": {
+        "en": "A single measure is what makes the hairlines line up across sections that were written months apart.",
+        "ko": "단일 기준 폭이 있어야, 몇 달 간격으로 작성된 섹션들의 헤어라인이 서로 맞습니다."
+      }
+    }
+  ],
+  "utilities": [
+    {
+      "className": "font-display",
+      "use": {
+        "en": "Display face plus the -0.02em tracking it is designed with. Use this, not `font-family` alone.",
+        "ko": "디스플레이 서체와 그에 맞춘 자간 -0.02em. font-family만 지정하지 말고 이 클래스를 사용합니다."
+      },
+      "animated": false
+    },
+    {
+      "className": "font-mono",
+      "use": {
+        "en": "Mono face for data and labels.",
+        "ko": "데이터·라벨용 모노 서체."
+      },
+      "animated": false
+    },
+    {
+      "className": "label-eyebrow",
+      "use": {
+        "en": "The eyebrow label: 11px mono, 0.18em tracking, uppercase, copper. Every section opens with one.",
+        "ko": "섹션 라벨 — 11px 모노, 자간 0.18em, 대문자, 구리색. 모든 섹션이 이것으로 시작합니다."
+      },
+      "animated": false
+    },
+    {
+      "className": "text-balance",
+      "use": {
+        "en": "Balanced line breaks for headlines. Not for paragraphs.",
+        "ko": "헤드라인의 줄바꿈 균형. 문단에는 쓰지 않습니다."
+      },
+      "animated": false
+    },
+    {
+      "className": "hairline-t",
+      "use": {
+        "en": "Top divider at --border. The standard way sections separate.",
+        "ko": "--border 값의 상단 구분선. 섹션 구분의 표준 방식."
+      },
+      "animated": false
+    },
+    {
+      "className": "hairline-b",
+      "use": {
+        "en": "Bottom divider at --border.",
+        "ko": "--border 값의 하단 구분선."
+      },
+      "animated": false
+    },
+    {
+      "className": "grid-lines",
+      "use": {
+        "en": "Static 80px measuring grid. Structural texture, not decoration.",
+        "ko": "80px 정지 격자. 장식이 아닌 구조적 텍스처."
+      },
+      "animated": false
+    },
+    {
+      "className": "copper-gradient",
+      "use": {
+        "en": "Copper-to-gold gradient clipped to text. Static counterpart to .copper-shimmer.",
+        "ko": "텍스트에 클리핑된 구리→골드 그라디언트. .copper-shimmer의 정지 버전."
+      },
+      "animated": false
+    },
+    {
+      "className": "glow-copper",
+      "use": {
+        "en": "Wide, low-opacity copper glow behind a focal element.",
+        "ko": "초점 요소 뒤의 넓고 옅은 구리색 글로우."
+      },
+      "animated": false
+    },
+    {
+      "className": "reveal",
+      "use": {
+        "en": "Scroll reveal. Pair with the Reveal component — the raw class stays invisible until .is-visible is added.",
+        "ko": "스크롤 리빌. Reveal 컴포넌트와 함께 사용합니다 — 클래스만 붙이면 .is-visible이 추가될 때까지 보이지 않습니다."
+      },
+      "animated": true
+    },
+    {
+      "className": "is-visible",
+      "use": {
+        "en": "Applied by the Reveal observer. Never author this in JSX. Reduced-motion neutralises it through .reveal rather than by name.",
+        "ko": "Reveal 옵저버가 부여합니다. JSX에 직접 작성하지 않습니다. reduced-motion은 이 클래스가 아니라 .reveal 규칙으로 무력화합니다."
+      },
+      "animated": false
+    },
+    {
+      "className": "grid-pan",
+      "use": {
+        "en": "The measuring grid, panning slowly. Backgrounds only.",
+        "ko": "느리게 이동하는 측정 격자. 배경 전용."
+      },
+      "animated": true
+    },
+    {
+      "className": "copper-shimmer",
+      "use": {
+        "en": "Light travelling across a copper headline. One per page — it is the hero's device.",
+        "ko": "구리색 헤드라인 위를 지나는 빛. 페이지당 하나 — 히어로의 장치입니다."
+      },
+      "animated": true
+    },
+    {
+      "className": "aurora",
+      "use": {
+        "en": "Drifting blurred colour field for ambient depth. Absolutely positioned, pointer-events: none.",
+        "ko": "은은한 깊이를 위한 블러 색면. absolute 배치이며 pointer-events: none."
+      },
+      "animated": true
+    },
+    {
+      "className": "flow-dash",
+      "use": {
+        "en": "Travelling dashes along an SVG path — flow direction in the pipeline diagram.",
+        "ko": "SVG 경로를 따라 흐르는 파선 — 파이프라인 다이어그램의 흐름 방향."
+      },
+      "animated": true
+    },
+    {
+      "className": "flow-particle",
+      "use": {
+        "en": "A particle riding an SVG path via offset-distance.",
+        "ko": "offset-distance로 SVG 경로를 따라 이동하는 입자."
+      },
+      "animated": true
+    },
+    {
+      "className": "flow-rail",
+      "use": {
+        "en": "Sweep travelling across a horizontal rail.",
+        "ko": "수평 레일을 가로지르는 스윕."
+      },
+      "animated": true
+    },
+    {
+      "className": "node-pulse",
+      "use": {
+        "en": "Pulsing node in a diagram. Marks an active stage.",
+        "ko": "다이어그램의 맥동하는 노드. 활성 단계를 표시합니다."
+      },
+      "animated": true
+    },
+    {
+      "className": "live-dot",
+      "use": {
+        "en": "Expanding ring in --positive. Reserved for genuinely live state.",
+        "ko": "--positive 색의 확장하는 링. 실제 라이브 상태에만 사용합니다."
+      },
+      "animated": true
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# 비밀값 검사 설정 — `.github/workflows/secrets.yml`
+#
+# 기본 규칙을 그대로 쓰고, 공개된 테스트 값과 vendored 코드만 허용한다.
+# 허용 목록을 넓히기 전에 그 값이 정말 공개값인지(누구나 아는 기본 키인지) 확인한다.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "vendored 외부 라이브러리 — OpenZeppelin·forge-std 자체 테스트 벡터"
+paths = ['''(^|/)contracts/lib/''']
+
+[[allowlists]]
+description = "로컬 전용 공개 기본값 — deploy/local-secrets/README.md"
+paths = ['''(^|/)deploy/local-secrets/''']
+
+[[allowlists]]
+description = "anvil 기본 계정 #0·#1 개인키 — 공개값, 실자산 없음"
+regexes = [
+  '''0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''',
+  '''0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d''',
+]

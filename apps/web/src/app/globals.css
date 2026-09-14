@@ -1,0 +1,512 @@
+@import "@mpc/design/tokens.css";
+@import "@mpc/design/utilities.css";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+/* 헤드라인 서체. 폴백이 Inter인 것은 토큰 정의 그대로다 — 웹폰트가 늦어도
+   헤드라인이 시스템 세리프로 튀지 않아야 한다(tokens/typography.json). */
+@import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/600.css";
+
+/*
+ * 워크스페이스 레이아웃 — ADR-T11.
+ *
+ * @mpc/design의 토큰·시그널 색 의미·보이스는 그대로 계승한다. 다만 마케팅
+ * 사이트의 섹션 리듬(py-24, max-w-7xl, 섹션당 논지 하나)은 쓰지 않는다.
+ * 데이터 테이블과 작업 폼은 밀도가 다르다.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+a {
+  color: var(--copper);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--copper-glow);
+}
+
+/* 문장 안의 링크는 밑줄을 갖는다 — WCAG 1.4.1.
+   내비게이션처럼 링크만 있는 자리는 위치가 곧 표식이지만, 문단 안에서는 색만으로
+   구분하면 색을 못 보는 사람에게 링크가 사라진다. */
+p a,
+li a,
+dd a,
+.sub a,
+.meta a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.86em;
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+
+/* 메뉴가 길면 왼쪽 영역 안에서 줄을 바꾼다. 헤더 전체가 줄을 바꾸면 계정 영역이
+   둘째 줄 왼쪽으로 떨어져 우상단에서 사라진다. */
+.topbar {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.topbar-start {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.topbar-end {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  /* basis 0이면 줄바꿈 계산에서 폭이 0으로 잡혀 한 줄에 겹친다. */
+  .topbar-start {
+    flex-basis: 100%;
+  }
+
+  .topbar-end {
+    margin-left: auto;
+  }
+}
+
+/* 로그인 뒤의 공개 메뉴. 워크스페이스 메뉴와 섞지 않고 한 묶음으로
+   접어 둔다 — 열 개 옆에 일곱 개를 더 펼치면 헤더가 세 줄이 된다. */
+.nav-public {
+  position: relative;
+}
+
+.nav-public > summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--muted-foreground);
+}
+
+.nav-public > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nav-public > summary::after {
+  content: " ▾";
+}
+
+.nav-public-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* 지갑 주소 — 항상 전체, 복사 가능. 42자는 좁은 칸에서 줄을 바꿔야 잘리지 않는다. */
+.address {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.address-value {
+  word-break: break-all;
+}
+
+.address-copy {
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* gap은 클리어스페이스 규칙(마크 높이의 0.5×)이다. 마크 28px → 14px. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--font-display), "Inter", sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.main {
+  flex: 1;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 24px 64px;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+/* 헤드라인은 display 서체에 자간 -0.02em — @mpc/design의 .font-display가 거는
+   조합과 같다. 워크스페이스는 마케팅 사이트의 크기 스케일만 쓰지 않는다. */
+h1 {
+  font-family: var(--font-display), "Inter", sans-serif;
+  font-size: 22px;
+  margin: 0 0 4px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-family: var(--font-display), "Inter", sans-serif;
+  font-size: 15px;
+  margin: 0 0 12px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.sub {
+  color: var(--muted-foreground);
+  margin: 0;
+}
+
+.panel {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  margin-bottom: 18px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+thead th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  padding: 9px 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+tbody td {
+  padding: 11px 12px;
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+}
+
+tbody tr:hover td {
+  background: var(--accent);
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+/* 상태 표시 — 색만으로 상태를 전달하지 않는다(§11.8).
+   모든 배지가 아이콘 글리프와 텍스트 라벨을 함께 갖는다. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.badge .glyph {
+  font-family: var(--font-mono), monospace;
+  font-weight: 700;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+input,
+select {
+  background: var(--input, var(--muted));
+  color: var(--foreground);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-md);
+  padding: 9px 11px;
+  font: inherit;
+  width: 100%;
+}
+
+input:focus,
+select:focus,
+button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+button {
+  font: inherit;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong, var(--border));
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--copper);
+  color: var(--primary-foreground);
+  border-color: var(--copper);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--copper-glow);
+  border-color: var(--copper-glow);
+}
+
+/* 계정 연결 진입점. 링크(`<a>`)지만 버튼으로 읽혀야 한다 — 본문 링크와 같은
+   모양이면 공개 화면에서 로그인 경로가 보이지 않는다. 헤더에서는 `.sm`. */
+.btn-connect {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 20px;
+  border: 1px solid var(--copper);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--copper) 14%, transparent);
+  color: var(--copper-glow);
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.btn-connect:hover {
+  background: var(--copper);
+  border-color: var(--copper);
+  color: var(--primary-foreground);
+  text-decoration: none;
+}
+
+.btn-connect:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.btn-connect.sm {
+  padding: 7px 14px;
+  font-size: 13px;
+}
+
+/* 랜딩 첫 화면. 아래 panel들과 같은 카드 모양이면 어디서 소개가 끝나고 본문이
+   시작하는지 갈리지 않는다 — 크기·배경·구분선으로 한 단계 위에 둔다. */
+.hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 36px 32px;
+  margin-bottom: 28px;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--copper);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(120% 140% at 100% 0%, color-mix(in oklch, var(--copper) 12%, transparent), transparent 60%),
+    var(--surface-elevated);
+}
+
+.hero h1 {
+  font-size: 30px;
+  line-height: 1.2;
+  color: var(--foreground);
+  max-width: 22ch;
+  margin-bottom: 12px;
+}
+
+.hero .sub {
+  max-width: 64ch;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .hero {
+    padding: 24px 18px;
+  }
+
+  .hero h1 {
+    font-size: 24px;
+  }
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.notice {
+  border: 1px solid currentColor;
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.notice .title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.notice ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.dl {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 8px 16px;
+}
+
+.dl dt {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.dl dd {
+  margin: 0;
+}
+
+.meta {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+
+/* 설치된 지갑 목록. 하나뿐이면 버튼 하나처럼 보인다. */
+.wallet-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wallet-choices button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wallet-choices img {
+  border-radius: 4px;
+}
+
+.account-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.account-card {
+  text-align: left;
+  padding: 14px;
+  background: var(--surface-elevated);
+}
+
+.account-card .name {
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.account-card .desc {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+@media (max-width: 620px) {
+  .dl {
+    grid-template-columns: 1fr;
+  }
+}
+
+/*
+ * Footer — 약관·데이터 처리·지원.
+ *
+ * 경계 문구를 footer로 내리지 않는 것과 이것은 다르다. 경계는 결과 가까이에
+ * 있어야 하고(§11.6), 약관 링크는 어디서든 닿을 수 있으면 된다.
+ */
+.footer {
+  margin-top: 48px;
+  padding: 18px 0 32px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.footer a {
+  color: var(--muted-foreground);
+}

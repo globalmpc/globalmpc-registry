@@ -1,0 +1,18 @@
+# 빌드 컨텍스트는 저장소 루트다. 이미지에 들어갈 필요가 없는 것만 뺀다.
+.git
+.github
+**/node_modules
+**/.next
+**/test-results
+**/playwright-report
+apps/*/dist
+packages/*/dist
+contracts/out
+contracts/cache
+contracts/lib
+
+# 로컬 시크릿은 이미지에 넣지 않는다. compose가 런타임에 마운트한다.
+deploy/local-secrets
+
+# design-system/dist는 **제외하지 않는다.** 커밋된 산출물이고 `@mpc/design`의
+# exports가 그것을 가리키므로, 빼면 웹 빌드가 CSS를 찾지 못한다.

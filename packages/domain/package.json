@@ -1,0 +1,17 @@
+{
+  "name": "@mpc/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MPC dApp domain enums, grade derivation, state machines, and invariants.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mpc/canonical": "workspace:*"
+  }
+}

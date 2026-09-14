@@ -1,0 +1,151 @@
+{
+  "serializationVersion": "1",
+  "note": "MPC canonical serialization 골든 벡터. 값이 바뀌면 규격이 바뀐 것이며 serializationVersion을 올려야 한다.",
+  "keccak256": {
+    "empty": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+    "abc": "0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+  },
+  "canonicalize": [
+    {
+      "name": "empty-object",
+      "input": {},
+      "canonical": "{}",
+      "keccak256": "0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d"
+    },
+    {
+      "name": "empty-array",
+      "input": [],
+      "canonical": "[]",
+      "keccak256": "0x518674ab2b227e5f11e9084f615d57663cde47bce1ba168b4c19c7ee22a73d70"
+    },
+    {
+      "name": "key-ordering",
+      "input": {
+        "b": "1",
+        "a": "2",
+        "C": "3",
+        "": "4"
+      },
+      "canonical": "{\"\":\"4\",\"C\":\"3\",\"a\":\"2\",\"b\":\"1\"}",
+      "keccak256": "0x220a094f5b91328163a6002e9b2b36e8408928a91e45d8c7511ff4deac74b130"
+    },
+    {
+      "name": "nested",
+      "input": {
+        "z": {
+          "y": [
+            "1",
+            "2"
+          ],
+          "x": null
+        },
+        "a": true
+      },
+      "canonical": "{\"a\":true,\"z\":{\"x\":null,\"y\":[\"1\",\"2\"]}}",
+      "keccak256": "0x9fe1eac066e11d4c147b95e3495d62e6d763557252bc4cb4fc14c472cce94e5c"
+    },
+    {
+      "name": "escapes",
+      "input": {
+        "s": "line\nbreak\ttab\"quote\\slash\u0001"
+      },
+      "canonical": "{\"s\":\"line\\nbreak\\ttab\\\"quote\\\\slash\\u0001\"}",
+      "keccak256": "0xd837d99bced2433259bd2fb44285a5b2e9794b68a39279db70451190ce1a8e25"
+    },
+    {
+      "name": "non-ascii",
+      "input": {
+        "mn": "Монгол",
+        "ko": "몽골",
+        "emoji": "😀"
+      },
+      "canonical": "{\"emoji\":\"😀\",\"ko\":\"몽골\",\"mn\":\"Монгол\"}",
+      "keccak256": "0x3c91ca743185afd7db0a25747b27f6e15382567a7c5dd3b85458e120e6d26f46"
+    },
+    {
+      "name": "decimal-strings",
+      "input": {
+        "amount": "10000000000",
+        "unit": "MPC",
+        "asOf": "2026-08-01"
+      },
+      "canonical": "{\"amount\":\"10000000000\",\"asOf\":\"2026-08-01\",\"unit\":\"MPC\"}",
+      "keccak256": "0x919a68ccab3e35b138b1e355514e76498d83d5a8350e78f267bce2f6b14cfc3e"
+    }
+  ],
+  "leaves": [
+    {
+      "leaf": {
+        "registryType": "project",
+        "entryVersionId": "01JZPROJECT0000000000000AA",
+        "subjectId": "01JZSUBJECT0000000000000AA",
+        "version": "1",
+        "status": "published",
+        "serializationVersion": "1",
+        "policyVersion": "mn-core-1.0.0",
+        "schemaVersion": "project-registry-1",
+        "contentHash": "0x8a763859277f764edf67dffa392d3eec76cde965a789233d15731441e01187f9"
+      },
+      "leafHash": "0x62a6f13e1a21498f57d53fa72f0e9dd0580bea3d1da2ef4ef79ac796cfdb1fa3"
+    },
+    {
+      "leaf": {
+        "registryType": "verification",
+        "entryVersionId": "01JZVERIFY00000000000000AA",
+        "subjectId": "01JZSUBJECT0000000000000AA",
+        "version": "2",
+        "status": "published",
+        "serializationVersion": "1",
+        "policyVersion": "mn-core-1.0.0",
+        "schemaVersion": "verification-registry-1",
+        "contentHash": "0x2225e2c2db4bd9b9baf178622014bec81b0dcebd3f2c3f4db09ba7816041b954"
+      },
+      "leafHash": "0xfa59edb8202ed4792450c0a4780d013f270e741e4ebe804a30b797a01d0b2a1b"
+    },
+    {
+      "leaf": {
+        "registryType": "verification",
+        "entryVersionId": "01JZVERIFY00000000000000BB",
+        "subjectId": "01JZSUBJECT0000000000000BB",
+        "version": "1",
+        "status": "superseded",
+        "serializationVersion": "1",
+        "policyVersion": "mn-core-1.0.0",
+        "schemaVersion": "verification-registry-1",
+        "contentHash": "0xa8f5b221e16ef58df8ce6ecd13286dd83d6b1ae9ae2678a4ddc4bb3b02ec186a"
+      },
+      "leafHash": "0x6cc56d65d27bc11d9c337591936a6a70e15c0ebcbae477d1b571b8d9b319c305"
+    }
+  ],
+  "merkle": {
+    "root": "0x208c0014a0b42ab73b731f01da2edb2bf4c5be67b02cfb24a14bd2c13d5737ac",
+    "leafCount": 3,
+    "sortedLeaves": [
+      "0x62a6f13e1a21498f57d53fa72f0e9dd0580bea3d1da2ef4ef79ac796cfdb1fa3",
+      "0x6cc56d65d27bc11d9c337591936a6a70e15c0ebcbae477d1b571b8d9b319c305",
+      "0xfa59edb8202ed4792450c0a4780d013f270e741e4ebe804a30b797a01d0b2a1b"
+    ],
+    "proofs": [
+      {
+        "leafHash": "0x62a6f13e1a21498f57d53fa72f0e9dd0580bea3d1da2ef4ef79ac796cfdb1fa3",
+        "proof": [
+          "0x6cc56d65d27bc11d9c337591936a6a70e15c0ebcbae477d1b571b8d9b319c305",
+          "0xfa59edb8202ed4792450c0a4780d013f270e741e4ebe804a30b797a01d0b2a1b"
+        ]
+      },
+      {
+        "leafHash": "0xfa59edb8202ed4792450c0a4780d013f270e741e4ebe804a30b797a01d0b2a1b",
+        "proof": [
+          "0x054f75f05acb5951015d23a2488c2782b591df916adec1017cef98f732df95c7"
+        ]
+      },
+      {
+        "leafHash": "0x6cc56d65d27bc11d9c337591936a6a70e15c0ebcbae477d1b571b8d9b319c305",
+        "proof": [
+          "0x62a6f13e1a21498f57d53fa72f0e9dd0580bea3d1da2ef4ef79ac796cfdb1fa3",
+          "0xfa59edb8202ed4792450c0a4780d013f270e741e4ebe804a30b797a01d0b2a1b"
+        ]
+      }
+    ]
+  }
+}

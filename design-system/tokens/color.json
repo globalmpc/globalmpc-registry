@@ -1,0 +1,483 @@
+{
+  "$description": "MPC colour tokens. Screen values are authored in oklch; print stops are hex literals because no on-screen token corresponds to them.",
+  "color": {
+    "background": {
+      "$value": "oklch(0.13 0.02 265)",
+      "$type": "color",
+      "$description": "Page background. Every route sits on this.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Page background. Every route sits on this.",
+          "ko": "페이지 배경. 모든 라우트의 바탕."
+        }
+      }
+    },
+    "foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Body text on any dark surface.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Body text on any dark surface.",
+          "ko": "다크 표면 위 본문 텍스트."
+        }
+      }
+    },
+    "surface": {
+      "$value": "oklch(0.16 0.018 260)",
+      "$type": "color",
+      "$description": "Section blocks that need to separate from the page.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Section blocks that need to separate from the page.",
+          "ko": "페이지와 분리되어야 하는 섹션 구획."
+        },
+        "mpc.note": {
+          "en": "Often used at partial opacity (`bg-surface/40`) to soften the step between sections.",
+          "ko": "섹션 간 단차를 완화하기 위해 부분 불투명도(`bg-surface/40`)로 쓰이는 경우가 많습니다."
+        }
+      }
+    },
+    "surface-elevated": {
+      "$value": "oklch(0.19 0.02 260)",
+      "$type": "color",
+      "$description": "The topmost surface: raised panels inside a section.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "The topmost surface: raised panels inside a section.",
+          "ko": "최상단 표면 — 섹션 내부의 부상된 패널."
+        }
+      }
+    },
+    "card": {
+      "$value": "oklch(0.17 0.018 260)",
+      "$type": "color",
+      "$description": "shadcn card background.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "shadcn card background.",
+          "ko": "shadcn card 배경."
+        },
+        "mpc.note": {
+          "en": "Darker than --surface-elevated despite both describing cards. Site sections use --surface-elevated; only shadcn primitives read this token.",
+          "ko": "둘 다 카드를 지칭하지만 --surface-elevated보다 어둡습니다. 사이트 섹션은 --surface-elevated를 쓰고, 이 토큰은 shadcn 프리미티브만 참조합니다."
+        }
+      }
+    },
+    "card-foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Text inside a shadcn card.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Text inside a shadcn card.",
+          "ko": "shadcn card 내부 텍스트."
+        }
+      }
+    },
+    "popover": {
+      "$value": "oklch(0.17 0.018 260)",
+      "$type": "color",
+      "$description": "Floating surfaces: dropdown, popover, command, tooltip panels.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Floating surfaces: dropdown, popover, command, tooltip panels.",
+          "ko": "부유 표면 — dropdown·popover·command·tooltip 패널."
+        }
+      }
+    },
+    "popover-foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Text on floating surfaces.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Text on floating surfaces.",
+          "ko": "부유 표면 위 텍스트."
+        }
+      }
+    },
+    "primary": {
+      "$value": "oklch(0.72 0.12 55)",
+      "$type": "color",
+      "$description": "shadcn's primary slot — what `Button`, `Switch`, and friends render.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "shadcn's primary slot — what `Button`, `Switch`, and friends render.",
+          "ko": "shadcn의 primary 슬롯 — `Button`·`Switch` 등이 렌더하는 값."
+        },
+        "mpc.note": {
+          "en": "A third copper, lighter than --copper and not part of the published scale. Site components should reach for --copper; --primary exists so unmodified shadcn primitives stay on-brand. Worth reconciling.",
+          "ko": "--copper보다 밝은 세 번째 구리색으로, 공개 스케일에 포함되지 않습니다. 사이트 컴포넌트는 --copper를, 미수정 shadcn 프리미티브는 --primary를 사용합니다. 정리 대상입니다."
+        }
+      }
+    },
+    "primary-foreground": {
+      "$value": "oklch(0.13 0.02 265)",
+      "$type": "color",
+      "$description": "Text on a copper fill. Near-black, not white — copper is too light to carry white text at AA.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "Text on a copper fill. Near-black, not white — copper is too light to carry white text at AA.",
+          "ko": "구리색 배경 위 텍스트. 흰색이 아닌 near-black입니다 — 구리색은 AA 기준에서 흰 텍스트를 지탱하기에 너무 밝습니다."
+        }
+      }
+    },
+    "secondary": {
+      "$value": "oklch(0.22 0.02 260)",
+      "$type": "color",
+      "$description": "Secondary button and badge fills.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Secondary button and badge fills.",
+          "ko": "보조 버튼·배지 배경."
+        }
+      }
+    },
+    "secondary-foreground": {
+      "$value": "oklch(0.92 0.005 250)",
+      "$type": "color",
+      "$description": "Text on --secondary.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Text on --secondary.",
+          "ko": "--secondary 위 텍스트."
+        }
+      }
+    },
+    "muted": {
+      "$value": "oklch(0.2 0.018 260)",
+      "$type": "color",
+      "$description": "Recessed blocks: table headers, skeletons, disabled fills.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Recessed blocks: table headers, skeletons, disabled fills.",
+          "ko": "가라앉힌 블록 — 테이블 헤더, 스켈레톤, 비활성 배경."
+        }
+      }
+    },
+    "muted-foreground": {
+      "$value": "oklch(0.65 0.015 255)",
+      "$type": "color",
+      "$description": "Secondary text. Carries most body copy on this site — the sections lead with foreground headlines and muted paragraphs.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Secondary text. Carries most body copy on this site — the sections lead with foreground headlines and muted paragraphs.",
+          "ko": "보조 텍스트. 이 사이트 본문 대부분이 이 값입니다 — 섹션은 foreground 헤드라인 + muted 문단 구조를 씁니다."
+        }
+      }
+    },
+    "accent": {
+      "$value": "oklch(0.25 0.025 260)",
+      "$type": "color",
+      "$description": "Hover fill for menu and list items.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Hover fill for menu and list items.",
+          "ko": "메뉴·리스트 항목의 호버 배경."
+        },
+        "mpc.note": {
+          "en": "Not a brand colour despite the name — it is shadcn's neutral hover slot. Brand accent is --copper.",
+          "ko": "이름과 달리 브랜드 색이 아닙니다 — shadcn의 중립 호버 슬롯입니다. 브랜드 강조색은 --copper입니다."
+        }
+      }
+    },
+    "accent-foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Text on --accent.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Text on --accent.",
+          "ko": "--accent 위 텍스트."
+        }
+      }
+    },
+    "copper": {
+      "$value": "oklch(0.68 0.13 50)",
+      "$type": "color",
+      "$description": "The brand accent in the interface: eyebrow labels, links, emphasis, primary buttons.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "The brand accent in the interface: eyebrow labels, links, emphasis, primary buttons.",
+          "ko": "인터페이스의 브랜드 강조색 — 라벨, 링크, 강조, 주요 버튼."
+        },
+        "mpc.note": {
+          "en": "Published as Copper Light in the media kit. This is the value site components use directly (`bg-copper`, `text-copper`).",
+          "ko": "미디어 킷에는 Copper Light로 게시됩니다. 사이트 컴포넌트가 직접 사용하는 값입니다(`bg-copper`, `text-copper`)."
+        }
+      }
+    },
+    "copper-glow": {
+      "$value": "oklch(0.78 0.14 60)",
+      "$type": "color",
+      "$description": "Hover and active states only. Never a resting colour and never a large fill.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "Hover and active states only. Never a resting colour and never a large fill.",
+          "ko": "호버·활성 상태 전용. 기본 상태나 넓은 면적에는 쓰지 않습니다."
+        }
+      }
+    },
+    "gold": {
+      "$value": "oklch(0.82 0.11 80)",
+      "$type": "color",
+      "$description": "Figure emphasis — the number in a stat, not the label around it.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Figure emphasis — the number in a stat, not the label around it.",
+          "ko": "수치 강조 — 지표의 숫자에만 사용하며 주변 라벨에는 쓰지 않습니다."
+        }
+      }
+    },
+    "steppe": {
+      "$value": "oklch(0.42 0.06 155)",
+      "$type": "color",
+      "$description": "Mongolian asset context. The only green that is not a status.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Mongolian asset context. The only green that is not a status.",
+          "ko": "몽골 자산 맥락. 상태를 뜻하지 않는 유일한 초록입니다."
+        }
+      }
+    },
+    "sand": {
+      "$value": "oklch(0.78 0.07 75)",
+      "$type": "color",
+      "$description": "Secondary backgrounds in asset-context artwork.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Secondary backgrounds in asset-context artwork.",
+          "ko": "자산 맥락 아트워크의 보조 배경."
+        }
+      }
+    },
+    "positive": {
+      "$value": "oklch(0.62 0.1 155)",
+      "$type": "color",
+      "$description": "Confirmed state — secured, verified, on-chain. Also the live-dot pulse.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Confirmed state — secured, verified, on-chain. Also the live-dot pulse.",
+          "ko": "확인된 상태 — 확보·검증·온체인. live-dot 펄스에도 사용됩니다."
+        }
+      }
+    },
+    "alert": {
+      "$value": "oklch(0.62 0.12 45)",
+      "$type": "color",
+      "$description": "Attention, not failure. Provisional and in-progress states.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Attention, not failure. Provisional and in-progress states.",
+          "ko": "실패가 아닌 주의. 잠정·진행 중 상태."
+        }
+      }
+    },
+    "destructive": {
+      "$value": "oklch(0.55 0.18 25)",
+      "$type": "color",
+      "$description": "Irreversible actions and hard errors.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Irreversible actions and hard errors.",
+          "ko": "되돌릴 수 없는 동작과 명확한 오류."
+        },
+        "mpc.note": {
+          "en": "Red, and the only token outside the warm/neutral system. That is the point: it should look foreign.",
+          "ko": "이 시스템의 웜/뉴트럴 계열을 벗어나는 유일한 빨강입니다. 이질적으로 보이는 것이 의도입니다."
+        }
+      }
+    },
+    "destructive-text": {
+      "$value": "oklch(0.64 0.15 25)",
+      "$type": "color",
+      "$description": "Destructive meaning as text on a dark surface.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Destructive meaning as text on a dark surface.",
+          "ko": "어두운 표면 위에 텍스트로 쓰는 destructive."
+        },
+        "mpc.note": {
+          "en": "A fill colour and a text colour cannot be the same swatch here. `destructive` is dark enough to carry near-white text on top of it (4.72:1), which is exactly why it fails as text on our dark surfaces (3.80:1 on background). This token is the lighter twin, and it is the one to reach for whenever the red is a word rather than a shape.",
+          "ko": "채움 색과 글자 색은 같은 값일 수 없습니다. `destructive`는 그 위에 흰 글자를 얹을 만큼 어둡고(4.72:1), 바로 그래서 어두운 표면 위 글자로는 미달합니다(배경 대비 3.80:1). 이 토큰이 그 밝은 쌍이며, 빨강이 도형이 아니라 낱말일 때 쓰는 값입니다."
+        }
+      }
+    },
+    "destructive-foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Text on a destructive fill.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Text on a destructive fill.",
+          "ko": "destructive 배경 위 텍스트."
+        }
+      }
+    },
+    "border": {
+      "$value": "oklch(1 0 0 / 8%)",
+      "$type": "color",
+      "$description": "Default hairline. Applied globally to every element in @layer base.",
+      "$extensions": {
+        "mpc.group": "line",
+        "mpc.use": {
+          "en": "Default hairline. Applied globally to every element in @layer base.",
+          "ko": "기본 헤어라인. @layer base에서 모든 요소에 전역 적용됩니다."
+        },
+        "mpc.note": {
+          "en": "Alpha-channel white, so it never appeared in the generated hex palette. Use the .hairline-t / .hairline-b utilities rather than a raw border.",
+          "ko": "알파 채널 흰색이라 생성된 hex 팔레트에 나타나지 않았습니다. 직접 border를 쓰지 말고 .hairline-t / .hairline-b 유틸리티를 사용합니다."
+        }
+      }
+    },
+    "border-strong": {
+      "$value": "oklch(1 0 0 / 16%)",
+      "$type": "color",
+      "$description": "Emphasised divider where the default hairline disappears.",
+      "$extensions": {
+        "mpc.group": "line",
+        "mpc.use": {
+          "en": "Emphasised divider where the default hairline disappears.",
+          "ko": "기본 헤어라인이 보이지 않는 위치의 강조 구분선."
+        }
+      }
+    },
+    "input": {
+      "$value": "oklch(1 0 0 / 12%)",
+      "$type": "color",
+      "$description": "Form field borders. Brighter than --border so an input reads as interactive.",
+      "$extensions": {
+        "mpc.group": "line",
+        "mpc.use": {
+          "en": "Form field borders. Brighter than --border so an input reads as interactive.",
+          "ko": "폼 필드 테두리. 입력 요소임이 드러나도록 --border보다 밝습니다."
+        }
+      }
+    },
+    "ring": {
+      "$value": "oklch(0.72 0.12 55)",
+      "$type": "color",
+      "$description": "Focus ring. Identical to --primary, so keyboard focus is unmistakably the brand accent.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "Focus ring. Identical to --primary, so keyboard focus is unmistakably the brand accent.",
+          "ko": "포커스 링. --primary와 동일한 값이어서 키보드 포커스가 브랜드 강조색으로 명확히 드러납니다."
+        }
+      }
+    }
+  },
+  "print": {
+    "print-copper-deep": {
+      "$value": "#B06A3B",
+      "$type": "color",
+      "$description": "Light backgrounds and print. Whitepaper covers, rules, callout borders.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Light backgrounds and print. Whitepaper covers, rules, callout borders.",
+          "ko": "밝은 배경과 인쇄물. 백서 표지, 구분선, 강조 박스 테두리."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Copper Deep"
+      }
+    },
+    "print-copper": {
+      "$value": "#C2773F",
+      "$type": "color",
+      "$description": "The mark itself, plus icons and social artwork. Not a text colour.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "The mark itself, plus icons and social artwork. Not a text colour.",
+          "ko": "마크 자체와 아이콘·소셜 아트워크. 텍스트 색으로는 쓰지 않습니다."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Copper"
+      }
+    },
+    "print-paper": {
+      "$value": "#F6F6F4",
+      "$type": "color",
+      "$description": "Print background.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Print background.",
+          "ko": "인쇄물 배경."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Paper"
+      }
+    },
+    "print-ink": {
+      "$value": "#1C1C1C",
+      "$type": "color",
+      "$description": "Print body text.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Print body text.",
+          "ko": "인쇄물 본문."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Ink"
+      }
+    },
+    "print-ink-muted": {
+      "$value": "#6B6B6B",
+      "$type": "color",
+      "$description": "Print secondary text.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Print secondary text.",
+          "ko": "인쇄물 보조 텍스트."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Ink Muted"
+      }
+    },
+    "print-rule": {
+      "$value": "#CFCFCF",
+      "$type": "color",
+      "$description": "Print dividers.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Print dividers.",
+          "ko": "인쇄물 구분선."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Rule"
+      }
+    }
+  }
+}

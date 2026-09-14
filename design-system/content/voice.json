@@ -1,0 +1,177 @@
+{
+  "$description": "How MPC is allowed to speak. These are not style preferences: MPC describes a pre-issuance financial product, and most of these exist because the wrong sentence is a compliance problem.",
+  "positioning": {
+    "statement": {
+      "en": "MPC is the mining RWA issuance standard infrastructure operating on blockchain.",
+      "ko": "MPC는 블록체인 위에서 구동되는 광산 RWA 발행 표준 인프라입니다."
+    },
+    "expansion": {
+      "en": "It standardises verification across the mining-asset lifecycle: every published record carries its source, its reviewer, that reviewer\u2019s authority scope, and the limitations of the check. Reference cases are not named until the counterparty has agreed to be named.",
+      "ko": "광산 자산 라이프사이클 전반의 검증을 표준화합니다. 공개되는 모든 기록에 출처·검토자·검토자의 권한 범위·검토의 한계가 함께 남습니다. 레퍼런스 사례는 상대방이 공개에 동의하기 전까지 이름을 밝히지 않습니다."
+    }
+  },
+  "boundaries": [
+    {
+      "claim": {
+        "en": "Not a technology platform.",
+        "ko": "기술 플랫폼이 아닙니다."
+      },
+      "instead": {
+        "en": "Four operated layers — resource, structuring, tokenization, capital markets — as one standard stack.",
+        "ko": "자원·구조화·토큰화·자본시장의 4개 계층을 하나의 표준 스택으로 직접 운영합니다."
+      }
+    },
+    {
+      "claim": {
+        "en": "Not a single mine deal.",
+        "ko": "개별 광산 딜이 아닙니다."
+      },
+      "instead": {
+        "en": "Infrastructure that standardises verification across the mining-asset lifecycle. Any single project is a case, not the business.",
+        "ko": "광산 자산 라이프사이클 전반의 검증을 표준화하는 인프라입니다. 개별 프로젝트는 사업 자체가 아니라 하나의 사례입니다."
+      }
+    },
+    {
+      "claim": {
+        "en": "Not in issuance. Design & build stage.",
+        "ko": "발행 단계가 아닌 설계·구축 단계입니다."
+      },
+      "instead": {
+        "en": "Readiness is disclosed item by item, including what is only provisionally selected. Never write in the present tense about a stage not reached.",
+        "ko": "잠정 선정 항목을 포함해 준비 상태를 항목별로 공개합니다. 도달하지 않은 단계를 현재형으로 쓰지 않습니다."
+      }
+    },
+    {
+      "claim": {
+        "en": "Not an offering or a solicitation.",
+        "ko": "청약 권유나 투자 권유가 아닙니다."
+      },
+      "instead": {
+        "en": "Institutional review briefs, due-diligence packages, and meetings. The disclaimer travels with every request surface.",
+        "ko": "기관 검토 브리프, 실사 패키지, 미팅을 제공합니다. 이 고지는 모든 요청 화면에 함께 따라갑니다."
+      }
+    }
+  ],
+  "tone": [
+    {
+      "rule": {
+        "en": "State the stage in the same breath as the ambition.",
+        "ko": "포부를 말할 때 단계도 같은 호흡에 밝힙니다."
+      },
+      "why": {
+        "en": "MPC has not issued. A sentence that reads as though it has is a misrepresentation, not enthusiasm.",
+        "ko": "MPC는 아직 발행하지 않았습니다. 이미 발행한 것처럼 읽히는 문장은 열의가 아니라 허위 표시입니다."
+      },
+      "example": {
+        "en": "'Issuance Readiness — Design & Build Stage', not 'Now issuing'.",
+        "ko": "'Now issuing'이 아니라 'Issuance Readiness — Design & Build Stage'."
+      }
+    },
+    {
+      "rule": {
+        "en": "Every figure is verifiable or it does not appear.",
+        "ko": "검증 가능한 수치만 게재합니다."
+      },
+      "why": {
+        "en": "The on-chain section's whole value is that a reader can check it on a public explorer. One unverifiable number beside those rows costs the page its function.",
+        "ko": "온체인 섹션의 가치는 독자가 퍼블릭 익스플로러에서 직접 확인할 수 있다는 데 있습니다. 검증 불가능한 수치 하나가 그 기능을 무너뜨립니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "Name risks next to the structure that addresses them.",
+        "ko": "리스크를 그것을 다루는 구조와 나란히 제시합니다."
+      },
+      "why": {
+        "en": "An institutional reader has already thought of the risk. Omitting it signals either ignorance or concealment.",
+        "ko": "기관 독자는 이미 그 리스크를 떠올렸습니다. 언급하지 않으면 무지 또는 은폐로 읽힙니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "Write for allocators: infrastructure vocabulary, not crypto vocabulary.",
+        "ko": "자산배분 담당자를 대상으로 씁니다 — 크립토 어휘가 아니라 인프라 어휘를 사용합니다."
+      },
+      "why": {
+        "en": "The audience is institutional capital. 'Issuance standard', 'risk/return profile', 'value chain' land; 'moon', 'gem', 'community' do not.",
+        "ko": "대상은 기관 자본입니다. 'issuance standard', 'risk/return profile', 'value chain'은 통하지만 'moon', 'gem', 'community'는 통하지 않습니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "No superlatives and no urgency devices.",
+        "ko": "최상급 표현과 긴박감 유도 장치를 쓰지 않습니다."
+      },
+      "why": {
+        "en": "'Revolutionary', 'don't miss out', countdowns — these read as retail solicitation and undercut the institutional framing everything else is doing.",
+        "ko": "'혁신적', '놓치지 마세요', 카운트다운 등은 리테일 권유로 읽히며, 나머지 전부가 구축한 기관 대상 포지셔닝을 훼손합니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "Fixed vocabulary: layer names, status words, and asset names are reused verbatim.",
+        "ko": "고정 어휘 — 계층 명칭, 상태 표현, 자산명은 동일하게 반복 사용합니다."
+      },
+      "why": {
+        "en": "The site, the whitepaper, and the brief have to describe one thing. A synonym reads as a second, slightly different thing.",
+        "ko": "사이트·백서·브리프가 하나의 대상을 기술해야 합니다. 동의어를 쓰면 조금 다른 두 번째 대상처럼 읽힙니다."
+      },
+      "example": {
+        "en": "Resource → Structuring → Tokenization → Capital Markets. Not 'sourcing → packaging → minting → distribution'.",
+        "ko": "Resource → Structuring → Tokenization → Capital Markets. 'sourcing → packaging → minting → distribution'이 아닙니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "Disclaimers are copy, not fine print. They sit in the paragraph.",
+        "ko": "고지사항은 각주가 아니라 본문 카피입니다. 문단 안에 배치합니다."
+      },
+      "why": {
+        "en": "A disclaimer a reader has to look for is a disclaimer that did not disclaim.",
+        "ko": "독자가 찾아야 하는 고지는 고지 역할을 하지 못한 고지입니다."
+      }
+    }
+  ],
+  "locale": [
+    {
+      "rule": {
+        "en": "Copy lives in a `const COPY = { en: {...}, ko: {...} } as const` beside its component, read with `useT`.",
+        "ko": "카피는 컴포넌트 옆의 `const COPY = { en: {...}, ko: {...} } as const`에 두고 `useT`로 읽습니다."
+      },
+      "why": {
+        "en": "The shape makes a missing translation a type error rather than a blank on the page.",
+        "ko": "이 구조에서는 번역 누락이 페이지의 공백이 아니라 타입 오류가 됩니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "Translate meaning, not words — but never let the two locales assert different facts.",
+        "ko": "단어가 아니라 의미를 번역합니다 — 단, 두 로케일이 서로 다른 사실을 주장해서는 안 됩니다."
+      },
+      "why": {
+        "en": "A hedge that survives in English and disappears in Korean is a different disclosure in each market.",
+        "ko": "영문에는 남고 국문에서는 사라진 유보 표현은 시장마다 다른 공시가 됩니다."
+      }
+    },
+    {
+      "rule": {
+        "en": "Standalone pages currently render `locale=\"en\"`. The Korean copy exists and is unrendered, not missing.",
+        "ko": "독립 페이지는 현재 `locale=\"en\"`으로 렌더됩니다. 국문 카피는 누락된 것이 아니라 존재하되 렌더되지 않는 상태입니다."
+      },
+      "why": {
+        "en": "Turning a Korean surface on is a routing change, not a translation project — provided nobody ships an en-only string in the meantime.",
+        "ko": "국문 화면 활성화는 번역 프로젝트가 아니라 라우팅 변경입니다 — 그 전까지 영문 전용 문자열을 넣지 않는다는 전제 하에."
+      }
+    },
+    {
+      "rule": {
+        "en": "Navigation labels come from a single registry that requires a label per locale.",
+        "ko": "내비게이션 라벨은 로케일별 라벨을 요구하는 단일 레지스트리에서 가져옵니다."
+      },
+      "why": {
+        "en": "A destination cannot ship with one language filled in — the registry type will not allow it.",
+        "ko": "레지스트리 타입이 허용하지 않으므로, 한 언어만 채운 채로 목적지를 추가할 수 없습니다."
+      }
+    }
+  ]
+}

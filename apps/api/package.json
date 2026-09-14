@@ -1,0 +1,33 @@
+{
+  "name": "@mpc/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/server.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "bootstrap": "tsx src/bootstrap-cli.ts",
+    "bootstrap:registry": "tsx src/bootstrap-registry-cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^10.1.0",
+    "@fastify/rate-limit": "^11.2.0",
+    "@mpc/api-contract": "workspace:*",
+    "@mpc/canonical": "workspace:*",
+    "@mpc/config": "workspace:*",
+    "@mpc/db": "workspace:*",
+    "@mpc/domain": "workspace:*",
+    "@mpc/policy": "workspace:*",
+    "@mpc/storage": "workspace:*",
+    "@mpc/ui": "workspace:*",
+    "fastify": "5.12.1",
+    "postgres": "^3.4.5",
+    "viem": "2.55.13",
+    "zod": "^3.24.1"
+  }
+}

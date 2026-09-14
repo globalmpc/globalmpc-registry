@@ -1,0 +1,4 @@
+{
+  "$description": "Fixture: the same leaf name in a different group.",
+  "print": { "copper": { "$value": "#C2773F", "$type": "color" } }
+}
