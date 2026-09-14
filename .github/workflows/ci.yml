@@ -63,7 +63,7 @@ jobs:
         with:
           node-version: 22
 
-        name: Install
+      - name: Install
         run: pnpm install --frozen-lockfile
 
       # Do not ship dependencies with known vulnerabilities.
@@ -181,7 +181,7 @@ jobs:
         with:
           node-version: 22
 
-        name: Install
+      - name: Install
         run: pnpm install --frozen-lockfile
 
       - name: Playwright browsers
@@ -207,7 +207,7 @@ jobs:
           # upgrading, update this and the README count together.
           version: v1.7.1
 
-        name: Build
+      - name: Build
         run: forge build --sizes
 
       - name: Tests (incl. fuzz and invariant)
