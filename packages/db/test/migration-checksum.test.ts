@@ -35,6 +35,25 @@ describe("normalizeMigrationSql", () => {
   it("handles nested block comments", () => {
     expect(normalizeMigrationSql("SELECT 1 /* a /* b */ c */;")).toBe("SELECT 1 ;");
   });
+
+  it("drops comments inside DO blocks and named function-body tags", () => {
+    expect(normalizeMigrationSql("DO $$ BEGIN -- note\n PERFORM 1; END $$;")).toBe(
+      "DO $$ BEGIN PERFORM 1; END $$;",
+    );
+    expect(normalizeMigrationSql("AS $fn$\nSELECT 1; -- note\n$fn$;")).toBe("AS $fn$ SELECT 1; $fn$;");
+  });
+
+  it("keeps a dollar-quoted literal nested in a function body verbatim", () => {
+    const sql = "AS $$ BEGIN RETURN $q$keep -- this\n  /* too */$q$; END; $$;";
+    expect(normalizeMigrationSql(sql)).toBe(
+      "AS $$ BEGIN RETURN $q$keep -- this\n  /* too */$q$; END; $$;",
+    );
+  });
+
+  it("keeps a dollar-quoted literal outside a function body verbatim", () => {
+    const sql = "COMMENT ON TABLE t IS $c$range -- inclusive\n /* x */$c$;";
+    expect(normalizeMigrationSql(sql)).toBe(sql);
+  });
 });
 
 describe("migrationChecksum", () => {
@@ -51,6 +70,21 @@ describe("migrationChecksum", () => {
 
   it("changes when a string literal changes", () => {
     expect(migrationChecksum("SELECT 'b';")).not.toBe(migrationChecksum("SELECT 'a';"));
+  });
+
+  it("changes when whitespace inside a string literal changes", () => {
+    expect(migrationChecksum("SELECT 'a  b';")).not.toBe(migrationChecksum("SELECT 'a b';"));
+  });
+
+  it("changes when a dollar-quoted literal inside a function body changes", () => {
+    const body = (text: string) =>
+      `CREATE FUNCTION f() RETURNS text LANGUAGE plpgsql AS $$\nBEGIN RETURN $q$keep -- ${text}$q$; END;\n$$;`;
+    expect(migrationChecksum(body("A"))).not.toBe(migrationChecksum(body("B")));
+  });
+
+  it("changes when a dollar-quoted literal outside a function body changes", () => {
+    const comment = (text: string) => `COMMENT ON TABLE t IS $c$range -- ${text}$c$;`;
+    expect(migrationChecksum(comment("inclusive"))).not.toBe(migrationChecksum(comment("exclusive")));
   });
 });
 

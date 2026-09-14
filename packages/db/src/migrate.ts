@@ -26,35 +26,69 @@ export interface Migration {
 }
 
 /**
- * SQL with comments removed and whitespace runs collapsed to one space.
+ * SQL with comments removed and whitespace runs in code collapsed to one space.
  *
- * Single-quoted literals (including `E''` strings) and double-quoted identifiers are kept
- * verbatim, so comment markers inside them are not comments. Comments inside dollar-quoted
- * function bodies are removed too — they do not change what the function does.
+ * Literals are kept verbatim — whitespace and comment markers inside them are data:
+ * single-quoted strings (including `E''`), double-quoted identifiers, and dollar-quoted strings.
+ *
+ * A dollar-quoted string right after `AS` or `DO` is a function or `DO` body, i.e. code: it is
+ * normalized recursively, so comments inside it are removed while literals nested in it
+ * (including nested dollar-quoted ones) stay verbatim.
  */
 export function normalizeMigrationSql(sql: string): string {
+  return normalizeCode(sql).trim();
+}
+
+function normalizeCode(sql: string): string {
   let out = "";
+  // A leading space is kept: a body's inner text starts right after its opening tag, and
+  // `normalizeMigrationSql` trims the outermost level.
+  const space = () => {
+    if (!out.endsWith(" ")) out += " ";
+  };
   let i = 0;
   while (i < sql.length) {
-    const ch = sql[i];
+    const ch = sql[i] ?? "";
     const next = sql[i + 1];
-    if (ch === "'" || ch === '"') {
+    const tag = ch === "$" ? dollarTagAt(sql, i) : null;
+    if (tag !== null) {
+      const close = sql.indexOf(tag, i + tag.length);
+      const innerEnd = close === -1 ? sql.length : close;
+      const end = close === -1 ? sql.length : close + tag.length;
+      const inner = sql.slice(i + tag.length, innerEnd);
+      const closing = close === -1 ? "" : tag;
+      out += FUNCTION_BODY_OPENER.test(out) ? `${tag}${normalizeCode(inner)}${closing}` : sql.slice(i, end);
+      i = end;
+    } else if (ch === "'" || ch === '"') {
       const end = endOfQuoted(sql, i);
       out += sql.slice(i, end);
       i = end;
     } else if (ch === "-" && next === "-") {
       const eol = sql.indexOf("\n", i);
       i = eol === -1 ? sql.length : eol;
-      out += " ";
+      space();
     } else if (ch === "/" && next === "*") {
       i = endOfBlockComment(sql, i);
-      out += " ";
+      space();
+    } else if (/\s/.test(ch)) {
+      space();
+      i += 1;
     } else {
       out += ch;
       i += 1;
     }
   }
-  return out.replace(/\s+/g, " ").trim();
+  return out;
+}
+
+/** Output so far ends with the keyword that introduces a function or `DO` body. */
+const FUNCTION_BODY_OPENER = /(?:^|[^A-Za-z0-9_$])(?:AS|DO) ?$/i;
+
+/** The `$tag$` delimiter starting at `start`, or null. `$1`-style parameters are not tags. */
+function dollarTagAt(sql: string, start: number): string | null {
+  if (/[A-Za-z0-9_]/.test(sql[start - 1] ?? "")) return null;
+  const match = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(start, start + 64));
+  return match ? match[0] : null;
 }
 
 /** Index just past the quoted token that starts at `start`. Unterminated runs to the end. */
