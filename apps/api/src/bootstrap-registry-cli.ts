@@ -9,14 +9,14 @@ import {
 } from "./bootstrap-registry.js";
 
 /**
- * 검토를 시작하는 데 필요한 세 가지를 넣는 실행기.
+ * Runner that inserts the three things needed to start review.
  *
  *   pnpm --filter @mpc/api bootstrap:registry credential
  *   pnpm --filter @mpc/api bootstrap:registry schema
  *   pnpm --filter @mpc/api bootstrap:registry policy-set
  *
- * `bootstrap`과 같은 연결(RLS 우회)로 붙는다. 아무것도 지우지 않으므로 같은 값으로
- * 다시 돌려도 안전하다.
+ * Connects the same way as `bootstrap` (bypassing RLS). It deletes nothing, so re-running with
+ * the same values is safe.
  */
 
 const KINDS = ["credential", "schema", "policy-set"] as const;
@@ -31,17 +31,17 @@ function fail(lines: readonly string[]): never {
 
 if (!kind || !KINDS.includes(kind)) {
   fail([
-    `무엇을 넣을지 골라야 한다 — ${KINDS.join(" | ")}`,
+    `Choose what to insert — ${KINDS.join(" | ")}`,
     "",
-    "  credential   검토자의 자격. 이것 없이는 검토 배정이 만들어지지 않는다",
-    "  schema       검토 규격. draft로는 서명할 수 없다",
-    "  policy-set   준비도 규칙. draft로는 평가가 돌지 않는다",
+    "  credential   reviewer credential. Without it no review assignment is created",
+    "  schema       review schema. Cannot be signed while draft",
+    "  policy-set   readiness rules. Evaluation does not run while draft",
   ]);
 }
 
 function required(name: string): string {
   const value = process.env[name] ?? "";
-  if (value === "") fail([`환경변수가 없다 — ${name}`]);
+  if (value === "") fail([`Missing environment variable — ${name}`]);
   return value;
 }
 
@@ -53,11 +53,11 @@ function list(name: string): string[] {
 }
 
 /**
- * 승인자.
+ * Approver.
  *
- * 비우면 `draft`로 들어간다. **그 상태가 기본값인 것이 의도다** — 승인 경로가
- * 아직 앱에 없으므로(02 §2.8), 승인됐다고 말한 사람의 이름을 받아야만 활성으로
- * 올라간다. 그 이름은 앱이 확인한 사실이 아니라 진술이며 감사에 그렇게 남는다.
+ * Empty means `draft`. **That being the default is intentional** — the app has no approval
+ * path yet (02 §2.8), so it becomes active only when given the name of the person stated to
+ * have approved. That name is a statement, not a fact the app verified, and audit records it so.
  */
 function approvedBy(): string | null {
   const value = (process.env["BOOTSTRAP_APPROVED_BY"] ?? "").trim();
@@ -101,15 +101,15 @@ try {
       approvedBy: approvedBy(),
     });
   } else {
-    // 규칙은 파일 또는 환경변수로 받는다.
+    // Rules come from a file or an environment variable.
     //
-    // **파일만 받으면 컨테이너에서 쓸 수 없다.** 배포는 저장소를 마운트하지 않으므로
-    // 그 안에 rule set 파일이 없다. 그래서 `POLICY_SET_JSON`을 함께 받는다 —
-    // Coolify 같은 환경에서 넣을 수 있는 것은 환경변수뿐이다.
+    // **Accepting only a file makes it unusable in containers.** Deployments do not mount the
+    // repository, so no rule set file exists there. Hence `POLICY_SET_JSON` too —
+    // in environments like Coolify, environment variables are all you can supply.
     const path = process.env["POLICY_SET_FILE"] ?? "";
     const inline = process.env["POLICY_SET_JSON"] ?? "";
     if (path === "" && inline === "") {
-      fail(["POLICY_SET_FILE 또는 POLICY_SET_JSON이 필요하다 — rule set을 어디서 읽을지"]);
+      fail(["POLICY_SET_FILE or POLICY_SET_JSON is required — where to read the rule set from"]);
     }
 
     const source = path === "" ? "POLICY_SET_JSON" : path;
@@ -117,7 +117,7 @@ try {
     try {
       definition = JSON.parse(path === "" ? inline : readFileSync(path, "utf8"));
     } catch (error) {
-      fail([`rule set을 읽지 못했다 — ${source}`, String(error)]);
+      fail([`Could not read rule set — ${source}`, String(error)]);
     }
     result = await bootstrapPolicySet(sql, {
       tenantSlug,
@@ -135,7 +135,7 @@ try {
   );
 } catch (error) {
   const message = error instanceof BootstrapRegistryError ? error.message : String(error);
-  process.stderr.write(`bootstrap ${kind} 실패 — ${message}\n`);
+  process.stderr.write(`bootstrap ${kind} failed — ${message}\n`);
   process.exitCode = 1;
 } finally {
   await sql.end();

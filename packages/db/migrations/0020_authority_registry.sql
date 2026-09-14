@@ -1,25 +1,25 @@
--- Authority Registry 운영 경로 — spec 02 §2.8, 05 §5.11, REQ-DAPP-043.
+-- Authority Registry operational path — spec 02 §2.8, 05 §5.11, REQ-DAPP-043.
 --
--- 지금까지 authority와 source connection은 seed와 테스트에서만 만들어졌다.
--- 운영 중에 기관을 등록하거나 갱신할 경로가 없어 DB에 직접 INSERT해야 했고,
--- 그러면 **누가 등록했고 누가 승인했는지가 남지 않는다.**
+-- Until now authorities and source connections were created only in seeds and tests.
+-- There was no path to register or update an institution in operation, so rows had to be INSERTed
+-- directly into the DB, and then **who registered and who approved is not recorded.**
 --
--- 02 §2.8이 정한 것: 등록은 Trust Registry 운영자가 하고, `accepted` 전환은
--- 독립 reviewer가 한다. **운영자 단독 전환은 금지다.**
+-- What 02 §2.8 defines: the Trust Registry operator registers, and an independent reviewer
+-- performs the `accepted` transition. **An operator-only transition is forbidden.**
 
 ALTER TABLE core.authorities
-  -- 누가 후보로 올렸는가. 승인자와 같으면 안 되므로 저장해야 판정할 수 있다.
+  -- Who proposed it as a candidate. It must not equal the approver, so it must be stored to check.
   ADD COLUMN registered_by UUID REFERENCES core.subjects(id),
   ADD COLUMN accepted_by   UUID REFERENCES core.subjects(id),
   ADD COLUMN accepted_at   TIMESTAMPTZ,
-  -- 왜 이 상태인가. `suspended`·`revoked`는 이유 없이 남을 수 없다.
+  -- Why it is in this state. `suspended`·`revoked` cannot exist without a reason.
   ADD COLUMN state_reason  TEXT;
 
 /**
- * 상태에 이유가 따라붙는다.
+ * A state carries a reason.
  *
- * 기관을 정지·취소하면 그것을 근거로 삼은 receipt가 전부 영향을 받는다.
- * 이유 없이 바뀌면 나중에 "왜 못 쓰게 됐나"에 답할 수 없다.
+ * Suspending or revoking an authority affects every receipt that relied on it.
+ * A change without a reason leaves "why did it become unusable" unanswerable later.
  */
 ALTER TABLE core.authorities
   ADD CONSTRAINT authority_negative_state_needs_reason
@@ -29,13 +29,13 @@ ALTER TABLE core.authorities
   );
 
 /**
- * authority 이력 — REQ-DAPP-043의 versioning.
+ * Authority history — versioning for REQ-DAPP-043.
  *
- * `version` 컬럼만으로는 동시성만 막는다. Source Receipt는 조회 시점의
- * authority를 근거로 삼는데, 그 시점에 이 기관이 **무엇을 확인해 준다고
- * 했는지**를 나중에 재현할 수 없으면 receipt의 한계 문구가 근거를 잃는다.
+ * The `version` column alone only guards concurrency. A Source Receipt relies on the authority
+ * as of lookup time; if we cannot later reproduce **what this authority claimed to
+ * confirm** at that time, the receipt's limitation text loses its basis.
  *
- * append-only다. 과거 버전을 고칠 수 있으면 이력이 아니다.
+ * Append-only. If past versions can be edited, it is not history.
  */
 CREATE TABLE core.authority_versions (
   id              UUID PRIMARY KEY,
@@ -53,7 +53,7 @@ CREATE TABLE core.authority_versions (
   valid_until     DATE,
   state           core.authority_state NOT NULL,
   state_reason    TEXT,
-  -- 무엇이 바뀌었고 왜 바뀌었는가.
+  -- What changed and why.
   change_reason   TEXT NOT NULL CHECK (length(btrim(change_reason)) > 0),
   changed_by      UUID REFERENCES core.subjects(id),
   recorded_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -85,11 +85,11 @@ CREATE TRIGGER authority_versions_append_only
   FOR EACH ROW EXECUTE FUNCTION core.reject_authority_version_mutation();
 
 /**
- * 승인되지 않은 기관의 연동은 활성이 될 수 없다.
+ * A connection of an unapproved authority cannot become active.
  *
- * 02 §2.8이 금지하는 것: **API 성공을 authority 승인으로 변환**하는 것.
- * 연동이 붙었다는 사실과 그 기관을 신뢰하기로 했다는 판단은 다른 것이고,
- * 이 제약이 없으면 연동을 켜는 것만으로 승인 절차를 건너뛸 수 있다.
+ * What 02 §2.8 forbids: **turning API success into authority approval**.
+ * Having a connection attached and deciding to trust that authority are different things;
+ * without this constraint, just enabling a connection would skip the approval process.
  */
 CREATE OR REPLACE FUNCTION core.check_connection_authority_accepted() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -116,13 +116,13 @@ CREATE TRIGGER source_connections_require_accepted_authority
   FOR EACH ROW EXECUTE FUNCTION core.check_connection_authority_accepted();
 
 /**
- * 기관이 승인 상태를 벗어나면 그 연동을 내린다 — AC-04·AC-21의 전파.
+ * When an authority leaves the approved state, demote its connections — propagation for AC-04·AC-21.
  *
- * 기관을 정지시켰는데 연동이 계속 `active`면 화면은 계속 "연동됨"으로 보이고
- * 수집은 계속 돈다. 정지의 의미가 사라진다.
+ * If an authority is suspended but its connection stays `active`, the UI keeps showing "connected"
+ * and collection keeps running. Suspension loses its meaning.
  *
- * `degraded`로 내린다 — 연동 설정 자체는 남기고 호출만 막는다. `disabled`는
- * 사람이 명시적으로 끄는 것이고, 여기서 쓰면 둘을 구분할 수 없다.
+ * Demote to `degraded` — keep the connection settings, block only calls. `disabled` is
+ * an explicit manual shutoff; using it here would make the two indistinguishable.
  */
 CREATE OR REPLACE FUNCTION core.propagate_authority_state() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -141,8 +141,8 @@ CREATE TRIGGER authorities_propagate_state
   AFTER UPDATE ON core.authorities
   FOR EACH ROW EXECUTE FUNCTION core.propagate_authority_state();
 
--- 기존 행에 초기 버전을 남긴다. 이력이 이 마이그레이션부터 시작한다는 사실을
--- 기록으로 남겨야 "왜 v1 이전이 없나"에 답할 수 있다.
+-- Leave an initial version for existing rows. Recording that history starts at this migration
+-- is what lets us answer "why is there nothing before v1".
 INSERT INTO core.authority_versions (
   id, tenant_id, authority_id, version, name, jurisdiction, proves, does_not_prove,
   recognized_scope, verification_method, public_disclosure_level,

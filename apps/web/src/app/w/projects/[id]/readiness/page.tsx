@@ -11,13 +11,13 @@ import type { ReadinessStatus } from "@mpc/domain";
 /**
  * Readiness Matrix — spec 11 §11.3.
  *
- * 행=requirement, 열=근거/등급/상태/사유.
+ * Rows = requirements, columns = evidence/grade/status/reason.
  *
- * **운영자 override control이 없다.** 이 화면에 값을 고치는 버튼이 없는 것이
- * 통제다(REQ-DAPP-017). 서버에도 그런 경로가 없고 DB 트리거도 막는다.
+ * **There is no operator override control.** The absence of any value-editing button on this screen
+ * is the control (REQ-DAPP-017). The server has no such path either, and a DB trigger blocks it.
  *
- * Gate Decision은 여기 두지 않는다. 같은 화면에 있으면 준비도와 사람의 결정을
- * 혼동시킨다(§11.3) — 별도 라우트로 분리한다.
+ * Gate Decision does not live here. On the same screen, readiness and a human decision
+ * get confused (§11.3) — so it has its own route.
  */
 export default function ReadinessPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -56,8 +56,8 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
         <div>
           <h1>Data and evidence readiness</h1>
           <p className="sub">
-            {/* §11.13: Compliance Policy Engine의 사용자 표시명이다.
-                법률 컴플라이언스 승인으로 번역하지 않는다. */}
+            {/* §11.13: user-facing name of the Compliance Policy Engine.
+                Not to be rendered as legal compliance approval. */}
             A rule set computes whether the data requirements are met. Whether to move to the
             next stage is decided by a person.
           </p>
@@ -117,7 +117,7 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
                         {result.applicable ? (
                           "Yes"
                         ) : (
-                          // 적용 안 됨과 통과를 구분한다.
+                          // Distinguish not applicable from passed.
                           <span className="meta">Not applicable</span>
                         )}
                       </td>
@@ -172,5 +172,5 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
   );
 }
 
-/** seed가 만든 데모 규칙 세트. 실제로는 Jurisdiction Profile이 고른다. */
+/** Demo rule set created by seed. In practice the Jurisdiction Profile selects it. */
 const DEMO_POLICY_SET_ID = "dddddddd-0000-0000-0000-000000000001";

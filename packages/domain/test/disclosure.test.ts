@@ -28,11 +28,11 @@ const PUBLISHABLE: PublicationGuardInput = {
 };
 
 describe("AC-22 — public projection allowlist", () => {
-  it("allowlist 필드만 있으면 통과한다", () => {
+  it("passes with only allowlisted fields", () => {
     expect(checkPublishable(PUBLISHABLE).allowed).toBe(true);
   });
 
-  it("allowlist에 없는 필드를 거절하고 어떤 필드인지 반환한다", () => {
+  it("rejects fields outside the allowlist and returns which ones", () => {
     const result = checkPublishable({
       ...PUBLISHABLE,
       fields: [...PUBLISHABLE.fields, "rawSourceResponse", "internalNotes"],
@@ -44,13 +44,13 @@ describe("AC-22 — public projection allowlist", () => {
     }
   });
 
-  it("절대 공개 불가 필드는 전부 allowlist 밖이다", () => {
+  it("every never-public field is outside the allowlist", () => {
     for (const field of NEVER_PUBLIC_FIELDS) {
       expect(isPublicField(field)).toBe(false);
     }
   });
 
-  it("public이 아닌 민감도는 승인이 있어도 거절한다", () => {
+  it("rejects non-public sensitivity even with approval", () => {
     for (const sensitivity of ["restricted", "confidential", "pii", "whistleblower"] as const) {
       const result = checkPublishable({ ...PUBLISHABLE, sensitivity });
       expect(result.allowed).toBe(false);
@@ -58,13 +58,13 @@ describe("AC-22 — public projection allowlist", () => {
     }
   });
 
-  it("disclosure 승인 없이는 공개하지 않는다", () => {
+  it("does not disclose without disclosure approval", () => {
     const result = checkPublishable({ ...PUBLISHABLE, disclosureApproved: false });
     expect(result.allowed).toBe(false);
     if (!result.allowed) expect(result.reason).toBe("PUBLICATION_APPROVAL_MISSING");
   });
 
-  it("allowlist에 원문·PII 성격의 필드가 없다", () => {
+  it("the allowlist has no raw-content or PII fields", () => {
     const allowlist = new Set<string>(PUBLIC_FIELD_ALLOWLIST);
     for (const forbidden of NEVER_PUBLIC_FIELDS) {
       expect(allowlist.has(forbidden)).toBe(false);
@@ -72,8 +72,8 @@ describe("AC-22 — public projection allowlist", () => {
   });
 });
 
-describe("AC-32 — 자연인 식별자의 비가역 공개 차단", () => {
-  it("safeguard가 전부 갖춰지면 허용한다", () => {
+describe("AC-32 — blocks irreversible disclosure of natural-person identifiers", () => {
+  it("allows when every safeguard is in place", () => {
     expect(
       checkPublishable({
         ...PUBLISHABLE,
@@ -92,7 +92,7 @@ describe("AC-32 — 자연인 식별자의 비가역 공개 차단", () => {
   ] as const;
 
   for (const key of safeguardKeys) {
-    it(`${key}가 없으면 차단한다`, () => {
+    it(`blocks when ${key} is missing`, () => {
       const result = checkPublishable({
         ...PUBLISHABLE,
         containsPersonLevelIdentifier: true,
@@ -103,13 +103,13 @@ describe("AC-32 — 자연인 식별자의 비가역 공개 차단", () => {
     });
   }
 
-  it("pseudonymous handle은 기본 allowlist에 있다", () => {
+  it("the pseudonymous handle is in the default allowlist", () => {
     expect(isPublicField("reviewerPseudonymousHandle")).toBe(true);
   });
 });
 
 describe("AC-13 — source license", () => {
-  it("commercial_reuse가 unconfirmed면 상업적 근거로 publish할 수 없다", () => {
+  it("cannot publish as commercial grounds when commercial_reuse is unconfirmed", () => {
     const result = checkPublishable({
       ...PUBLISHABLE,
       commercialReuse: "unconfirmed",
@@ -119,7 +119,7 @@ describe("AC-13 — source license", () => {
     if (!result.allowed) expect(result.reason).toBe("PUBLICATION_SOURCE_LICENSE_UNCONFIRMED");
   });
 
-  it("prohibited도 마찬가지다", () => {
+  it("same for prohibited", () => {
     expect(
       checkPublishable({
         ...PUBLISHABLE,
@@ -129,7 +129,7 @@ describe("AC-13 — source license", () => {
     ).toBe(false);
   });
 
-  it("Reference·methodology 용도는 unconfirmed여도 가능하다", () => {
+  it("reference and methodology use is possible even when unconfirmed", () => {
     expect(
       checkPublishable({
         ...PUBLISHABLE,
@@ -140,7 +140,7 @@ describe("AC-13 — source license", () => {
   });
 });
 
-describe("AC-30 — 중대정보 blackout", () => {
+describe("AC-30 — material-information blackout", () => {
   const active: DisclosureRestriction = {
     restrictionId: "restriction-001",
     subjectScope: ["asset-A"],
@@ -148,21 +148,21 @@ describe("AC-30 — 중대정보 blackout", () => {
     state: "active",
   };
 
-  it("active restriction은 지정된 action을 차단하고 restriction ID를 반환한다", () => {
+  it("an active restriction blocks designated actions and returns the restriction ID", () => {
     const result = checkRestrictedAction([active], "asset-A", "transfer");
     expect(result.blocked).toBe(true);
     if (result.blocked) expect(result.restrictionId).toBe("restriction-001");
   });
 
-  it("scope 밖 subject는 차단하지 않는다", () => {
+  it("does not block a subject outside the scope", () => {
     expect(checkRestrictedAction([active], "asset-B", "transfer").blocked).toBe(false);
   });
 
-  it("지정되지 않은 action은 차단하지 않는다", () => {
+  it("does not block an undesignated action", () => {
     expect(checkRestrictedAction([active], "asset-A", "view").blocked).toBe(false);
   });
 
-  it("released·draft·superseded restriction은 차단하지 않는다", () => {
+  it("released, draft, and superseded restrictions do not block", () => {
     for (const state of ["draft", "released", "superseded"] as const) {
       expect(
         checkRestrictedAction([{ ...active, state }], "asset-A", "transfer").blocked,
@@ -170,7 +170,7 @@ describe("AC-30 — 중대정보 blackout", () => {
     }
   });
 
-  it("여러 restriction 중 하나라도 걸리면 차단한다", () => {
+  it("blocks if any one of several restrictions applies", () => {
     const other: DisclosureRestriction = {
       restrictionId: "restriction-002",
       subjectScope: ["asset-A"],

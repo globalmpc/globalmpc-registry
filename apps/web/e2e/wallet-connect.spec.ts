@@ -2,15 +2,16 @@ import { expect, test, type Page } from "@playwright/test";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 /**
- * 실지갑 연결.
+ * Real wallet connection.
  *
- * 다른 E2E는 데모 계정(알려진 키)으로 로그인한다. 그 경로는 지갑 확장을 거치지
- * 않으므로 **지갑마다 다른 응답**(체인 없음 코드, 거절, 여러 확장 동시 설치)을
- * 한 번도 지나지 않았다. 여기서는 EIP-6963으로 자기를 알리는 가짜 지갑을 페이지에
- * 넣고, 서명만 Node 쪽 키로 한다 — 앱 코드는 실제 지갑과 같은 경로를 탄다.
+ * Other E2E specs sign in with demo accounts (known keys). That path bypasses wallet
+ * extensions, so it never exercised **responses that differ per wallet** (unknown-chain
+ * codes, rejections, multiple extensions installed at once). Here a fake wallet that
+ * announces itself via EIP-6963 is injected into the page, and only signing uses a key on
+ * the Node side — the app code takes the same path as with a real wallet.
  *
- * 주소는 매번 새로 만든다. **어느 tenant에도 없는 지갑**이 로그인해 워크스페이스에
- * 닿는지가 이 파일의 핵심이다 — "누구든 연결하면 사용자가 된다".
+ * The address is new every time. The core of this file is whether **a wallet not in any
+ * tenant** can sign in and reach the workspace — "anyone who connects becomes a user".
  */
 
 type Mode = "desktop" | "mobile-nested" | "reject-switch";
@@ -126,15 +127,15 @@ async function steps(page: Page): Promise<string> {
   return (await page.getByTestId("connection-steps").textContent()) ?? "";
 }
 
-test.describe("실지갑 연결 — 어느 지갑이든 사용자가 된다", () => {
-  test("MetaMask 데스크톱 — 이더리움(1)에서 시작해도 체인을 추가하고 로그인한다", async ({ page }) => {
+test.describe("real wallet connection — any wallet becomes a user", () => {
+  test("MetaMask desktop — starting on Ethereum (1), adds the chain and signs in", async ({ page }) => {
     await installWallets(page, [METAMASK]);
     await connectWith(page, "io.metamask");
 
-    // 등록되지 않은 새 지갑이 워크스페이스에 닿는다. 역할은 없고 그 사실이 보인다.
+    // A new, unregistered wallet reaches the workspace. It has no roles, and that is shown.
     await expect(page).toHaveURL(/\/w\/projects/);
     await expect(page.getByText("No roles").first()).toBeVisible();
-    // 묶이지 않은 지갑은 오류(401)가 아니라 연결 대기 안내를 본다.
+    // An unbound wallet sees an enrollment-pending notice, not an error (401).
     await expect(page.getByTestId("enrollment-panel")).toBeVisible();
     await expect(page.getByTestId("error-notice")).toHaveCount(0);
 
@@ -143,7 +144,7 @@ test.describe("실지갑 연결 — 어느 지갑이든 사용자가 된다", ()
     expect(await steps(page)).toMatch(/switched 1 → 97/);
   });
 
-  test("MetaMask 모바일 — 4902를 -32603 안에 싸서 줘도 체인 추가를 제안한다", async ({ page }) => {
+  test("MetaMask mobile — offers to add the chain even when 4902 is wrapped in -32603", async ({ page }) => {
     await installWallets(page, [{ ...METAMASK, mode: "mobile-nested" }]);
     await connectWith(page, "io.metamask");
 
@@ -152,7 +153,7 @@ test.describe("실지갑 연결 — 어느 지갑이든 사용자가 된다", ()
     expect(calls).toContain("io.metamask:wallet_addEthereumChain");
   });
 
-  test("Trust Wallet — 체인 전환을 거절해도 로그인은 된다", async ({ page }) => {
+  test("Trust Wallet — sign-in succeeds even when the chain switch is rejected", async ({ page }) => {
     await installWallets(page, [
       {
         name: "Trust Wallet",
@@ -164,14 +165,14 @@ test.describe("실지갑 연결 — 어느 지갑이든 사용자가 된다", ()
     ]);
     await connectWith(page, "com.trustwallet.app");
 
-    // SIWE 서명은 체인과 무관하다. 전환을 로그인의 조건으로 두지 않는다.
+    // A SIWE signature is chain-independent. Switching is not a precondition for sign-in.
     await expect(page).toHaveURL(/\/w\/projects/);
     const recorded = await steps(page);
     expect(recorded).toMatch(/Trust Wallet \(com\.trustwallet\.app\)/);
     expect(recorded).toMatch(/not switched \(4001/);
   });
 
-  test("Brave와 MetaMask가 같이 깔려 있으면 고른 지갑으로 연결한다", async ({ page }) => {
+  test("with Brave and MetaMask both installed, connects with the chosen wallet", async ({ page }) => {
     await installWallets(page, [
       { name: "Brave Wallet", rdns: "com.brave.wallet", flags: { isBraveWallet: true }, startChain: 1, mode: "desktop" },
       METAMASK,
@@ -185,16 +186,16 @@ test.describe("실지갑 연결 — 어느 지갑이든 사용자가 된다", ()
     await expect(page).toHaveURL(/\/w\/projects/);
 
     const calls = (await page.evaluate(() => (window as unknown as { __walletCalls: string[] }).__walletCalls));
-    // 고른 쪽만 요청을 받는다. `window.ethereum`을 먼저 잡은 쪽이 아니다.
+    // Only the chosen wallet receives requests, not whichever grabbed `window.ethereum` first.
     expect(calls.some((call) => call.startsWith("com.brave.wallet:personal_sign"))).toBe(true);
     expect(calls.some((call) => call.startsWith("io.metamask:personal_sign"))).toBe(false);
     expect(await steps(page)).toMatch(/Brave Wallet \(com\.brave\.wallet\)/);
   });
 
-  test("서명 메시지의 체인은 서버가 준 값이다 — 웹에 박힌 값이 아니다", async ({ page }) => {
+  test("the chain in the signing message comes from the server — not hardcoded in the web", async ({ page }) => {
     await installWallets(page, [METAMASK]);
 
-    // 서버가 56을 말한다고 가정한다(stg·prod). 예전 웹은 97을 박아 두었다.
+    // Assume the server says 56 (stg, prod). The old web hardcoded 97.
     await page.route("**/api/v1/auth/siwe/nonce", async (route) => {
       const response = await route.fetch();
       const body = (await response.json()) as Record<string, unknown>;
@@ -209,7 +210,7 @@ test.describe("실지갑 연결 — 어느 지갑이든 사용자가 된다", ()
     expect(message).toContain("Chain ID: 56");
   });
 
-  test("지갑에서 다른 계정으로 바꾸면 연결을 끊고 다시 연결하라고 말한다", async ({ page }) => {
+  test("switching to another account in the wallet disconnects and asks to reconnect", async ({ page }) => {
     await installWallets(page, [METAMASK]);
     await connectWith(page, "io.metamask");
     await expect(page).toHaveURL(/\/w\/projects/);

@@ -3,7 +3,7 @@
 import { AccessRequestPanel } from "@/components/AccessRequestPanel";
 
 /**
- * `ASSURANCE_LEVEL_INSUFFICIENT` 거절이 가리키는 경로
+ * Route that an `ASSURANCE_LEVEL_INSUFFICIENT` rejection points to
  * (`packages/api-contract/src/authorization.ts`).
  */
 export default function IdentityUpgradePage() {

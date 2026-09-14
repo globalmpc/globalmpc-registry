@@ -4,28 +4,28 @@ import { parseRuleSet } from "@mpc/policy";
 import { ROLE_DEPLOY_BOUND } from "./audit.js";
 
 /**
- * 검토를 시작하는 데 필요한 세 가지를 배포된 시스템에 넣는다.
+ * Inserts the three things needed to start review into a deployed system.
  *
- * `bootstrap.ts`가 사람을 넣으면 로그인과 프로젝트 등록까지 간다. 거기서 멈춘다 —
- * 검토 배정은 검토자의 **credential**과 **attestation schema**를 요구하고, 준비도
- * 평가는 **policy rule set**을 요구한다. 셋을 만드는 경로가 E2E seed에만 있었고,
- * 그 seed는 스키마를 드롭하므로 배포에서 쓸 수 없다.
+ * When `bootstrap.ts` inserts people, login and project registration work. It stops there —
+ * review assignment requires the reviewer's **credential** and an **attestation schema**, and
+ * readiness evaluation requires a **policy rule set**. The only path creating the three was the
+ * E2E seed, which drops the schema and so cannot be used in deployment.
  *
- * **이것은 API가 아니다.** 02 §2.8은 credential 확인·schema/policy 승인을 각각
- * 별도 역할의 일로 정의하고, 그 화면과 route는 아직 없다. 여기 있는 것은 운영자가
- * 배포 환경에서 직접 넣는 경로이며, **누가 승인했다고 말했는지를 감사에 남기는
- * 것**으로 그 부재를 가리지 않는다.
+ * **This is not an API.** 02 §2.8 defines credential verification and schema/policy approval
+ * as work for separate roles, and those screens and routes do not exist yet. This is a path
+ * operators run directly in the deployment environment, and it does not hide that gap by
+ * **recording in audit who was stated to have approved**.
  *
- * 규칙 셋:
+ * Rules:
  *
- * - 아무것도 지우거나 덮어쓰지 않는다. 이미 있으면 그대로 두고 `created: false`다.
- * - 승인자를 대지 않으면 `draft`로 들어간다. draft schema로는 서명할 수 없고,
- *   draft policy set으로는 평가가 돌지 않는다 — 그것이 "아직 승인되지 않았다"의
- *   정확한 표시다.
- * - 만료된 자격을 `valid`로 넣지 않는다. 넣으면 서명 시점 검사가 통과하고
- *   attestation에 거짓 상태가 박힌다.
+ * - Deletes or overwrites nothing. If it already exists it is left as is with `created: false`.
+ * - Without an approver it goes in as `draft`. A draft schema cannot be signed, and a
+ *   draft policy set does not run evaluation — that is the exact marker of "not yet
+ *   approved".
+ * - Expired credentials are not inserted as `valid`. Doing so would pass the signing-time
+ *   check and embed a false status in the attestation.
  *
- * RLS를 우회하는 연결(superuser)로 부른다.
+ * Called with an RLS-bypassing connection (superuser).
  */
 
 export class BootstrapRegistryError extends Error {
@@ -47,14 +47,14 @@ interface AuditInput {
 }
 
 /**
- * 사람의 세션이 없는 mutation의 감사 기록.
+ * Audit record for a mutation without a human session.
  *
- * `actor_subject_id`·`actor_wallet`을 비운다. 이 경로를 실행한 것은 배포 환경에
- * 접근할 수 있는 운영자이고, 그 사람을 앱이 식별하지 않는다 — 없는 신원을
- * 지어내지 않고 없다고 적는다. `command` 접두사 `bootstrap.`이 그 사실을 표시한다.
+ * `actor_subject_id` and `actor_wallet` are left empty. What ran this path is an operator with
+ * access to the deployment environment, whom the app does not identify — rather than invent an
+ * identity, it records that there is none. The `command` prefix `bootstrap.` marks that fact.
  *
- * `effective_role`도 같은 이유로 `mpc_operator`가 아니다. 어떤 권한 판정도
- * 지나지 않았으므로 그 자리에 역할 이름을 적으면 기록이 거짓말을 한다.
+ * `effective_role` is not `mpc_operator` for the same reason. No authorization decision was
+ * made, so writing a role name there would make the record lie.
  */
 async function recordBootstrapAudit(
   tx: postgres.TransactionSql,
@@ -78,7 +78,7 @@ async function requireTenant(tx: postgres.TransactionSql, slug: string): Promise
   `;
   if (!tenant) {
     throw new BootstrapRegistryError(
-      `tenant를 찾을 수 없다 — ${slug}. 사람을 먼저 넣는다(\`pnpm --filter @mpc/api bootstrap\`)`,
+      `Tenant not found — ${slug}. Insert people first (\`pnpm --filter @mpc/api bootstrap\`)`,
     );
   }
   return tenant.id;
@@ -88,17 +88,17 @@ async function requireTenant(tx: postgres.TransactionSql, slug: string): Promise
 
 export interface CredentialInput {
   readonly tenantSlug: string;
-  /** 자격을 가진 사람의 지갑. `bootstrap`으로 이미 들어와 있어야 한다. */
+  /** Wallet of the credential holder. Must already be in via `bootstrap`. */
   readonly walletAddress: string;
-  /** 발급 기관과 자격 번호. 사람이 대조할 수 있는 문자열이어야 한다. */
+  /** Issuing body and credential number. Must be strings a human can cross-check. */
   readonly issuerReference: string;
-  /** `competent_person`·`laboratory`·`legal_practitioner` 등. */
+  /** `competent_person`·`laboratory`·`legal_practitioner`, etc. */
   readonly credentialType: string;
-  /** 이 자격이 덮는 claim type. 비면 서명이 막힌다. */
+  /** Claim types this credential covers. Empty blocks signing. */
   readonly credentialScope: readonly string[];
   readonly jurisdiction: readonly string[];
   readonly issuedAt: string;
-  /** 없으면 만료 없는 자격이다. 있으면 미래여야 한다. */
+  /** Absent means a credential without expiry. If present it must be in the future. */
   readonly expiresAt: string | null;
 }
 
@@ -116,29 +116,29 @@ export async function bootstrapCredential(
 
   if (input.credentialScope.length === 0) {
     throw new BootstrapRegistryError(
-      "credentialScope가 비어 있다. 범위 없는 자격으로는 서명이 거절된다(02 §2.5)",
+      "credentialScope is empty. Signing with an unscoped credential is rejected (02 §2.5)",
     );
   }
   if (input.issuerReference.trim() === "" || input.credentialType.trim() === "") {
-    throw new BootstrapRegistryError("issuerReference와 credentialType이 필요하다");
+    throw new BootstrapRegistryError("issuerReference and credentialType are required");
   }
 
   const issuedAt = new Date(input.issuedAt);
   if (Number.isNaN(issuedAt.getTime())) {
-    throw new BootstrapRegistryError(`issuedAt을 읽을 수 없다 — ${input.issuedAt}`);
+    throw new BootstrapRegistryError(`Cannot parse issuedAt — ${input.issuedAt}`);
   }
 
   let expiresAt: Date | null = null;
   if (input.expiresAt !== null) {
     expiresAt = new Date(input.expiresAt);
     if (Number.isNaN(expiresAt.getTime())) {
-      throw new BootstrapRegistryError(`expiresAt을 읽을 수 없다 — ${input.expiresAt}`);
+      throw new BootstrapRegistryError(`Cannot parse expiresAt — ${input.expiresAt}`);
     }
-    // 이미 지난 자격을 `valid`로 넣지 않는다. 서명 시점 검사가 통과해 버리고,
-    // attestation의 credential 스냅숏에 거짓 상태가 남는다(AC-12·AC-17).
+    // Do not insert an already-expired credential as `valid`. The signing-time check would pass,
+    // and a false status would remain in the attestation's credential snapshot (AC-12·AC-17).
     if (expiresAt.getTime() <= Date.now()) {
       throw new BootstrapRegistryError(
-        `expiresAt이 과거다 — ${input.expiresAt}. 만료된 자격은 valid로 등록하지 않는다`,
+        `expiresAt is in the past — ${input.expiresAt}. Expired credentials are not registered as valid`,
       );
     }
   }
@@ -146,9 +146,9 @@ export async function bootstrapCredential(
   return sql.begin(async (tx) => {
     const tenantId = await requireTenant(tx, input.tenantSlug);
 
-    // 소속 조직은 가장 먼저 만들어진 역할 바인딩에서 가져온다. 정렬 없이 LIMIT 1을
-    // 쓰면 여러 조직에 바인딩된 사람에게서 매번 다른 조직이 나온다 — 자격이 어느
-    // 조직 아래 있는지가 실행할 때마다 달라지면 독립성 판단의 근거가 흔들린다.
+    // The organization comes from the earliest-created role binding. LIMIT 1 without ordering
+    // returns a different organization each time for people bound to several — if the credential's
+    // organization changes per run, the basis for independence judgments shifts.
     const [identity] = await tx<{ subject_id: string | null; organization_id: string | null }[]>`
       SELECT w.subject_id, rb.organization_id
       FROM core.wallet_identities w
@@ -162,7 +162,7 @@ export async function bootstrapCredential(
 
     if (!identity?.subject_id) {
       throw new BootstrapRegistryError(
-        `이 tenant에 ${wallet} 지갑이 없다. 사람을 먼저 넣는다`,
+        `Wallet ${wallet} is not in this tenant. Insert people first`,
       );
     }
 
@@ -214,15 +214,15 @@ export interface AttestationSchemaInput {
   readonly attestationType: string;
   readonly requiredEvidence: readonly string[];
   readonly acceptedAuthorityTypes: readonly string[];
-  /** 이 schema로 만든 attestation이 반드시 밝혀야 하는 한계. */
+  /** Limitations every attestation made with this schema must disclose. */
   readonly mandatoryLimitations: readonly string[];
   readonly jurisdictionProfile: string;
   /**
-   * 승인했다고 말한 사람.
+   * The person stated to have approved.
    *
-   * 없으면 `draft`로 들어간다 — 그 상태로는 서명이 거절된다. 있으면 `active`가
-   * 되고 그 이름이 감사에 남는다. 앱이 확인한 사실이 아니라 **운영자가 한 진술**이며,
-   * 그렇게 기록된다(02 §2.8의 승인 경로가 생기기 전까지의 한계).
+   * Absent means `draft` — signing is rejected in that state. Present means `active`, and the
+   * name is recorded in audit. It is **a statement by the operator**, not a fact the app
+   * verified, and is recorded as such (a limitation until the 02 §2.8 approval path exists).
    */
   readonly approvedBy: string | null;
 }
@@ -233,7 +233,7 @@ export async function bootstrapAttestationSchema(
 ): Promise<BootstrapRegistryResult> {
   if (input.mandatoryLimitations.length === 0) {
     throw new BootstrapRegistryError(
-      "mandatoryLimitations가 비어 있다. 한계 없는 검토 규격은 만들지 않는다(AC-01)",
+      "mandatoryLimitations is empty. Review schemas without limitations are not created (AC-01)",
     );
   }
 
@@ -249,8 +249,8 @@ export async function bootstrapAttestationSchema(
     `;
     const found = existing[0];
     if (found) {
-      // 등록과 승인을 두 번에 나눠 할 수 있어야 한다(02 §2.8). draft로 넣어 둔 것을
-      // 뒤에 승인하는 경로가 없으면 한 사람이 한 번에 다 하는 것 말고는 방법이 없다.
+      // Registration and approval must be splittable into two steps (02 §2.8). Without a path to
+      // approve a draft later, the only option is one person doing everything at once.
       if (found.state === "draft" && input.approvedBy !== null) {
         await tx`
           UPDATE core.attestation_schemas SET state = 'active' WHERE id = ${found.id}
@@ -304,9 +304,9 @@ export async function bootstrapAttestationSchema(
 
 export interface PolicySetInput {
   readonly tenantSlug: string;
-  /** `packages/policy`의 rule set. 여기서 파싱해 거절한다. */
+  /** Rule set from `packages/policy`. Parsed and rejected here. */
   readonly definition: unknown;
-  /** attestation schema와 같은 뜻이다. 없으면 `draft`. */
+  /** Same meaning as for the attestation schema. Absent means `draft`. */
   readonly approvedBy: string | null;
 }
 
@@ -314,14 +314,14 @@ export async function bootstrapPolicySet(
   sql: postgres.Sql,
   input: PolicySetInput,
 ): Promise<BootstrapRegistryResult> {
-  // 규칙이 데이터라는 것은 그것이 검증된다는 뜻이다(OD-15). 파싱하지 않고 넣으면
-  // 평가 시점에야 깨지고, 그때는 무엇이 잘못됐는지가 gate 화면의 오류로만 보인다.
+  // Rules being data means they are validated (OD-15). Inserting without parsing breaks only at
+  // evaluation time, when the problem shows up only as an error on the gate screen.
   let ruleSet;
   try {
     ruleSet = parseRuleSet(input.definition);
   } catch (error) {
     throw new BootstrapRegistryError(
-      `rule set이 schema를 통과하지 못했다 — ${error instanceof Error ? error.message : String(error)}`,
+      `Rule set failed schema validation — ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
@@ -337,7 +337,7 @@ export async function bootstrapPolicySet(
     `;
     const found = existing[0];
     if (found) {
-      // schema와 같다 — 넣는 것과 승인하는 것을 나눌 수 있어야 한다.
+      // Same as schema — inserting and approving must be separable.
       if (found.state === "draft" && input.approvedBy !== null) {
         await tx`
           UPDATE core.compliance_policy_sets SET state = 'effective' WHERE id = ${found.id}

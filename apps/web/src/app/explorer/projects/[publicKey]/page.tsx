@@ -7,13 +7,13 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 import { PublicRecord } from "@/components/PublicRecord";
 
 /**
- * 공유 가능한 공개 프로젝트 URL — spec 11 §11.3.
+ * Shareable public project URL — spec 11 §11.3.
  *
- * 예전에는 공개 기록을 남에게 보내려면 "Explorer에 가서 이 키를 넣어라"고 말해야
- * 했다. 링크가 곧 기록이어야 인용·감사·이의제기가 같은 것을 가리킨다.
+ * Sending a public record to someone used to require saying "go to Explorer and enter this key".
+ * The link must be the record so citations, audits, and disputes point to the same thing.
  *
- * **이 화면이 새 데이터를 만들지 않는다.** 공개 projection 밖의 필드는 서버가
- * 반환하지 않으며, 여기서 다른 endpoint를 덧붙여 채우지 않는다.
+ * **This screen creates no new data.** Fields outside the public projection are not returned
+ * by the server, and they are not filled in here from another endpoint.
  */
 export default function PublicProjectPage({
   params,

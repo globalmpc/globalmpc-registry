@@ -11,12 +11,12 @@ import { GlobalSearchForm } from "@/components/GlobalSearchForm";
 /**
  * Public Explorer — spec 11 §11.3, OD-02.
  *
- * **이 화면은 목록이 먼저다.** 예전에는 `publicKey`를 이미 알아야 하는 검색 폼
- * 하나였고, 그러면 무엇이 게시돼 있는지 아는 사람만 쓸 수 있다. 공개
- * Registry에서 그것은 공개가 아니다.
+ * **This screen is list-first.** It used to be a single search form that required already knowing
+ * the `publicKey`, usable only by people who knew what was published. In a public
+ * Registry, that is not public.
  *
- * 키를 아는 경우를 없애지는 않는다 — 게시 화면과 공유 링크가 그 경로로 온다.
- * 그래서 직접 조회를 아래에 남기고 `?registryType=&publicKey=`도 계속 받는다.
+ * The known-key case stays — the publication screen and share links arrive through it.
+ * So direct lookup remains below, and `?registryType=&publicKey=` is still accepted.
  */
 export default function ExplorerPage() {
   const [registryType, setRegistryType] = useState("project");
@@ -25,8 +25,8 @@ export default function ExplorerPage() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
-  // 게시 화면에서 넘어온 링크가 바로 조회되게 한다. 공개 기록의 URL은 남에게
-  // 보낼 수 있어야 한다.
+  // Links from the publication screen look up immediately. A public record URL must be
+  // shareable.
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     const key = query.get("publicKey");
@@ -35,7 +35,7 @@ export default function ExplorerPage() {
     setRegistryType(type);
     setPublicKey(key);
     void lookup(type, key);
-    // 최초 1회만 — 이후에는 사용자가 폼으로 조회한다.
+    // First time only — afterwards the user looks up via the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -117,7 +117,7 @@ export default function ExplorerPage() {
               placeholder="SYNTH-PROJECT-001"
             />
           </div>
-          {/* 위의 목록 검색과 이름이 겹치지 않게 한다 — 하는 일도 다르다. */}
+          {/* Keep the name distinct from list search above — they do different things. */}
           <button className="primary" type="submit" disabled={busy || !publicKey}>
             {busy ? "Looking up…" : "Look up"}
           </button>

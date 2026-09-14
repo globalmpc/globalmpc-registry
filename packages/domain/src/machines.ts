@@ -17,8 +17,8 @@ export const AT_LIFECYCLE_STATES = [
 export type AtLifecycleState = (typeof AT_LIFECYCLE_STATES)[number];
 
 /**
- * suspended로 갈 수 있는 상태 — `any eligible state → suspended`.
- * draft는 아직 등록 전이라 정지할 대상이 없고, retired는 이미 종료됐다.
+ * States that may move to suspended — `any eligible state → suspended`.
+ * draft is not yet registered so there is nothing to suspend; retired has already ended.
  */
 export const SUSPENDABLE_STATES: readonly AtLifecycleState[] = [
   "registered",
@@ -46,17 +46,17 @@ export const atLifecycleMachine: StateMachine<AtLifecycleState> = {
     divested: ["closure", "suspended"],
     closure: ["retired", "suspended"],
     retired: [],
-    // 복귀 대상은 suspend 직전 상태다. 전이표는 가능한 집합만 정의하고
-    // 실제 복귀는 resumeFromSuspension이 판정한다.
+    // The resume target is the state just before suspension. The transition table defines only
+    // the possible set; resumeFromSuspension decides the actual resume.
     suspended: [...SUSPENDABLE_STATES, "closure"],
   },
 };
 
 /**
- * suspended에서의 복귀.
+ * Resuming from suspended.
  *
- * `suspended → prior_state 또는 closure`(§4.3)만 허용한다. 임의 상태로 복귀하면
- * suspension이 상태를 세탁하는 수단이 된다.
+ * Only `suspended → prior_state or closure` (§4.3) is allowed. Resuming into an arbitrary state
+ * would make suspension a way to launder state.
  */
 export function resumeFromSuspension(
   priorState: AtLifecycleState,
@@ -90,8 +90,8 @@ export const verificationCaseMachine: StateMachine<VerificationCaseState> = {
     assigned: ["in_review", "declined", "cancelled"],
     in_review: ["changes_requested", "signed", "cancelled"],
     changes_requested: ["in_review", "cancelled"],
-    // 서명 이후에는 본문을 수정할 수 없다. 정정은 새 attestation의 supersede다
-    // (§2.4 규칙 4, 불변조건 4).
+    // The body cannot be edited after signing. A correction is a supersede by a new attestation
+    // (§2.4 rule 4, invariant 4).
     signed: ["registered", "revoked", "superseded"],
     registered: ["revoked", "superseded"],
     declined: [],
@@ -128,14 +128,14 @@ export const proposalMachine: StateMachine<ProposalState> = {
     draft: ["review", "cancelled"],
     review: ["announced", "cancelled"],
     announced: ["voting", "cancelled"],
-    // voting 이후 cancelled가 없다 — tally 확정 후 관리자 취소를 막는다(§4.5).
+    // No cancelled after voting — blocks admin cancellation once the tally is final (§4.5).
     voting: ["succeeded", "defeated", "no_quorum"],
     succeeded: ["timelocked"],
     defeated: [],
     no_quorum: [],
     timelocked: ["recorded"],
     recorded: ["execution_pending"],
-    // 온체인 결과와 오프체인 집행의 간극(§4.5, AC-06).
+    // The gap between the on-chain result and off-chain execution (§4.5, AC-06).
     execution_pending: ["executed", "failed", "disputed"],
     executed: [],
     failed: [],
@@ -198,7 +198,7 @@ export const sourceConnectionMachine: StateMachine<SourceConnectionState> = {
   },
 };
 
-/** Source Receipt 처리 lifecycle — spec 04 §4.9. source result와 직교한다. */
+/** Source Receipt processing lifecycle — spec 04 §4.9. Orthogonal to source result. */
 export const RECEIPT_PROCESSING_STATES = [
   "requested",
   "received",
@@ -245,7 +245,7 @@ export const adapterHealthMachine: StateMachine<AdapterHealthState> = {
   transitions: {
     healthy: ["degraded", "schema_changed", "unavailable", "disabled"],
     degraded: ["healthy", "reconciliation_required", "disabled"],
-    // schema drift는 healthy로 직행할 수 없다. reconciliation을 거쳐야 한다(AC-19).
+    // schema drift cannot go straight to healthy. It must pass through reconciliation (AC-19).
     schema_changed: ["reconciliation_required", "disabled"],
     unavailable: ["healthy", "reconciliation_required", "disabled"],
     reconciliation_required: ["healthy", "disabled"],
@@ -296,7 +296,7 @@ export const attestationMachine: StateMachine<AttestationState> = {
     draft: ["signed"],
     signed: ["active", "revoked", "disputed"],
     active: ["stale_candidate", "superseded", "revoked", "disputed"],
-    // 재검토가 끝나면 active로 돌아갈 수 있다. 과거 서명 사실은 지우지 않는다.
+    // Once re-review ends it can return to active. The past signature is not erased.
     stale_candidate: ["active", "superseded", "revoked", "disputed"],
     superseded: [],
     revoked: [],
@@ -368,7 +368,7 @@ export const chainTransactionMachine: StateMachine<ChainTxState> = {
     created: ["signed", "failed"],
     signed: ["submitted", "failed"],
     submitted: ["included", "replaced", "dropped", "failed"],
-    // included는 성공이 아니다. confirmation depth를 충족해야 confirmed다(§6.8).
+    // included is not success. It is confirmed only once confirmation depth is met (§6.8).
     included: ["confirmed", "reverted", "reorged", "replaced"],
     confirmed: ["reorged"],
     replaced: ["submitted", "failed"],

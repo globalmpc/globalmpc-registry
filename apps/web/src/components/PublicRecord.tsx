@@ -10,25 +10,25 @@ import {
 import { project, type RecordDepth, type RecordView } from "@mpc/ui";
 
 /**
- * 게시된 공개 기록 하나 — spec 11 §11.3·§11.10 / AC-26.
+ * One published public record — spec 11 §11.3·§11.10 / AC-26.
  *
- * Explorer 검색 결과와 공유 가능한 프로젝트 URL(`/explorer/projects/[key]`)이
- * 같은 것을 보여야 한다. 두 화면이 각자 그리면 한쪽에서만 limitations가 빠지는
- * 일이 생기고, 그것은 눈으로 잡히지 않는다.
+ * Explorer search results and the shareable project URL (`/explorer/projects/[key]`)
+ * must show the same thing. If each screen renders its own, limitations go missing on one side
+ * and nobody catches it by eye.
  *
- * 두 질문을 분리해 표시하는 것이 이 컴포넌트의 핵심이다(08 §8.11).
+ * Displaying two questions separately is the core of this component (08 §8.11).
  *
- * 1. 이 공개 version이 해당 batch에 포함됐는가 — Merkle proof와 체인 확정
- * 2. 이 출처·검토자가 그 판단에 적합한 authority였는가 — 오프체인 Registry
+ * 1. Was this public version included in the batch — Merkle proof and chain finality
+ * 2. Was this source/reviewer an appropriate authority for that judgment — off-chain Registry
  *
- * 1번의 성공은 2번을 보증하지 않는다.
+ * Success on 1 does not guarantee 2.
  */
 export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
   const [proof, setProof] = useState<InclusionProof | null>(null);
   const [depth, setDepth] = useState<RecordDepth>("basic");
 
-  // proof는 아직 anchor되지 않았을 수 있다. 없는 것이 오류가 아니므로 조회
-  // 실패를 화면 오류로 올리지 않고 "아직 없음"으로 말한다.
+  // The proof may not be anchored yet. Absence is not an error, so a lookup
+  // failure is not raised as a screen error; it is stated as "not yet available".
   useEffect(() => {
     let live = true;
     setProof(null);
@@ -45,8 +45,8 @@ export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
   }, [entry.entryVersionId]);
 
   const view = toRecordView(entry, proof);
-  // 깊이별 필드 선택은 @mpc/ui가 한다. 화면이 직접 고르면 어느 깊이에선가
-  // limitations가 빠진다(AC-26).
+  // @mpc/ui selects fields per depth. If the screen picks them, limitations
+  // go missing at some depth (AC-26).
   const shown = project(view, depth) as Record<string, unknown>;
 
   return (
@@ -55,12 +55,12 @@ export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
           <div className="page-head" style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0 }}>Published record</h2>
             {/*
-              3깊이 레코드 뷰 — §11.10 / AC-26.
+              Three-depth record view — §11.10 / AC-26.
 
-              깊이는 **더 보여줄 뿐 덜 보여주지 않는다.** status·as-of·version·
-              limitations·authority scope는 어느 깊이에서도 그대로 있다. 그래야
-              "간단히 보기"에서 읽은 상태와 "자세히 보기"에서 읽은 상태가
-              갈리지 않는다.
+              Depth **only shows more, never less.** status, as-of, version,
+              limitations, and authority scope stay at every depth. That keeps the state read in
+              "Simple view" and the state read in "Detailed view"
+              from diverging.
             */}
             <div className="row" style={{ gap: 6 }} data-testid="depth-switch">
               {(["basic", "explanation", "expert"] as const).map((option) => (
@@ -77,7 +77,7 @@ export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
             </div>
           </div>
 
-          {/* 어느 깊이에서도 접히지 않는 사실. */}
+          {/* Facts that never collapse at any depth. */}
           <dl className="dl" data-testid="shared-facts">
             <dt>Status</dt>
             <dd className="mono" data-testid="shared-status">
@@ -199,8 +199,8 @@ export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
         {entry.history.length > 0 ? (
           <div className="panel">
             <h2>Earlier versions</h2>
-            {/* 정정·철회 이력을 감추지 않는다. 과거 상태를 최신처럼 보이게
-                하지 않는 것과 같은 이유다(§11.6). */}
+            {/* Do not hide correction/revocation history. Same reason as not making a past
+                state look current (§11.6). */}
             <div className="table-scroll">
               <table>
                 <thead>
@@ -244,8 +244,8 @@ export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
                   {proof.included ? (
                     <span style={{ color: "var(--positive)" }}>Confirmed</span>
                   ) : (
-                    // included는 confirmed일 때만 참이다. 그 전에는 아직
-                    // 확정되지 않았다(06 §6.8 hidden success 금지).
+                    // included is true only when confirmed. Before that it is not yet
+                    // final (06 §6.8 no hidden success).
                     <span style={{ color: "var(--alert)" }}>
                       Not confirmed yet — shown once the chain confirms
                     </span>
@@ -303,7 +303,7 @@ const DEPTH_LABEL: Record<RecordDepth, string> = {
   expert: "Expert",
 };
 
-/** 공개 projection의 선택 필드. `.strict()` allowlist 안에서만 읽는다. */
+/** Optional fields of the public projection. Read only within the `.strict()` allowlist. */
 function optionalString(entry: PublicProjection, key: string): string | null {
   const value = entry[key];
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -315,11 +315,11 @@ function optionalStrings(entry: PublicProjection, key: string): readonly string[
 }
 
 /**
- * 공개 응답을 3깊이 뷰로 옮긴다.
+ * Maps the public response to the three-depth view.
  *
- * **없는 값을 만들어 채우지 않는다.** anchor 전이면 merkle path와 트랜잭션이
- * 없고, 화면은 그것을 "아직 없음"으로 말한다 — 빈 자리를 그럴듯한 값으로 메우면
- * Expert 깊이가 근거가 아니라 장식이 된다.
+ * **Never fabricate missing values.** Before anchoring there is no merkle path or transaction,
+ * and the screen states "not yet available" — filling gaps with plausible values turns
+ * the Expert depth into decoration instead of evidence.
  */
 function toRecordView(entry: PublicProjection, proof: InclusionProof | null): RecordView {
   const asOf = entry.publishedAt ?? optionalString(entry, "asOf") ?? "—";
@@ -347,7 +347,7 @@ function toRecordView(entry: PublicProjection, proof: InclusionProof | null): Re
   queryOrDocumentReference: proof ? `batch ${proof.batchId}` : "—",
   receivedAt: entry.publishedAt ?? "—",
   rawHashReference: proof?.leafHash ?? "—",
-  // 공개 projection allowlist에 없는 값이다. 비슷한 필드를 대신 넣지 않는다.
+  // Not in the public projection allowlist. Do not substitute a similar field.
   sourceSchemaVersion: "—",
   adapterVersion: "—",
   signature: null,

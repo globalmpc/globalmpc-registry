@@ -3,21 +3,21 @@ import { REQUIRED_BOUNDARY_COPY } from "@mpc/ui";
 import { PUBLIC_NAV } from "@/lib/copy";
 
 /**
- * 공개 진입점 — spec 11 §11.2.
+ * Public entry point — spec 11 §11.2.
  *
- * 이 자리에는 계정 연결 화면이 있었다. 그래서 제품을 모르는 사람이 처음 만나는
- * 것이 "지갑을 연결하세요"였고, 무엇에 연결하는지는 어디에도 없었다. 로그인은
- * 공개 표면의 한 갈래이지 그 입구가 아니다 — 연결은 `/connect`로 옮겼다.
+ * This spot used to hold the account connect screen. So the first thing someone unfamiliar with
+ * the product met was "Connect your wallet", with nothing saying what it connects to. Sign-in is
+ * one branch of the public surface, not its entrance — connect moved to `/connect`.
  *
- * **설명이 주장이 되지 않게 한다.** 이 화면이 하는 일은 무엇을 확인해 주고
- * 무엇을 확인해 주지 않는지를 같은 무게로 적는 것이다. 경계 문구는 `@mpc/ui`가
- * 원본이며 여기서 다시 쓰지 않는다 — 화면마다 다르게 적히면 강제하는 의미가 없다.
+ * **Keep description from becoming a claim.** This screen states what it confirms
+ * and what it does not confirm with equal weight. Boundary copy originates in `@mpc/ui`
+ * and is not rewritten here — if each screen words it differently, enforcing it means nothing.
  *
- * 서버 컴포넌트다. 로그인하지 않은 첫 방문에 클라이언트 번들과 세션 조회를
- * 기다리게 할 이유가 없다.
+ * Server component. There is no reason to make an anonymous first visit wait for a client bundle
+ * and a session lookup.
  */
 
-/** 이 제품이 갈라 놓는 질문들 — §11.1. 셋은 서로를 보증하지 않는다. */
+/** The questions this product keeps apart — §11.1. None of the three vouches for another. */
 const SEPARATIONS = [
   {
     left: "Integrity proof",
@@ -41,7 +41,7 @@ const SEPARATIONS = [
   },
 ] as const;
 
-/** 무엇을 볼 수 있는지. 순서는 `PUBLIC_NAV`가 갖는다 — 두 곳에 적으면 갈라진다. */
+/** What can be viewed. The order belongs to `PUBLIC_NAV` — written in two places, it diverges. */
 const NAV_BLURB: Record<string, string> = {
   "/explorer": "Browse published registry records and look one up by key.",
   "/explorer/verifications": "Verification Registry entries — who reviewed what, under which authority.",
@@ -69,8 +69,8 @@ export default function PublicLandingPage() {
       </section>
 
       {/*
-        경계를 접히지 않는 자리에 둔다. footer로 내리면 읽히지 않고, 읽히지 않는
-        경고는 경고가 아니다(§11.6).
+        Put the boundary where it never collapses. Moved to the footer, it goes unread, and an unread
+        warning is not a warning (§11.6).
       */}
       <div className="notice" style={{ color: "var(--alert)" }} data-testid="landing-boundaries">
         <div className="title">What this service does not do</div>

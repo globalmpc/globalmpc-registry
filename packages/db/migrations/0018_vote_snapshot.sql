@@ -1,39 +1,39 @@
--- 투표 무게 스냅숏 — spec 04 §4.5, OD-06
+-- Vote weight snapshot — spec 04 §4.5, OD-06
 --
--- 지금까지 투표 무게는 요청 본문으로 들어왔다. 그러면 던지는 사람이 자기 무게를
--- 정한다 — 투표가 아니라 선언이다.
+-- Until now vote weight came in the request body. The voter thus set their own
+-- weight — a declaration, not a vote.
 --
--- 무게는 **투표 시작 시점의 온체인 잔고**에서 온다. 시점을 고정하는 이유:
+-- Weight comes from the **on-chain balance at voting start**. Why the point in time is fixed:
 --
---   1. 투표 중에 토큰을 사서 무게를 늘릴 수 없다.
---   2. 같은 토큰을 여러 지갑으로 옮겨 여러 번 던질 수 없다.
---   3. 집계를 언제 다시 해도 같은 결과가 나온다.
+--   1. Buying tokens during voting cannot increase weight.
+--   2. Moving the same tokens across wallets cannot cast multiple votes.
+--   3. Re-tallying at any time gives the same result.
 --
--- 스냅숏 블록은 제안이 `voting`으로 갈 때 정해지고 이후 바뀌지 않는다.
+-- The snapshot block is set when the proposal moves to `voting` and never changes afterward.
 
 ALTER TABLE core.governance_proposals
-  -- 투표 시작 시점의 블록. 이 높이의 잔고가 무게다.
+  -- Block at voting start. The balance at this height is the weight.
   ADD COLUMN snapshot_block BIGINT,
-  -- 무게를 읽을 토큰 컨트랙트. 없으면 수동 입력으로 떨어진다.
+  -- Token contract to read weight from. If absent, falls back to manual input.
   ADD COLUMN snapshot_token_address TEXT
     CHECK (snapshot_token_address ~ '^0x[0-9a-f]{40}$'),
   ADD COLUMN snapshot_chain_id INTEGER;
 
 /**
- * 스냅숏된 무게.
+ * Snapshotted weight.
  *
- * 조회 결과를 저장하는 이유: 온체인 조회는 실패할 수 있고 아카이브 노드가
- * 필요하다. 매 집계마다 다시 읽으면 노드 상태에 결과가 좌우된다.
+ * Why the lookup result is stored: on-chain lookups can fail and need an archive
+ * node. Re-reading at every tally would make the result depend on node state.
  *
- * **한 번 기록되면 바뀌지 않는다.** 같은 (proposal, wallet)에 두 값이 있으면
- * 어느 것이 맞는지 판정이 필요해진다.
+ * **Once recorded, it never changes.** Two values for the same (proposal, wallet) would
+ * require deciding which one is right.
  */
 CREATE TABLE core.governance_vote_weights (
   id            UUID PRIMARY KEY,
   tenant_id     UUID NOT NULL REFERENCES core.tenants(id),
   proposal_id   UUID NOT NULL,
   wallet_address TEXT NOT NULL CHECK (wallet_address ~ '^0x[0-9a-f]{40}$'),
-  -- decimal string으로 다룬다. 18 decimals를 number로 담으면 정밀도를 잃는다.
+  -- Handled as a decimal string. Holding 18 decimals in a number loses precision.
   weight        NUMERIC(78, 0) NOT NULL CHECK (weight >= 0),
   block_number  BIGINT NOT NULL,
   read_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -52,7 +52,7 @@ CREATE POLICY tenant_isolation ON core.governance_vote_weights
   USING (tenant_id = core.current_tenant())
   WITH CHECK (tenant_id = core.current_tenant());
 
--- 스냅숏은 append-only다. 무게를 고칠 수 있으면 결과를 고칠 수 있다.
+-- Snapshots are append-only. If weight can be edited, the result can be edited.
 GRANT SELECT, INSERT ON core.governance_vote_weights TO mpc_app;
 
 CREATE TRIGGER governance_vote_weights_no_delete
@@ -71,9 +71,9 @@ CREATE TRIGGER governance_vote_weights_no_update
   FOR EACH ROW EXECUTE FUNCTION core.reject_weight_update();
 
 /**
- * 스냅숏 블록은 한 번만 정해진다.
+ * The snapshot block is set only once.
  *
- * 투표 중에 블록을 옮기면 이미 던진 표의 무게 근거가 사라진다.
+ * Moving the block during voting removes the weight basis of votes already cast.
  */
 CREATE OR REPLACE FUNCTION core.protect_snapshot_block() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$

@@ -7,12 +7,12 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * Authority Registry 운영 경로 — 02 §2.8, REQ-DAPP-043.
+ * Authority Registry operations path — 02 §2.8, REQ-DAPP-043.
  *
- * 이 파일이 보는 것은 **분리가 실제로 강제되는가**다. 문서에 적힌 분리는
- * 라우트가 막지 않으면 존재하지 않는다.
+ * This file checks **whether separation is actually enforced**. Separation written in a
+ * document does not exist unless the route blocks it.
  */
-describeDb("Authority Registry 쓰기", () => {
+describeDb("Authority Registry writes", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operator: string;
@@ -48,7 +48,7 @@ describeDb("Authority Registry 쓰기", () => {
         verificationMethod: "authenticated_api",
         publicDisclosureLevel: "public",
         validFrom: "2020-01-01",
-        reason: "몽골 광업권 등록부 후보",
+        reason: "Mongolian mining right registry candidate",
         ...overrides,
       },
     });
@@ -63,30 +63,30 @@ describeDb("Authority Registry 쓰기", () => {
         "idempotency-key": idempotencyKey(),
         "if-match": `"${version}"`,
       },
-      payload: { state, reason: `${state}로 전환한다` },
+      payload: { state, reason: `transition to ${state}` },
     });
   }
 
-  it("등록은 항상 proposed에서 시작한다", async () => {
+  it("always starts registration in proposed", async () => {
     const response = await register();
     expect(response.statusCode).toBe(201);
 
     const body = response.json();
-    // 요청이 상태를 정할 수 있으면 등록하는 사람이 승인까지 하게 된다.
+    // If the request could set the state, the registrant would also approve.
     expect(body.state).toBe("proposed");
     expect(body.version).toBe(1);
   });
 
-  it("한계가 비어 있으면 등록되지 않는다", async () => {
-    // 한계 없는 authority는 존재하지 않는다(05 §5.11).
+  it("does not register with empty limitations", async () => {
+    // An authority without limitations does not exist (05 §5.11).
     const response = await register(operator, { doesNotProve: [] });
     expect(response.statusCode).toBe(400);
   });
 
-  it("등록한 사람은 같은 기관을 승인할 수 없다", async () => {
+  it("does not let the registrant approve the same authority", async () => {
     const created = (await register()).json();
 
-    // operatorA에게 auditor 역할을 더해 권한만으로는 통과하게 만든다.
+    // Add the auditor role to operatorA so that permissions alone would pass.
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
       VALUES (gen_random_uuid(), ${fx.tenantA}, ${fx.operatorSubjectA}, ${fx.orgA}, 'auditor')
@@ -95,7 +95,8 @@ describeDb("Authority Registry 쓰기", () => {
 
     const response = await setState(created.id, created.version, "accepted", bothRoles);
 
-    // 권한 검사만으로는 막지 못한다. 등록자와 승인자가 같은지를 따로 본다.
+    // A permission check alone cannot block this. Whether registrant equals approver is
+    // checked separately.
     expect(response.statusCode).toBe(403);
     expect(response.json().code).toBe("SEPARATION_OF_DUTIES");
 
@@ -105,14 +106,14 @@ describeDb("Authority Registry 쓰기", () => {
     `;
   });
 
-  it("운영자 역할만으로는 상태를 바꿀 수 없다", async () => {
+  it("does not let the operator role alone change state", async () => {
     const created = (await register()).json();
-    // 02 §2.8: 운영자 단독 accepted 전환 금지.
+    // 02 §2.8: an operator alone may not transition to accepted.
     const response = await setState(created.id, created.version, "accepted", operator);
     expect(response.statusCode).toBe(403);
   });
 
-  it("독립 검토자는 승인할 수 있다", async () => {
+  it("lets an independent reviewer approve", async () => {
     const created = (await register()).json();
     const response = await setState(created.id, created.version, "accepted");
 
@@ -120,7 +121,7 @@ describeDb("Authority Registry 쓰기", () => {
     expect(response.json().state).toBe("accepted");
   });
 
-  it("정지·취소에는 이유가 필요하다", async () => {
+  it("requires a reason for suspension and revocation", async () => {
     const created = (await register()).json();
     const response = await app.inject({
       method: "POST",
@@ -136,19 +137,19 @@ describeDb("Authority Registry 쓰기", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("If-Match 없이 상태를 바꿀 수 없다", async () => {
+  it("cannot change state without If-Match", async () => {
     const created = (await register()).json();
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/authorities/${created.id}/state`,
       headers: { authorization: `Bearer ${auditor}`, "idempotency-key": idempotencyKey() },
-      payload: { state: "accepted", reason: "확인했다" },
+      payload: { state: "accepted", reason: "reviewed" },
     });
 
     expect(response.statusCode).toBe(428);
   });
 
-  it("변경마다 이력이 남는다", async () => {
+  it("keeps a history entry for every change", async () => {
     const created = (await register()).json();
 
     await app.inject({
@@ -159,7 +160,7 @@ describeDb("Authority Registry 쓰기", () => {
         "idempotency-key": idempotencyKey(),
         "if-match": `"${created.version}"`,
       },
-      payload: { doesNotProve: ["economic_viability", "title_validity"], reason: "한계를 넓힌다" },
+      payload: { doesNotProve: ["economic_viability", "title_validity"], reason: "widen limitations" },
     });
 
     const versions = (
@@ -171,19 +172,19 @@ describeDb("Authority Registry 쓰기", () => {
     ).json().items as { version: number; doesNotProve: string[]; changeReason: string }[];
 
     expect(versions).toHaveLength(2);
-    // 그때 이 기관이 무엇을 확인해 주지 않는다고 했는지가 남아야 한다.
+    // What this authority said it does not confirm, at that time, must be kept.
     expect(versions[0]?.doesNotProve).toContain("title_validity");
     expect(versions[1]?.doesNotProve).not.toContain("title_validity");
-    expect(versions[1]?.changeReason).toBe("몽골 광업권 등록부 후보");
+    expect(versions[1]?.changeReason).toBe("Mongolian mining right registry candidate");
   });
 
-  it("이력은 수정할 수 없다", async () => {
+  it("does not allow history to be modified", async () => {
     await expect(
-      fx.sql`UPDATE core.authority_versions SET change_reason = '바꿈' WHERE version = 1`,
+      fx.sql`UPDATE core.authority_versions SET change_reason = 'changed' WHERE version = 1`,
     ).rejects.toThrow(/수정하거나 삭제할 수 없다/);
   });
 
-  describe("연동", () => {
+  describe("connections", () => {
     async function makeAccepted() {
       const created = (await register()).json();
       const accepted = (await setState(created.id, created.version, "accepted")).json();
@@ -200,16 +201,16 @@ describeDb("Authority Registry 쓰기", () => {
           connectionKey: `conn-test-${counter}`,
           collectionMethod: "authenticated_api",
           accessBasis: "data sharing agreement",
-          reason: "연동을 구성한다",
+          reason: "configure connection",
           ...body,
         },
       });
     }
 
-    it("승인되지 않은 기관의 연동은 활성이 될 수 없다", async () => {
+    it("does not activate a connection for an unapproved authority", async () => {
       const created = (await register()).json();
 
-      // 02 §2.8이 금지하는 것: API 성공을 authority 승인으로 변환하는 것.
+      // What 02 §2.8 forbids: turning API success into authority approval.
       const response = await createConnection(created.id, {
         state: "active",
         endpoint: "https://registry.example.test/x",
@@ -219,7 +220,7 @@ describeDb("Authority Registry 쓰기", () => {
       expect(response.json().code).toBe("CONNECTION_REQUIRES_ACCEPTED_AUTHORITY");
     });
 
-    it("승인된 기관의 연동은 활성이 된다", async () => {
+    it("activates a connection for an approved authority", async () => {
       const authorityId = await makeAccepted();
       const response = await createConnection(authorityId, {
         state: "active",
@@ -230,21 +231,21 @@ describeDb("Authority Registry 쓰기", () => {
       expect(response.json().state).toBe("active");
     });
 
-    it("자격증명 값을 반환하지 않는다", async () => {
+    it("does not return credential values", async () => {
       const authorityId = await makeAccepted();
       const created = (await createConnection(authorityId, {
         secretReference: "vault://mn/registry",
       })).json();
 
       expect(created.hasSecret).toBe(true);
-      // 참조 문자열 자체도 응답에 없다.
+      // Not even the reference string is in the response.
       expect(JSON.stringify(created)).not.toContain("vault://");
     });
 
-    // AC-04·AC-21: source가 승인을 잃으면 그것에 의존하는 하위가 함께 상태를
-    // 바꾼다. 여기서 덮는 것은 authority→connection 구간이다 —
-    // claim→attestation→Registry 전파는 아직 없다.
-    it("기관이 승인을 잃으면 연동이 내려간다", async () => {
+    // AC-04·AC-21: when a source loses approval, its dependents change state with it. This
+    // covers the authority→connection segment — claim→attestation→Registry propagation does
+    // not exist yet.
+    it("degrades connections when the authority loses approval", async () => {
       const authorityId = await makeAccepted();
       const connection = (await createConnection(authorityId, {
         state: "active",
@@ -257,17 +258,17 @@ describeDb("Authority Registry 쓰기", () => {
 
       const suspended = await setState(authorityId, before!.version, "suspended");
       expect(suspended.statusCode).toBe(200);
-      // 화면이 다시 조회하지 않아도 알 수 있게 응답이 말한다.
+      // The response says so, so the screen knows without re-fetching.
       expect(suspended.json().connectionsDegraded).toBe(true);
 
       const [row] = await fx.sql<{ state: string }[]>`
         SELECT state::text FROM core.source_connections WHERE id = ${connection.id}
       `;
-      // 정지시켰는데 연동이 계속 active면 정지의 의미가 사라진다.
+      // If the connection stayed active after suspension, suspension would mean nothing.
       expect(row?.state).toBe("degraded");
     });
 
-    it("연동 구성 권한이 없는 역할은 만들 수 없다", async () => {
+    it("does not let a role without connection configuration permission create one", async () => {
       const authorityId = await makeAccepted();
       const response = await app.inject({
         method: "POST",
@@ -277,14 +278,14 @@ describeDb("Authority Registry 쓰기", () => {
           connectionKey: "conn-denied",
           collectionMethod: "authenticated_api",
           accessBasis: "x",
-          reason: "시도",
+          reason: "attempt",
         },
       });
 
       expect(response.statusCode).toBe(403);
     });
 
-    it("endpoint를 갱신할 수 있다", async () => {
+    it("allows updating the endpoint", async () => {
       const authorityId = await makeAccepted();
       const created = (await createConnection(authorityId)).json();
 
@@ -299,7 +300,7 @@ describeDb("Authority Registry 쓰기", () => {
         payload: {
           endpoint: "https://registry.example.test/v2",
           state: "active",
-          reason: "새 주소로 옮긴다",
+          reason: "move to new address",
         },
       });
 

@@ -3,9 +3,9 @@ import { expect, test, type Page } from "@playwright/test";
 /**
  * Governance E2E — 04 §4.5, OD-06.
  *
- * 이 스펙이 확인하는 것은 투표가 되는가가 아니라 **투표가 무엇을 만들지
- * 않는가를 화면이 말하는가**다. 통과한 제안을 "승인됐다"로 읽게 만드는 것이
- * 이 화면의 가장 큰 위험이다.
+ * What this spec checks is not whether voting works but **whether the screen says what
+ * a vote does not create**. The biggest risk of this screen is that a passed proposal
+ * reads as "approved".
  */
 
 async function connectAs(page: Page, label: string): Promise<void> {
@@ -21,27 +21,27 @@ async function connectAs(page: Page, label: string): Promise<void> {
 test.describe("Governance", () => {
   test.setTimeout(120_000);
 
-  test("제안에서 마감까지 이어지고 한계가 계속 보인다", async ({ page }) => {
-    const title = `제안 ${Date.now()}`;
+  test("runs from proposal to close with the limitations always visible", async ({ page }) => {
+    const title = `Proposal ${Date.now()}`;
 
     await connectAs(page, "Proposer A");
     await page.goto("/w/governance");
 
-    // 경계 문구가 목록 위에 항상 있다.
+    // The boundary notice is always above the list.
     await expect(page.getByTestId("governance-boundary")).toContainText("no legal fact");
 
-    // 이유 없이는 제안할 수 없다.
+    // Cannot propose without a reason.
     await page.getByLabel("Title").fill(title);
     await expect(page.getByTestId("create-proposal")).toBeDisabled();
 
     await page.getByLabel("Rationale (required)").fill("The current schema cannot carry limitations");
 
     /**
-     * 정족수의 분모 — 09 §9.6.
+     * The quorum denominator — 09 §9.6.
      *
-     * 토큰이 배포되기 전에는 사람이 넣는다. 이 값 없이는 투표를 열 수 없다 —
-     * 던진 표의 합을 분모로 쓰면 `참여 × D >= 참여 × N`이 항상 참이라
-     * `no_quorum`이 구조적으로 나오지 않는다.
+     * Before the token is deployed, a person enters it. Voting cannot open without this
+     * value — using the sum of cast votes as the denominator makes
+     * `turnout × D >= turnout × N` always true, so `no_quorum` structurally never occurs.
      */
     await expect(page.getByTestId("create-proposal")).toBeDisabled();
     await page.getByLabel("Eligible weight (required)").fill("100");
@@ -58,7 +58,7 @@ test.describe("Governance", () => {
     );
     await expect(stateCell).toHaveText("draft");
 
-    // 상태 변경에도 이유가 필요하다.
+    // State changes also require a reason.
     await expect(page.getByTestId(`advance-review-${proposalId}`)).toBeDisabled();
     await page.getByLabel("Reason for the state change (required)").fill("Starting the review");
 
@@ -68,31 +68,31 @@ test.describe("Governance", () => {
     }
 
     /**
-     * 무게가 어디서 왔는지를 집계 옆에서 밝힌다 — 04 §4.5.
+     * States where the weight came from, next to the tally — 04 §4.5.
      *
-     * 토큰이 배포되기 전에는 사람이 넣은 값으로 집계된다. 화면이 그 사실을
-     * 말하지 않으면 수동 집계 결과를 온체인 근거로 읽는다.
+     * Before the token is deployed, tallies use manually entered values. If the screen
+     * does not say so, a manual tally reads as on-chain evidence.
      */
     await expect(page.getByTestId(`weight-source-${proposalId}`)).toContainText("Entered manually");
 
-    // 정족수의 분모도 같이 밝힌다. 비율만으로는 무엇의 비율인지 알 수 없다.
+    // Also states the quorum denominator. A ratio alone does not say what it is a ratio of.
     await expect(page.getByTestId(`quorum-${proposalId}`)).toContainText("of 100");
     await expect(page.getByTestId(`quorum-${proposalId}`)).toContainText("entered manually");
 
-    // --- 투표 (protocol_voter) ------------------------------------------------
+    // --- Vote (protocol_voter) --------------------------------------------
     await connectAs(page, "Voter A");
     await page.goto("/w/governance");
     await page.getByLabel("Vote weight").fill("100");
     await page.getByTestId(`vote-for-${proposalId}`).click();
     await expect(page.getByTestId("proposal-table")).toContainText("For 100");
 
-    // --- 마감 (proposer) ------------------------------------------------------
+    // --- Close (proposer) -------------------------------------------------
     await connectAs(page, "Proposer A");
     await page.goto("/w/governance");
     await page.getByLabel("Reason for the state change (required)").fill("The for votes prevail");
 
-    // 집계가 말하는 결과 하나만 제시된다. 셋을 다 보여주면 표를 무시하고
-    // 고르는 것처럼 읽힌다.
+    // Only the one outcome the tally indicates is offered. Showing all three would read as
+    // choosing while ignoring the votes.
     await expect(page.getByTestId(`advance-defeated-${proposalId}`)).toHaveCount(0);
     await page.getByTestId(`advance-succeeded-${proposalId}`).click();
 
@@ -100,16 +100,16 @@ test.describe("Governance", () => {
       "succeeded",
     );
 
-    // 통과해도 한계 문구는 그대로다. 통과가 승인이 아니다.
+    // Even after passing, the limitation notice stays. Passing is not approval.
     await expect(page.getByTestId("governance-boundary")).toContainText(
       "does not happen automatically",
     );
   });
 
-  test("투표자는 제안할 수 없고 제안자는 투표할 수 없다", async ({ page }) => {
+  test("voters cannot propose and proposers cannot vote", async ({ page }) => {
     await connectAs(page, "Voter A");
     await page.goto("/w/governance");
-    // 제안 폼 자체가 보이지 않는다.
+    // The proposal form itself is not shown.
     await expect(page.getByTestId("create-proposal")).toHaveCount(0);
 
     await connectAs(page, "Proposer A");

@@ -24,16 +24,16 @@ import { Address } from "@/components/Address";
 /**
  * Administration — spec 11 §11.2.
  *
- * 이 화면이 있기 전에는 배포된 시스템에 사람을 추가하는 유일한 방법이 서버에서
- * `bootstrap` CLI를 돌리는 것이었다. 그 CLI는 RLS를 우회하는 superuser 연결로
- * 돈다.
+ * Before this screen, the only way to add a person to a deployed system was to run the
+ * `bootstrap` CLI on the server. That CLI runs over a superuser connection that bypasses
+ * RLS.
  *
- * **혼자 권한을 줄 수 없다는 것이 이 화면의 형태를 정한다.** 역할 부여는
- * "제안"과 "결정"으로 갈리고, 제안한 사람에게는 결정 버튼이 나타나지 않는다.
- * 서버도 같은 것을 막는다 — 버튼을 숨기는 것은 보안 통제가 아니다(02 §2.1).
+ * **No one can grant a role alone, and that shapes this screen.** A role grant splits into
+ * "proposal" and "decision", and the proposer never sees the decision buttons.
+ * The server blocks the same thing — hiding a button is not a security control (02 §2.1).
  *
- * **잠긴 계정을 먼저 보인다.** 붙은 지갑이 전부 비활성이면 역할이 무엇이든
- * 로그인할 수 없다. 그 상태를 목록 안에 섞어 두면 눈에 띄지 않는다.
+ * **Locked accounts come first.** If every attached wallet is inactive, the person cannot
+ * sign in whatever their role. Mixed into the list, that state goes unnoticed.
  */
 
 const REASON_CODES = [
@@ -43,7 +43,7 @@ const REASON_CODES = [
   { value: "offboarding", label: "Offboarding" },
 ] as const;
 
-/** 역할 부여를 승인할 수 있는 역할. 서버의 `admin.role.approve`와 같은 목록이다. */
+/** Roles that can approve a role grant. Same list as the server's `admin.role.approve`. */
 const ADMIN_ROLES: readonly string[] = ["mpc_operator", "security_operator"];
 
 export default function AdminPage() {
@@ -193,7 +193,7 @@ export default function AdminPage() {
                         {wallet.disabledAt ? (
                           <span style={{ color: "var(--destructive-text)" }}>disabled</span>
                         ) : wallet.walletAddress === session?.walletAddress?.toLowerCase() ? (
-                          // 자기 지갑은 끌 수 없다. 버튼을 두면 누른 뒤에야 거절을 본다.
+                          // You cannot deactivate your own wallet. A button here would show the rejection only after the click.
                           <span>you</span>
                         ) : (
                           <button
@@ -211,7 +211,7 @@ export default function AdminPage() {
                       : subject.roles.map((role) => role.role).join(", ")}
                   </td>
                   <td>
-                    {/* 운영 권한자에게는 화면에서 지갑을 붙이지 않는다. 키 교체는 bootstrap이다. */}
+                    {/* Operator-level holders do not get wallets attached from the screen. Key rotation goes through bootstrap. */}
                     {subject.roles.some((role) => ADMIN_ROLES.includes(role.role)) ? (
                       <span className="meta">Wallet changes via bootstrap</span>
                     ) : (
@@ -240,7 +240,7 @@ export default function AdminPage() {
             onSubmit={(event) => {
               event.preventDefault();
               void run(async () => {
-                // 서버 세션의 체인을 쓴다. 숫자를 박아 두면 stg·prod(56)에서 어긋난다.
+                // Use the server session's chain. A hardcoded number breaks on stg/prod (56).
                 if (!session?.chainId) throw new Error("No session chain. Connect again.");
                 await bindAdminWallet(token!, newIdempotencyKey(), walletFor, {
                   walletAddress: walletAddress.trim().toLowerCase(),
@@ -382,10 +382,10 @@ export default function AdminPage() {
       ) : null}
 
       {/*
-        알림 수신처.
+        Notification sinks.
 
-        **등록돼 있다와 실제로 가고 있다를 구분해 보인다.** 설정해 두고 아무것도
-        못 보내는 상태가 가장 나쁘다 — 보내고 있다고 믿는다.
+        **Show "registered" separately from "actually delivering".** A sink that is configured but
+        sends nothing is the worst state — everyone believes it is sending.
       */}
       <div className="panel" data-testid="admin-sinks">
         <h2>Notification delivery</h2>
@@ -440,7 +440,7 @@ export default function AdminPage() {
           </button>
         </form>
         <p className="meta">
-          {/* 값을 붙여넣게 하면 그것이 DB에 남는다. 참조만 받는다(05 §5.12). */}
+          {/* A pasted value would stay in the DB. Accept only a reference (05 §5.12). */}
           A reference, not the secret itself. The worker resolves `file:` and `env:` references at
           send time; the value never enters this database.
         </p>
@@ -480,7 +480,7 @@ export default function AdminPage() {
                       ) : null}
                     </td>
                     <td>
-                      {/* 지우지 않고 멈춘다. 지우면 왜 끊겼는지가 남지 않는다. */}
+                      {/* Pause, do not delete. Deleting loses why it was cut off. */}
                       <button
                         onClick={() =>
                           void run(() =>
@@ -532,9 +532,9 @@ export default function AdminPage() {
                       <td style={{ color: "var(--muted-foreground)" }}>{grant.reason}</td>
                       <td>
                         {/*
-                          제안자에게는 결정 버튼을 주지 않는다. 서버도 같은 것을
-                          막지만, 누를 수 있는 버튼이 항상 거절되면 화면이
-                          고장난 것처럼 보인다.
+                          The proposer gets no decision buttons. The server blocks the
+                          same thing, but a clickable button that is always rejected makes
+                          the screen look broken.
                         */}
                         {mine ? (
                           <span className="meta">You proposed this — someone else decides.</span>

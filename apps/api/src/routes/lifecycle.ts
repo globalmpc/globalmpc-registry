@@ -17,24 +17,24 @@ import {
 } from "./shared.js";
 
 /**
- * project lifecycle 전이 — spec 04 §4.3.
+ * Project lifecycle transitions — spec 04 §4.3.
  *
- * `lifecycle_state`는 `draft`로 들어온 뒤 Registry 게시가 `registered`로 한 번
- * 옮기는 것이 전부였다. 나머지 전이는 **경로 자체가 없었다** — 상태기계와 단위
- * 테스트는 있었고 그것을 호출하는 route가 없었다.
+ * `lifecycle_state` enters as `draft`, and the only move was Registry publishing moving it once
+ * to `registered`. The other transitions **had no path at all** — the state machine and unit
+ * tests existed, but no route called them.
  *
- * **결정 — 내리는 것과 올리는 것을 나눈다.**
+ * **Decision — taking down and bringing up are separated.**
  *
- * - `suspended` 진입은 **1인**이다. 급한 일이며, 2인을 요구하면 두 번째 사람을
- *   기다리는 동안 문제가 있는 프로젝트가 계속 돈다(지갑 비활성과 같은 논리).
- * - 나머지 전이는 `issuer_officer`·`gate_approver`가 한다. 운영자 단독으로
- *   offering을 열 수 없다.
- * - **복귀는 멈춘 사람이 할 수 없다.** 같은 사람이 멈추고 되돌리면 suspension이
- *   통제가 아니라 개인의 재량이 된다.
+ * - Entering `suspended` is **one-person**. It is urgent; requiring two people would keep a
+ *   problematic project running while waiting for the second (same logic as wallet deactivation).
+ * - Other transitions are done by `issuer_officer`/`gate_approver`. An operator alone cannot
+ *   open an offering.
+ * - **Whoever suspended cannot reinstate.** If the same person suspends and reverts, suspension
+ *   becomes personal discretion rather than a control.
  *
- * **자동 전이는 없다.** gate decision 결과가 상태를 옮기지 않는다 — readiness가
- * 승인이 아닌 것과 같은 이유다(AC-03). stale 신호도 옮기지 않는다.
- * 사람이 이유를 적고 옮긴다.
+ * **There are no automatic transitions.** A gate decision result does not move the state — for
+ * the same reason readiness is not approval (AC-03). Stale signals do not move it either.
+ * A person records a reason and moves it.
  */
 
 interface ProjectRow {
@@ -67,7 +67,7 @@ export async function registerLifecycleRoutes(
       FROM core.projects
       WHERE tenant_id = ${tenantId} AND id = ${projectId}
     `;
-    if (!project) throw notFound("프로젝트를 찾을 수 없다");
+    if (!project) throw notFound("Project not found");
 
     const transitions = await tx<TransitionRow[]>`
       SELECT from_state, to_state, reason, actor_subject_id, occurred_at
@@ -119,20 +119,20 @@ export async function registerLifecycleRoutes(
     "/api/v1/projects/:projectId/lifecycle-transitions",
     async (request, reply) => {
       const { session, tenantId, idempotencyKey } = requireMutationContext(request);
-      // If-Match를 본문보다 먼저 본다 — 헤더가 빠진 요청이 400으로 답하면
-      // 클라이언트는 본문을 고치며 헤어나지 못한다.
+      // If-Match is checked before the body — if a request missing the header got a 400 for the
+      // body, the client would keep fixing the body without getting anywhere.
       const expected = requireIfMatch(request);
 
       const parsed = projectLifecycleTransitionRequest.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
       const toState = parsed.data.toState as AtLifecycleState;
 
       /**
-       * 04 §4.3의 비대칭이 여기 있다. 목적지가 권한을 정한다.
+       * The asymmetry of 04 §4.3 lives here. The destination determines the permission.
        */
       const effectiveRole = assertAuthorized(
         session,
@@ -150,13 +150,13 @@ export async function registerLifecycleRoutes(
             WHERE tenant_id = ${tenantId} AND id = ${request.params.projectId}
             FOR UPDATE
           `;
-          if (!project) throw notFound("프로젝트를 찾을 수 없다");
+          if (!project) throw notFound("Project not found");
           assertVersionMatches(expected, project.version, "project");
 
           const from = project.lifecycle_state;
           const allowed = atLifecycleMachine.transitions[from] ?? [];
           if (!allowed.includes(toState)) {
-            throw unprocessable("LIFECYCLE_TRANSITION_NOT_ALLOWED", "허용되지 않은 전이다", {
+            throw unprocessable("LIFECYCLE_TRANSITION_NOT_ALLOWED", "Transition not allowed", {
               from,
               to: toState,
               allowed: [...allowed],
@@ -164,24 +164,24 @@ export async function registerLifecycleRoutes(
           }
 
           /**
-           * 복귀는 suspend 직전 상태 또는 closure로만 간다(§4.3).
+           * Reinstatement goes only to the state before suspension, or to closure (§4.3).
            *
-           * 임의 상태로 복귀하면 suspension이 상태를 세탁하는 수단이 된다 —
-           * 멈췄다가 원하는 자리로 나오는 것이다.
+           * Reinstating to an arbitrary state would make suspension a way to launder state —
+           * suspend, then come out wherever you like.
            */
           if (from === "suspended") {
             if (!resumeFromSuspension(project.prior_lifecycle_state ?? "draft", toState)) {
               throw unprocessable(
                 "LIFECYCLE_RESUME_TARGET_INVALID",
-                "suspension 직전 상태 또는 closure로만 복귀한다",
+                "Reinstatement goes only to the pre-suspension state or closure",
                 { priorState: project.prior_lifecycle_state, requested: toState },
               );
             }
             /**
-             * 멈춘 사람은 되돌릴 수 없다.
+             * Whoever suspended cannot revert.
              *
-             * 같은 사람이 멈추고 되돌리면 suspension은 통제가 아니라 개인의
-             * 재량이 된다. 02 §2.8의 "운영자 단독 전환 금지"와 같은 규칙이다.
+             * If the same person suspends and reverts, suspension becomes personal discretion rather
+             * than a control. Same rule as the "no operator-only transition" of 02 §2.8.
              */
             if (
               project.suspended_by_subject_id !== null &&
@@ -189,8 +189,8 @@ export async function registerLifecycleRoutes(
             ) {
               throw forbidden(
                 "LIFECYCLE_RESUME_SELF",
-                "멈춘 사람은 그 프로젝트를 되돌릴 수 없다",
-                { requiredAction: "다른 권한 보유자가 복귀를 판정한다" },
+                "Whoever suspended the project cannot reinstate it",
+                { requiredAction: "Another permission holder decides the reinstatement" },
               );
             }
           }
@@ -198,7 +198,7 @@ export async function registerLifecycleRoutes(
           const [updated] = await tx<ProjectRow[]>`
             UPDATE core.projects
             SET lifecycle_state = ${toState},
-                -- 복귀 대상은 suspend 직전 상태다. 나올 때 지운다.
+                -- Reinstatement target is the pre-suspension state. Cleared on exit.
                 prior_lifecycle_state = ${toState === "suspended" ? from : null},
                 suspended_by_subject_id = ${toState === "suspended" ? session.subjectId : null},
                 version = version + 1,

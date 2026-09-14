@@ -2,25 +2,25 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * 접근성 자동 검사 — spec 11 §11.8, OD-31(WCAG 2.2 AA).
+ * Automated accessibility checks — spec 11 §11.8, OD-31 (WCAG 2.2 AA).
  *
- * 자동 검사가 잡는 것은 전체의 일부다. 대비·레이블·랜드마크·역할처럼 기계가
- * 판정할 수 있는 것만 본다 — "이 문구가 이해되는가"는 잡지 못한다. 그래서
- * `workspace.spec.ts`의 수동 검사(색 외의 표식, 키보드 조작)를 대체하지 않고
- * 함께 돌린다.
+ * Automated checks catch only part of the whole. They see only what a machine can
+ * judge, such as contrast, labels, landmarks and roles — not "is this wording
+ * understandable". So they run alongside, not instead of, the manual checks in
+ * `workspace.spec.ts` (markers other than color, keyboard operation).
  *
- * **위반을 0으로 강제한다.** 경고로 두면 쌓이고, 쌓이면 아무도 보지 않는다.
- * 고칠 수 없는 항목이 생기면 이유와 함께 여기 명시적으로 적는다.
+ * **Violations are forced to zero.** Left as warnings they pile up, and once they pile
+ * up nobody looks. If an item cannot be fixed, record it here explicitly with the reason.
  */
 
 const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 /**
- * 검사 전에 페이지를 가라앉힌다.
+ * Lets the page settle before checking.
  *
- * axe는 페이지 안에서 돈다. 하이드레이션이나 그때 시작된 요청이 아직 진행 중이면
- * 검사 도중 실행 컨텍스트가 사라지고 **접근성과 무관한 이유로** 테스트가 깨진다.
- * `goto`는 문서 로드까지만 기다리므로 클라이언트가 멈출 때까지 한 번 더 기다린다.
+ * axe runs inside the page. If hydration or requests started by it are still in flight,
+ * the execution context disappears mid-check and the test breaks **for reasons unrelated
+ * to accessibility**. `goto` waits only for document load, so wait once more until the client is idle.
  */
 async function settle(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle");
@@ -30,12 +30,12 @@ async function analyze(page: Page) {
   await settle(page);
   return new AxeBuilder({ page })
     .withTags(WCAG_TAGS)
-    // Next.js 개발 오버레이는 우리 코드가 아니다. prod 번들에는 없다.
+    // The Next.js dev overlay is not our code. It is absent from the prod bundle.
     .exclude("nextjs-portal")
     .analyze();
 }
 
-/** 위반을 사람이 읽을 수 있게 정리한다. id만 보면 무엇을 고쳐야 할지 모른다. */
+/** Formats violations for humans. The id alone does not say what to fix. */
 function describe(violations: Awaited<ReturnType<typeof analyze>>["violations"]): string {
   return violations
     .map(
@@ -56,19 +56,19 @@ async function connectAs(page: Page, label: string): Promise<void> {
   await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
 }
 
-test.describe("접근성 (WCAG 2.2 AA)", () => {
-  test("로그인 화면", async ({ page }) => {
+test.describe("accessibility (WCAG 2.2 AA)", () => {
+  test("sign-in screen", async ({ page }) => {
     await page.goto("/connect");
     const result = await analyze(page);
     expect(describe(result.violations)).toBe("");
   });
 
   /**
-   * 공개 표면 전부를 훑는다 — spec 11 §11.2의 7개.
+   * Sweeps the whole public surface — the 7 screens of spec 11 §11.2.
    *
-   * 로그인하지 않은 사람이 보는 화면이다. 여기가 막히면 공개의 의미가 없다.
-   * 한 화면씩 적는 대신 목록으로 도는 이유는 §11.2에 화면이 추가될 때 검사가
-   * 같이 늘어나야 하기 때문이다 — 손으로 적으면 새 화면만 조용히 빠진다.
+   * These are the screens seen by people who are not signed in. If they are blocked,
+   * being public means nothing. A loop over a list is used instead of one test per screen
+   * so the checks grow when §11.2 adds a screen — written by hand, new screens silently drop out.
    */
   for (const path of [
     "/",
@@ -81,37 +81,37 @@ test.describe("접근성 (WCAG 2.2 AA)", () => {
     "/governance",
     "/disclosures",
   ]) {
-    test(`공개 표면 — ${path}`, async ({ page }) => {
+    test(`public surface — ${path}`, async ({ page }) => {
       await page.goto(path);
       const result = await analyze(page);
       expect(describe(result.violations)).toBe("");
     });
   }
 
-  test("프로젝트 목록", async ({ page }) => {
+  test("project list", async ({ page }) => {
     await connectAs(page, "Operator A");
     await page.goto("/w/projects");
     const result = await analyze(page);
     expect(describe(result.violations)).toBe("");
   });
 
-  test("프로젝트 등록 폼", async ({ page }) => {
-    // 입력 폼은 레이블·오류 연결이 걸리기 쉬운 자리다.
+  test("project registration form", async ({ page }) => {
+    // Input forms are where label and error associations tend to break.
     await connectAs(page, "Operator A");
     await page.goto("/w/projects/new");
     const result = await analyze(page);
     expect(describe(result.violations)).toBe("");
   });
 
-  test("Data Room — 표와 상태 배지", async ({ page }) => {
-    // 표가 비어 있으면 검사할 것이 없다. 실제 행이 있는 상태를 만든다.
+  test("Data Room — table and state badges", async ({ page }) => {
+    // An empty table has nothing to check. Create a state with real rows.
     await connectAs(page, "Operator A");
     await page.goto("/w/projects/new");
     await page.getByRole("textbox", { name: "Project key" }).fill(`A11Y-${Date.now()}`);
     await page.getByRole("textbox", { name: "Name" }).fill("For the accessibility check");
     await page.getByRole("textbox", { name: "Minerals (comma separated)" }).fill("copper");
     await page.getByRole("button", { name: "Register" }).click();
-    // 이동을 기다리지 않으면 URL이 아직 `/new`다.
+    // Without waiting for navigation, the URL is still `/new`.
     await expect(page).toHaveURL(/\/w\/projects\/[0-9a-f-]{36}$/);
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;
 
@@ -125,8 +125,8 @@ test.describe("접근성 (WCAG 2.2 AA)", () => {
     expect(describe(result.violations)).toBe("");
   });
 
-  test("오류 표시", async ({ page }) => {
-    // 오류는 role=alert로 읽혀야 하고 색만으로 구분되면 안 된다.
+  test("error display", async ({ page }) => {
+    // Errors must be read as role=alert and must not be distinguished by color alone.
     await connectAs(page, "Reader A");
     await page.goto("/w/projects/new");
     await page.getByRole("textbox", { name: "Project key" }).fill("A11Y-DENIED");
@@ -138,23 +138,23 @@ test.describe("접근성 (WCAG 2.2 AA)", () => {
     expect(describe(result.violations)).toBe("");
   });
 
-  test("권한 거절이 가리키는 화면 — 로그인 없이", async ({ page }) => {
-    // 막힌 사람이 도착하는 자리다. 세션이 없어도 읽을 수 있어야 한다.
+  test("screen a permission denial points to — without sign-in", async ({ page }) => {
+    // This is where a blocked person lands. It must be readable without a session.
     await page.goto("/w/identity/upgrade");
     const result = await analyze(page);
     expect(describe(result.violations)).toBe("");
   });
 
-  test("Anchor 상태 화면", async ({ page }) => {
+  test("Anchor state screen", async ({ page }) => {
     await connectAs(page, "Operator A");
     await page.goto("/w/anchors");
     const result = await analyze(page);
     expect(describe(result.violations)).toBe("");
   });
 
-  /** 새로 생긴 워크스페이스 집계 화면. */
+  /** The new workspace aggregate screens. */
   for (const path of ["/w/work", "/w/notifications", "/w/registries", "/w/integrations"]) {
-    test(`워크스페이스 — ${path}`, async ({ page }) => {
+    test(`workspace — ${path}`, async ({ page }) => {
       await connectAs(page, "Operator A");
       await page.goto(path);
       const result = await analyze(page);
@@ -162,16 +162,16 @@ test.describe("접근성 (WCAG 2.2 AA)", () => {
     });
   }
 
-  test("Administration 화면", async ({ page }) => {
-    // 사람·지갑·역할을 다루는 화면이다. 여기가 막히면 복구 경로가 막힌다.
+  test("Administration screen", async ({ page }) => {
+    // This screen manages people, wallets and roles. If it is blocked, the recovery path is blocked.
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
     const result = await analyze(page);
     expect(describe(result.violations)).toBe("");
   });
 
-  test("감사 화면", async ({ page }) => {
-    // 감사 기록이 남는 행위를 먼저 만든다. 빈 화면은 표를 렌더하지 않는다.
+  test("audit screen", async ({ page }) => {
+    // First perform an action that leaves an audit record. An empty screen does not render the table.
     await connectAs(page, "Operator A");
     await page.goto("/w/projects/new");
     await page.getByRole("textbox", { name: "Project key" }).fill(`A11Y-AUDIT-${Date.now()}`);

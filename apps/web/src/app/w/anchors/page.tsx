@@ -13,13 +13,13 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 import { Address } from "@/components/Address";
 
 /**
- * Anchor 상태 — spec 08 §8.9, 06 §6.8.
+ * Anchor state — spec 08 §8.9, 06 §6.8.
  *
- * batch를 만든 뒤 무슨 일이 일어났는지 보는 화면이다. 이것이 없으면 운영자는
- * 제출이 막힌 것과 확정을 기다리는 것을 구분할 수 없다.
+ * Shows what happened after a batch was created. Without it, an operator cannot
+ * tell a stuck submission from one awaiting confirmation.
  *
- * **상태를 "진행중/완료"로 뭉개지 않는다.** `included`와 `confirmed`는 다른
- * 사실이고, 그 차이가 공개 증명의 `included` 필드를 결정한다.
+ * **States are not collapsed into "in progress/done".** `included` and `confirmed` are different
+ * facts, and the difference sets the `included` field of the public proof.
  */
 export default function AnchorsPage() {
   const { token, loading: sessionLoading } = useSession();
@@ -44,18 +44,18 @@ export default function AnchorsPage() {
   useEffect(() => {
     if (sessionLoading) return;
     void load();
-    // 체인 상태는 worker가 밖에서 바꾼다. 화면이 주기적으로 다시 읽지 않으면
-    // 확정된 뒤에도 제출 중으로 보인다.
+    // The worker changes chain state externally. Without periodic re-reads the screen
+    // still shows "submitting" after confirmation.
     const timer = setInterval(() => void load(), 5000);
     return () => clearInterval(timer);
   }, [load, sessionLoading]);
 
   /**
-   * 멈춘 batch를 다시 올린다.
+   * Resubmit a stuck batch.
    *
-   * 자동으로 하지 않는 이유: 같은 root를 두 번 올리면 컨트랙트가
-   * `BatchAlreadyExists`로 거절하지만 가스는 소모된다. 원인을 확인한 사람이
-   * 결정한다.
+   * Why this is not automatic: submitting the same root twice is rejected by the contract
+   * with `BatchAlreadyExists`, but gas is still spent. A person who has checked the cause
+   * decides.
    */
   async function resubmit(batchId: string) {
     if (!token) return;
@@ -99,7 +99,7 @@ export default function AnchorsPage() {
       {attention.length > 0 ? (
         <div className="notice" data-testid="anchor-attention" style={{ color: "var(--destructive-text)" }}>
           <div className="title">{attention.length} batches need a person to look</div>
-          {/* 자동으로 풀리지 않는 상태다. 조용히 두면 공개 기록이 근거 없이 남는다. */}
+          {/* This state does not clear on its own. Left silent, the public record stands without evidence. */}
           <ul>
             {attention.map((item) => (
               <li key={item.id}>
@@ -110,7 +110,7 @@ export default function AnchorsPage() {
             ))}
           </ul>
           <div className="meta" style={{ marginTop: 6 }}>
-            {/* 자동 재제출은 같은 root를 두 번 올릴 수 있다. */}
+            {/* Automatic resubmission could submit the same root twice. */}
             Resubmission is never automatic. A person decides after finding the cause.
           </div>
         </div>
@@ -152,12 +152,12 @@ export default function AnchorsPage() {
                         {item.confirmationState}
                       </span>
                       {item.confirmationState === "included" ? (
-                        // included를 성공으로 읽지 않게 한다(06 §6.8).
+                        // Keep included from reading as success (06 §6.8).
                         <div className="meta">Not confirmed yet</div>
                       ) : null}
                       {item.proposal ? (
-                        // 제안이 있다는 것은 제출됐다는 뜻이 아니다. 서명 수집과
-                        // 실행은 Safe에서 사람이 한다.
+                        // A proposal existing does not mean it was submitted. Collecting signatures
+                        // and executing happen in Safe, by people.
                         <div className="meta" data-testid="safe-proposal">
                           Awaiting Safe signatures ·{" "}
                           <Address value={item.proposal.safeAddress} label="Safe address" />
@@ -171,7 +171,7 @@ export default function AnchorsPage() {
                     <td className="mono">{item.attempts}</td>
                     <td className="mono">
                       {item.reorgCount > 0 ? (
-                        // 재확정됐더라도 한 번 뒤집혔다는 사실은 지우지 않는다.
+                        // Even after reconfirmation, the fact that it was reorged once is kept.
                         <span style={{ color: "var(--alert)" }}>{item.reorgCount}</span>
                       ) : (
                         <span className="meta">0</span>

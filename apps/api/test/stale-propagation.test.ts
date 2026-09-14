@@ -8,16 +8,16 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 출처 변경 전파 — AC-04 · AC-21.
+ * Source change propagation — AC-04 · AC-21.
  *
- * 사슬은 이렇다.
+ * The chain:
  *
  *   authority → connection → receipt → claim → attestation
  *
- * 앞의 두 구간은 0020이, 뒤의 두 구간은 0023이 만든다. 이 파일은 **끝까지
- * 이어지는가**와 **끝난 기록을 건드리지 않는가**를 함께 본다.
+ * Migration 0020 builds the first two links and 0023 the last two. This file checks both
+ * **that the chain reaches the end** and **that it leaves closed records untouched**.
  */
-describeDb("stale 전파", () => {
+describeDb("stale propagation", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operator: string;
@@ -34,13 +34,13 @@ describeDb("stale 전파", () => {
   });
 
   beforeEach(async () => {
-    // 연동을 원래대로 돌려 놓는다. 각 테스트가 자기 전이를 일으킨다.
+    // Restore the connection. Each test triggers its own transition.
     await fx.sql`
       UPDATE core.source_connections SET state = 'active' WHERE id = ${fx.connectionA}
     `;
   });
 
-  /** receipt 하나와 그것에 근거한 claim 하나를 만든다. */
+  /** Creates one receipt and one claim backed by it. */
   async function seedClaim(): Promise<{ receiptId: string; claimId: string }> {
     const receiptId = randomUUID();
     await fx.sql`
@@ -55,8 +55,8 @@ describeDb("stale 전파", () => {
         'authenticated_api', 'confirmed_from_source', '{}'::jsonb, 'https://x.test/a',
         'none', ${`0x${"11".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
         now(), now(), 'fresh', 'test',
-        -- 서버가 부른 조회에서 나온 확정이다 — 2026-09-10 실사 A1.
-        -- 이 표시가 없으면 DB가 거절한다(api_confirmation_requires_server_collection).
+        -- A confirmation from a server-initiated lookup — 2026-09-10 audit A1.
+        -- Without this flag the DB rejects it (api_confirmation_requires_server_collection).
         '{"collector":"server_adapter"}'::jsonb
       )
     `;
@@ -99,7 +99,7 @@ describeDb("stale 전파", () => {
       ) VALUES (
         ${id}, ${fx.tenantA}, ${caseId}, ${assignmentId}, ${fx.credentialA}, ${fx.schemaA},
         'professional_signoff', ARRAY[${claimId}]::UUID[], ${`0x${"22".repeat(32)}`},
-        '{"note":"검토했다"}'::jsonb, 'legal_effect_not_determined', '{}'::jsonb, '1', '1',
+        '{"note":"reviewed"}'::jsonb, 'legal_effect_not_determined', '{}'::jsonb, '1', '1',
         ${`0x${"33".repeat(32)}`}, ${`0x${"44".repeat(65)}`},
         ${fx.reviewerA.address.toLowerCase()}, now(), ${state}
       )
@@ -107,7 +107,7 @@ describeDb("stale 전파", () => {
     return id;
   }
 
-  it("연동이 내려가면 그 출처의 claim이 표시된다", async () => {
+  it("flags the claims of a source when its connection goes down", async () => {
     const { claimId } = await seedClaim();
 
     await fx.sql`
@@ -119,11 +119,11 @@ describeDb("stale 전파", () => {
     `;
 
     expect(claim?.stale_since).not.toBeNull();
-    // 왜 흔들렸는지가 함께 남아야 다음 사람이 판단한다.
+    // The reason must be kept alongside so the next person can judge.
     expect(claim?.stale_reason).toContain("degraded");
   });
 
-  it("검토 상태는 바뀌지 않는다", async () => {
+  it("does not change the review state", async () => {
     const { claimId } = await seedClaim();
 
     await fx.sql`
@@ -134,11 +134,11 @@ describeDb("stale 전파", () => {
       SELECT verification_state FROM core.claims WHERE id = ${claimId}
     `;
 
-    // 검토는 실제로 있었다. 달라진 것은 그 검토가 딛고 있던 근거다.
+    // The review did happen. What changed is the evidence it stood on.
     expect(claim?.verification_state).toBe("analyst_checked");
   });
 
-  it("처음 흔들린 시점을 덮어쓰지 않는다", async () => {
+  it("does not overwrite the time it first went stale", async () => {
     const { claimId } = await seedClaim();
 
     await fx.sql`UPDATE core.source_connections SET state = 'degraded' WHERE id = ${fx.connectionA}`;
@@ -156,10 +156,10 @@ describeDb("stale 전파", () => {
     expect(second?.stale_since.getTime()).toBe(first?.stale_since.getTime());
   });
 
-  it("access_confirmed로 내려가는 것은 전파하지 않는다", async () => {
+  it("does not propagate a drop to access_confirmed", async () => {
     const { claimId } = await seedClaim();
 
-    // 자동 호출 경로가 없어진 것이지 근거가 사라진 것이 아니다.
+    // The automated lookup path is gone; the evidence is not.
     await fx.sql`
       UPDATE core.source_connections SET state = 'access_confirmed' WHERE id = ${fx.connectionA}
     `;
@@ -170,7 +170,7 @@ describeDb("stale 전파", () => {
     expect(claim?.stale_since).toBeNull();
   });
 
-  it("claim이 흔들리면 그것을 덮은 attestation이 재검토 대상이 된다", async () => {
+  it("marks the attestation covering a stale claim for re-review", async () => {
     const { claimId } = await seedClaim();
     const attestationId = await seedAttestation(claimId, "active");
 
@@ -187,7 +187,7 @@ describeDb("stale 전파", () => {
     expect(row?.stale_reason).toContain("근거 claim");
   });
 
-  it("이미 끝난 attestation은 건드리지 않는다", async () => {
+  it("leaves closed attestations untouched", async () => {
     const { claimId } = await seedClaim();
     const revoked = await seedAttestation(claimId, "revoked");
     const superseded = await seedAttestation(claimId, "superseded");
@@ -201,12 +201,12 @@ describeDb("stale 전파", () => {
       WHERE id IN (${revoked}, ${superseded})
     `;
 
-    // 끝난 기록을 다시 건드리면 "언제 무엇이 유효했나"가 흐려진다.
+    // Touching closed records blurs "what was valid when".
     expect(rows.find((r) => r.id === revoked)?.state).toBe("revoked");
     expect(rows.find((r) => r.id === superseded)?.state).toBe("superseded");
   });
 
-  it("다른 출처의 claim은 영향받지 않는다", async () => {
+  it("does not affect claims from other sources", async () => {
     const other = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
@@ -229,7 +229,7 @@ describeDb("stale 전파", () => {
     expect(row?.stale_since).toBeNull();
   });
 
-  it("이유 없이 stale로 표시할 수 없다", async () => {
+  it("cannot mark stale without a reason", async () => {
     const { claimId } = await seedClaim();
 
     await expect(
@@ -237,7 +237,7 @@ describeDb("stale 전파", () => {
     ).rejects.toThrow(/claims_stale_needs_reason/);
   });
 
-  it("근거 없는 claim을 뷰가 드러낸다", async () => {
+  it("exposes claims without evidence through the view", async () => {
     const orphan = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
@@ -253,11 +253,11 @@ describeDb("stale 전파", () => {
       SELECT id FROM core.claims_without_evidence WHERE id = ${orphan}
     `;
 
-    // 자동으로 지우거나 등급을 낮추지 않는다. 존재한다는 사실이 정보다.
+    // Not deleted or downgraded automatically. Their existence is the information.
     expect(rows).toHaveLength(1);
   });
 
-  it("다른 tenant의 receipt를 근거로 삼을 수 없다", async () => {
+  it("cannot use another tenant's receipt as evidence", async () => {
     await expect(
       fx.sql`
         INSERT INTO core.claims (
@@ -272,12 +272,12 @@ describeDb("stale 전파", () => {
   });
 
   /**
-   * 마지막 구간 — attestation → assessment · Registry version.
+   * Last link — attestation → assessment · Registry version.
    *
-   * 앞 구간과 달리 대상을 바꾸지 않는다. 두 테이블 모두 불변이기 때문이고,
-   * 공개 기록을 자동으로 내리지 않기 위해서이기도 하다.
+   * Unlike the earlier links, the target is not modified: both tables are immutable, and a
+   * public record must not be taken down automatically.
    */
-  describe("근거 신호", () => {
+  describe("evidence signals", () => {
     async function seedPublishedRegistryEntry(): Promise<string> {
       const entryId = randomUUID();
       await fx.sql`
@@ -299,7 +299,7 @@ describeDb("stale 전파", () => {
       return versionId;
     }
 
-    it("attestation이 흔들리면 공개 version에 신호가 남는다", async () => {
+    it("leaves a signal on the public version when an attestation goes stale", async () => {
       const versionId = await seedPublishedRegistryEntry();
       const { claimId } = await seedClaim();
       await seedAttestation(claimId, "active");
@@ -317,7 +317,7 @@ describeDb("stale 전파", () => {
       expect(signal?.reason).toContain("근거");
     });
 
-    it("공개 version 자체는 바뀌지 않는다", async () => {
+    it("does not change the public version itself", async () => {
       const versionId = await seedPublishedRegistryEntry();
       const { claimId } = await seedClaim();
       await seedAttestation(claimId, "active");
@@ -331,12 +331,12 @@ describeDb("stale 전파", () => {
         WHERE id = ${versionId}
       `;
 
-      // 연동 하나가 끊겼다고 공개 기록이 자동으로 사라지면 안 된다.
+      // One broken connection must not make a public record disappear automatically.
       expect(version?.status).toBe("published");
       expect(version?.revoked_at).toBeNull();
     });
 
-    it("이유 없이 신호를 닫을 수 없다", async () => {
+    it("cannot close a signal without a reason", async () => {
       await seedPublishedRegistryEntry();
       const { claimId } = await seedClaim();
       await seedAttestation(claimId, "active");
@@ -357,7 +357,7 @@ describeDb("stale 전파", () => {
       ).rejects.toThrow(/stale_signal_resolution_needs_note/);
     });
 
-    it("닫힌 신호는 다시 열 수 없다", async () => {
+    it("cannot reopen a closed signal", async () => {
       await seedPublishedRegistryEntry();
       const { claimId } = await seedClaim();
       await seedAttestation(claimId, "active");
@@ -371,11 +371,11 @@ describeDb("stale 전파", () => {
 
       await fx.sql`
         UPDATE core.evidence_stale_signals
-        SET resolution = 'dismissed', resolved_at = now(), resolution_note = '영향 없음'
+        SET resolution = 'dismissed', resolved_at = now(), resolution_note = 'no impact'
         WHERE id = ${signal!.id}
       `;
 
-      // 판정을 되돌릴 수 있으면 언제 무엇을 알았고 어떻게 판단했나가 사라진다.
+      // If a decision can be reversed, what was known when and how it was judged is lost.
       await expect(
         fx.sql`
           UPDATE core.evidence_stale_signals SET resolution = 'open' WHERE id = ${signal!.id}
@@ -383,7 +383,7 @@ describeDb("stale 전파", () => {
       ).rejects.toThrow(/이미 닫힌 신호/);
     });
 
-    it("신호는 삭제할 수 없다", async () => {
+    it("cannot delete a signal", async () => {
       await seedPublishedRegistryEntry();
       const { claimId } = await seedClaim();
       await seedAttestation(claimId, "active");
@@ -397,7 +397,7 @@ describeDb("stale 전파", () => {
     });
   });
 
-  describe("신호 API", () => {
+  describe("signal API", () => {
     async function openSignal(): Promise<string> {
       const entryId = randomUUID();
       await fx.sql`
@@ -429,7 +429,7 @@ describeDb("stale 전파", () => {
       return signal!.id;
     }
 
-    it("열린 신호와 다음 행동을 함께 반환한다", async () => {
+    it("returns open signals with their next actions", async () => {
       await openSignal();
 
       const response = await app.inject({
@@ -445,11 +445,11 @@ describeDb("stale 전파", () => {
       const registrySignal = body.items.find(
         (item: { targetType: string }) => item.targetType === "registry_entry_version",
       );
-      // 화면이 상태 문자열을 보고 추측하지 않게 서버가 정한다.
-      expect(registrySignal.nextActions.join(" ")).toContain("세상이 보는 것이 바뀐다");
+      // The server decides, so the UI does not guess from state strings.
+      expect(registrySignal.nextActions.join(" ")).toContain("changes what the world sees");
     });
 
-    it("이유 없이 닫을 수 없다", async () => {
+    it("cannot close without a reason", async () => {
       const signalId = await openSignal();
 
       const response = await app.inject({
@@ -462,18 +462,18 @@ describeDb("stale 전파", () => {
       expect(response.statusCode).toBe(400);
     });
 
-    it("닫아도 대상은 바뀌지 않는다", async () => {
+    it("does not change the target when closing", async () => {
       const signalId = await openSignal();
 
       const response = await app.inject({
         method: "POST",
         url: `/api/v1/stale-signals/${signalId}/resolve`,
         headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() },
-        payload: { resolution: "revoked", note: "근거가 사라져 공개 기록을 내리기로 했다" },
+        payload: { resolution: "revoked", note: "evidence is gone; decided to take down the public record" },
       });
 
       expect(response.statusCode).toBe(200);
-      // 한 번의 요청으로 두 가지 일이 일어나면 무엇이 실행됐는지 알 수 없다.
+      // If one request does two things, it is unclear what was executed.
       expect(response.json().targetUnchanged).toBe(true);
 
       const [signal] = await fx.sql<{ target_id: string }[]>`
@@ -485,21 +485,21 @@ describeDb("stale 전파", () => {
       expect(version?.status).toBe("published");
     });
 
-    it("두 번 닫을 수 없다", async () => {
+    it("cannot close twice", async () => {
       const signalId = await openSignal();
       const send = () =>
         app.inject({
           method: "POST",
           url: `/api/v1/stale-signals/${signalId}/resolve`,
           headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() },
-          payload: { resolution: "dismissed", note: "확인했다" },
+          payload: { resolution: "dismissed", note: "checked" },
         });
 
       expect((await send()).statusCode).toBe(200);
       expect((await send()).statusCode).toBe(409);
     });
 
-    it("registry.revoke 권한이 없으면 닫을 수 없다", async () => {
+    it("cannot close without the registry.revoke permission", async () => {
       const signalId = await openSignal();
 
       const response = await app.inject({
@@ -509,10 +509,10 @@ describeDb("stale 전파", () => {
           authorization: `Bearer ${await signIn(app, fx.stewardA)}`,
           "idempotency-key": idempotencyKey(),
         },
-        payload: { resolution: "dismissed", note: "확인" },
+        payload: { resolution: "dismissed", note: "checked" },
       });
 
-      // dismissed도 공개 기록의 운명을 정하는 판단이다.
+      // dismissed is also a decision about the fate of a public record.
       expect(response.statusCode).toBe(403);
     });
   });

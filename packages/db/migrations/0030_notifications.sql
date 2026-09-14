@@ -1,16 +1,16 @@
--- 알림 — spec 12 §12.4 R2 범위.
+-- Notifications — spec 12 §12.4 R2 scope.
 --
--- **없던 것을 만든다.** 검토 요청·gap 발생·stale·revoke가 일어나도 당사자가 아는
--- 경로는 화면을 다시 여는 것뿐이었다. 그것은 "무엇이 바뀌었나"에 답하지 않는다 —
--- 사람이 화면마다 이전 상태를 기억하고 있어야 한다.
+-- **Builds something that did not exist.** When a review request, gap, stale, or revoke occurred, the
+-- only way for the party to learn was reopening the screen. That does not answer "what changed" —
+-- people had to remember the previous state of every screen.
 --
--- **트리거로 만드는 이유.** route마다 알림 생성을 끼우면 새 route가 생길 때마다
--- 빠뜨릴 수 있고, 빠뜨린 것은 "알림이 안 온다"로만 드러난다. 사건이 만들어지는
--- 자리(테이블)에 붙이면 어느 경로로 들어와도 같이 생긴다.
+-- **Why triggers.** Adding notification creation to each route risks omission with every new
+-- route, and an omission shows up only as "no notification arrived". Attached where the event is
+-- created (the table), notifications are created whichever path the event came through.
 --
--- **발신 수단은 여기서 정하지 않는다.** 메일·webhook·푸시 중 무엇으로 내보낼지는
--- 결정된 바 없다. 이 표는 그 결정과 무관하게 필요한 것 — **무엇이
--- 누구에게 갈 알림인가** — 를 담고, 앱 안에서 읽는 경로를 먼저 연다.
+-- **The delivery channel is not decided here.** Whether to send via mail, webhook, or push
+-- is undecided. This table holds what is needed regardless of that decision — **which
+-- notification goes to whom** — and opens the in-app read path first.
 
 CREATE TYPE core.notification_kind AS ENUM (
   'review_assigned',
@@ -24,17 +24,17 @@ CREATE TABLE core.notifications (
   tenant_id     UUID NOT NULL REFERENCES core.tenants(id),
   kind          core.notification_kind NOT NULL,
   /**
-   * 개인에게 가는가, 역할에게 가는가.
+   * To an individual, or to a role?
    *
-   * 검토 배정은 배정된 사람에게 간다. stale 신호나 철회는 **아무에게도 배정되지
-   * 않은 사건**이라 개인이 없다 — 그것을 특정인에게 보내면 그 사람이 자리를 비운
-   * 동안 아무도 모른다. 역할로 보내고 그 역할을 가진 누구든 읽는다.
+   * Review assignments go to the assignee. Stale signals and revocations are **events
+   * assigned to no one**, so there is no individual — sending them to one person means no one
+   * knows while that person is away. Send to the role; anyone holding it reads.
    */
   subject_id    UUID REFERENCES core.subjects(id),
   audience_role TEXT,
   project_id    UUID,
   summary       TEXT NOT NULL CHECK (length(btrim(summary)) > 0),
-  /** 이 알림이 가리키는 화면. 알림만 있고 갈 곳이 없으면 다시 찾아야 한다. */
+  /** The screen this notification points to. A notification with nowhere to go must be searched for again. */
   link          TEXT NOT NULL,
   occurred_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
 
@@ -53,10 +53,10 @@ CREATE INDEX notifications_role_idx
   WHERE audience_role IS NOT NULL;
 
 /**
- * 읽음은 **주체별**이다.
+ * Read state is **per subject**.
  *
- * 역할로 간 알림은 여러 사람이 본다. 알림 행에 `read_at`을 두면 한 사람이 읽는
- * 순간 나머지에게서 사라지고, 그 사람이 처리하지 않으면 아무도 다시 보지 않는다.
+ * Role notifications are seen by several people. A `read_at` on the notification row would hide it
+ * from everyone else the moment one person reads it, and if that person does not act, no one sees it again.
  */
 CREATE TABLE core.notification_reads (
   notification_id UUID NOT NULL REFERENCES core.notifications(id),
@@ -82,13 +82,13 @@ GRANT SELECT, INSERT ON core.notifications TO mpc_app;
 GRANT SELECT, INSERT ON core.notification_reads TO mpc_app;
 
 -- ---------------------------------------------------------------------------
--- 사건 → 알림
+-- event → notification
 -- ---------------------------------------------------------------------------
 --
--- 트리거는 `SECURITY DEFINER`가 아니다. 사건을 만든 트랜잭션의 tenant 안에서
--- 돌기 때문에 RLS를 그대로 만족한다 — 알림이 다른 tenant로 새지 않는다.
+-- Triggers are not `SECURITY DEFINER`. They run inside the tenant of the transaction that
+-- created the event, so RLS holds as is — notifications do not leak to other tenants.
 
-/** 검토 배정 → 배정된 사람에게. */
+/** Review assignment → to the assignee. */
 CREATE FUNCTION core.notify_review_assigned() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -112,9 +112,9 @@ CREATE TRIGGER assignments_notify
   FOR EACH ROW EXECUTE FUNCTION core.notify_review_assigned();
 
 /**
- * readiness gap → data_steward 역할에게.
+ * readiness gap → to the data_steward role.
  *
- * gap은 특정인의 일이 아니다. 증빙을 채울 사람이 채운다.
+ * A gap is not one person's job. Whoever fills the evidence fills it.
  */
 CREATE FUNCTION core.notify_readiness_gap() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -137,7 +137,7 @@ CREATE TRIGGER compliance_assessments_notify
   AFTER INSERT ON core.compliance_assessments
   FOR EACH ROW EXECUTE FUNCTION core.notify_readiness_gap();
 
-/** stale 신호 → data_steward 역할에게. 아무에게도 배정되지 않은 사건이다. */
+/** stale signal → to the data_steward role. An event assigned to no one. */
 CREATE FUNCTION core.notify_evidence_stale() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -156,9 +156,9 @@ CREATE TRIGGER evidence_stale_signals_notify
   FOR EACH ROW EXECUTE FUNCTION core.notify_evidence_stale();
 
 /**
- * 공개 기록 철회 → mpc_operator 역할에게.
+ * Public record revocation → to the mpc_operator role.
  *
- * 철회는 공개된 것을 내리는 일이라 알림이 늦으면 그 사이 인용이 계속된다.
+ * Revocation takes down something public; a late notification means citations continue in the meantime.
  */
 CREATE FUNCTION core.notify_registry_revoked() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$

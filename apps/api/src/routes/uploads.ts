@@ -29,42 +29,42 @@ import {
 } from "@mpc/storage";
 
 /**
- * 파일 업로드 — spec 05 §5.2, 06 §6.7.
+ * File upload — spec 05 §5.2, 06 §6.7.
  *
- * 이 라우트가 지키는 것:
+ * What this route enforces:
  *
- * - **업로드는 evidence가 아니다.** quarantine 경로로 먼저 들어가고, 검사를
- *   통과해야 승격된다. 업로드 즉시 evidence가 되면 악성 파일이 검토 대상 자료가 된다.
- * - **감염 판정은 되돌릴 수 없다.** 상태기계에 `scanned_infected → promoted`
- *   경로가 없고, 도달성 검사가 그것을 확인한다.
- * - **저장소 키에 파일명·프로젝트명을 넣지 않는다.** 키는 로그·URL·오류 메시지를
- *   타고 흐른다.
- * - **영구 공개 URL을 만들지 않는다.** 다운로드는 15분 상한의 presigned URL이다.
- * - **같은 내용을 두 번 저장하지 않는다.** content hash가 tenant·프로젝트 안에서
- *   UNIQUE라 evidence가 갈라지지 않는다.
+ * - **An upload is not evidence.** It lands on the quarantine path first and is promoted
+ *   only after passing scanning. If uploads became evidence at once, malware would reach review.
+ * - **An infected verdict is irreversible.** The state machine has no
+ *   `scanned_infected → promoted` path, and a reachability check verifies that.
+ * - **Storage keys contain no file or project names.** Keys travel through logs, URLs,
+ *   and error messages.
+ * - **No permanent public URLs.** Downloads use presigned URLs capped at 15 minutes.
+ * - **The same content is not stored twice.** The content hash is UNIQUE per tenant and
+ *   project, so evidence does not fork.
  */
 
 /**
- * 업로드 상한.
+ * Upload cap.
  *
- * base64 경로는 요청 본문을 통째로 메모리에 올리므로 낮게 잡는다. 큰 파일은
- * multipart 경로를 쓴다.
+ * The base64 path loads the whole request body into memory, so the cap is low. Large
+ * files use the multipart path.
  */
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
-/** multipart 상한. 저장소로 흘려보내므로 더 크게 받을 수 있다. */
+/** Multipart cap. It streams to storage, so it can accept more. */
 const MAX_STREAM_BYTES = 2 * 1024 * 1024 * 1024;
 
 /**
- * 받을 수 있는 content type — 06 §6.7.
+ * Accepted content types — 06 §6.7.
  *
- * 값은 업로더가 정한다. 제한이 없으면 `text/html`로 올린 파일이 저장소 오리진의
- * 문서가 되고, 그 오리진은 우리 권한 검사를 지나지 않는다. 다운로드 링크가
- * `attachment`를 강제하지만(`@mpc/storage`) 저장 자체를 좁히는 것이 먼저다 —
- * 방어가 하나뿐이면 그것이 바뀌는 순간 막는 것이 없다.
+ * The uploader sets the value. Without a limit, a file uploaded as `text/html` becomes a
+ * document on the storage origin, which bypasses our authorization checks. Download links
+ * force `attachment` (`@mpc/storage`), but narrowing what is stored comes first —
+ * with a single defense, nothing blocks anything the moment it changes.
  *
- * 증빙으로 실제 쓰이는 것만 둔다. 필요한 형식이 생기면 여기에 추가한다 —
- * 목록을 넓히는 것이 기록에 남아야 한다.
+ * Only types actually used as evidence are listed. Add a type here when one is needed —
+ * widening the list must leave a record.
  */
 const ALLOWED_CONTENT_TYPES = new Set([
   "application/pdf",
@@ -83,7 +83,7 @@ const ALLOWED_CONTENT_TYPES = new Set([
 ]);
 
 /**
- * `text/csv; charset=utf-8`처럼 파라미터가 붙어 온다. 판정은 media type으로 한다.
+ * Values arrive with parameters, as in `text/csv; charset=utf-8`. The check uses the media type.
  */
 function normalizeContentType(value: string): string {
   return value.split(";")[0]!.trim().toLowerCase();
@@ -96,10 +96,10 @@ function isAllowedContentType(value: string): boolean {
 const contentTypeSchema = z
   .string()
   .min(1)
-  .refine(isAllowedContentType, "받지 않는 content type이다");
+  .refine(isAllowedContentType, "Content type is not accepted");
 
 const createUploadSchema = z.object({
-  /** base64 인코딩된 본문. multipart는 R2에서 스트리밍으로 바꾼다. */
+  /** Base64-encoded body. Multipart switches to streaming on R2. */
   contentBase64: z.string().min(1),
   contentType: contentTypeSchema,
   originalFilename: z.string().min(1).nullable().default(null),
@@ -129,24 +129,24 @@ interface UploadRow {
 }
 
 /**
- * 상태별 다음 행동.
+ * Next actions per state.
  *
- * 화면이 추측하지 않게 서버가 알려준다. `scanned_infected`에 "재검사"를 넣지
- * 않는 것이 핵심이다 — 그런 경로는 존재하지 않는다.
+ * The server provides them so the UI does not guess. The key point is that
+ * `scanned_infected` has no "rescan" — no such path exists.
  */
 function nextActions(state: UploadState): string[] {
   switch (state) {
     case "received":
-      return ["검사 결과 기록"];
+      return ["Record scan result"];
     case "quarantined":
-      return ["검사 결과 기록"];
+      return ["Record scan result"];
     case "scanned_clean":
-      return ["evidence로 승격", "반려"];
+      return ["Promote to evidence", "Reject"];
     case "scanned_infected":
-      // 감염 판정은 되돌릴 수 없다. 다시 보려면 새로 올린다.
-      return ["반려", "새 파일로 다시 업로드"];
+      // An infected verdict is irreversible. To try again, upload a new file.
+      return ["Reject", "Upload a new file"];
     case "promoted":
-      return ["다운로드"];
+      return ["Download"];
     case "rejected":
       return [];
   }
@@ -172,10 +172,10 @@ function toView(row: UploadRow) {
 }
 
 /**
- * 업로드가 속한 프로젝트.
+ * The project an upload belongs to.
  *
- * 권한 판정은 **트랜잭션 밖에서 먼저** 한다. 멱등 replay는 저장된 응답을 그대로
- * 돌려주므로, 인가를 멱등 블록 안에 두면 남의 key로 재생한 요청이 인가를 건너뛴다.
+ * Authorization runs **first, outside the transaction**. An idempotent replay returns the
+ * stored response as is, so inside the block a replay of someone else's key skips authorization.
  */
 async function uploadProjectId(
   sql: postgres.Sql,
@@ -187,15 +187,15 @@ async function uploadProjectId(
       SELECT project_id FROM core.object_uploads WHERE id = ${uploadId}
     `,
   );
-  if (!row) throw notFound("업로드를 찾을 수 없다");
+  if (!row) throw notFound("Upload not found");
   return row.project_id;
 }
 
 /**
- * 검사기 생존 판정.
+ * Scanner liveness check.
  *
- * `SCAN_STALE_SECONDS`를 넘으면 "멈춘 것으로 본다". 15초마다 신호를 남기므로
- * 180초는 열두 주기를 놓친 것이다 — 일시적인 지연으로 오해할 여지가 없다.
+ * Past `SCAN_STALE_SECONDS` the scanner is treated as stopped. It signals every 15 seconds,
+ * so 180 seconds is twelve missed cycles — not mistakable for a transient delay.
  */
 const SCAN_STALE_SECONDS = 180;
 
@@ -215,27 +215,27 @@ async function scannerStatus(
         state: "never_seen",
         secondsSinceHeartbeat: null,
         detail:
-          "검사 worker가 한 번도 보고한 적이 없다. 업로드는 quarantine에 머물며 증빙으로 승격되지 않는다.",
+          "The scan worker has never reported. Uploads stay in quarantine and are not promoted to evidence.",
       };
     }
     if (seconds > SCAN_STALE_SECONDS) {
       return {
         state: "stale",
         secondsSinceHeartbeat: seconds,
-        detail: `검사 worker를 ${seconds}초 동안 보지 못했다. 그동안 업로드는 quarantine에 머문다.`,
+        detail: `The scan worker has not been seen for ${seconds} seconds. Uploads stay in quarantine meanwhile.`,
       };
     }
     return {
       state: "running",
       secondsSinceHeartbeat: seconds,
-      detail: "검사 worker가 돌고 있다.",
+      detail: "The scan worker is running.",
     };
   } catch {
-    // 알 수 없다는 것도 하나의 상태다. 목록을 실패시키지 않는다.
+    // Unknown is a state too. The listing does not fail.
     return {
       state: "unknown",
       secondsSinceHeartbeat: null,
-      detail: "검사 worker 상태를 확인하지 못했다.",
+      detail: "Could not check the scan worker state.",
     };
   }
 }
@@ -267,15 +267,15 @@ export async function registerUploadRoutes(
       );
 
       /**
-       * 검사기가 살아 있는가.
+       * Is the scanner alive.
        *
-       * `promote`는 `scanned_clean`에서만 전이하므로, scan worker가 없는 배포에서
-       * 업로드는 `quarantined`에 영원히 머문다. 그런데 그 정지는 **오류가 아니라
-       * 대기처럼 보인다** — 화면이 "검사를 기다리는 중"과 "검사할 사람이 아예
-       * 없음"을 구분하지 못했다.
+       * `promote` transitions only from `scanned_clean`, so in a deployment without a scan worker
+       * uploads stay `quarantined` forever. That stall **looks like waiting, not an
+       * error** — the UI could not tell "waiting for a scan" from "nothing is there to
+       * scan at all".
        *
-       * 조회 실패를 오류로 올리지 않는다. 목록은 나가야 하고, 알 수 없다는 것도
-       * 하나의 상태다 — `unknown`이 그것이다.
+       * A lookup failure is not raised as an error. The listing must go out, and unknown is
+       * a state too — that is `unknown`.
        */
       const scanner = await scannerStatus(sql);
 
@@ -290,17 +290,17 @@ export async function registerUploadRoutes(
 
       const parsed = createUploadSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
 
       /**
-       * 저장 경로 판정 — OD-17·OD-18.
+       * Storage path decision — OD-17·OD-18.
        *
-       * 권한 검사보다 **먼저** 본다. 권한이 있는 사람이 올리는 것과 이 저장소가
-       * 받아도 되는 자료인가는 다른 질문이고, 뒤에 두면 "권한이 있으니 받는다"가
-       * 된다.
+       * Checked **before** authorization. Whether the uploader has permission and whether this
+       * store may accept the material are different questions; checking later turns it into
+       * "accepted because permitted".
        */
       const admission = admitToStorage(parsed.data.sensitivity);
       if (!admission.admitted) {
@@ -321,10 +321,10 @@ export async function registerUploadRoutes(
 
       const bytes = new Uint8Array(Buffer.from(parsed.data.contentBase64, "base64"));
       if (bytes.byteLength === 0) {
-        throw badRequest("UPLOAD_EMPTY", "빈 파일은 받지 않는다");
+        throw badRequest("UPLOAD_EMPTY", "Empty files are not accepted");
       }
       if (bytes.byteLength > MAX_UPLOAD_BYTES) {
-        throw unprocessable("UPLOAD_TOO_LARGE", "업로드 상한을 넘었다", {
+        throw unprocessable("UPLOAD_TOO_LARGE", "Upload exceeds the cap", {
           maxBytes: String(MAX_UPLOAD_BYTES),
           receivedBytes: String(bytes.byteLength),
         });
@@ -336,8 +336,8 @@ export async function registerUploadRoutes(
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-          // 같은 내용이 이미 있으면 그것을 돌려준다. 두 번 저장하면 evidence가
-          // 갈라지고 어느 쪽이 검토 대상인지 모르게 된다.
+          // If the same content exists, return it. Storing it twice forks evidence and
+          // leaves it unclear which copy is under review.
           const [existing] = await tx<UploadRow[]>`
             SELECT * FROM core.object_uploads
             WHERE project_id = ${request.params.projectId} AND content_hash = ${contentHash}
@@ -345,7 +345,7 @@ export async function registerUploadRoutes(
           if (existing) return { ...toView(existing), requestId, asOf };
 
           const uploadId = randomUUID();
-          // quarantine 경로다. evidence 경로는 승격될 때 만들어진다.
+          // Quarantine path. The evidence path is created on promotion.
           const key = quarantineKey(tenantId, uploadId);
 
           await store.put(key, bytes, normalizeContentType(parsed.data.contentType));
@@ -374,7 +374,7 @@ export async function registerUploadRoutes(
             resourceId: uploadId,
             correlationId,
             requestIp: request.ip,
-            // 파일명은 남기지 않는다. 감사 로그가 restricted 정보의 통로가 된다.
+            // File names are not recorded. The audit log would become a channel for restricted data.
             detail: {
               byteSize: bytes.byteLength,
               contentType: normalizeContentType(parsed.data.contentType),
@@ -388,26 +388,26 @@ export async function registerUploadRoutes(
   );
 
   /**
-   * 검사 결과 기록.
+   * Record scan result.
    *
-   * **검사 서비스가 호출하는 경로다.** 기본 구성에서는 `@mpc/worker`의 scan
-   * worker가 DB를 직접 갱신하므로 이 route는 쓰이지 않는다. 외부 검사 서비스를
-   * 붙일 때를 위해 남긴다.
+   * **This path is called by the scan service.** In the default setup the `@mpc/worker` scan
+   * worker updates the DB directly, so this route is unused. It is kept for attaching an
+   * external scan service.
    *
-   * 화면에는 이 버튼이 없다. 운영자가 검사 결과를 만들 수 있으면 quarantine이
-   * 형식만 남는다.
+   * The UI has no button for this. If an operator could produce scan results, quarantine
+   * would be a formality.
    *
-   * `upload.scan_result`는 `scan_service` 역할만 갖는다. `source.upload`를
-   * 재사용하면 파일을 올린 사람이 자기 파일을 통과시킬 수 있다.
+   * Only the `scan_service` role holds `upload.scan_result`. Reusing `source.upload` would
+   * let an uploader pass their own file.
    */
   /**
-   * multipart 스트리밍 업로드.
+   * Multipart streaming upload.
    *
-   * base64 경로와 같은 결과를 만들되 **파일을 메모리에 통째로 올리지 않는다.**
-   * 대용량 증빙(도면·항공사진·전체 등록부 export)은 base64로 받을 수 없다.
+   * Produces the same result as the base64 path **without loading the whole file into memory.**
+   * Large evidence (drawings, aerial photos, full registry exports) cannot go through base64.
    *
-   * 두 경로가 남아 있는 이유: 브라우저 fetch로 JSON을 보내는 것이 단순하고
-   * 작은 파일에는 충분하다. 큰 파일만 이쪽으로 온다.
+   * Why both paths remain: sending JSON via browser fetch is simple and enough for small
+   * files. Only large files come here.
    */
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/uploads/stream",
@@ -422,11 +422,11 @@ export async function registerUploadRoutes(
       );
 
       const file = await request.file({ limits: { fileSize: MAX_STREAM_BYTES } });
-      if (!file) throw badRequest("UPLOAD_MISSING_FILE", "multipart 파일 파트가 없다");
+      if (!file) throw badRequest("UPLOAD_MISSING_FILE", "Multipart file part is missing");
 
-      // base64 경로와 같은 제한을 건다. 한쪽만 좁히면 넓은 쪽이 우회로가 된다.
+      // Apply the same limits as the base64 path. Narrowing only one makes the other a bypass.
       if (file.mimetype && !isAllowedContentType(file.mimetype)) {
-        throw unprocessable("UPLOAD_CONTENT_TYPE_NOT_ALLOWED", "받지 않는 content type이다", {
+        throw unprocessable("UPLOAD_CONTENT_TYPE_NOT_ALLOWED", "Content type is not accepted", {
           contentType: normalizeContentType(file.mimetype),
         });
       }
@@ -435,8 +435,8 @@ export async function registerUploadRoutes(
       const uploadId = randomUUID();
       const key = quarantineKey(tenantId, uploadId);
 
-      // 저장소에 먼저 쓴다. content hash를 알아야 중복을 판정할 수 있는데
-      // 스트리밍에서는 다 읽어야 해시가 나온다.
+      // Write to storage first. Deduplication needs the content hash, and when streaming
+      // the hash exists only after reading everything.
       const stored = await store.putStream(
         key,
         file.file,
@@ -444,12 +444,12 @@ export async function registerUploadRoutes(
       );
 
       if (file.file.truncated) {
-        // 상한에 걸려 잘린 파일을 저장하면 내용이 다른 증빙이 남는다.
-        throw unprocessable("UPLOAD_TOO_LARGE", "업로드 상한을 넘었다", {
+        // Storing a file truncated at the cap would leave evidence with different content.
+        throw unprocessable("UPLOAD_TOO_LARGE", "Upload exceeds the cap", {
           maxBytes: String(MAX_STREAM_BYTES),
         });
       }
-      if (stored.byteSize === 0) throw badRequest("UPLOAD_EMPTY", "빈 파일은 받지 않는다");
+      if (stored.byteSize === 0) throw badRequest("UPLOAD_EMPTY", "Empty files are not accepted");
 
       const requestHash = hashRequest({ contentHash: stored.contentHash });
 
@@ -460,8 +460,8 @@ export async function registerUploadRoutes(
             WHERE project_id = ${request.params.projectId}
               AND content_hash = ${stored.contentHash}
           `;
-          // 같은 내용이 이미 있다. 방금 쓴 객체는 남지만 참조되지 않는다 —
-          // 지우면 저장소 오류가 업로드 실패로 번진다.
+          // The same content already exists. The object just written stays but is unreferenced —
+          // deleting it would let a storage error turn into an upload failure.
           if (existing) return { ...toView(existing), requestId, asOf };
 
           const [row] = await tx<UploadRow[]>`
@@ -471,8 +471,8 @@ export async function registerUploadRoutes(
             ) VALUES (
               ${uploadId}, ${tenantId}, ${request.params.projectId}, ${key},
               ${stored.contentHash}, ${stored.byteSize}, ${stored.contentType},
-              -- 스트리밍 경로는 항상 restricted다. 민감 등급을 받으려면
-              -- secured route가 필요하고(OD-18), 그 경로는 아직 없다.
+              -- The streaming path is always restricted. Accepting the sensitive tier
+              -- needs a secured route (OD-18), which does not exist yet.
               ${file.filename ?? null}, 'restricted', 'quarantined',
               ${session.subjectId ?? null}
             )
@@ -489,7 +489,7 @@ export async function registerUploadRoutes(
             resourceId: uploadId,
             correlationId,
             requestIp: request.ip,
-            // 파일명은 남기지 않는다. 감사 로그가 restricted 정보의 통로가 된다.
+            // File names are not recorded. The audit log would become a channel for restricted data.
             detail: { byteSize: stored.byteSize, contentType: stored.contentType, via: "multipart" },
           });
 
@@ -507,7 +507,7 @@ export async function registerUploadRoutes(
 
       const parsed = scanResultSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "result는 clean 또는 infected여야 한다");
+        throw badRequest("REQUEST_INVALID", "result must be clean or infected");
       }
 
       const effectiveRole = assertAuthorized(
@@ -531,12 +531,12 @@ export async function registerUploadRoutes(
             SELECT * FROM core.object_uploads WHERE id = ${request.params.uploadId}
             FOR UPDATE
           `;
-          if (!row) throw notFound("업로드를 찾을 수 없다");
+          if (!row) throw notFound("Upload not found");
 
           assertVersionMatches(expectedVersion, row.version, "object_upload");
 
           if (!canTransitionUpload(row.state, toState)) {
-            throw conflict("INVALID_STATE_TRANSITION", "이 상태에서는 검사 결과를 기록할 수 없다", {
+            throw conflict("INVALID_STATE_TRANSITION", "A scan result cannot be recorded in this state", {
               fromState: row.state,
               toState,
             });
@@ -571,10 +571,10 @@ export async function registerUploadRoutes(
   );
 
   /**
-   * evidence 승격.
+   * Promotion to evidence.
    *
-   * quarantine 객체를 evidence 경로로 복사하고 artifact를 만든다. 원본은 지우지
-   * 않는다 — "무엇이 승격됐는가"를 나중에 확인해야 한다.
+   * Copies the quarantine object to the evidence path and creates an artifact. The original
+   * is kept — "what was promoted" must be verifiable later.
    */
   app.post<{ Params: { uploadId: string } }>(
     "/api/v1/uploads/:uploadId/promote",
@@ -601,13 +601,13 @@ export async function registerUploadRoutes(
             SELECT * FROM core.object_uploads WHERE id = ${request.params.uploadId}
             FOR UPDATE
           `;
-          if (!row) throw notFound("업로드를 찾을 수 없다");
+          if (!row) throw notFound("Upload not found");
 
           assertVersionMatches(expectedVersion, row.version, "object_upload");
 
-          // 감염 판정된 것은 여기 오지 않는다. 상태기계에 경로가 없다.
+          // Infected uploads never get here. The state machine has no path for it.
           if (!canTransitionUpload(row.state, "promoted")) {
-            throw conflict("INVALID_STATE_TRANSITION", "검사를 통과한 업로드만 승격된다", {
+            throw conflict("INVALID_STATE_TRANSITION", "Only uploads that passed scanning can be promoted", {
               fromState: row.state,
               toState: "promoted",
             });
@@ -666,11 +666,11 @@ export async function registerUploadRoutes(
   );
 
   /**
-   * 단기 다운로드 링크.
+   * Short-lived download link.
    *
-   * 영구 URL을 만들지 않는다. 링크를 받은 사람은 우리 권한 검사를 다시 지나지
-   * 않으므로, 그 사실을 응답에 함께 담는다 — 링크를 공유해도 된다고 오해하면
-   * restricted 자료가 통제 밖으로 나간다.
+   * No permanent URL is created. Whoever receives the link skips our authorization checks,
+   * so the response says so — if the link were mistaken as shareable, restricted
+   * material would leave our control.
    */
   app.post<{ Params: { uploadId: string } }>(
     "/api/v1/uploads/:uploadId/download-link",
@@ -696,11 +696,11 @@ export async function registerUploadRoutes(
           const [row] = await tx<UploadRow[]>`
             SELECT * FROM core.object_uploads WHERE id = ${request.params.uploadId}
           `;
-          if (!row) throw notFound("업로드를 찾을 수 없다");
+          if (!row) throw notFound("Upload not found");
 
-          // 감염 판정된 파일의 링크를 만들지 않는다. 검토자가 열어 볼 이유가 없다.
+          // No link is issued for an infected file. A reviewer has no reason to open it.
           if (row.state === "scanned_infected") {
-            throw unprocessable("UPLOAD_INFECTED", "감염 판정된 파일은 내려받을 수 없다");
+            throw unprocessable("UPLOAD_INFECTED", "An infected file cannot be downloaded");
           }
 
           const url = await store.presignGet(row.object_key, ttlSeconds);
@@ -721,7 +721,7 @@ export async function registerUploadRoutes(
             url,
             expiresInSeconds: ttlSeconds,
             warning:
-              "이 링크를 가진 사람은 로그인 없이 파일을 받을 수 있다. 공유하지 않는다.",
+              "Anyone with this link can download the file without signing in. Do not share it.",
             requestId,
             asOf,
           };

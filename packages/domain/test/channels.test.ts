@@ -12,31 +12,31 @@ import {
 /**
  * Evidence channel parity — AC-29.
  *
- * 네 채널이 같은 result enum을 쓰되 각자가 막아야 하는 것은 다르다. 이 파일이
- * 보는 것은 **약한 채널이 쉬운 채널이 되지 않는가**다.
+ * All four channels use the same result enum, but each must block different things. This file
+ * checks that **a weak channel does not become an easy channel**.
  */
 describe("schema drift", () => {
-  it("사라진 필드를 잡는다", () => {
+  it("catches a vanished field", () => {
     const drift = detectSchemaDrift(["licenseId", "holder", "expiresAt"], ["licenseId", "holder"]);
     expect(drift.drifted).toBe(true);
-    // 있던 컬럼이 사라지면 파서가 undefined를 빈 값으로 넘길 수 있다.
+    // When an existing column vanishes, the parser can pass undefined along as empty.
     expect(drift.removed).toEqual(["expiresAt"]);
   });
 
-  it("새로 생긴 필드도 drift다", () => {
+  it("a new field is drift too", () => {
     const drift = detectSchemaDrift(["licenseId"], ["licenseId", "newColumn"]);
     expect(drift.drifted).toBe(true);
     expect(drift.added).toEqual(["newColumn"]);
   });
 
-  it("선언이 없으면 대조하지 않았다고 말한다", () => {
+  it("says it did not compare when there is no declaration", () => {
     const drift = detectSchemaDrift([], ["a", "b"]);
-    // 모르는 것을 일치로 읽지 않는다.
+    // The unknown is never read as a match.
     expect(drift.compared).toBe(false);
     expect(drift.drifted).toBe(false);
   });
 
-  it("순서가 달라도 같은 집합이면 drift가 아니다", () => {
+  it("the same set in a different order is not drift", () => {
     fc.assert(
       fc.property(fc.uniqueArray(fc.string({ minLength: 1 }), { minLength: 1 }), (fields) => {
         const shuffled = [...fields].reverse();
@@ -47,17 +47,17 @@ describe("schema drift", () => {
 });
 
 describe("bulk export", () => {
-  it("drift가 있으면 확정되지 않는다", () => {
+  it("drift is not confirmed", () => {
     const { result } = classifyBulkExport({
       declaredFields: ["licenseId", "expiresAt"],
       observedFields: ["licenseId"],
       recordFound: true,
     });
-    // 컬럼이 바뀐 파일에서 읽은 값은 다른 것을 가리킬 수 있다.
+    // A value read from a file whose columns changed may point at something else.
     expect(result).toBe("schema_changed");
   });
 
-  it("대조하지 않았으면 사람이 본다", () => {
+  it("a person looks when nothing was compared", () => {
     const { result } = classifyBulkExport({
       declaredFields: [],
       observedFields: ["licenseId"],
@@ -66,39 +66,39 @@ describe("bulk export", () => {
     expect(result).toBe("manual_review_required");
   });
 
-  it("파일은 정상인데 기록이 없으면 기록 없음이다", () => {
+  it("a sound file without the record is no record", () => {
     const { result } = classifyBulkExport({
       declaredFields: ["licenseId"],
       observedFields: ["licenseId"],
       recordFound: false,
     });
-    // 장애가 아니라 사실이다.
+    // A fact, not an outage.
     expect(result).toBe("source_returned_no_record");
   });
 });
 
 describe("signed document", () => {
-  it("서명 검증 실패는 확정되지 않는다", () => {
+  it("a failed signature verification is not confirmed", () => {
     expect(
       classifySignedDocument({ signatureValid: false, signerRecognized: true, recordFound: true }),
     ).toBe("signature_invalid");
   });
 
-  it("검증하지 못한 것과 실패한 것을 구분한다", () => {
-    // 공개키를 등록하지 않는 것으로 검증을 건너뛸 수 없다.
+  it("distinguishes not verified from failed", () => {
+    // Verification cannot be skipped by not registering a public key.
     expect(
       classifySignedDocument({ signatureValid: null, signerRecognized: true, recordFound: true }),
     ).toBe("manual_review_required");
   });
 
-  it("유효한 서명이라도 모르는 서명자면 거절한다", () => {
-    // 유효한 서명은 서명자가 누구인지를 말하지 않는다.
+  it("rejects a valid signature from an unknown signer", () => {
+    // A valid signature does not say who the signer is.
     expect(
       classifySignedDocument({ signatureValid: true, signerRecognized: false, recordFound: true }),
     ).toBe("signature_invalid");
   });
 
-  it("서명이 맞고 서명자를 알면 확정된다", () => {
+  it("confirms a valid signature from a known signer", () => {
     expect(
       classifySignedDocument({ signatureValid: true, signerRecognized: true, recordFound: true }),
     ).toBe("confirmed_from_source");
@@ -106,31 +106,31 @@ describe("signed document", () => {
 });
 
 describe("manual second review", () => {
-  it("수동 확인만 두 번째 검토를 요구한다", () => {
+  it("only manual checks require a second review", () => {
     expect(requiresSecondReview("manual_official_registry_confirmation")).toBe(true);
     expect(requiresSecondReview("authenticated_api")).toBe(false);
   });
 
-  it("두 번째 검토가 없으면 확정되지 않는다", () => {
+  it("not confirmed without a second review", () => {
     const check = checkSecondReview({ firstConfirmedBy: "a", secondConfirmedBy: null });
     expect(check.ok).toBe(false);
   });
 
-  it("같은 사람이 두 번 확인할 수 없다", () => {
-    // 목적이 다른 눈인데 같은 사람을 허용하면 절차만 남는다.
+  it("the same person cannot check twice", () => {
+    // The purpose is a different pair of eyes; allowing the same person leaves only the procedure.
     const check = checkSecondReview({ firstConfirmedBy: "a", secondConfirmedBy: "a" });
     expect(check.ok).toBe(false);
-    if (!check.ok) expect(check.reason).toContain("처음 확인한 사람");
+    if (!check.ok) expect(check.reason).toContain("The first checker");
   });
 
-  it("다른 사람이 확인하면 통과한다", () => {
+  it("passes when another person confirms", () => {
     expect(checkSecondReview({ firstConfirmedBy: "a", secondConfirmedBy: "b" }).ok).toBe(true);
   });
 });
 
-describe("채널 요건", () => {
-  it("확정이 아니면 요건을 묻지 않는다", () => {
-    // 실패는 실패대로 기록돼야 한다.
+describe("channel requirements", () => {
+  it("requirements are not asked for a non-confirmation", () => {
+    // Failures must be recorded as failures.
     const check = checkChannelReady({
       method: "manual_official_registry_confirmation",
       result: "source_unavailable",
@@ -138,7 +138,7 @@ describe("채널 요건", () => {
     expect(check.ok).toBe(true);
   });
 
-  it("서명 증거 없는 서명 문서는 확정될 수 없다", () => {
+  it("a signed document without signature evidence cannot be confirmed", () => {
     const check = checkChannelReady({
       method: "verifiable_signed_document",
       result: "confirmed_from_source",
@@ -147,7 +147,7 @@ describe("채널 요건", () => {
     expect(check.ok).toBe(false);
   });
 
-  it("관측 스키마 없는 bulk export는 확정될 수 없다", () => {
+  it("a bulk export without an observed schema cannot be confirmed", () => {
     const check = checkChannelReady({
       method: "official_bulk_export",
       result: "confirmed_from_source",
@@ -156,8 +156,8 @@ describe("채널 요건", () => {
     expect(check.ok).toBe(false);
   });
 
-  it("API 채널은 채널 증거를 요구하지 않는다", () => {
-    // API는 상태 코드가 실패를 알린다. 그 판정은 adapter가 이미 했다.
+  it("the API channel requires no channel evidence", () => {
+    // For an API the status code signals failure. The adapter has already decided that.
     const check = checkChannelReady({
       method: "authenticated_api",
       result: "confirmed_from_source",

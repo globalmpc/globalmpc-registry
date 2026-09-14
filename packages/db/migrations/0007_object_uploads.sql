@@ -1,8 +1,8 @@
--- 업로드 추적과 quarantine — 12 §12.2 "encrypted object upload·quarantine".
+-- Upload tracking and quarantine — 12 §12.2 "encrypted object upload·quarantine".
 --
--- 업로드는 즉시 evidence가 되지 않는다. quarantine에 들어가 검사를 통과해야
--- artifact로 승격된다(06 §6.7 "malware quarantine"). 업로드 즉시 evidence가 되면
--- 악성 파일이 전문 검토 대상 자료가 된다.
+-- An upload does not become evidence immediately. It enters quarantine and must pass scanning
+-- to be promoted to an artifact (06 §6.7 "malware quarantine"). Otherwise a malicious
+-- file would become material for expert review.
 
 CREATE TYPE core.upload_state AS ENUM (
   'received',
@@ -17,14 +17,14 @@ CREATE TABLE core.object_uploads (
   id            UUID PRIMARY KEY,
   tenant_id     UUID NOT NULL REFERENCES core.tenants(id),
   project_id    UUID NOT NULL,
-  -- 저장소 키에 파일명·프로젝트명을 넣지 않는다. 키는 로그·URL·에러 메시지를
-  -- 타고 흐르며, 문서 제목도 public projection에 누출돼서는 안 된다(§11.9).
+  -- The storage key contains no file or project name. Keys flow through logs, URLs, and error
+  -- messages, and document titles must not leak into the public projection (§11.9).
   object_key    TEXT NOT NULL,
   content_hash  TEXT NOT NULL CHECK (content_hash ~ '^0x[0-9a-f]{64}$'),
   byte_size     BIGINT NOT NULL CHECK (byte_size > 0),
   content_type  TEXT NOT NULL,
-  -- 원본 파일명은 별도 컬럼에 두고 restricted로 취급한다. 화면에 보여줄 때도
-  -- 공개 projection allowlist를 통과해야 한다.
+  -- The original file name lives in a separate column and is treated as restricted. Display
+  -- also requires passing the public projection allowlist.
   original_filename TEXT,
   sensitivity   core.sensitivity NOT NULL,
   state         core.upload_state NOT NULL DEFAULT 'received',
@@ -35,8 +35,8 @@ CREATE TABLE core.object_uploads (
   rejection_reason TEXT,
   version       INTEGER NOT NULL DEFAULT 1,
   UNIQUE (tenant_id, object_key),
-  -- 같은 내용을 두 번 올리면 같은 해시가 나온다. tenant·프로젝트 안에서
-  -- 중복 업로드를 막아 evidence가 갈라지지 않게 한다.
+  -- Uploading the same content twice yields the same hash. Blocks duplicate uploads within
+  -- a tenant and project so evidence does not fork.
   UNIQUE (tenant_id, project_id, content_hash),
   CONSTRAINT promoted_requires_artifact CHECK (
     state <> 'promoted' OR promoted_artifact_id IS NOT NULL
@@ -47,7 +47,7 @@ CREATE TABLE core.object_uploads (
   CONSTRAINT upload_tenant_scope_key UNIQUE (tenant_id, id)
 );
 
--- tenant 경계를 넘는 참조를 막는다(0006과 같은 규칙).
+-- Blocks references across the tenant boundary (same rule as 0006).
 ALTER TABLE core.object_uploads
   ADD CONSTRAINT object_uploads_project_same_tenant
     FOREIGN KEY (tenant_id, project_id) REFERENCES core.projects (tenant_id, id),
@@ -69,14 +69,14 @@ CREATE INDEX object_uploads_project_idx ON core.object_uploads (project_id, uplo
 CREATE INDEX object_uploads_quarantine_idx ON core.object_uploads (state)
   WHERE state IN ('received', 'quarantined');
 
--- 업로드 기록은 지우지 않는다. 잘못된 업로드도 rejected 상태로 남긴다 —
--- 무엇이 올라왔었는지가 감사 대상이다.
+-- Upload records are never deleted. Bad uploads remain in the rejected state —
+-- what was uploaded is subject to audit.
 CREATE TRIGGER object_upload_no_delete
   BEFORE DELETE ON core.object_uploads
   FOR EACH ROW EXECUTE FUNCTION core.reject_delete();
 
--- content_hash와 object_key는 저장 후 바뀌지 않는다. 바뀌면 저장소의 실제
--- 객체와 DB 기록이 어긋난다.
+-- content_hash and object_key do not change after storage. A change would make the
+-- stored object and the DB record diverge.
 CREATE OR REPLACE FUNCTION core.protect_upload_identity() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
 BEGIN

@@ -10,19 +10,19 @@ import {
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
- * 공개 Governance — spec 11 §11.2.
+ * Public Governance — spec 11 §11.2.
  *
- * 거버넌스는 워크스페이스 안에만 있었다. 로그인해야 보이는 거버넌스는 참여자
- * 명부이지 거버넌스가 아니다 — 규칙이 어떻게 바뀌었는지는 그 규칙에 영향을 받는
- * 사람이 계정 없이 읽을 수 있어야 한다.
+ * Governance existed only inside the workspace. Governance visible only after sign-in is a participant
+ * roster, not governance — people affected by the rules must be able to read how they changed
+ * without an account.
  *
- * **protocol space만 나온다.** project space의 제안은 특정 프로젝트의 내부
- * 의사결정이며 공개 대상이라는 근거가 없다(0027).
+ * **Only protocol space appears.** Project space proposals are a specific project's internal
+ * decisions, with no basis for making them public (0027).
  *
- * **투표자 명단이 없다.** 집계는 판정 근거이지만 명단은 아니다(AC-32).
+ * **No voter roster.** The tally is the basis for the verdict, but it is not a roster (AC-32).
  */
 
-/** 무게는 decimal string이다. 자리수 구분만 넣고 number로 바꾸지 않는다. */
+/** Weight is a decimal string. Only digit grouping is added; it is never converted to number. */
 function weight(value: string): string {
   return value.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
@@ -166,7 +166,7 @@ export default function PublicGovernancePage() {
           </dl>
 
           <h2 style={{ marginTop: 18 }}>How it got here</h2>
-          {/* 현재 상태만 보면 "정족수 미달로 끝났다"와 "취소됐다"가 같아 보인다. */}
+          {/* From current state alone, "ended without quorum" and "cancelled" look the same. */}
           {open.transitions.length === 0 ? (
             <p className="sub" style={{ margin: 0 }}>
               No recorded transition. The proposal is in its first published state.

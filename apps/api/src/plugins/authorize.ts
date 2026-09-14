@@ -9,7 +9,7 @@ import {
 import { badRequest, forbidden } from "../errors.js";
 import type { Session } from "./session.js";
 
-/** 세션 밖에서 조회해야 하는 사실. 라우트가 자기 리소스에 맞게 채운다. */
+/** Facts that must be looked up outside the session. Routes fill them for their own resource. */
 export interface ActorFacts {
   readonly sensitivityClearance: readonly string[];
   readonly hasRequiredCredential: boolean;
@@ -18,15 +18,15 @@ export interface ActorFacts {
 }
 
 /**
- * assurance level별 민감도 clearance — 02 §2.2, 06 §6.7.
+ * Sensitivity clearance per assurance level — 02 §2.2, 06 §6.7.
  *
- * 이전에는 라우트마다 `["public","restricted"]`를 상수로 넘겼다. 그러면 세션이
- * 무엇이든 clearance가 같아지고, 결정식의 `sensitivity_clearance_sufficient`가
- * 판정에 관여하지 않는다.
+ * Previously each route passed `["public","restricted"]` as a constant. Clearance was then the
+ * same whatever the session, and the decision formula's `sensitivity_clearance_sufficient` took
+ * no part in the verdict.
  *
- * `confidential` 이상은 여기서 열지 않는다. 그 등급의 저장 경로 자체가 아직
- * 없고(OD-18, `admitToStorage`), 읽기만 먼저 열면 저장되지 않는 것을 읽을 수
- * 있다고 말하는 것이 된다.
+ * `confidential` and above are not opened here. No storage path for that grade exists yet
+ * (OD-18, `admitToStorage`), and opening reads first would claim that things that cannot be
+ * stored can be read.
  */
 const CLEARANCE_BY_ASSURANCE: Readonly<Record<Session["assuranceLevel"], readonly string[]>> = {
   wallet_only: ["public"],
@@ -35,12 +35,12 @@ const CLEARANCE_BY_ASSURANCE: Readonly<Record<Session["assuranceLevel"], readonl
 };
 
 /**
- * 세션만으로 판정할 수 있는 사실.
+ * Facts decidable from the session alone.
  *
- * credential·assignment·이해상충은 리소스마다 다르므로 여기서 채우지 않는다.
- * **기본값을 "충족"이 아니라 "요구되지 않음"으로 둔다** — 리소스가
- * `requiresCredential`을 켜면 라우트가 실제 조회 결과를 넘겨야 하고, 넘기지
- * 않으면 통과가 아니라 거절이 된다.
+ * Credential, assignment, and conflict of interest differ per resource, so they are not filled here.
+ * **Defaults are "not required", not "satisfied"** — once a resource turns on
+ * `requiresCredential`, the route must pass the real lookup result; if it does not, the result
+ * is rejection, not a pass.
  */
 export function sessionFacts(session: Session, overrides: Partial<ActorFacts> = {}): ActorFacts {
   return {
@@ -52,15 +52,15 @@ export function sessionFacts(session: Session, overrides: Partial<ActorFacts> = 
   };
 }
 
-/** 역할 바인딩 하나. 조직 수준(project_id NULL)이면 그 조직의 전 프로젝트다. */
+/** One role binding. Organization-level (project_id NULL) covers all of that org's projects. */
 type Binding = Session["roleBindings"][number];
 
 /**
- * 바인딩이 닿는 프로젝트.
+ * Projects a binding reaches.
  *
- * 이전에는 조직 수준 바인딩을 모두 `"all"`로 바꿨다. 주석은 "그 조직의 전
- * 프로젝트"였지만 조직을 비교하는 곳이 없어서, 같은 tenant 안의 B사 steward가
- * A사 프로젝트에 업로드할 수 있었다.
+ * Previously every organization-level binding became `"all"`. The comment said "all of that
+ * organization's projects", but nothing compared organizations, so a company B steward in the
+ * same tenant could upload to company A's project.
  */
 function scopeOf(session: Session, binding: Binding): ProjectScope {
   if (binding.projectId !== null) return [binding.projectId];
@@ -69,24 +69,25 @@ function scopeOf(session: Session, binding: Binding): ProjectScope {
   return session.organizationProjectIds?.[binding.organizationId] ?? [];
 }
 
-/** 이 action을 허용받는 역할의 바인딩. */
+/** Bindings of the roles permitted for this action. */
 function usableBindings(session: Session, action: string): readonly Binding[] {
   const policy = ACTION_POLICIES[action];
   if (!policy) return [];
   return session.roleBindings.filter((binding) => policy.allowedRoles.includes(binding.role));
 }
 
-/** 세션이 이 action의 역할을 하나라도 가졌는가. 목록에 결정 대상을 실을지 정할 때 쓴다. */
+/** Whether the session holds any role for this action. Decides whether lists carry decision targets. */
 export function holdsActionRole(session: Session, action: string): boolean {
   return usableBindings(session, action).length > 0;
 }
 
 /**
- * 이 조직의 이름으로 행위할 수 있는가 — 프로젝트 생성의 소유 조직 검사.
+ * Whether the session may act in this organization's name — the owning-organization check on
+ * project creation.
  *
- * tenant 운영 역할은 온보딩으로 다른 조직 소유 프로젝트를 등록할 수 있다.
- * 당사자 역할은 자기 조직의 것만 만든다. 그렇지 않으면 B사가 A사 이름으로
- * 프로젝트를 만들어 그 프로젝트의 당사자처럼 보이게 된다.
+ * Tenant operations roles can register projects owned by other organizations via onboarding.
+ * Party roles create only their own organization's. Otherwise company B could create a project
+ * under company A's name and appear as that project's party.
  */
 export function canActForOrganization(
   session: Session,
@@ -117,13 +118,13 @@ export function bindingToAuthorizationContext(
 }
 
 /**
- * 이 action으로 닿을 수 있는 프로젝트 — 목록 조회용.
+ * Projects reachable with this action — for list queries.
  *
- * 단건 조회는 `assertAuthorized`가 막으면 되지만 목록은 그렇지 않다. 걸러내지
- * 않으면 범위 밖 프로젝트의 이름과 ID가 목록에 실려 나간다. 403을 받지 않았다는
- * 이유로 유출이 아닌 것이 되지 않는다.
+ * Single reads are covered by `assertAuthorized` blocking, but lists are not. Without filtering,
+ * names and IDs of out-of-scope projects go out in the list. Not receiving a 403 does not make
+ * it any less of a leak.
  *
- * `"all"`은 tenant 운영 역할의 조직 수준 바인딩이 하나라도 있다는 뜻이다.
+ * `"all"` means there is at least one organization-level binding of a tenant operations role.
  */
 export function visibleProjectScope(session: Session, action: string): ProjectScope {
   const scopes = usableBindings(session, action).map((binding) => scopeOf(session, binding));
@@ -133,11 +134,11 @@ export function visibleProjectScope(session: Session, action: string): ProjectSc
 }
 
 /**
- * 리소스 컨텍스트의 기본값.
+ * Default resource context.
  *
- * 라우트마다 7개 필드를 손으로 적으면 하나를 빠뜨렸을 때 그 라우트만 조용히
- * 다르게 판정된다. 기본값은 전부 **가장 좁은 쪽**이다 — credential·assignment는
- * 요구하지 않음이 아니라, 요구하면 라우트가 명시해야 한다는 뜻이다.
+ * Writing 7 fields by hand per route means forgetting one silently changes the verdict for that
+ * route alone. Every default is **the narrowest option** — for credential and assignment it does
+ * not mean "not required"; it means a route that requires them must say so explicitly.
  */
 const RESOURCE_DEFAULTS = {
   sensitivity: "restricted",
@@ -148,7 +149,7 @@ const RESOURCE_DEFAULTS = {
   separationSensitive: false,
 } as const;
 
-/** tenant 전체에 걸리는 리소스. 프로젝트 경계가 없는 운영 action에만 쓴다. */
+/** Tenant-wide resource. Only for operations actions with no project boundary. */
 export function tenantResource(
   tenantId: string,
   overrides: Partial<Omit<ResourceContext, "tenantId" | "projectId">> = {},
@@ -156,7 +157,7 @@ export function tenantResource(
   return { ...RESOURCE_DEFAULTS, ...overrides, tenantId, projectId: null };
 }
 
-/** 프로젝트에 매인 리소스. `projectId`를 넘겨야 project scope가 평가된다. */
+/** Project-bound resource. `projectId` must be passed for project scope to be evaluated. */
 export function projectResource(
   tenantId: string,
   projectId: string,
@@ -165,7 +166,7 @@ export function projectResource(
   return { ...RESOURCE_DEFAULTS, ...overrides, tenantId, projectId };
 }
 
-/** 역할이 하나도 없는 세션. wallet이 묶여 있다는 사실은 역할이 아니다. */
+/** Session with no roles. Having a wallet bound is not a role. */
 const PUBLIC_READER: Binding = {
   role: "public_reader",
   organizationId: null,
@@ -173,20 +174,20 @@ const PUBLIC_READER: Binding = {
 };
 
 /**
- * 서버가 최종 권한을 판정한다 — 02 §2.1.
+ * The server makes the final authorization decision — 02 §2.1.
  *
- * **역할이 아니라 역할 바인딩 단위로 판정한다.** 조직 수준 바인딩은 그 조직의
- * 프로젝트 전체에, 프로젝트 수준 바인딩은 그 프로젝트에만 닿는다. 역할 이름만
- * 보면 프로젝트 A의 검토자가 프로젝트 B에서도 같은 역할로 통과한다.
+ * **Decides per role binding, not per role.** An organization-level binding reaches all the
+ * organization's projects; a project-level binding reaches only that project. Looking only at
+ * role names lets a reviewer of project A pass in project B with the same role.
  *
- * 하나라도 통과하면 허용한다. 전부 실패하면 **가장 마지막 거절 사유**를
- * 반환한다. 사용자가 무엇을 해야 하는지 알아야 하기 때문이다(§11.7).
+ * Allows if any binding passes. If all fail, returns **the last rejection reason**,
+ * because the user needs to know what to do (§11.7).
  *
- * **통과시킨 바인딩의 역할을 반환한다.** 감사 기록의 `effective_role`이 이 값이어야
- * 한다(02 §2.7). 세션의 첫 바인딩을 대신 쓰면, 두 바인딩을 가진 사람이 두 번째
- * 것으로 통과한 행위가 첫 번째 역할로 기록된다. `core.resolve_role_bindings`에는
- * ORDER BY가 없어 그 "첫 번째"가 실행마다 달라질 수도 있다 — 기록이 틀리기만
- * 하는 것이 아니라 재현되지도 않는다.
+ * **Returns the role of the binding that passed.** The audit record's `effective_role` must be
+ * this value (02 §2.7). Using the session's first binding instead records an action that a
+ * person with two bindings passed via the second as the first role. `core.resolve_role_bindings`
+ * has no ORDER BY, so that "first" can differ per run — the record would be not only wrong but
+ * unreproducible.
  */
 export function assertAuthorized(
   session: Session,
@@ -196,7 +197,7 @@ export function assertAuthorized(
 ): string {
   const policy = ACTION_POLICIES[action];
   if (!policy) {
-    throw badRequest("ACTION_UNKNOWN", `알 수 없는 action이다: ${action}`);
+    throw badRequest("ACTION_UNKNOWN", `Unknown action: ${action}`);
   }
 
   const candidates = session.roleBindings.length > 0 ? session.roleBindings : [PUBLIC_READER];
@@ -214,7 +215,7 @@ export function assertAuthorized(
   }
 
   if (lastDenial && !lastDenial.allow) {
-    throw forbidden("AUTHORIZATION_DENIED", "이 작업을 수행할 권한이 없다", {
+    throw forbidden("AUTHORIZATION_DENIED", "You do not have permission to perform this action", {
       reason: lastDenial.reason,
       ...(lastDenial.requiredRoles ? { requiredRoles: lastDenial.requiredRoles } : {}),
       ...(lastDenial.requiredAssurance
@@ -226,5 +227,5 @@ export function assertAuthorized(
     });
   }
 
-  throw forbidden("AUTHORIZATION_DENIED", "이 작업을 수행할 권한이 없다");
+  throw forbidden("AUTHORIZATION_DENIED", "You do not have permission to perform this action");
 }

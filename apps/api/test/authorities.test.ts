@@ -9,8 +9,8 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 /**
  * Authority Registry — 05 §5.11, OD-42·OD-43.
  *
- * R5 gate가 요구하는 것은 "미확인 integration 과장 0"이다. 그래서 이 파일은
- * **연동되지 않은 기관이 목록에 남는가**와 **활성으로 보이지 않는가**를 함께 본다.
+ * The R5 gate requires "zero overstatement of unverified integrations". So this file
+ * checks both that **unintegrated authorities stay listed** and **do not look active**.
  */
 describeDb("Authority Registry", () => {
   let fx: TestFixture;
@@ -36,26 +36,26 @@ describeDb("Authority Registry", () => {
     });
   }
 
-  it("확인하지 않는 것을 함께 반환한다", async () => {
+  it("also returns what is not verified", async () => {
     const response = await list();
     expect(response.statusCode).toBe(200);
 
     const items = response.json().items as { doesNotProve: string[] }[];
     expect(items.length).toBeGreaterThan(0);
-    // 확인해 주는 것만 보여주면 읽는 쪽이 전체 확인으로 오해한다.
+    // Showing only what is verified makes readers assume everything is verified.
     for (const item of items) {
       expect(item.doesNotProve.length).toBeGreaterThan(0);
     }
   });
 
-  it("active 연동은 호출 가능으로 표시된다", async () => {
+  it("an active integration is shown as callable", async () => {
     const items = (await list()).json().items as { adapterState: string; callable: boolean }[];
     const active = items.find((item) => item.adapterState === "active");
     expect(active?.callable).toBe(true);
   });
 
-  it("연동이 없는 기관도 목록에 남는다", async () => {
-    // 빼면 "왜 이 기관은 없나"를 알 수 없다.
+  it("an authority without an integration stays listed", async () => {
+    // Dropping it leaves "why is this authority missing" unanswerable.
     await fx.sql`
       INSERT INTO core.authorities (
         id, tenant_id, name, jurisdiction, proves, does_not_prove,
@@ -76,13 +76,13 @@ describeDb("Authority Registry", () => {
     const found = items.find((item) => item.name === "Unconnected Registry");
 
     expect(found).toBeDefined();
-    // active로 두면 있지도 않은 연동을 약속한다.
+    // Marking it active promises an integration that does not exist.
     expect(found!.adapterState).toBe("none");
     expect(found!.callable).toBe(false);
-    expect(found!.nextAction).toContain("연동");
+    expect(found!.nextAction).toContain("connection");
   });
 
-  it("계획 단계 연동은 호출 대상이 아니다", async () => {
+  it("a planned integration is not called", async () => {
     const [authority] = await fx.sql<{ id: string }[]>`
       INSERT INTO core.authorities (
         id, tenant_id, name, jurisdiction, proves, does_not_prove,
@@ -100,7 +100,7 @@ describeDb("Authority Registry", () => {
         access_basis, state
       ) VALUES (
         gen_random_uuid(), ${fx.tenantA}, ${authority!.id}, ${`planned-${Date.now()}`},
-        'authenticated_api', '협의 예정', 'planned'
+        'authenticated_api', 'Pending consultation', 'planned'
       )
     `;
 
@@ -112,14 +112,14 @@ describeDb("Authority Registry", () => {
     }[];
     const found = items.find((item) => item.name === "Planned Registry");
 
-    // 호출하면 미확인 통합을 약속하는 것이 된다(OD-42).
+    // Calling it would promise an unverified integration (OD-42).
     expect(found!.adapterState).toBe("pending_access");
     expect(found!.callable).toBe(false);
-    // "왜 안 되나"에 답할 수 있어야 한다.
+    // Must be able to answer "why not".
     expect(found!.adapterStateReason).toBeTruthy();
   });
 
-  it("관할 profile이 활성과 대기를 나눠 센다", async () => {
+  it("the jurisdiction profile counts active and pending separately", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/jurisdictions/mng/profile",
@@ -129,13 +129,13 @@ describeDb("Authority Registry", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
 
-    // 합계만 보여주면 "10개 연동"이 실제로는 1개만 호출 가능한 상태를 감춘다.
+    // A total alone hides that "10 integrations" may mean only 1 is callable.
     expect(body.activeCount).toBeGreaterThanOrEqual(1);
     expect(body.pendingCount).toBeGreaterThanOrEqual(1);
-    expect(body.limitations.join(" ")).toContain("약속하지 않는다");
+    expect(body.limitations.join(" ")).toContain("does not promise");
   });
 
-  it("다른 tenant의 authority는 보이지 않는다", async () => {
+  it("another tenant's authority is not visible", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/authorities",
@@ -169,9 +169,9 @@ describeDb("Asset/Offering gate (OD-07)", () => {
     });
   }
 
-  // AC-08: 프로젝트가 official reference여도 Issuer·SPV·권리가 pending이면
-  // offering activation은 거절되고 Registry workflow는 정상 유지된다.
-  it("조건이 채워지지 않은 상태를 그대로 보여준다", async () => {
+  // AC-08: even with an official reference, if Issuer/SPV/rights are pending,
+  // offering activation is rejected and the Registry workflow continues normally.
+  it("shows unmet conditions as they are", async () => {
     const response = await gate();
 
     expect(response.statusCode).toBe(200);
@@ -179,14 +179,14 @@ describeDb("Asset/Offering gate (OD-07)", () => {
     expect(response.json().missing.length).toBeGreaterThan(0);
   });
 
-  it("기능이 없다는 사실을 응답이 직접 말한다", async () => {
-    // 화면이 잊어도 API가 말한다. 비활성 버튼은 "곧 생긴다"로 읽힌다.
+  it("the response itself states that the feature does not exist", async () => {
+    // The API says it even if the UI forgets. A disabled button reads as "coming soon".
     const body = gate().then((response) => response.json());
-    expect((await body).absenceNotice).toContain("숨겨 두지도");
-    expect((await body).notMeaning).toContain("발행 승인이 아닙니다");
+    expect((await body).absenceNotice).toContain("not hidden behind a flag");
+    expect((await body).notMeaning).toContain("are not issuance approval");
   });
 
-  it("남은 조건마다 담당이 있다", async () => {
+  it("every remaining condition has an owner", async () => {
     const missing = (await gate()).json().missing as { owner: string; why: string }[];
     for (const item of missing) {
       expect(item.owner.length).toBeGreaterThan(0);
@@ -194,8 +194,8 @@ describeDb("Asset/Offering gate (OD-07)", () => {
     }
   });
 
-  it("거래 route가 존재하지 않는다", async () => {
-    // OD-07: 미승인 규제 기능은 flag 뒤에 있어도 오활성화 위험을 만든다.
+  it("no trading route exists", async () => {
+    // OD-07: unapproved regulated features risk accidental activation even behind a flag.
     for (const path of ["subscriptions", "orders", "transfers", "custody"]) {
       const response = await app.inject({
         method: "POST",

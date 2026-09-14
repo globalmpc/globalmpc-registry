@@ -3,41 +3,41 @@ import { admitToStorage, storageTierFor } from "../src/storage-tier.js";
 import { SENSITIVITY_LEVELS } from "../src/disclosure.js";
 
 /**
- * 저장 등급 게이트 — OD-17·OD-18 (2026-08-14 초안 결정).
+ * Storage level gate — OD-17·OD-18 (draft decision of 2026-08-14).
  *
- * 초안 저장 경로는 provider 관리 키를 쓰고 tenant별 분리도 파기 절차도 없다.
- * 그것으로 충분한 자료만 지나갈 수 있는가를 본다.
+ * The draft storage path uses a provider-managed key, with no per-tenant separation or
+ * destruction procedure. Checks that only material for which that suffices can pass.
  */
-describe("저장 등급", () => {
-  it("public·restricted는 초안 경로가 받는다", () => {
+describe("storage level", () => {
+  it("the draft path accepts public and restricted", () => {
     expect(storageTierFor("public")).toBe("draft");
     expect(storageTierFor("restricted")).toBe("draft");
   });
 
-  it("민감 등급은 secured 경로를 요구한다", () => {
+  it("sensitive levels require the secured path", () => {
     for (const level of ["confidential", "pii", "whistleblower"] as const) {
       expect(storageTierFor(level)).toBe("secured");
     }
   });
 
-  it("모든 등급이 둘 중 하나로 판정된다", () => {
-    // 새 등급이 생겼는데 판정이 빠지면 기본이 `draft`가 되어 조용히 통과한다.
+  it("every level is decided as one of the two", () => {
+    // If a new level appears without a decision, the default becomes `draft` and it passes silently.
     for (const level of SENSITIVITY_LEVELS) {
       expect(["draft", "secured"]).toContain(storageTierFor(level));
     }
   });
 
-  it("거절할 때 무엇을 해야 하는지 말한다", () => {
+  it("says what to do when rejecting", () => {
     const result = admitToStorage("pii");
     expect(result.admitted).toBe(false);
     if (!result.admitted) {
-      // "안 된다"만 알려주면 다음 행동을 추측하게 된다.
+      // Saying only "no" leaves the next action to guesswork.
       expect(result.nextAction).toContain("secured route");
-      expect(result.reason).toContain("키 분리");
+      expect(result.reason).toContain("key separation");
     }
   });
 
-  it("받을 때는 어느 경로인지 밝힌다", () => {
+  it("states which path when accepting", () => {
     const result = admitToStorage("restricted");
     expect(result.admitted).toBe(true);
     if (result.admitted) expect(result.tier).toBe("draft");

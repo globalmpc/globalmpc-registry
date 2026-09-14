@@ -1,10 +1,10 @@
 /**
- * API 클라이언트.
+ * API client.
  *
- * 서버가 반환하는 error envelope(07 §7.1)를 그대로 보존한다. 화면이 오류를
- * "실패했습니다"로 뭉개면 사용자는 다음에 무엇을 해야 할지 알 수 없다.
- * `code`·`retryable`·`details.requiredRoles`·`details.accessRequestPath`가
- * 그대로 UI까지 온다(§11.7).
+ * Preserves the server's error envelope (07 §7.1) as-is. If a screen flattens an error
+ * into "failed", the user cannot tell what to do next.
+ * `code`, `retryable`, `details.requiredRoles`, and `details.accessRequestPath`
+ * reach the UI unchanged (§11.7).
  */
 
 export interface ApiErrorEnvelope {
@@ -26,19 +26,19 @@ export interface ApiErrorEnvelope {
 }
 
 /**
- * 요청 하나의 상한.
+ * Upper bound for a single request.
  *
- * 서버가 응답을 지연시키면 `fetch`는 스스로 끝나지 않는다. error envelope는
- * **응답을 받은** 경우의 설계이므로, 응답이 오지 않는 구간은 그 설계가 닿지
- * 못하고 화면이 무한 로딩에 머문다.
+ * If the server stalls, `fetch` never ends on its own. The error envelope is
+ * designed for the case where a **response arrives**, so a missing response falls outside
+ * that design and the screen stays in an endless loading state.
  */
 export const REQUEST_TIMEOUT_MS = 20_000;
 
 /**
- * 타임아웃이 붙은 `fetch`.
+ * `fetch` with a timeout.
  *
- * 호출부가 이미 `signal`을 넘겼으면 그것을 존중한다 — 취소 가능한 화면 요청의
- * signal을 여기서 덮어쓰면 그쪽 취소가 동작하지 않는다.
+ * If the caller already passed a `signal`, respect it — overwriting the signal of a
+ * cancellable screen request here breaks that cancellation.
  */
 export async function apiFetch(
   input: RequestInfo | URL,
@@ -59,10 +59,10 @@ export class ApiError extends Error {
 }
 
 /**
- * 세션 토큰 헤더.
+ * Session token header.
  *
- * 토큰은 SIWE 서명을 검증한 뒤에만 발급된다. 서버는 토큰 원문을 저장하지 않고
- * 해시만 보관하며, 로그아웃하면 즉시 무효가 된다.
+ * A token is issued only after the SIWE signature is verified. The server stores only
+ * the hash, never the raw token, and logout invalidates it immediately.
  */
 function authHeader(token: string | null): Record<string, string> {
   return token ? { authorization: `Bearer ${token}` } : {};
@@ -72,12 +72,12 @@ export interface SiweChallenge {
   nonce: string;
   statement: string;
   domain: string;
-  /** 서명 대상 uri. 서버가 정하고 서버가 검증한다 — 여기서 추측하지 않는다. */
+  /** URI to sign. The server decides it and the server verifies it — do not guess here. */
   uri: string;
   /**
-   * 서명할 체인. **서버가 정하고 서버가 검증한다**.
+   * Chain to sign on. **The server decides it and the server verifies it**.
    *
-   * 여기에 97을 박아 두었을 때 stg·prod(56)에서 실지갑 로그인이 0건 성공했다.
+   * When 97 was hardcoded here, real-wallet login on stg/prod (56) succeeded zero times.
    */
   chainId: number;
   expiresAt: string;
@@ -142,7 +142,7 @@ export interface SessionInfo {
   assuranceLevel?: string;
   roleBindings?: { role: string; organizationId: string | null; projectId: string | null }[];
   projectIds?: string[];
-  /** 역할로 허용되는 action. 메뉴를 거르는 데만 쓴다 — 판정은 서버가 한다. */
+  /** Actions allowed by role. Used only to filter menus — the server makes the decision. */
   actions?: string[];
   requestId: string;
 }
@@ -189,8 +189,8 @@ export async function createProject(
     headers: {
       ...authHeader(token),
       "content-type": "application/json",
-      // 07 §7.1: mutation에는 Idempotency-Key가 필수다. 네트워크 재시도가
-      // 중복 등록을 만들지 않게 화면이 key를 생성해 보낸다.
+      // 07 §7.1: mutations require an Idempotency-Key. The screen generates and sends the key
+      // so that network retries do not create duplicate records.
       "idempotency-key": idempotencyKey,
     },
     body: JSON.stringify(input),
@@ -266,11 +266,11 @@ export async function createSourceReceipt(
 }
 
 /**
- * 공식 출처 조회 — 2026-09-10 실사 A1.
+ * Official source lookup — 2026-09-10 audit A1.
  *
- * **확정은 이 경로에서만 나온다.** 화면이 `confirmed_from_source`를 직접 보내는
- * 것은 "올린 사람이 그렇다고 했다"를 "우리가 확인했다"로 기록하는 것이다.
- * 여기서 나오는 결과는 출처가 실제로 답한 것이며, 답하지 못하면 그 사실이 남는다.
+ * **Confirmation comes only from this path.** A screen sending `confirmed_from_source`
+ * directly records "the uploader said so" as "we checked".
+ * The result here is what the source actually answered; if it cannot answer, that fact is recorded.
  */
 export async function collectFromSource(
   token: string,
@@ -288,11 +288,11 @@ export async function collectFromSource(
 }
 
 /**
- * claim conflict 기록.
+ * Record a claim conflict.
  *
- * conflict가 생기면 grade가 재계산되어 claim의 version이 올라간다. 어느 버전을
- * 보고 기록하는지 `If-Match`로 밝힌다 — 밝히지 않으면 서버가 428로 거절하고,
- * 그 사이 누가 먼저 바꿨으면 412가 온다.
+ * A conflict recomputes the grade and bumps the claim's version. State which version
+ * you are recording against with `If-Match` — without it the server rejects with 428,
+ * and if someone changed it first in the meantime you get 412.
  */
 export async function createClaimConflict(
   token: string,
@@ -328,7 +328,7 @@ export async function createClaim(
   return parse<Claim>(response);
 }
 
-// --- 업로드 -----------------------------------------------------------------
+// --- Upload -------------------------------------------------------------------
 
 export interface ObjectUpload {
   id: string;
@@ -365,18 +365,18 @@ export async function listUploads(
 }
 
 /**
- * base64 경로의 상한.
+ * Upper bound for the base64 path.
  *
- * 이보다 크면 multipart로 보낸다. base64는 본문이 33% 커지고 서버가 통째로
- * 메모리에 올린다 — 작은 파일에는 단순해서 좋고, 큰 파일에는 쓸 수 없다.
+ * Larger files go as multipart. base64 inflates the body by 33% and the server loads it
+ * entirely into memory — simple for small files, unusable for large ones.
  */
 const BASE64_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
 
 /**
- * 파일 업로드.
+ * File upload.
  *
- * 크기에 따라 경로를 고른다. 두 경로는 같은 content hash를 만들고 같은
- * quarantine 상태로 들어간다 — 사용자에게는 하나의 동작이다.
+ * Picks a path by size. Both paths produce the same content hash and enter the same
+ * quarantine state — to the user it is one action.
  */
 export async function createUpload(
   token: string,
@@ -388,7 +388,7 @@ export async function createUpload(
     const form = new FormData();
     form.append("file", file, file.name);
 
-    // content-type을 직접 설정하지 않는다. 브라우저가 boundary를 붙여야 한다.
+    // Do not set content-type directly. The browser must attach the boundary.
     const response = await apiFetch(`/api/v1/projects/${projectId}/uploads/stream`, {
       method: "POST",
       headers: { ...authHeader(token), "idempotency-key": key },
@@ -550,10 +550,10 @@ export interface VerificationCase {
 }
 
 /**
- * 이 프로젝트의 검토 case 목록.
+ * Review cases for this project.
  *
- * 배정을 만든 사람과 서명하는 사람이 다르므로, 검토자는 이 목록으로 자기
- * 배정을 찾는다. 목록에 보이는 것과 서명할 수 있는 것은 다른 문제다.
+ * The person who creates an assignment differs from the person who signs, so reviewers
+ * find their assignments in this list. Appearing in the list and being able to sign are separate questions.
  */
 export async function listVerificationCases(
   token: string,
@@ -590,10 +590,10 @@ export interface AttestationDraft {
 }
 
 /**
- * case 상태 전이.
+ * Case state transition.
  *
- * 보완 요청·반려·취소를 기록한다. 이유 없이 바꿀 수 없고, 어느 버전을 보고
- * 바꾸는지 `If-Match`로 밝힌다.
+ * Records a request for changes, rejection, or cancellation. Cannot change without a reason, and
+ * states the version it is changing against with `If-Match`.
  */
 export async function transitionCase(
   token: string,
@@ -616,9 +616,9 @@ export async function transitionCase(
 }
 
 /**
- * 서명된 attestation에 이의를 제기한다.
+ * Dispute a signed attestation.
  *
- * 서명을 지우지 않는다. 서명 당시의 판단은 그대로 남고 상태만 추가된다.
+ * Does not delete the signature. The judgment at signing time stays; only a status is added.
  */
 export async function disputeAttestation(
   token: string,
@@ -657,10 +657,10 @@ export async function listDisputes(
 }
 
 /**
- * 이의 해소.
+ * Resolve a dispute.
  *
- * 기록을 지우지 않고 결과를 덧붙인다. `upheld`여도 검토가 유효로 돌아가지
- * 않는다 — 틀렸다고 확인된 것을 유효로 표시할 수 없다.
+ * Appends the outcome without deleting the record. Even if `upheld`, the review does not
+ * return to valid — something confirmed wrong cannot be shown as valid.
  */
 export async function resolveDispute(
   token: string,
@@ -693,11 +693,11 @@ export async function createAttestation(
 }
 
 /**
- * 서명 요청.
+ * Signature request.
  *
- * `typedData`는 EIP-712 구조 그대로 온다. 서버는 대리 서명하지 않으므로
- * 브라우저가 이것을 지갑에 넘겨 서명한다. `humanReadablePayload`는 서명자가
- * 무엇에 서명하는지 읽을 수 있게 하는 것이며 서명 대상 자체는 typedData다.
+ * `typedData` arrives in its EIP-712 structure as-is. The server does not sign on anyone's behalf,
+ * so the browser passes it to the wallet to sign. `humanReadablePayload` lets the signer
+ * read what they are signing; the signed payload itself is typedData.
  */
 export interface SignatureRequest {
   signatureRequestId: string;
@@ -749,7 +749,7 @@ export async function submitSignature(
   return parse<SignedAttestation>(response);
 }
 
-// --- Registry 게시 / anchor --------------------------------------------------
+// --- Registry publication / anchor ---------------------------------------------
 
 export interface PublishedVersion {
   id: string;
@@ -800,10 +800,10 @@ export interface AuditEvent {
 }
 
 /**
- * 감사 로그 조회.
+ * Audit log query.
  *
- * `audit.events`는 append-only이고 superuser도 수정할 수 없다. 읽는 경로가
- * 없으면 그 보장이 운영에 쓰이지 못한다.
+ * `audit.events` is append-only and not even a superuser can modify it. Without a read
+ * path, that guarantee is of no use in operations.
  */
 export async function listAuditEvents(
   token: string,
@@ -836,7 +836,7 @@ export async function getOutboxBacklog(token: string): Promise<OutboxBacklog> {
   return parse<OutboxBacklog>(response);
 }
 
-/** 멈춘 batch 재제출. 자동이 아니라 사람이 판단한다. */
+/** Resubmit a stalled batch. A person decides, not an automatic process. */
 export async function resubmitAnchorBatch(
   token: string,
   batchId: string,
@@ -873,10 +873,10 @@ export interface AnchorBatchStatus extends AnchorBatch {
 }
 
 /**
- * anchor batch 상태 목록.
+ * Anchor batch status list.
  *
- * batch를 만든 뒤 무슨 일이 일어났는지 볼 수 있어야 한다. 상태가 안 보이면
- * 제출이 막힌 것과 확정을 기다리는 것을 구분할 수 없다.
+ * It must be possible to see what happened after a batch was created. If status is hidden,
+ * a blocked submission cannot be told apart from one awaiting confirmation.
  */
 export async function listAnchorBatches(token: string): Promise<{ items: AnchorBatchStatus[] }> {
   const response = await apiFetch("/api/v1/anchor-batches", {
@@ -898,10 +898,10 @@ export async function createAnchorBatch(token: string, key: string): Promise<Anc
 // --- Asset/Offering gate (OD-07) --------------------------------------------
 
 /**
- * 활성화 조건 조회.
+ * Activation condition query.
  *
- * **거래 함수가 없다.** `buy`·`subscribe`·`transfer`가 이 파일에 없는 것이
- * 의도다 — 클라이언트 코드의 모양이 곧 "무엇이 있는가"를 말한다.
+ * **There are no trading functions.** `buy`, `subscribe`, and `transfer` are absent from this file
+ * by design — the shape of the client code itself says "what exists".
  */
 export interface OfferingGateStatus {
   projectId: string;
@@ -998,20 +998,20 @@ export interface GovernanceProposal {
   transitions: { fromState: string; toState: string; reason: string; occurredAt: string }[];
   limitations: string[];
   /**
-   * 무게가 어디서 왔는가 — 04 §4.5.
+   * Where the weight came from — 04 §4.5.
    *
-   * `manual`은 사람이 입력한 값으로 집계됐다는 뜻이다. 화면이 이것을 밝히지
-   * 않으면 수동 집계 결과를 온체인 근거로 읽는다.
+   * `manual` means the tally used values a person entered. If the screen does not state this,
+   * a manual tally reads as on-chain evidence.
    */
   weightSource: "onchain_snapshot" | "manual";
   snapshotBlock: number | null;
   /**
-   * 정족수의 분모 — 투표할 수 있었던 전체 무게.
+   * Quorum denominator — the total weight that could have voted.
    *
-   * 던진 표의 합이 아니다. 투표를 열 때 고정되며 그 전에는 null이다.
+   * Not the sum of votes cast. Fixed when voting opens; null before that.
    */
   eligibleWeight: string | null;
-  /** 분모가 어디서 왔는가. `manual`이면 사람이 지정한 값이다. */
+  /** Where the denominator came from. `manual` means a person set the value. */
   eligibleWeightSource: "onchain_total_supply" | "manual" | null;
 }
 
@@ -1056,7 +1056,7 @@ export async function transitionProposal(
   return parse<GovernanceProposal>(response);
 }
 
-/** 투표. 무게는 decimal string이다 — number로 다루면 정밀도를 잃는다. */
+/** Vote. Weight is a decimal string — handling it as a number loses precision. */
 export async function castVote(
   token: string,
   proposalId: string,
@@ -1071,7 +1071,7 @@ export async function castVote(
   return parse<GovernanceProposal>(response);
 }
 
-// --- Public (무인증) ---------------------------------------------------------
+// --- Public (unauthenticated) ---------------------------------------------------
 
 export interface PublicProjection {
   entryVersionId: string;
@@ -1125,13 +1125,13 @@ export interface PublicRegistryListItem {
   publishedAt: string | null;
   revokedAt: string | null;
   supersededBy: string | null;
-  /** 공개 allowlist 안의 필드만 담긴다. 서버가 그것을 강제한다. */
+  /** Contains only fields in the public allowlist. The server enforces it. */
   projection: Record<string, unknown>;
 }
 
 export interface PublicRegistryList {
   items: PublicRegistryListItem[];
-  /** 다음 페이지를 요청하는 유일한 방법. 값을 해석하지 않고 그대로 돌려준다. */
+  /** The only way to request the next page. Return the value as-is without interpreting it. */
   nextCursor: string | null;
   sort: string;
 }
@@ -1147,7 +1147,7 @@ export async function listPublicRegistryEntries(
   registryType: string,
   query: PublicListQuery = {},
 ): Promise<PublicRegistryList> {
-  // 빈 값을 보내지 않는다. `q=`는 "빈 문자열로 검색"이고 서버가 거절한다.
+  // Do not send empty values. `q=` means "search for the empty string" and the server rejects it.
   const search = new URLSearchParams(
     Object.entries(query)
       .filter(([, value]) => value !== undefined && value !== "")
@@ -1171,7 +1171,7 @@ export interface PublicProposal {
   votingOpensAt: string | null;
   votingClosesAt: string | null;
   createdAt: string;
-  /** 무게는 decimal string이다. number로 옮기면 조용히 반올림된다(ADR-T07). */
+  /** Weight is a decimal string. Converting it to a number rounds silently (ADR-T07). */
   tally: { for: string; against: string; abstain: string; voterCount: number };
 }
 
@@ -1212,23 +1212,23 @@ export interface PublicDisclosureEvent {
   occurredAt: string;
   registryType: "project" | "verification" | "asset";
   publicKey: string;
-  /** 정정·철회에만 있다. 나머지 종류는 registry version이 아니다. */
+  /** Present only for corrections and withdrawals. Other kinds are not registry versions. */
   registryVersion: {
     entryVersionId: string;
     version: string;
     supersededBy: string | null;
     projection: Record<string, unknown>;
   } | null;
-  /** suspension에만 있다. 사유와 행위자는 공개하지 않는다. */
+  /** Present only for suspensions. The reason and actor are not public. */
   lifecycle: { fromState: string; toState: string } | null;
-  /** pause·dispute가 끝난 시각. 아직 열려 있으면 null. */
+  /** When the pause or dispute ended. Null while still open. */
   resolvedAt: string | null;
 }
 
 export interface PublicDisclosureList {
   items: PublicDisclosureEvent[];
   nextCursor: string | null;
-  /** 이 목록이 덮지 않는 사건 종류. 빈 목록을 "없었다"로 읽지 않게 한다. */
+  /** Event kinds this list does not cover. Keeps an empty list from reading as "none happened". */
   notCovered: { kind: string; reason: string }[];
 }
 
@@ -1246,7 +1246,7 @@ export async function listPublicDisclosures(
   return parse<PublicDisclosureList>(response);
 }
 
-// --- 플랫폼 관리 ---------------------------------------------
+// --- Platform administration ---------------------------------------
 
 export interface AdminWallet {
   id: string;
@@ -1264,7 +1264,7 @@ export interface AdminSubject {
   kind: "person" | "service";
   wallets: AdminWallet[];
   roles: { id: string; role: string; projectId: string | null; grantedAt: string; revokedAt: string | null }[];
-  /** 로그인 가능한 지갑이 하나도 없다. 화면이 가장 먼저 말해야 하는 상태다. */
+  /** No wallet can log in. This is the first state the screen must report. */
   locked: boolean;
 }
 
@@ -1380,7 +1380,7 @@ export async function decideRoleGrant(
   return parse<RoleGrant>(response);
 }
 
-// --- 워크스페이스 집계 ---------------------------------------
+// --- Workspace summary -------------------------------------------
 
 export interface RegistryEntrySummary {
   entryId: string;
@@ -1391,7 +1391,7 @@ export interface RegistryEntrySummary {
   status: "draft" | "published" | "revoked" | "superseded";
   publishedAt: string | null;
   revokedAt: string | null;
-  /** 게시와 anchor는 다른 사건이다. 한 칸에 합치지 않는다. */
+  /** Publication and anchoring are separate events. Do not merge them into one column. */
   anchored: boolean;
 }
 
@@ -1432,7 +1432,7 @@ export async function getMyWork(token: string): Promise<MyWork> {
   return parse<MyWork>(response);
 }
 
-// --- 내 활동 ------------------------------------------------------
+// --- My activity ---------------------------------------------------
 
 export interface MyActivityItem {
   id: string;
@@ -1460,7 +1460,7 @@ export async function getMyActivity(token: string, cursor?: string): Promise<MyA
   return parse<MyActivity>(response);
 }
 
-// --- 공개 통합 검색 -----------------------------------------------
+// --- Public unified search -----------------------------------------
 
 export interface PublicSearchMatch {
   matchedOn:
@@ -1493,12 +1493,12 @@ export async function searchPublicRecords(q: string): Promise<PublicSearchResult
   return parse<PublicSearchResult>(response);
 }
 
-// --- 알림 ------------------------------------------------------------
+// --- Notifications ---------------------------------------------------
 
 export interface Notification {
   id: string;
   kind: "review_assigned" | "readiness_gap" | "evidence_stale" | "registry_revoked";
-  /** 나에게 온 것인가, 내가 가진 역할에게 온 것인가. */
+  /** Addressed to me, or to a role I hold? */
   audience: "you" | "role";
   audienceRole: string | null;
   projectId: string | null;

@@ -10,24 +10,25 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 플랫폼 관리 — 역할 부여의 2인 원칙과 key recovery(AC-27).
+ * Platform administration — the two-person rule for role grants, and key recovery (AC-27).
  *
- * 이 파일이 지키는 것은 셋이다.
+ * This file guards three things.
  *
- * 1. **bootstrap CLI 없이 사람을 추가할 수 있다.**
- * 2. **한 사람이 역할을 혼자 줄 수 없다** — 제안과 승인이 갈린다(02 §2.8).
- * 3. **분실한 키를 끊고 새 키를 붙일 수 있고, 끊는 즉시 그 키로는 못 들어온다**(AC-27).
+ * 1. **People can be added without the bootstrap CLI.**
+ * 2. **No one person can grant a role alone** — proposal and approval are split (02 §2.8).
+ * 3. **A lost key can be cut off and a new key bound, and the cut key stops working at once**
+ * (AC-27).
  */
-/** 서명 가능한 임시 계정. `helpers/db.ts`의 것과 같은 모양이다. */
+/** Throwaway signing account. Same shape as the one in `helpers/db.ts`. */
 function newAccount(): TestAccount {
   const account = privateKeyToAccount(generatePrivateKey());
   return { address: account.address.toLowerCase() as `0x${string}`, account };
 }
 
-describeDb("플랫폼 관리", () => {
+describeDb("platform administration", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
-  /** 둘 다 mpc_operator다. 2인 원칙이 역할이 아니라 사람으로 갈리는지 본다. */
+  /** Both are mpc_operator. Checks that the two-person rule splits by person, not by role. */
   let operatorAToken: string;
   let operatorBToken: string;
   let stewardToken: string;
@@ -38,9 +39,9 @@ describeDb("플랫폼 관리", () => {
     operatorAToken = await signIn(app, fx.operatorA);
     stewardToken = await signIn(app, fx.stewardA);
 
-    // operatorB는 tenant B다. 같은 tenant의 두 번째 admin이 필요하므로
-    // tenant A에 하나 더 만든다 — 이 준비 자체가 운영 화면이 없으면 CLI로만
-    // 가능했던 일이다.
+    // operatorB is in tenant B. A second admin in the same tenant is needed, so
+    // create one more in tenant A — without the operator screens, this setup alone
+    // was possible only through the CLI.
     const second = newAccount();
     const subjectId = randomUUID();
     await fx.sql`
@@ -84,37 +85,37 @@ describeDb("플랫폼 관리", () => {
     return app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
   }
 
-  it("bootstrap CLI 없이 주체를 만든다", async () => {
+  it("creates a subject without the bootstrap CLI", async () => {
     const response = await post(operatorAToken, "/api/v1/admin/subjects", {
       displayName: `Added by API ${randomUUID().slice(0, 6)}`,
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.json().id).toBeTruthy();
-    // 지갑이 아직 없다. 역할이 무엇이든 로그인할 수 없는 상태를 화면이 먼저
-    // 말해야 한다.
+    // No wallet yet. Whatever the role, the screen must first say that this subject
+    // cannot log in.
     expect(response.json().locked).toBe(true);
   });
 
-  it("admin 권한이 없으면 거절한다", async () => {
+  it("rejects without admin permission", async () => {
     const response = await post(stewardToken, "/api/v1/admin/subjects", {
-      displayName: "steward가 만들 수 없다",
+      displayName: "steward cannot create this",
     });
 
     expect(response.statusCode).toBe(403);
     expect(response.json().details.requiredRoles).toContain("mpc_operator");
   });
 
-  it("제안한 사람은 그 제안을 승인할 수 없다", async () => {
+  it("does not let the proposer approve their own proposal", async () => {
     const subject = (
-      await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "권한 대상 A" })
+      await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "grant target A" })
     ).json();
 
     const grant = (
       await post(operatorAToken, "/api/v1/admin/role-grants", {
         subjectId: subject.id,
         role: "data_steward",
-        reason: "증빙 등록을 맡는다",
+        reason: "handles evidence registration",
       })
     ).json();
     expect(grant.state).toBe("pending");
@@ -122,7 +123,7 @@ describeDb("플랫폼 관리", () => {
     const self = await post(
       operatorAToken,
       `/api/v1/admin/role-grants/${grant.id}/decision`,
-      { decision: "approve", reason: "내가 제안했다" },
+      { decision: "approve", reason: "I proposed this" },
       `"${grant.version}"`,
     );
 
@@ -130,23 +131,23 @@ describeDb("플랫폼 관리", () => {
     expect(self.json().code).toBe("ROLE_GRANT_SELF_APPROVAL");
   });
 
-  it("다른 사람이 승인하면 역할이 실제로 붙는다", async () => {
+  it("grants the role once another person approves", async () => {
     const subject = (
-      await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "권한 대상 B" })
+      await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "grant target B" })
     ).json();
 
     const grant = (
       await post(operatorAToken, "/api/v1/admin/role-grants", {
         subjectId: subject.id,
         role: "data_steward",
-        reason: "증빙 등록을 맡는다",
+        reason: "handles evidence registration",
       })
     ).json();
 
     const decided = await post(
       operatorBToken,
       `/api/v1/admin/role-grants/${grant.id}/decision`,
-      { decision: "approve", reason: "확인했다" },
+      { decision: "approve", reason: "verified" },
       `"${grant.version}"`,
     );
 
@@ -158,27 +159,27 @@ describeDb("플랫폼 관리", () => {
     expect(target.roles.map((role: { role: string }) => role.role)).toContain("data_steward");
   });
 
-  it("권한표에 없는 역할은 제안 단계에서 거절한다", async () => {
+  it("rejects a role outside the permission table at proposal time", async () => {
     const subject = (
-      await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "권한 대상 C" })
+      await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "grant target C" })
     ).json();
 
     const response = await post(operatorAToken, "/api/v1/admin/role-grants", {
       subjectId: subject.id,
       role: "god_mode",
-      reason: "없는 역할",
+      reason: "nonexistent role",
     });
 
-    // 승인 시점에 실패하면 승인자가 무엇을 잘못했는지 알 수 없다.
+    // Failing at approval time leaves the approver unable to tell what went wrong.
     expect(response.statusCode).toBe(422);
     expect(response.json().code).toBe("ROLE_UNKNOWN");
   });
 
-  it("같은 대상에 대기 중인 제안을 둘 두지 않는다", async () => {
+  it("does not allow two pending proposals for the same target", async () => {
     const subject = (
-      await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "권한 대상 D" })
+      await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "grant target D" })
     ).json();
-    const body = { subjectId: subject.id, role: "auditor", reason: "감사 담당" };
+    const body = { subjectId: subject.id, role: "auditor", reason: "audit duty" };
 
     expect((await post(operatorAToken, "/api/v1/admin/role-grants", body)).statusCode).toBe(200);
     const second = await post(operatorAToken, "/api/v1/admin/role-grants", body);
@@ -190,13 +191,13 @@ describeDb("플랫폼 관리", () => {
   /**
    * AC-27 — key recovery.
    *
-   * 이 테스트가 없었고, 그 이전에 **경로 자체가 없었다.** `disabled_at`은 컬럼만
-   * 있었다.
+   * this test did not exist, and before that **the path itself did not exist.** `disabled_at`
+   * was only a column.
    */
-  describe("운영자 한 명이 2인 원칙을 우회하지 못한다", () => {
-    it("운영 권한을 가진 사람에게는 화면에서 지갑을 붙일 수 없다", async () => {
-      // 붙일 수 있으면 운영자 A가 자기 지갑을 운영자 B에게 붙여 B로 로그인하고
-      // 자기 제안을 스스로 승인한다.
+  describe("a single operator cannot bypass the two-person rule", () => {
+    it("does not bind a wallet from the screen to someone with operator permission", async () => {
+      // Otherwise operator A binds their own wallet to operator B, logs in as B,
+      // and approves their own proposal.
       const response = await post(
         operatorBToken,
         `/api/v1/admin/subjects/${fx.operatorSubjectA}/wallets`,
@@ -207,7 +208,7 @@ describeDb("플랫폼 관리", () => {
       expect(response.json().code).toBe("WALLET_BIND_ADMIN_SUBJECT");
     });
 
-    it("자기 지갑은 끌 수 없다 — 마지막 운영자가 스스로 사라지지 않는다", async () => {
+    it("does not disable one's own wallet — the last operator cannot remove themselves", async () => {
       const subjects = (await get(operatorAToken, "/api/v1/admin/subjects")).json() as {
         items: { id: string; wallets: { id: string; version: number }[] }[];
       };
@@ -216,7 +217,7 @@ describeDb("플랫폼 관리", () => {
       const response = await post(
         operatorAToken,
         `/api/v1/admin/wallets/${own.id}/disable`,
-        { reasonCode: "key_lost", detail: "스스로 끄기 시도" },
+        { reasonCode: "key_lost", detail: "self-disable attempt" },
         `"${own.version}"`,
       );
 
@@ -225,10 +226,10 @@ describeDb("플랫폼 관리", () => {
     });
   });
 
-  describe("분실 키 복구 (AC-27)", () => {
-    it("끊은 키로는 더 이상 로그인할 수 없고 새 키로는 된다", async () => {
+  describe("lost key recovery (AC-27)", () => {
+    it("blocks the cut key and accepts the new key", async () => {
       const subject = (
-        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "키를 잃은 사람" })
+        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "person who lost a key" })
       ).json();
 
       const lost = newAccount();
@@ -240,7 +241,7 @@ describeDb("플랫폼 관리", () => {
       expect(bound.statusCode).toBe(200);
       expect(bound.json().locked).toBe(false);
 
-      // 잃기 전에는 로그인된다.
+      // Login works before the loss.
       const before = await signIn(app, lost);
       expect(before).toBeTruthy();
 
@@ -248,24 +249,24 @@ describeDb("플랫폼 관리", () => {
       const disabled = await post(
         operatorAToken,
         `/api/v1/admin/wallets/${wallet.id}/disable`,
-        { reasonCode: "key_lost", detail: "노트북과 함께 분실했다고 신고" },
+        { reasonCode: "key_lost", detail: "reported lost along with a laptop" },
         `"${wallet.version}"`,
       );
 
       expect(disabled.statusCode).toBe(200);
       expect(disabled.json().wallets[0].disabledAt).not.toBeNull();
-      // 붙은 지갑이 전부 비활성이면 로그인할 수 없다 — 그것을 응답이 말한다.
+      // With every bound wallet disabled, login is impossible — the response says so.
       expect(disabled.json().locked).toBe(true);
 
       /**
-       * 끊은 키로는 **그 주체로서** 행동할 수 없다.
+       * The cut key cannot act **as that subject**.
        *
-       * SIWE 서명 자체는 여전히 유효하므로 토큰은 발급된다 — 서명은 키가 있음을
-       * 증명할 뿐 그 키가 누구인지를 우리가 인정하는지는 별개다. 세션 해석이
-       * `disabled_at IS NULL`인 지갑만 주체에 잇는다(0005). 따라서 토큰은 나오되
-       * tenant도 역할도 붙지 않는다.
+       * The SIWE signature itself is still valid, so a token is issued — a signature proves
+       * possession of the key; whether we accept whose key it is is a separate matter. Session
+       * resolution links only wallets with `disabled_at IS NULL` to a subject (0005). So the
+       * token is issued but carries no tenant and no role.
        *
-       * "로그인이 실패한다"로 검사하면 이 구분을 놓친다.
+       * Checking for "login fails" misses this distinction.
        */
       const afterDisable = await signIn(app, lost);
       const orphan = await app.inject({
@@ -276,7 +277,7 @@ describeDb("플랫폼 관리", () => {
       expect(orphan.json().tenantId).toBeNull();
       expect(orphan.json().roleBindings ?? []).toEqual([]);
 
-      // 그 토큰으로는 워크스페이스에 아무것도 할 수 없다.
+      // That token can do nothing in the workspace.
       const denied = await app.inject({
         method: "GET",
         url: "/api/v1/admin/subjects",
@@ -284,8 +285,8 @@ describeDb("플랫폼 관리", () => {
       });
       expect([401, 403]).toContain(denied.statusCode);
 
-      // 새 키를 붙이면 다시 들어온다. 끊는 것만 되고 붙는 것이 안 되면 복구가
-      // 아니라 계정 폐기다.
+      // Binding a new key lets them back in. If cutting worked but binding did not, it would
+      // be account destruction, not recovery.
       const replacement = newAccount();
       const rebound = await post(
         operatorAToken,
@@ -299,9 +300,9 @@ describeDb("플랫폼 관리", () => {
       expect(after).toBeTruthy();
     });
 
-    it("끊은 이유가 기록으로 남는다", async () => {
+    it("records the reason for the cut", async () => {
       const subject = (
-        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "사유 기록 대상" })
+        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "reason record target" })
       ).json();
       const key = newAccount();
       const bound = (
@@ -315,23 +316,23 @@ describeDb("플랫폼 관리", () => {
       await post(
         operatorAToken,
         `/api/v1/admin/wallets/${bound.wallets[0].id}/disable`,
-        { reasonCode: "key_compromised", detail: "피싱 신고 접수" },
+        { reasonCode: "key_compromised", detail: "phishing report received" },
         `"${bound.wallets[0].version}"`,
       );
 
-      // 분실과 침해와 퇴사는 같은 결과를 내지만 과거 서명을 어떻게 읽어야
-      // 하는지가 다르다.
+      // Loss, compromise, and departure have the same effect, but differ in how past
+      // signatures must be read.
       const [event] = await fx.sql<{ reason_code: string; detail: string }[]>`
         SELECT reason_code, detail FROM core.wallet_disable_events
         WHERE wallet_identity_id = ${bound.wallets[0].id}
       `;
       expect(event!.reason_code).toBe("key_compromised");
-      expect(event!.detail).toContain("피싱");
+      expect(event!.detail).toContain("phishing");
     });
 
-    it("이미 비활성된 지갑을 다시 끊지 않는다", async () => {
+    it("does not disable an already disabled wallet again", async () => {
       const subject = (
-        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "중복 비활성 대상" })
+        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "duplicate disable target" })
       ).json();
       const key = newAccount();
       const bound = (
@@ -346,13 +347,13 @@ describeDb("플랫폼 관리", () => {
       await post(
         operatorAToken,
         `/api/v1/admin/wallets/${wallet.id}/disable`,
-        { reasonCode: "rotation", detail: "정기 교체" },
+        { reasonCode: "rotation", detail: "scheduled rotation" },
         `"${wallet.version}"`,
       );
       const again = await post(
         operatorAToken,
         `/api/v1/admin/wallets/${wallet.id}/disable`,
-        { reasonCode: "rotation", detail: "정기 교체" },
+        { reasonCode: "rotation", detail: "scheduled rotation" },
         `"${wallet.version + 1}"`,
       );
 
@@ -360,12 +361,12 @@ describeDb("플랫폼 관리", () => {
       expect(again.json().code).toBe("WALLET_ALREADY_DISABLED");
     });
 
-    it("이미 다른 주체에 붙은 주소를 옮기지 않는다", async () => {
+    it("does not move an address already bound to another subject", async () => {
       const first = (
-        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "주소 보유자" })
+        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "address holder" })
       ).json();
       const second = (
-        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "주소를 노리는 쪽" })
+        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "address claimant" })
       ).json();
       const key = newAccount();
 
@@ -375,7 +376,7 @@ describeDb("플랫폼 관리", () => {
         assuranceLevel: "wallet_only",
       });
 
-      // 옮기면 그 주소의 과거 서명이 다른 사람의 것으로 읽힌다.
+      // Moving it would make the address's past signatures read as someone else's.
       const moved = await post(operatorAToken, `/api/v1/admin/subjects/${second.id}/wallets`, {
         walletAddress: key.address,
         chainId: 97,

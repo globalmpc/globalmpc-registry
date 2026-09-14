@@ -1,20 +1,20 @@
 import { isIP } from "node:net";
 
 /**
- * IP 주소 파싱과 대역 판정.
+ * IP address parsing and range checks.
  *
- * 두 곳이 같은 질문을 한다 — 출처 endpoint가 내부망인가(SSRF, `services/
- * source-endpoint.ts`)와 요청을 넘긴 피어가 우리 프록시인가(`client-ip.ts`).
- * 각자 문자열 접두로 판정하다 실제로 뚫렸다(2026-09-10 실사 A2). 판정을 한 곳에
- * 모으고 **바이트로만 본다** — 표기가 여럿이면 판정하는 쪽과 연결하는 쪽이 다른
- * 주소를 본다.
+ * Two places ask the same question — is a source endpoint internal (SSRF, `services/
+ * source-endpoint.ts`), and is the peer forwarding the request our proxy (`client-ip.ts`).
+ * Each judged by string prefix and was actually breached (2026-09-10 audit A2). The verdict is
+ * centralized and **looks only at bytes** — with multiple notations, the judging side and the
+ * connecting side see different addresses.
  */
 
 /**
- * 점 표기 IPv4를 바이트로.
+ * Dotted IPv4 to bytes.
  *
- * `010`을 8진수로 읽는 파서가 있다. 우리는 받지 않는다 — 표기를 하나로 좁히는
- * 것이 판정을 하나로 만드는 방법이다.
+ * Some parsers read `010` as octal. We do not accept it — narrowing to one notation is how the
+ * verdict stays single.
  */
 export function ipv4ToBytes(address: string): readonly number[] | null {
   const parts = address.split(".");
@@ -31,15 +31,15 @@ export function ipv4ToBytes(address: string): readonly number[] | null {
 }
 
 /**
- * IPv6 문자열을 16바이트로 편다.
+ * Expands an IPv6 string to 16 bytes.
  *
- * **문자열 접두로 대역을 판정하지 않기 위해서다.** `fe80` 접두 검사는
- * `fe80::/10`의 4분의 1만 덮고, `::ffff:127.0.0.1`은 `URL`을 지나면
- * `::ffff:7f00:1`이 되어 점 표기 정규식에 걸리지 않는다. 둘 다 실제로 통과했다.
+ * **So that ranges are not judged by string prefix.** A `fe80` prefix check covers only a
+ * quarter of `fe80::/10`, and `::ffff:127.0.0.1` becomes `::ffff:7f00:1` after passing through
+ * `URL`, evading a dotted-notation regex. Both actually passed.
  */
 export function ipv6ToBytes(address: string): Uint8Array | null {
   const value = address.toLowerCase();
-  // zone index(`fe80::1%eth0`)는 대상이 아니다. 판정하지 않는다.
+  // A zone index (`fe80::1%eth0`) is out of scope. Not judged.
   if (value.includes("%")) return null;
 
   const halves = value.split("::");
@@ -53,7 +53,7 @@ export function ipv6ToBytes(address: string): Uint8Array | null {
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index]!;
 
-      // 점 표기 IPv4는 마지막 자리에만 온다.
+      // Dotted IPv4 appears only in the last position.
       if (item.includes(".")) {
         if (index !== items.length - 1) return null;
         const quad = ipv4ToBytes(item);
@@ -80,7 +80,7 @@ export function ipv6ToBytes(address: string): Uint8Array | null {
     return bytes;
   }
 
-  // `::`가 최소 한 그룹을 덮어야 한다. 16바이트가 다 찼으면 압축할 것이 없다.
+  // `::` must cover at least one group. If all 16 bytes are filled there is nothing to compress.
   if (head.length + tail.length >= 16) return null;
   bytes.set(head, 0);
   bytes.set(tail, 16 - tail.length);
@@ -88,11 +88,11 @@ export function ipv6ToBytes(address: string): Uint8Array | null {
 }
 
 /**
- * 주소를 16바이트로 정규화한다.
+ * Normalizes an address to 16 bytes.
  *
- * IPv4는 IPv4-mapped(`::ffff:a.b.c.d`)로 올린다. 그래야 `10.0.0.1`과
- * `::ffff:10.0.0.1`이 같은 대역 판정을 지난다 — Docker가 IPv4를 mapped 형태로
- * 주므로 둘을 따로 다루면 한쪽이 빠진다.
+ * IPv4 is lifted to IPv4-mapped (`::ffff:a.b.c.d`). That way `10.0.0.1` and
+ * `::ffff:10.0.0.1` go through the same range check — Docker gives IPv4 in mapped form,
+ * so handling them separately misses one.
  */
 export function ipToBytes(address: string): Uint8Array | null {
   const family = isIP(address);
@@ -109,7 +109,7 @@ export function ipToBytes(address: string): Uint8Array | null {
   return null;
 }
 
-/** `10.0.0.0/8` · `fc00::/7` · 단일 주소(`127.0.0.1`)를 받는다. */
+/** Accepts `10.0.0.0/8` · `fc00::/7` · a single address (`127.0.0.1`). */
 export interface CidrRange {
   readonly bytes: Uint8Array;
   readonly prefixBits: number;
@@ -125,7 +125,7 @@ export function parseCidr(value: string): CidrRange | null {
   const bytes = ipToBytes(address);
   if (!bytes) return null;
 
-  // IPv4를 mapped로 올렸으므로 접두 길이도 96을 더해 옮긴다.
+  // IPv4 was lifted to mapped, so the prefix length shifts by 96 too.
   const isIpv4 = isIP(address) === 4;
   if (prefix === undefined) return { bytes, prefixBits: 128 };
 

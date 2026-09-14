@@ -1,16 +1,16 @@
-# Prometheus 스크레이프 설정 — spec 06 §6.9.
+# Prometheus scrape config — spec 06 §6.9.
 #
-# `/metrics`는 노출돼 있었고 **수집하는 곳이 없었다.** 노출만 있는 지표는
-# 아무도 보지 않으며, 보지 않는 지표는 없는 것과 같다.
+# `/metrics` was exposed and **nothing collected it.** Metrics that are only exposed are seen
+# by nobody, and unseen metrics are as good as absent.
 #
-# `/metrics`에는 인증을 걸지 않는다(`routes/health.ts`). 대신 tenant·경로
-# 파라미터 같은 식별 정보를 담지 않으며, 네트워크 수준에서 내부에만 노출하는 것이
-# 배포의 몫이다 — compose에서 이 스택은 `api`와 같은 네트워크에 있고 포트를 밖으로
-# 열지 않는다.
+# `/metrics` has no auth (`routes/health.ts`). Instead it carries no identifying data such
+# as tenant or path parameters, and exposing it only internally at the network level is the
+# deployment's job — in compose this stack shares a network with `api` and opens no ports
+# to the outside.
 
 global:
-  # 15초로 조이지 않는다. 스크레이프마다 DB 집계를 한 번 돌리므로(게이지),
-  # 주기가 곧 그 부하다. 알림 규칙의 `for`가 30초보다 훨씬 길다.
+  # Not tightened to 15s. Each scrape runs one DB aggregation (gauges), so the interval is
+  # that load. The alert rules' `for` values are far longer than 30s.
   scrape_interval: 30s
   evaluation_interval: 30s
 

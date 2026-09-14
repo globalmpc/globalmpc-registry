@@ -21,15 +21,15 @@ const BASE: ClaimGradeInput = {
 };
 
 describe("computeClaimGrade — truth table (spec 05 §5.3)", () => {
-  it("rejected: 규칙상 배제", () => {
+  it("rejected: excluded by rule", () => {
     expect(computeClaimGrade({ ...BASE, excludedByRule: true })).toBe("rejected");
   });
 
-  it("rejected: verification state가 rejected", () => {
+  it("rejected: verification state is rejected", () => {
     expect(computeClaimGrade({ ...BASE, verificationState: "rejected" })).toBe("rejected");
   });
 
-  it("rejected가 다른 모든 조건을 이긴다", () => {
+  it("rejected beats every other condition", () => {
     expect(
       computeClaimGrade({
         verificationState: "independently_assured",
@@ -41,15 +41,15 @@ describe("computeClaimGrade — truth table (spec 05 §5.3)", () => {
     ).toBe("rejected");
   });
 
-  it("unverified: 근거가 없다", () => {
+  it("unverified: no evidence", () => {
     expect(computeClaimGrade({ ...BASE, evidenceTier: null })).toBe("unverified");
   });
 
-  it("unverified: 검토 전", () => {
+  it("unverified: before review", () => {
     expect(computeClaimGrade({ ...BASE, verificationState: "unreviewed" })).toBe("unverified");
   });
 
-  it("verified: 독립 assurance + professional signoff + P1/P2 + conflict 0", () => {
+  it("verified: independent assurance + professional signoff + P1/P2 + 0 conflicts", () => {
     expect(
       computeClaimGrade({
         verificationState: "independently_assured",
@@ -61,7 +61,7 @@ describe("computeClaimGrade — truth table (spec 05 §5.3)", () => {
     ).toBe("verified");
   });
 
-  it("verified가 되지 않는다: unresolved conflict가 있으면", () => {
+  it("not verified: with an unresolved conflict", () => {
     expect(
       computeClaimGrade({
         verificationState: "independently_assured",
@@ -73,7 +73,7 @@ describe("computeClaimGrade — truth table (spec 05 §5.3)", () => {
     ).toBe("partially_verified");
   });
 
-  it("verified가 되지 않는다: tier가 P3면", () => {
+  it("not verified: when the tier is P3", () => {
     expect(
       computeClaimGrade({
         verificationState: "independently_assured",
@@ -85,7 +85,7 @@ describe("computeClaimGrade — truth table (spec 05 §5.3)", () => {
     ).toBe("partially_verified");
   });
 
-  it("verified가 되지 않는다: professional signoff가 없으면", () => {
+  it("not verified: without a professional signoff", () => {
     expect(
       computeClaimGrade({
         verificationState: "independently_assured",
@@ -97,7 +97,7 @@ describe("computeClaimGrade — truth table (spec 05 §5.3)", () => {
     ).toBe("partially_verified");
   });
 
-  it("verified가 되지 않는다: independent assurance attestation이 없으면", () => {
+  it("not verified: without an independent assurance attestation", () => {
     expect(
       computeClaimGrade({
         verificationState: "independently_assured",
@@ -117,13 +117,13 @@ describe("computeClaimGrade — truth table (spec 05 §5.3)", () => {
     }
   });
 
-  it("self_reported: machine_checked 이하의 자기 신고", () => {
+  it("self_reported: self-declared at machine_checked or below", () => {
     expect(computeClaimGrade({ ...BASE, verificationState: "machine_checked" })).toBe(
       "self_reported",
     );
   });
 
-  it("self_reported: 검토는 있었으나 tier가 P4/P5", () => {
+  it("self_reported: reviewed but tier is P4/P5", () => {
     for (const tier of ["P4", "P5"] as EvidenceTier[]) {
       expect(
         computeClaimGrade({
@@ -138,26 +138,26 @@ describe("computeClaimGrade — truth table (spec 05 §5.3)", () => {
 });
 
 describe("weakestGrade — weakest link", () => {
-  it("최저 grade를 고른다", () => {
+  it("picks the lowest grade", () => {
     expect(weakestGrade(["verified", "partially_verified", "self_reported"])).toBe(
       "self_reported",
     );
   });
 
-  it("rejected가 하나라도 있으면 rejected다", () => {
+  it("rejected if any one is rejected", () => {
     expect(weakestGrade(["verified", "verified", "rejected"])).toBe("rejected");
   });
 
-  it("빈 집합은 unverified다 — 필수 claim이 없는 것은 좋은 상태가 아니다", () => {
+  it("an empty set is unverified — having no required claims is not a good state", () => {
     expect(weakestGrade([])).toBe("unverified");
   });
 
-  it("모두 verified여야 verified다", () => {
+  it("verified only when all are verified", () => {
     expect(weakestGrade(["verified", "verified"])).toBe("verified");
   });
 });
 
-describe("property — grade 산출", () => {
+describe("property — grade derivation", () => {
   const gradeInput = fc.record<ClaimGradeInput>({
     verificationState: fc.constantFrom<VerificationState>(
       "unreviewed",
@@ -183,7 +183,7 @@ describe("property — grade 산출", () => {
     excludedByRule: fc.boolean(),
   });
 
-  it("모든 입력 조합이 정확히 하나의 grade를 만든다 (AC-11 결정성)", () => {
+  it("every input combination yields exactly one grade (AC-11 determinism)", () => {
     fc.assert(
       fc.property(gradeInput, (input) => {
         const first = computeClaimGrade(input);
@@ -194,7 +194,7 @@ describe("property — grade 산출", () => {
     );
   });
 
-  it("weakestGrade는 입력 순서와 무관하다", () => {
+  it("weakestGrade is independent of input order", () => {
     fc.assert(
       fc.property(fc.array(fc.constantFrom<Grade>(...GRADES), { maxLength: 8 }), (grades) => {
         expect(weakestGrade([...grades].reverse())).toBe(weakestGrade(grades));
@@ -203,7 +203,7 @@ describe("property — grade 산출", () => {
     );
   });
 
-  it("weakestGrade 결과는 항상 입력에 포함된 grade다", () => {
+  it("the weakestGrade result is always a grade from the input", () => {
     fc.assert(
       fc.property(
         fc.array(fc.constantFrom<Grade>(...GRADES), { minLength: 1, maxLength: 8 }),
@@ -217,7 +217,7 @@ describe("property — grade 산출", () => {
 });
 
 describe("gradeAtLeast", () => {
-  it("최소 등급 비교", () => {
+  it("minimum grade comparison", () => {
     expect(gradeAtLeast("verified", "partially_verified")).toBe(true);
     expect(gradeAtLeast("partially_verified", "verified")).toBe(false);
     expect(gradeAtLeast("self_reported", "self_reported")).toBe(true);

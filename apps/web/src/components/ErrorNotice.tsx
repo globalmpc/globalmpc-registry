@@ -2,13 +2,13 @@ import Link from "next/link";
 import { ApiError } from "@/lib/api";
 
 /**
- * 오류 표시.
+ * Error display.
  *
- * 서버가 준 envelope를 그대로 보여준다 — `code`, 재시도 가능 여부, 필요한 역할,
- * access request 경로, correlation ID. §11.7이 요구하는 "Permission: 필요한 role과
- * access request 경로"가 화면까지 도달하는 지점이다.
+ * Shows the server envelope as-is — `code`, whether retry is possible, the required role,
+ * the access request path, and the correlation ID. This is where §11.7 "Permission: the required role and
+ * the access request path" reaches the screen.
  *
- * "요청에 실패했습니다"로 뭉개면 사용자는 다음 행동을 알 수 없다.
+ * Flattening it into "The request failed" leaves the user with no next action.
  */
 export function ErrorNotice({ error }: { error: unknown }) {
   if (!(error instanceof ApiError)) {
@@ -22,8 +22,8 @@ export function ErrorNotice({ error }: { error: unknown }) {
 
   const { envelope, status } = error;
 
-  // 세션이 끝났거나 지갑이 묶이지 않은 것은 고장이 아니라 다음 행동이 정해진 상태다.
-  // 서버 문구(한국어 envelope)와 코드 대신 할 일을 말한다.
+  // An ended session or an unbound wallet is not a failure; it is a state with a defined next action.
+  // State what to do instead of the server wording (Korean envelope) and the code.
   if (envelope.code === "UNAUTHENTICATED") {
     return (
       <div className="notice" style={{ color: "var(--alert)" }} role="alert" data-testid="error-notice">
@@ -74,7 +74,7 @@ export function ErrorNotice({ error }: { error: unknown }) {
 
       {envelope.details?.currentVersion ? (
         <div className="meta" style={{ color: "inherit" }}>
-          {/* 실패가 아니라 "그 사이 누가 먼저 바꿨다"는 사실이다. 다시 읽어야 한다. */}
+          {/* Not a failure but the fact that "someone changed it first in the meantime". Re-read. */}
           You were looking at <span className="mono">v{envelope.details.expectedVersion}</span>;
           the current version is <span className="mono">v{envelope.details.currentVersion}</span> —
           read it again before deciding.

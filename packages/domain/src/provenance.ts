@@ -1,16 +1,16 @@
 /**
- * Provenance 3축과 요약 grade — spec 05 §5.3.
+ * The three provenance axes and the summary grade — spec 05 §5.3.
  *
- * 세 축은 직교한다. 하나의 `verified=true`로 축약해 저장하지 않는다.
+ * The three axes are orthogonal. Never collapse them into a single stored `verified=true`.
  */
 
-/** P1 공식 등록부·규제 공시 → P5 미확인 2차 인용. */
+/** P1 official registry / regulatory disclosure → P5 unverified secondary citation. */
 export const EVIDENCE_TIERS = ["P1", "P2", "P3", "P4", "P5"] as const;
 export type EvidenceTier = (typeof EVIDENCE_TIERS)[number];
 
 /**
- * artifact kind — 각 kind는 별도 immutable ID/version이며 lineage edge로 연결한다.
- * semantic kind를 바꾸거나 덮어쓰지 않는다(불변조건 17).
+ * artifact kind — each kind has its own immutable ID/version and is linked by lineage edges.
+ * A semantic kind is never changed or overwritten (invariant 17).
  */
 export const ARTIFACT_KINDS = [
   "raw_source",
@@ -49,9 +49,9 @@ export const GRADES = [
 export type Grade = (typeof GRADES)[number];
 
 /**
- * grade 우선순위 — 낮을수록 나쁘다.
+ * Grade precedence — lower is worse.
  * spec 05 §5.3: `rejected > unverified > self_reported > partially_verified > verified`
- * (여기서 `>`는 "더 우선해서 채택된다"는 뜻이고, 결과적으로 최저값을 고른다.)
+ * (Here `>` means "is adopted with higher priority"; the net effect is picking the minimum.)
  */
 const GRADE_RANK: Readonly<Record<Grade, number>> = {
   rejected: 0,
@@ -71,19 +71,19 @@ const STATE_RANK: Readonly<Record<VerificationState, number>> = {
 
 export interface ClaimGradeInput {
   readonly verificationState: VerificationState;
-  /** 근거가 아예 없으면 null. */
+  /** null when there is no evidence at all. */
   readonly evidenceTier: EvidenceTier | null;
   readonly attestationTypes: readonly AttestationType[];
   readonly unresolvedConflictCount: number;
-  /** 위조·부적합·철회·규칙상 배제. */
+  /** Forged, unsuitable, revoked, or excluded by rule. */
   readonly excludedByRule: boolean;
 }
 
 /**
- * claim 단위 요약 grade.
+ * Per-claim summary grade.
  *
- * 결정적이어야 한다 — 같은 입력은 항상 같은 grade를 만든다. 현재 시각·난수·외부
- * 조회를 사용하지 않는다(AC-11).
+ * Must be deterministic — the same input always yields the same grade. Uses no current time,
+ * randomness, or external lookup (AC-11).
  */
 export function computeClaimGrade(input: ClaimGradeInput): Grade {
   if (input.excludedByRule || input.verificationState === "rejected") {
@@ -122,15 +122,15 @@ export function computeClaimGrade(input: ClaimGradeInput): Grade {
     return "self_reported";
   }
 
-  // analyst_checked 이상이지만 tier가 P4/P5인 경우 — 검토는 있었으나 근거 등급이 낮다.
+  // analyst_checked or higher but tier is P4/P5 — reviewed, yet the evidence tier is low.
   return "self_reported";
 }
 
 /**
- * weakest link — asset의 필수 claim 중 최저 grade를 사용한다(§5.3).
+ * Weakest link — uses the lowest grade among the asset's required claims (§5.3).
  *
- * 빈 집합은 `unverified`다. "필수 claim이 없다"는 좋은 상태가 아니라
- * 판단 근거가 없는 상태다.
+ * An empty set is `unverified`. "No required claims" is not a good state but one with no
+ * basis for judgment.
  */
 export function weakestGrade(grades: readonly Grade[]): Grade {
   if (grades.length === 0) return "unverified";

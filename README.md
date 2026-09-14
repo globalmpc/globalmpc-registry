@@ -22,7 +22,7 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 | `packages/canonical` | Restricted JCS profile, leaf encoding, Merkle, golden vectors | 88 |
 | `packages/domain` | 12 source results, grade derivation, 12 state machines, invariants | 213 |
 | `packages/policy` | Readiness rule schema, deterministic evaluation engine | 44 |
-| `packages/db` | Schema, RLS, append-only guards, composite FKs, migration checksums | 40 |
+| `packages/db` | Schema, RLS, append-only guards, composite FKs, migration checksums | 54 |
 | `packages/api-contract` | Zod contract → OpenAPI 3.1, SIWE, authorization | 43 |
 | `packages/ui` | Status display mapping, R-04 forbidden-term lint, three-depth consistency | 37 |
 | `packages/config` | Secret reference resolution (`file:`, `env:`), audit fingerprints that do not expose values | 14 |
@@ -40,7 +40,7 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 
 `contracts/` — `RegistryAnchorV1` + 10 deferred interfaces, 29 Foundry tests (including fuzz and invariant).
 
-Total: vitest 1282 + Playwright 88 + Foundry 29 + route 81. (measured 2026-09-14)
+Total: vitest 1296 + Playwright 88 + Foundry 29 + route 81. (measured 2026-09-14)
 
 ## Running
 

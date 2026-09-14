@@ -2,22 +2,22 @@ import { CanonicalError } from "./errors.js";
 import { assertBytes32, hexToBytes, keccak256, type Hex } from "./hash.js";
 
 /**
- * Merkle 규격 (ADR-T08).
+ * Merkle spec (ADR-T08).
  *
- * - 내부 노드: keccak256(min(a,b) ++ max(a,b)) — OpenZeppelin MerkleProof 호환.
- *   정렬쌍이므로 proof에 방향 비트가 필요 없다.
- * - leaf 배열은 leafHash 오름차순으로 정렬한다. 입력 순서와 무관하게 같은 root가
- *   나온다 — batch 생성이 비결정적이면 AC-11이 성립하지 않는다.
- * - 중복 leafHash는 거절한다. 같은 leaf가 두 번 들어가면 어느 쪽 inclusion인지
- *   구분할 수 없다.
- * - 빈 batch는 거절한다.
- * - 홀수 노드는 **복제하지 않고 승격**한다. 마지막 노드를 복제하면 존재하지 않는
- *   leaf에 대한 유효 proof를 만들 수 있다.
+ * - Internal node: keccak256(min(a,b) ++ max(a,b)) — compatible with OpenZeppelin MerkleProof.
+ *   Sorted pairs mean proofs need no direction bits.
+ * - The leaf array is sorted by ascending leafHash. The same root results regardless of input
+ *   order — if batch creation were nondeterministic, AC-11 would not hold.
+ * - Duplicate leafHashes are rejected. With the same leaf twice, which inclusion is meant
+ *   cannot be told apart.
+ * - Empty batches are rejected.
+ * - Odd nodes are **promoted, not duplicated**. Duplicating the last node would allow a valid
+ *   proof for a leaf that does not exist.
  */
 
 export interface MerkleTree {
   readonly root: Hex;
-  /** layers[0]이 정렬된 leaf, 마지막 layer가 [root]다. */
+  /** layers[0] is the sorted leaves; the last layer is [root]. */
   readonly layers: readonly (readonly Hex[])[];
   readonly leafCount: number;
 }
@@ -32,7 +32,7 @@ export function hashPair(a: Hex, b: Hex): Hex {
 
 export function buildMerkleTree(leafHashes: readonly Hex[]): MerkleTree {
   if (leafHashes.length === 0) {
-    throw new CanonicalError("E_MERKLE_EMPTY_BATCH", "빈 batch는 anchor할 수 없다");
+    throw new CanonicalError("E_MERKLE_EMPTY_BATCH", "An empty batch cannot be anchored");
   }
 
   for (const [index, leaf] of leafHashes.entries()) {
@@ -45,7 +45,7 @@ export function buildMerkleTree(leafHashes: readonly Hex[]): MerkleTree {
     if (sorted[i] === sorted[i - 1]) {
       throw new CanonicalError(
         "E_MERKLE_DUPLICATE_LEAF",
-        `batch에 중복 leaf가 있다: ${sorted[i]}`,
+        `Duplicate leaf in batch: ${sorted[i]}`,
       );
     }
   }
@@ -59,7 +59,7 @@ export function buildMerkleTree(leafHashes: readonly Hex[]): MerkleTree {
     for (let i = 0; i < current.length; i += 2) {
       const left = current[i]!;
       const right = current[i + 1];
-      // 형제가 없으면 승격한다. 복제하지 않는다.
+      // No sibling means promotion. Never duplicate.
       next.push(right === undefined ? left : hashPair(left, right));
     }
 
@@ -78,7 +78,7 @@ export function getMerkleProof(tree: MerkleTree, leafHash: Hex): Hex[] {
   if (index === -1) {
     throw new CanonicalError(
       "E_MERKLE_LEAF_NOT_FOUND",
-      `leaf가 이 batch에 없다: ${leafHash}`,
+      `Leaf is not in this batch: ${leafHash}`,
     );
   }
 
@@ -88,7 +88,7 @@ export function getMerkleProof(tree: MerkleTree, leafHash: Hex): Hex[] {
     const layer = tree.layers[level]!;
     const siblingIndex = index % 2 === 0 ? index + 1 : index - 1;
     const sibling = layer[siblingIndex];
-    // sibling이 없으면 이 노드는 승격됐다. proof에 추가할 것이 없다.
+    // No sibling means this node was promoted. Nothing to add to the proof.
     if (sibling !== undefined) {
       proof.push(sibling);
     }
@@ -99,11 +99,11 @@ export function getMerkleProof(tree: MerkleTree, leafHash: Hex): Hex[] {
 }
 
 /**
- * inclusion 검증.
+ * Inclusion verification.
  *
- * 이 함수의 true는 "이 leaf가 이 root의 batch에 포함됐다"만 뜻한다.
- * spec 08 §8.11 / AC-23: 원문의 사실성·authority 적격성·법률 효력·투자
- * 적합성을 뜻하지 않는다.
+ * A true from this function means only "this leaf is included in this root's batch".
+ * spec 08 §8.11 / AC-23: it does not mean factual accuracy of the source, authority
+ * eligibility, legal effect, or investment suitability.
  */
 export function verifyMerkleProof(leafHash: Hex, proof: readonly Hex[], root: Hex): boolean {
   let computed = leafHash;

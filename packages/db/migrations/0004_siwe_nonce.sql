@@ -1,7 +1,7 @@
--- SIWE nonce 저장.
+-- SIWE nonce storage.
 --
--- nonce는 한 번만 쓴다. 재사용을 허용하면 서명 replay가 가능해진다.
--- tenant에 속하지 않으므로 RLS 대상이 아니며, 만료된 행은 주기적으로 지운다.
+-- A nonce is single-use. Allowing reuse would enable signature replay.
+-- Not tenant-scoped, so not subject to RLS; expired rows are purged periodically.
 
 CREATE TABLE core.siwe_nonces (
   nonce          TEXT PRIMARY KEY,

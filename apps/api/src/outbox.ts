@@ -4,9 +4,9 @@ import type postgres from "postgres";
 /**
  * Outbox — 07 §7.5.
  *
- * 도메인 transaction과 outbox insert를 **같은 transaction**에서 처리한다.
- * 도메인 변경이 롤백되면 이벤트도 사라진다. 별도 발행 worker가 이 테이블을 읽어
- * 큐로 옮기며 at-least-once로 전달한다.
+ * Handles the domain transaction and the outbox insert in **the same transaction**.
+ * If the domain change rolls back, the event disappears too. A separate publisher worker reads
+ * this table and moves events to the queue with at-least-once delivery.
  */
 export interface DomainEvent {
   readonly tenantId: string;

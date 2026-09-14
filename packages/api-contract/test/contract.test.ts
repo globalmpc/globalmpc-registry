@@ -21,19 +21,19 @@ import {
 } from "../src/resources.js";
 import { errorEnvelope, sourceStatusView } from "../src/common.js";
 
-describe("route 정의", () => {
-  it("모든 mutation route에 action이 있다", () => {
+describe("route definitions", () => {
+  it("every mutation route has an action", () => {
     expect(findRoutesWithoutAction()).toEqual([]);
   });
 
-  it("모든 action이 정책표에 있다", () => {
+  it("every action is in the policy table", () => {
     for (const route of ROUTES) {
       if (route.action === null) continue;
-      expect(ACTION_POLICIES[route.action], `${route.action} 정책 누락`).toBeDefined();
+      expect(ACTION_POLICIES[route.action], `${route.action} missing from policy table`).toBeDefined();
     }
   });
 
-  it("readiness 결과를 수정하는 route가 없다 (REQ-DAPP-017)", () => {
+  it("no route modifies a readiness result (REQ-DAPP-017)", () => {
     const mutating = ROUTES.filter(
       (route) =>
         (route.method === "patch" || route.method === "delete") &&
@@ -42,12 +42,12 @@ describe("route 정의", () => {
     expect(mutating).toEqual([]);
   });
 
-  it("readiness·gate·attestation·registry에 DELETE route가 없다", () => {
+  it("readiness, gate, attestation, and registry have no DELETE route", () => {
     const deletes = ROUTES.filter((route) => route.method === "delete");
     expect(deletes).toEqual([]);
   });
 
-  it("public route는 인증을 요구하지 않고 별도 prefix를 쓴다", () => {
+  it("public routes require no auth and use a separate prefix", () => {
     const publicDataRoutes = ROUTES.filter(
       (route) => route.public && !route.path.includes("/auth/"),
     );
@@ -58,14 +58,14 @@ describe("route 정의", () => {
     }
   });
 
-  it("operationId가 중복되지 않는다", () => {
+  it("operationIds are unique", () => {
     const ids = ROUTES.map((route) => route.operationId);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("If-Match를 요구하는 route는 mutation이다", () => {
-    // 07 §7.1은 versioned resource mutation에 If-Match를 요구한다. 읽기에
-    // 요구하면 조회할 때마다 버전을 알아야 하는 모순이 된다.
+  it("routes requiring If-Match are mutations", () => {
+    // 07 §7.1 requires If-Match for versioned resource mutations. Requiring it on
+    // reads would be contradictory: every read would need the version up front.
     const guarded = ROUTES.filter((route) => route.requiresIfMatch);
     expect(guarded.length).toBeGreaterThan(0);
     for (const route of guarded) {
@@ -73,13 +73,15 @@ describe("route 정의", () => {
     }
   });
 
-  it("버전이 올라가는 mutation은 If-Match를 요구한다", () => {
-    // 기존 resource의 version을 바꾸는 route 목록이다. 여기 있는데 계약이
-    // false면 나중 요청이 앞의 판단을 조용히 덮는다.
+  it("version-bumping mutations require If-Match", () => {
+    // Routes that change an existing resource's version. If one is listed here but
+    // the contract says false, a later request silently overwrites an earlier
+    // judgment.
     //
-    // 새로 만들기만 하는 route(create)는 대상이 아니다. 덮어쓸 이전 상태가 없다.
-    // attestation 서명은 evidence snapshot 해시 비교가 같은 일을 한다 —
-    // 서명 요청 이후 근거가 바뀌면 EVIDENCE_SNAPSHOT_CHANGED로 거절된다.
+    // Create-only routes are excluded: there is no prior state to overwrite.
+    // For attestation signing, the evidence snapshot hash comparison does the
+    // same job — if the evidence changes after the signature request, it is
+    // rejected with EVIDENCE_SNAPSHOT_CHANGED.
     const versionMutating = ["createClaimConflict", "revokeRegistryVersion"];
 
     for (const operationId of versionMutating) {
@@ -89,17 +91,17 @@ describe("route 정의", () => {
     }
   });
 
-  it("모든 mutation은 최소한 Idempotency-Key를 요구한다", () => {
+  it("every mutation requires at least Idempotency-Key", () => {
     const mutations = ROUTES.filter((route) => route.mutation);
     expect(mutations.length).toBeGreaterThan(0);
-    // If-Match가 없는 동안에도 재시도 안전성은 idempotency key가 담보한다.
+    // Even without If-Match, the idempotency key guarantees retry safety.
     for (const route of mutations) {
       expect(route.action, route.operationId).not.toBeNull();
     }
   });
 });
 
-describe("authorization — 02 §2.1의 7개 조건", () => {
+describe("authorization — the seven conditions of 02 §2.1", () => {
   const ACTOR: AuthorizationContext = {
     role: "gate_approver",
     assuranceLevel: "high_assurance",
@@ -122,11 +124,11 @@ describe("authorization — 02 §2.1의 7개 조건", () => {
     separationSensitive: true,
   };
 
-  it("모든 조건이 충족되면 허용한다", () => {
+  it("allows when every condition is met", () => {
     expect(authorize(ACTION_POLICIES["gate.decide"]!, ACTOR, RESOURCE).allow).toBe(true);
   });
 
-  it("역할이 맞지 않으면 필요한 역할과 요청 경로를 반환한다", () => {
+  it("returns the required roles and request path on a role mismatch", () => {
     const decision = authorize(
       ACTION_POLICIES["gate.decide"]!,
       { ...ACTOR, role: "data_steward" },
@@ -140,7 +142,7 @@ describe("authorization — 02 §2.1의 7개 조건", () => {
     }
   });
 
-  it("assurance level이 부족하면 거절하고 필요한 수준을 반환한다", () => {
+  it("rejects insufficient assurance level and returns the required level", () => {
     const decision = authorize(
       ACTION_POLICIES["gate.decide"]!,
       { ...ACTOR, assuranceLevel: "wallet_only" },
@@ -153,7 +155,7 @@ describe("authorization — 02 §2.1의 7개 조건", () => {
     }
   });
 
-  it("cross-tenant는 거절한다", () => {
+  it("rejects cross-tenant access", () => {
     const decision = authorize(ACTION_POLICIES["gate.decide"]!, ACTOR, {
       ...RESOURCE,
       tenantId: "tenant-b",
@@ -162,7 +164,7 @@ describe("authorization — 02 §2.1의 7개 조건", () => {
     if (!decision.allow) expect(decision.reason).toBe("TENANT_SCOPE_MISMATCH");
   });
 
-  it("scope 밖 프로젝트는 거절하고 access request 경로를 준다", () => {
+  it("rejects out-of-scope projects and returns an access request path", () => {
     const decision = authorize(ACTION_POLICIES["gate.decide"]!, ACTOR, {
       ...RESOURCE,
       projectId: "project-9",
@@ -175,11 +177,11 @@ describe("authorization — 02 §2.1의 7개 조건", () => {
   });
 
   /**
-   * 거절이 가리키는 경로는 세 개뿐이고, 각각에 화면이 있어야 한다
-   * (`apps/web/e2e/access-request-paths.spec.ts`). 네 번째를 늘리면 여기가 깨진다 —
-   * 화면 없는 경로를 안내하면 사용자가 404를 만난다.
+   * Denials point to exactly three paths, and each must have a screen
+   * (`apps/web/e2e/access-request-paths.spec.ts`). Adding a fourth breaks this
+   * test — pointing users to a path without a screen sends them to a 404.
    */
-  it("access request 경로는 화면이 있는 셋뿐이다 (§11.7)", () => {
+  it("access request paths are only the three with screens (§11.7)", () => {
     const emitted = new Set<string>();
     for (const role of ["data_steward", "gate_approver"]) {
       for (const projectId of ["project-1", null]) {
@@ -205,7 +207,7 @@ describe("authorization — 02 §2.1의 7개 조건", () => {
     );
   });
 
-  it("민감도 clearance가 부족하면 거절한다", () => {
+  it("rejects insufficient sensitivity clearance", () => {
     const decision = authorize(ACTION_POLICIES["gate.decide"]!, ACTOR, {
       ...RESOURCE,
       sensitivity: "confidential",
@@ -214,7 +216,7 @@ describe("authorization — 02 §2.1의 7개 조건", () => {
     if (!decision.allow) expect(decision.reason).toBe("SENSITIVITY_CLEARANCE_INSUFFICIENT");
   });
 
-  it("resource state가 허용하지 않으면 거절한다", () => {
+  it("rejects when the resource state does not allow the action", () => {
     const decision = authorize(ACTION_POLICIES["gate.decide"]!, ACTOR, {
       ...RESOURCE,
       state: "suspended",
@@ -223,7 +225,7 @@ describe("authorization — 02 §2.1의 7개 조건", () => {
     if (!decision.allow) expect(decision.reason).toBe("RESOURCE_STATE_FORBIDS_ACTION");
   });
 
-  it("미해결 이해상충은 거절한다", () => {
+  it("rejects an unresolved conflict of interest", () => {
     const decision = authorize(
       ACTION_POLICIES["gate.decide"]!,
       { ...ACTOR, conflictStatus: "unresolved" },
@@ -233,13 +235,13 @@ describe("authorization — 02 §2.1의 7개 조건", () => {
     if (!decision.allow) expect(decision.reason).toBe("CONFLICT_OR_SEPARATION_VIOLATION");
   });
 
-  it("readiness override action이 정책표에 없다", () => {
+  it("the policy table has no readiness override action", () => {
     expect(ACTION_POLICIES["readiness.override"]).toBeUndefined();
   });
 });
 
 describe("assurance level — OD-04", () => {
-  it("reviewer 역할은 wallet만으로 부여되지 않는다", () => {
+  it("reviewer roles are not granted by wallet alone", () => {
     for (const role of [
       "reviewer_cp_qp",
       "reviewer_lab",
@@ -256,14 +258,14 @@ describe("assurance level — OD-04", () => {
     }
   });
 
-  it("public reader와 governance 참여는 wallet만으로 가능하다", () => {
+  it("public reader and governance participation work with wallet alone", () => {
     for (const role of ["public_reader", "protocol_voter", "project_voter"]) {
       expect(satisfiesAssurance("wallet_only", ROLE_MINIMUM_ASSURANCE[role]!)).toBe(true);
     }
   });
 });
 
-describe("AC-22 — public projection은 allowlist 밖 필드를 거절한다", () => {
+describe("AC-22 — public projection rejects fields outside the allowlist", () => {
   const VALID = {
     stableId: "SYNTH-PROJECT-001",
     status: "registered",
@@ -271,44 +273,44 @@ describe("AC-22 — public projection은 allowlist 밖 필드를 거절한다", 
     asOf: "2026-08-01T00:00:00Z",
     sourceAge: "12",
     staleStatus: "fresh",
-    limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+    limitations: ["Legal title confirmation is outside the scope of this review"],
     legalEffect: "none" as const,
     disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
   };
 
-  it("allowlist 필드만 있으면 통과한다", () => {
+  it("passes with allowlist fields only", () => {
     expect(publicProjection.safeParse(VALID).success).toBe(true);
   });
 
-  it("원문 응답 필드가 섞이면 거절한다", () => {
+  it("rejects a raw source response field", () => {
     const result = publicProjection.safeParse({ ...VALID, rawSourceResponse: "{...}" });
     expect(result.success).toBe(false);
   });
 
-  it("자연인 식별자 필드가 섞이면 거절한다", () => {
-    expect(publicProjection.safeParse({ ...VALID, personalIdentifier: "홍길동" }).success).toBe(
+  it("rejects natural-person identifier fields", () => {
+    expect(publicProjection.safeParse({ ...VALID, personalIdentifier: "Jane Doe" }).success).toBe(
       false,
     );
-    expect(publicProjection.safeParse({ ...VALID, reviewerLegalName: "홍길동" }).success).toBe(
+    expect(publicProjection.safeParse({ ...VALID, reviewerLegalName: "Jane Doe" }).success).toBe(
       false,
     );
   });
 
-  it("좌표·계약 본문이 섞이면 거절한다", () => {
+  it("rejects coordinates and contract body", () => {
     expect(
       publicProjection.safeParse({ ...VALID, preciseGeologicalCoordinates: [1, 2] }).success,
     ).toBe(false);
     expect(publicProjection.safeParse({ ...VALID, contractBody: "..." }).success).toBe(false);
   });
 
-  it("limitations와 legalEffect는 필수다", () => {
+  it("limitations and legalEffect are required", () => {
     const { limitations, ...withoutLimitations } = VALID;
     expect(publicProjection.safeParse(withoutLimitations).success).toBe(false);
     const { legalEffect, ...withoutLegalEffect } = VALID;
     expect(publicProjection.safeParse(withoutLegalEffect).success).toBe(false);
   });
 
-  it("legalEffect는 none 또는 counsel_required만 가능하다", () => {
+  it("legalEffect allows only none or counsel_required", () => {
     expect(publicProjection.safeParse({ ...VALID, legalEffect: "valid" }).success).toBe(false);
     expect(
       publicProjection.safeParse({ ...VALID, legalEffect: "counsel_required" }).success,
@@ -316,8 +318,8 @@ describe("AC-22 — public projection은 allowlist 밖 필드를 거절한다", 
   });
 });
 
-describe("AC-23 — inclusion proof는 무엇을 증명하지 않는지 함께 반환한다", () => {
-  it("proves와 doesNotProve가 응답 스키마에 있다", () => {
+describe("AC-23 — inclusion proof also returns what it does not prove", () => {
+  it("proves and doesNotProve are in the response schema", () => {
     const result = inclusionProofResponse.safeParse({
       entryVersionId: "v1",
       leafHash: "0x" + "11".repeat(32),
@@ -338,9 +340,9 @@ describe("AC-23 — inclusion proof는 무엇을 증명하지 않는지 함께 �
     expect(result.success).toBe(true);
   });
 
-  it("규격 버전 셋이 필수다", () => {
-    // 셋이 없으면 검증자가 leaf를 **어떤 규격으로** 다시 만들어야 하는지 모른다.
-    // 선택 항목으로 두면 어느 배포에서는 빠지고, 빠진 응답도 계약을 지킨 것이 된다.
+  it("all three spec versions are required", () => {
+    // Without all three, a verifier does not know **which spec** to rebuild the leaf
+    // with. If optional, some deployment would omit them and still satisfy the contract.
     const base = {
       entryVersionId: "v1",
       leafHash: "0x" + "11".repeat(32),
@@ -365,9 +367,9 @@ describe("AC-23 — inclusion proof는 무엇을 증명하지 않는지 함께 �
     }
   });
 
-  it("serializationVersion은 \"1\"에 고정되지 않는다", () => {
-    // 규격을 올리면 값이 바뀐다(CLAUDE.md). 계약이 "1"을 강제하면 그날 응답이
-    // 계약을 위반한다.
+  it("serializationVersion is not pinned to \"1\"", () => {
+    // Bumping the spec changes the value (CLAUDE.md). If the contract forced "1",
+    // responses would violate the contract on that day.
     const result = inclusionProofResponse.safeParse({
       entryVersionId: "v1",
       leafHash: "0x" + "11".repeat(32),
@@ -388,14 +390,14 @@ describe("AC-23 — inclusion proof는 무엇을 증명하지 않는지 함께 �
     expect(result.success).toBe(true);
   });
 
-  it("doesNotProve에 사실성·법률 효력·투자 적합성이 명시된다", () => {
+  it("doesNotProve names factual accuracy, legal effect, and investment suitability", () => {
     const joined = PROOF_DOES_NOT_PROVE.join(" ");
-    expect(joined).toContain("사실성");
-    expect(joined).toContain("법률 효력");
-    expect(joined).toContain("투자 적합성");
+    expect(joined).toContain("Factual accuracy");
+    expect(joined).toContain("Legal effect");
+    expect(joined).toContain("Investment suitability");
   });
 
-  it("included가 boolean이고 verified 같은 이름을 쓰지 않는다", () => {
+  it("included is a boolean and names like verified are not used", () => {
     const keys = Object.keys(inclusionProofResponse.shape);
     expect(keys).toContain("included");
     expect(keys).not.toContain("verified");
@@ -403,8 +405,8 @@ describe("AC-23 — inclusion proof는 무엇을 증명하지 않는지 함께 �
   });
 });
 
-describe("AC-01 — limitations 없는 attestation 요청을 거절한다", () => {
-  it("빈 문자열을 거절한다", () => {
+describe("AC-01 — rejects attestation requests without limitations", () => {
+  it("rejects an empty string", () => {
     const result = createAttestationRequest.safeParse({
       caseId: "case-1",
       assignmentId: "assign-1",
@@ -415,20 +417,20 @@ describe("AC-01 — limitations 없는 attestation 요청을 거절한다", () =
     expect(result.success).toBe(false);
   });
 
-  it("claim scope가 비면 거절한다", () => {
+  it("rejects an empty claim scope", () => {
     const result = createAttestationRequest.safeParse({
       caseId: "case-1",
       assignmentId: "assign-1",
       attestationType: "professional_signoff",
       claimScope: [],
-      limitations: "범위 제한",
+      limitations: "Limited scope",
     });
     expect(result.success).toBe(false);
   });
 });
 
-describe("gate decision 요청", () => {
-  it("rationale 없이는 결정을 기록할 수 없다", () => {
+describe("gate decision request", () => {
+  it("cannot record a decision without a rationale", () => {
     const result = createGateDecisionRequest.safeParse({
       gateId: "registry_publication",
       decision: "go",
@@ -438,7 +440,7 @@ describe("gate decision 요청", () => {
     expect(result.success).toBe(false);
   });
 
-  it("결정은 4개 중 하나여야 한다", () => {
+  it("decision must be one of the four values", () => {
     expect(
       createGateDecisionRequest.safeParse({
         gateId: "g",
@@ -451,7 +453,7 @@ describe("gate decision 요청", () => {
 });
 
 describe("source status view — 07 §7.11", () => {
-  it("12개 result를 그대로 받는다", () => {
+  it("accepts all 12 results as-is", () => {
     for (const result of SOURCE_RESULTS) {
       const parsed = sourceStatusView.safeParse({
         result,
@@ -470,7 +472,7 @@ describe("source status view — 07 §7.11", () => {
     }
   });
 
-  it("별칭을 거절한다", () => {
+  it("rejects aliases", () => {
     expect(
       sourceStatusView.safeParse({
         result: "no_record",
@@ -490,11 +492,11 @@ describe("source status view — 07 §7.11", () => {
 });
 
 describe("error envelope", () => {
-  it("retryable이 필수다 — 클라이언트가 재시도 여부를 추측하면 안 된다", () => {
+  it("retryable is required — clients must not guess whether to retry", () => {
     expect(
       errorEnvelope.safeParse({
         code: "SOURCE_UNAVAILABLE",
-        message: "현재 출처 확인 불가",
+        message: "Source currently unavailable",
         correlationId: "corr-1",
       }).success,
     ).toBe(false);
@@ -502,7 +504,7 @@ describe("error envelope", () => {
     expect(
       errorEnvelope.safeParse({
         code: "SOURCE_UNAVAILABLE",
-        message: "현재 출처 확인 불가",
+        message: "Source currently unavailable",
         retryable: true,
         correlationId: "corr-1",
       }).success,
@@ -511,41 +513,42 @@ describe("error envelope", () => {
 });
 
 /**
- * 투표 요청 — 04 §4.5.
+ * Vote request — 04 §4.5.
  *
- * 온체인 스냅숏이 있는 제안에서는 서버가 무게를 정한다. 계약이 무게를 필수로
- * 두면 클라이언트는 무시될 값을 지어내야 하고, 그 값이 반영된다고 읽는다.
+ * For proposals with an on-chain snapshot, the server sets the weight. If the
+ * contract required weight, clients would have to invent a value that gets
+ * ignored and would read it as counted.
  */
 describe("castVoteRequest", () => {
-  it("무게 없이 던질 수 있다 — 스냅숏이 있으면 서버가 정한다", () => {
+  it("can vote without weight — the server sets it when a snapshot exists", () => {
     expect(castVoteRequest.safeParse({ choice: "for" }).success).toBe(true);
   });
 
-  it("무게를 보내면 형식을 검사한다", () => {
+  it("validates the format when weight is sent", () => {
     expect(castVoteRequest.safeParse({ choice: "for", weight: "-1" }).success).toBe(false);
     expect(castVoteRequest.safeParse({ choice: "for", weight: "100" }).success).toBe(true);
   });
 });
 
 /**
- * 정족수의 분모 — 09 §9.6.
+ * Quorum denominator — 09 §9.6.
  *
- * 0을 받으면 `참여 × D >= 0 × N`이 항상 참이라 분모를 두고도 정족수가 통과만
- * 한다.
+ * Accepting 0 makes `participation × D >= 0 × N` always true, so quorum would
+ * always pass despite having a denominator.
  */
 describe("createProposalRequest", () => {
   const base = {
     space: "protocol",
     proposalType: "fee_schedule",
-    title: "수수료 변경",
-    rationale: "현행 수수료가 운영 비용을 담지 못한다",
+    title: "Fee change",
+    rationale: "Current fees do not cover operating costs",
   };
 
-  it("정족수의 분모로 0을 받지 않는다", () => {
+  it("rejects 0 as the quorum denominator", () => {
     expect(createProposalRequest.safeParse({ ...base, eligibleWeight: "0" }).success).toBe(false);
   });
 
-  it("분모 없이도 제안은 만들 수 있다 — 투표를 열 때 막힌다", () => {
+  it("a proposal can be created without a denominator — blocked when voting opens", () => {
     expect(createProposalRequest.safeParse(base).success).toBe(true);
   });
 });

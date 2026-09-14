@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { createApiClient } from "../src/api-client.js";
 
 /**
- * worker → API 호출의 타임아웃.
+ * Timeout for worker → API calls.
  *
- * API가 응답을 지연시키면 worker의 요청은 끝나지 않는다. outbox publisher와
- * anchor submitter는 루프 안에서 이 클라이언트를 부르므로, 한 번 매달리면
- * 그 뒤의 이벤트가 전부 밀린다 — 실패가 아니라 정지로 나타난다.
+ * If the API stalls, the worker's request never ends. The outbox publisher and anchor submitter
+ * call this client inside their loops, so one hang backs up every later event — it shows up as a
+ * stall, not a failure.
  */
 
 const PRIVATE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -19,7 +19,7 @@ const options = {
   siweUri: "http://api.test",
 };
 
-/** 로그인은 정상 응답하고, 본 요청만 주어진 처리로 넘긴다. */
+/** Login responds normally; only the main request goes to the given handler. */
 function stubFetch(onTarget: (init: RequestInit) => Promise<Response>): typeof fetch {
   return (async (input: Parameters<typeof fetch>[0], init: RequestInit = {}) => {
     const url = String(input);
@@ -33,15 +33,15 @@ function stubFetch(onTarget: (init: RequestInit) => Promise<Response>): typeof f
   }) as typeof fetch;
 }
 
-describe("worker API 클라이언트", () => {
-  it("응답이 오지 않으면 타임아웃으로 끊는다", async () => {
+describe("worker API client", () => {
+  it("aborts with a timeout when no response arrives", async () => {
     const client = createApiClient(
       { ...options, timeoutMs: 50 },
       stubFetch(
         (init) =>
           new Promise<Response>((resolve, reject) => {
-            // signal이 없으면 타임아웃이 걸려 있지 않다는 뜻이다.
-            // 그때는 그냥 성공시켜, 이 테스트가 통과하지 못하게 둔다.
+            // No signal means no timeout is set.
+            // In that case just succeed, so this test fails.
             if (!init.signal) {
               resolve(Response.json({ ok: true }));
               return;

@@ -4,17 +4,17 @@
 @import "@fontsource/inter/500.css";
 @import "@fontsource/inter/600.css";
 @import "@fontsource/jetbrains-mono/400.css";
-/* 헤드라인 서체. 폴백이 Inter인 것은 토큰 정의 그대로다 — 웹폰트가 늦어도
-   헤드라인이 시스템 세리프로 튀지 않아야 한다(tokens/typography.json). */
+/* Headline typeface. The Inter fallback follows the token definition — even if the web font is late,
+   headlines must not jump to a system serif (tokens/typography.json). */
 @import "@fontsource/space-grotesk/500.css";
 @import "@fontsource/space-grotesk/600.css";
 
 /*
- * 워크스페이스 레이아웃 — ADR-T11.
+ * Workspace layout — ADR-T11.
  *
- * @mpc/design의 토큰·시그널 색 의미·보이스는 그대로 계승한다. 다만 마케팅
- * 사이트의 섹션 리듬(py-24, max-w-7xl, 섹션당 논지 하나)은 쓰지 않는다.
- * 데이터 테이블과 작업 폼은 밀도가 다르다.
+ * Inherits @mpc/design tokens, signal color meanings, and voice as-is. It does not, however,
+ * use the marketing site's section rhythm (py-24, max-w-7xl, one thesis per section).
+ * Data tables and task forms have a different density.
  */
 
 * {
@@ -39,9 +39,9 @@ a:hover {
   color: var(--copper-glow);
 }
 
-/* 문장 안의 링크는 밑줄을 갖는다 — WCAG 1.4.1.
-   내비게이션처럼 링크만 있는 자리는 위치가 곧 표식이지만, 문단 안에서는 색만으로
-   구분하면 색을 못 보는 사람에게 링크가 사라진다. */
+/* Links inside sentences are underlined — WCAG 1.4.1.
+   Where only links appear, as in navigation, position is the marker; inside a paragraph,
+   distinguishing by color alone makes links disappear for people who cannot see color. */
 p a,
 li a,
 dd a,
@@ -74,8 +74,8 @@ code,
   flex-wrap: wrap;
 }
 
-/* 메뉴가 길면 왼쪽 영역 안에서 줄을 바꾼다. 헤더 전체가 줄을 바꾸면 계정 영역이
-   둘째 줄 왼쪽으로 떨어져 우상단에서 사라진다. */
+/* When the menu is long, wrap within the left area. If the whole header wraps, the account area
+   drops to the left of the second line and vanishes from the top right. */
 .topbar {
   flex-wrap: nowrap;
   align-items: flex-start;
@@ -97,7 +97,7 @@ code,
     flex-wrap: wrap;
   }
 
-  /* basis 0이면 줄바꿈 계산에서 폭이 0으로 잡혀 한 줄에 겹친다. */
+  /* With basis 0, width is taken as 0 in wrap calculation and items overlap on one line. */
   .topbar-start {
     flex-basis: 100%;
   }
@@ -107,8 +107,8 @@ code,
   }
 }
 
-/* 로그인 뒤의 공개 메뉴. 워크스페이스 메뉴와 섞지 않고 한 묶음으로
-   접어 둔다 — 열 개 옆에 일곱 개를 더 펼치면 헤더가 세 줄이 된다. */
+/* Public menu after login. Kept as one collapsed group, not mixed with the workspace menu
+   — spreading seven more next to ten makes the header three lines tall. */
 .nav-public {
   position: relative;
 }
@@ -141,7 +141,7 @@ code,
   background: var(--surface);
 }
 
-/* 지갑 주소 — 항상 전체, 복사 가능. 42자는 좁은 칸에서 줄을 바꿔야 잘리지 않는다. */
+/* Wallet address — always full and copyable. 42 characters must wrap in narrow cells to avoid truncation. */
 .address {
   display: inline-flex;
   flex-wrap: wrap;
@@ -160,7 +160,7 @@ code,
   line-height: 1.6;
 }
 
-/* gap은 클리어스페이스 규칙(마크 높이의 0.5×)이다. 마크 28px → 14px. */
+/* gap is the clearspace rule (0.5× mark height). Mark 28px → 14px. */
 .brand {
   display: flex;
   align-items: center;
@@ -187,8 +187,8 @@ code,
   flex-wrap: wrap;
 }
 
-/* 헤드라인은 display 서체에 자간 -0.02em — @mpc/design의 .font-display가 거는
-   조합과 같다. 워크스페이스는 마케팅 사이트의 크기 스케일만 쓰지 않는다. */
+/* Headlines use the display typeface with -0.02em tracking — the same combination @mpc/design's
+   .font-display applies. The workspace does not use the marketing site's size scale. */
 h1 {
   font-family: var(--font-display), "Inter", sans-serif;
   font-size: 22px;
@@ -249,8 +249,8 @@ tbody tr:hover td {
   overflow-x: auto;
 }
 
-/* 상태 표시 — 색만으로 상태를 전달하지 않는다(§11.8).
-   모든 배지가 아이콘 글리프와 텍스트 라벨을 함께 갖는다. */
+/* Status indicators — never convey status by color alone (§11.8).
+   Every badge has both an icon glyph and a text label. */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -321,8 +321,8 @@ button.primary:hover:not(:disabled) {
   border-color: var(--copper-glow);
 }
 
-/* 계정 연결 진입점. 링크(`<a>`)지만 버튼으로 읽혀야 한다 — 본문 링크와 같은
-   모양이면 공개 화면에서 로그인 경로가 보이지 않는다. 헤더에서는 `.sm`. */
+/* Account connection entry point. A link (`<a>`) that must read as a button — styled like body
+   links, the login path would be invisible on public screens. `.sm` in the header. */
 .btn-connect {
   display: inline-flex;
   align-items: center;
@@ -355,8 +355,8 @@ button.primary:hover:not(:disabled) {
   font-size: 13px;
 }
 
-/* 랜딩 첫 화면. 아래 panel들과 같은 카드 모양이면 어디서 소개가 끝나고 본문이
-   시작하는지 갈리지 않는다 — 크기·배경·구분선으로 한 단계 위에 둔다. */
+/* Landing hero. Styled like the panel cards below, it would be unclear where the introduction ends
+   and the body begins — size, background, and divider place it one level above. */
 .hero {
   display: flex;
   align-items: flex-end;
@@ -448,7 +448,7 @@ button:disabled {
 }
 
 
-/* 설치된 지갑 목록. 하나뿐이면 버튼 하나처럼 보인다. */
+/* Installed wallets. With only one, it looks like a single button. */
 .wallet-choices {
   display: flex;
   flex-wrap: wrap;
@@ -495,10 +495,10 @@ button:disabled {
 }
 
 /*
- * Footer — 약관·데이터 처리·지원.
+ * Footer — terms, data processing, support.
  *
- * 경계 문구를 footer로 내리지 않는 것과 이것은 다르다. 경계는 결과 가까이에
- * 있어야 하고(§11.6), 약관 링크는 어디서든 닿을 수 있으면 된다.
+ * This differs from not pushing boundary copy into the footer. Boundaries must sit near
+ * results (§11.6); terms links just need to be reachable from anywhere.
  */
 .footer {
   margin-top: 48px;

@@ -15,17 +15,17 @@ import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
- * 공개 게시와 anchor — spec 05 §5.6·§5.7, 08 §8.11.
+ * Public publication and anchor — spec 05 §5.6·§5.7, 08 §8.11.
  *
- * 게시는 두 단계다.
+ * Publication has two steps.
  *
- * 1. **projection 게시** — allowlist에 있는 필드만 나간다. 하나라도 밖에 있으면
- *    서버가 거절한다(AC-22). 화면이 그것을 미리 걸러 주지 않는 것이 의도다 —
- *    걸러 주면 실제 통제가 어디 있는지 알 수 없게 된다.
- * 2. **anchor batch** — 게시된 version들을 Merkle tree로 묶는다. 이 시점에는
- *    아직 체인에 올라가지 않았다. `confirmationState`가 그것을 그대로 말한다.
+ * 1. **Publish projection** — only allowlisted fields go out. If any field is outside it,
+ *    the server rejects (AC-22). The screen deliberately does not pre-filter —
+ *    pre-filtering would obscure where the real control lives.
+ * 2. **anchor batch** — bundles published versions into a Merkle tree. At this point
+ *    nothing is on chain yet. `confirmationState` says exactly that.
  *
- * 공개는 되돌릴 수 없다. 철회는 삭제가 아니라 새 상태다.
+ * Publication is irreversible. Withdrawal is a new state, not a deletion.
  */
 export default function PublicationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -128,7 +128,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
             checked={acknowledged}
             onChange={(event) => setAcknowledged(event.target.checked)}
           />
-          {/* 되돌릴 수 없다는 사실을 게시 뒤에 알려 주면 늦다. */}
+          {/* Saying it is irreversible after publishing is too late. */}
           <span>
             I understand that publication cannot be undone. Revoking does not recall what has
             already been read, and the revocation itself stays on the public record.
@@ -211,7 +211,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
             <dt>Chain state</dt>
             <dd className="mono">
               {batch.confirmationState}
-              {/* created는 제출 전이다. 이것을 "완료"로 보이게 하지 않는다. */}
+              {/* created is pre-submission. Do not let it look "done". */}
               <div className="meta">
                 Not submitted yet. Until it confirms, the inclusion proof reports
                 included=false.
@@ -233,10 +233,10 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
 }
 
 /**
- * 공개 projection.
+ * Public projection.
  *
- * allowlist 밖 필드를 넣지 않는다. 다만 여기서 거르는 것은 편의이며, 실제 통제는
- * 서버의 `checkPublishable`과 `.strict()` 스키마다 — 화면을 우회해도 막힌다.
+ * Leaves out fields outside the allowlist. Filtering here is a convenience; the real control is
+ * the server's `checkPublishable` and `.strict()` schema — bypassing the screen is still blocked.
  */
 function buildProjection(project: ProjectSummary): Record<string, unknown> {
   return {

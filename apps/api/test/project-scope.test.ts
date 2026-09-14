@@ -17,19 +17,19 @@ import {
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * project scope와 읽기 인가 — 02 §2.1.
+ * Project scope and read authorization — 02 §2.1.
  *
- * 결정식의 7개 조건 중 `project_scope_matches`와 역할 검사는 라우트가 사실을
- * 넘겨야 평가된다. 넘기지 않으면 판정 코드가 있어도 실행되지 않으므로, **경계를
- * 실제 요청으로 넘어 본다.**
+ * Of the decision formula's 7 conditions, `project_scope_matches` and the role check are
+ * evaluated only if the route passes the facts. If it does not, the decision code never runs
+ * even though it exists, so **these tests cross the boundary with real requests.**
  *
- * 두 가지를 시험한다.
+ * Two things are tested.
  *
- * 1. 프로젝트 수준 바인딩은 그 프로젝트 밖에서 통하지 않는다.
- * 2. 역할 없는 세션은 tenant 안이라도 워크스페이스를 읽지 못한다 —
- *    RLS의 tenant 경계가 인가를 대신하지 않는다.
+ * 1. A project-level binding does not work outside that project.
+ * 2. A session without a role cannot read the workspace even inside the tenant —
+ *    the RLS tenant boundary does not substitute for authorization.
  */
-describeDb("project scope와 읽기 인가", () => {
+describeDb("project scope and read authorization", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let tokens: {
@@ -39,14 +39,15 @@ describeDb("project scope와 읽기 인가", () => {
     operator: string;
     sponsor: string;
   };
-  /** 같은 tenant 안의 다른 회사와 그 회사 소유 프로젝트. */
+  /** Another company in the same tenant and a project it owns. */
   let foreign: { organizationId: string; projectId: string };
 
   /**
-   * tenant A 안에 두 번째 조직을 만든다.
+   * Creates a second organization inside tenant A.
    *
-   * 조직 격리는 tenant 격리와 다른 경계다. 다른 tenant로 시험하면 RLS가 먼저
-   * 막아서 인가 코드가 조직을 보는지 알 수 없다.
+   * Organization isolation is a different boundary from tenant isolation. Testing with another
+   * tenant lets RLS block first, so it cannot show whether the authorization code checks the
+   * organization.
    */
   async function seedForeignOrganization(): Promise<{ organizationId: string; projectId: string }> {
     const organizationId = randomUUID();
@@ -71,7 +72,8 @@ describeDb("project scope와 읽기 인가", () => {
         'foreign stale signal'
       )
     `;
-    // 역할에게 가는 알림. steward 역할 이름은 같아도 다른 회사 프로젝트의 것이다.
+    // A notification addressed to a role. The steward role name matches, but it belongs to
+    // another company's project.
     await fx.sql`
       INSERT INTO core.notifications (tenant_id, kind, audience_role, project_id, summary, link)
       VALUES (${fx.tenantA}, 'evidence_stale', 'data_steward', ${projectId},
@@ -80,7 +82,7 @@ describeDb("project scope와 읽기 인가", () => {
     return { organizationId, projectId };
   }
 
-  /** orgA의 조직 수준 project_sponsor_operator. 프로젝트를 만들 수 있는 당사자 역할이다. */
+  /** Organization-level project_sponsor_operator of orgA. A project-party role that can create projects. */
   async function seedSponsor(): Promise<TestAccount> {
     const account = newAccount();
     const subject = randomUUID();
@@ -99,8 +101,8 @@ describeDb("project scope와 읽기 인가", () => {
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
       VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'project_sponsor_operator')
     `;
-    // 결정 대기 중인 역할 부여 제안. 결정권(admin.role.approve)이 없는 steward의
-    // 할 일에 올라오면 안 된다.
+    // A pending role grant proposal. It must not appear in the work list of a steward without
+    // decision authority (admin.role.approve).
     await fx.sql`
       INSERT INTO core.role_grant_requests (
         id, tenant_id, subject_id, organization_id, role, reason, requested_by_subject_id
@@ -150,13 +152,13 @@ describeDb("project scope와 읽기 인가", () => {
     });
   }
 
-  describe("쓰기", () => {
-    it("프로젝트 수준 바인딩은 자기 프로젝트에서 통한다", async () => {
+  describe("writes", () => {
+    it("lets a project-level binding work in its own project", async () => {
       const response = await createClaim(tokens.scopedSteward, fx.projectA);
       expect(response.statusCode).toBe(200);
     });
 
-    it("프로젝트 수준 바인딩은 다른 프로젝트에서 거절된다", async () => {
+    it("rejects a project-level binding in another project", async () => {
       const response = await createClaim(tokens.scopedSteward, fx.otherProjectA);
 
       expect(response.statusCode).toBe(403);
@@ -165,12 +167,12 @@ describeDb("project scope와 읽기 인가", () => {
       expect(body.details?.reason).toBe("PROJECT_SCOPE_MISMATCH");
     });
 
-    it("조직 수준 바인딩은 같은 조직의 다른 프로젝트에도 닿는다", async () => {
+    it("lets an organization-level binding reach other projects of the same organization", async () => {
       const response = await createClaim(tokens.steward, fx.otherProjectA);
       expect(response.statusCode).toBe(200);
     });
 
-    it("조직 수준 바인딩은 같은 tenant의 다른 조직 프로젝트에 닿지 않는다", async () => {
+    it("does not let an organization-level binding reach another organization's project in the same tenant", async () => {
       const response = await createClaim(tokens.steward, foreign.projectId);
 
       expect(response.statusCode).toBe(403);
@@ -179,7 +181,7 @@ describeDb("project scope와 읽기 인가", () => {
       );
     });
 
-    it("tenant 운영 역할은 다른 조직 프로젝트에도 닿는다", async () => {
+    it("lets tenant operator roles reach another organization's project", async () => {
       const response = await app.inject({
         method: "GET",
         url: `/api/v1/projects/${foreign.projectId}`,
@@ -189,7 +191,7 @@ describeDb("project scope와 읽기 인가", () => {
     });
   });
 
-  describe("프로젝트 생성의 소유 조직", () => {
+  describe("owner organization on project creation", () => {
     function createProject(token: string, ownerOrganizationId: string) {
       return app.inject({
         method: "POST",
@@ -197,7 +199,7 @@ describeDb("project scope와 읽기 인가", () => {
         headers: { ...bearer(token), "idempotency-key": idempotencyKey() },
         payload: {
           projectKey: `OWN-${randomUUID().slice(0, 8)}`,
-          name: "소유 조직 시험",
+          name: "Owner organization test",
           hostCountryIso3: "MNG",
           minerals: ["copper"],
           ownerOrganizationId,
@@ -205,7 +207,7 @@ describeDb("project scope와 읽기 인가", () => {
       });
     }
 
-    it("프로젝트 당사자는 자기 조직 소유로만 만들 수 있다", async () => {
+    it("lets a project party create projects owned only by its own organization", async () => {
       const own = await createProject(tokens.sponsor, fx.orgA);
       expect(own.statusCode).toBe(200);
 
@@ -214,14 +216,14 @@ describeDb("project scope와 읽기 인가", () => {
       expect(other.json().code).toBe("OWNER_ORGANIZATION_NOT_ALLOWED");
     });
 
-    it("tenant 운영자는 다른 조직 소유로 등록할 수 있다 — 온보딩", async () => {
+    it("lets a tenant operator register a project owned by another organization — onboarding", async () => {
       const response = await createProject(tokens.operator, foreign.organizationId);
       expect(response.statusCode).toBe(200);
     });
   });
 
-  describe("읽기", () => {
-    it("역할 없는 세션은 프로젝트 목록을 읽지 못한다", async () => {
+  describe("reads", () => {
+    it("does not let a session without a role read the project list", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/projects",
@@ -234,7 +236,7 @@ describeDb("project scope와 읽기 인가", () => {
       );
     });
 
-    it("역할 없는 세션은 증빙을 읽지 못한다", async () => {
+    it("does not let a session without a role read evidence", async () => {
       const response = await app.inject({
         method: "GET",
         url: `/api/v1/projects/${fx.projectA}/claims`,
@@ -244,7 +246,7 @@ describeDb("project scope와 읽기 인가", () => {
       expect(response.statusCode).toBe(403);
     });
 
-    it("프로젝트 수준 바인딩은 범위 밖 프로젝트의 증빙을 읽지 못한다", async () => {
+    it("does not let a project-level binding read evidence of an out-of-scope project", async () => {
       const inScope = await app.inject({
         method: "GET",
         url: `/api/v1/projects/${fx.projectA}/claims`,
@@ -260,9 +262,9 @@ describeDb("project scope와 읽기 인가", () => {
       expect(outOfScope.statusCode).toBe(403);
     });
 
-    it("역할 없는 세션은 anchor batch 상태를 읽지 못한다", async () => {
-      // 게시된 root는 공개지만 제출 이력과 실패 상태는 운영 정보다.
-      // 공개 조회는 `/api/v1/public/*`이 따로 담당한다.
+    it("does not let a session without a role read anchor batch status", async () => {
+      // Published roots are public, but submission history and failure states are operational
+      // data. Public lookup is handled separately by `/api/v1/public/*`.
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/anchor-batches",
@@ -272,10 +274,10 @@ describeDb("project scope와 읽기 인가", () => {
       expect(response.statusCode).toBe(403);
     });
 
-    it("거버넌스 목록은 범위 밖 프로젝트 제안을 담지 않는다", async () => {
+    it("excludes out-of-scope project proposals from the governance list", async () => {
       /**
-       * 쓰기는 제안의 프로젝트로 범위를 보는데 조회가 tenant 전체를 돌려주면,
-       * 손대지 못할 뿐 제목·근거·집계는 그대로 나간다.
+       * Writes scope by the proposal's project; if the list returned the whole tenant, titles,
+       * evidence and tallies would still leak even though they cannot be acted on.
        */
       const response = await app.inject({
         method: "GET",
@@ -288,7 +290,7 @@ describeDb("project scope와 읽기 인가", () => {
       expect(items.every((item) => item.projectId !== fx.otherProjectA)).toBe(true);
     });
 
-    it("프로젝트 목록은 다른 조직 프로젝트를 담지 않는다", async () => {
+    it("excludes another organization's projects from the project list", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/projects",
@@ -301,7 +303,7 @@ describeDb("project scope와 읽기 인가", () => {
       expect(ids).not.toContain(foreign.projectId);
     });
 
-    it("registry 목록은 다른 조직 프로젝트의 기록을 담지 않는다", async () => {
+    it("excludes records of another organization's projects from the registry list", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/registry-entries",
@@ -313,7 +315,7 @@ describeDb("project scope와 읽기 인가", () => {
       expect(items.every((item) => item.projectId === fx.projectA || item.projectId === fx.otherProjectA)).toBe(true);
     });
 
-    it("할 일 목록은 다른 조직 프로젝트의 stale 신호와 결정권 없는 역할 부여 제안을 담지 않는다", async () => {
+    it("excludes other organizations' stale signals and undecidable role grant proposals from the work list", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/my-work",
@@ -328,7 +330,7 @@ describeDb("project scope와 읽기 인가", () => {
       expect(unassigned.some((item) => item.kind === "role_grant_decision")).toBe(false);
     });
 
-    it("역할에게 온 알림은 다른 조직 프로젝트의 것을 담지 않는다", async () => {
+    it("excludes another organization's projects from role-addressed notifications", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/notifications",
@@ -340,7 +342,7 @@ describeDb("project scope와 읽기 인가", () => {
       expect(items.some((item) => item.projectId === foreign.projectId)).toBe(false);
     });
 
-    it("프로젝트 목록은 범위 밖 프로젝트를 담지 않는다", async () => {
+    it("excludes out-of-scope projects from the project list", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/projects",

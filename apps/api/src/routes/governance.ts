@@ -37,30 +37,30 @@ import {
 /**
  * Governance — spec 04 §4.5, OD-06.
  *
- * 이 라우트가 지키는 것:
+ * What this route guarantees:
  *
- * - **투표가 오프체인 사실을 만들지 않는다**(불변조건 12). 통과한 제안은
- *   `executed`가 될 뿐이고 authority·credential·법적 상태는 그대로다.
- *   응답의 `limitations`가 그 사실을 매번 함께 보낸다.
- * - **space 밖의 대상을 제안할 수 없다.** protocol governance가 특정 프로젝트의
- *   처분을 정할 수 없고, 그 반대도 같다.
- * - **금지 대상은 어떤 space에서도 제안할 수 없다.** 법적 사실·개인 자격·검토
- *   결과는 투표로 만들어지지 않는다.
- * - **정족수와 통과 기준은 제안 시점 값을 쓴다.** 나중에 규칙을 바꿔 결과를
- *   뒤집을 수 없다.
- * - **정족수 미달과 부결을 구분한다.** 다음에 할 일이 다르다.
+ * - **A vote does not create off-chain facts** (invariant 12). A passed proposal only
+ *   becomes `executed`; authority, credential, and legal status stay unchanged.
+ *   Every response carries that fact in `limitations`.
+ * - **A proposal cannot target anything outside its space.** Protocol governance cannot
+ *   decide the disposition of a specific project, and vice versa.
+ * - **Forbidden targets cannot be proposed in any space.** Legal facts, personal
+ *   credentials, and review outcomes are not made by vote.
+ * - **Quorum and pass threshold use the values at proposal time.** Changing the rules
+ *   later cannot overturn the result.
+ * - **Missing quorum and defeat are distinct.** The next step differs.
  */
 
 /**
- * 이 기록이 만들지 않는 것.
+ * What this record does not create.
  *
- * 응답마다 함께 보낸다. 화면이 잊어도 API가 말한다 — 거버넌스 결과를 법적
- * 승인으로 읽는 것이 가장 위험한 오해다.
+ * Sent with every response. Even if the UI forgets, the API says it — reading a governance
+ * result as legal approval is the most dangerous misreading.
  */
 const GOVERNANCE_LIMITATIONS = [
-  "투표 결과는 법적 사실·인허가·계약 효력을 만들지 않는다",
-  "통과한 제안의 집행은 별도 행위이며 자동으로 일어나지 않는다",
-  "이 결과는 검토자의 자격이나 검토 결과를 바꾸지 않는다",
+  "A vote result does not create legal facts, permits, or contractual effect",
+  "Executing a passed proposal is a separate act and does not happen automatically",
+  "This result does not change reviewer credentials or review outcomes",
 ] as const;
 
 const createSchema = z.object({
@@ -68,21 +68,21 @@ const createSchema = z.object({
   projectId: z.string().uuid().nullable().default(null),
   proposalType: z.string().min(1),
   title: z.string().min(1),
-  rationale: z.string().min(1, "제안 이유는 비워 둘 수 없다"),
+  rationale: z.string().min(1, "Proposal rationale cannot be empty"),
   quorumNumerator: z.number().int().positive().default(1),
   quorumDenominator: z.number().int().positive().default(4),
   thresholdNumerator: z.number().int().positive().default(1),
   thresholdDenominator: z.number().int().positive().default(2),
   /**
-   * 정족수의 분모 후보.
+   * Candidate quorum denominator.
    *
-   * 온체인 총공급을 읽을 수 있는 제안에서는 무시된다. 읽을 수 없는 제안은
-   * 이 값이 있어야 투표를 열 수 있다 — 분모 없이 계산하면 정족수가 항상
-   * 통과한다.
+   * Ignored for proposals whose on-chain total supply is readable. Proposals where it is not
+   * need this value to open voting — computed without a denominator, quorum always
+   * passes.
    */
   eligibleWeight: z
     .string()
-    .regex(/^[1-9]\d*$/, "정족수 분모는 1 이상의 정수 문자열이어야 한다")
+    .regex(/^[1-9]\d*$/, "Quorum denominator must be an integer string of 1 or more")
     .nullable()
     .default(null),
 });
@@ -90,13 +90,13 @@ const createSchema = z.object({
 const voteSchema = z.object({
   choice: z.enum(["for", "against", "abstain"]),
   /**
-   * 수동 무게.
+   * Manual weight.
    *
-   * **온체인 스냅숏이 있으면 무시된다.** 던지는 사람이 자기 무게를 정할 수
-   * 없어야 한다 — 그것은 투표가 아니라 선언이다. 토큰이 설정되지 않은 제안에서만
-   * 쓰이고, 그 경우 응답이 `manual`이라고 밝힌다.
+   * **Ignored when an on-chain snapshot exists.** A voter must not be able to set their own
+   * weight — that is a declaration, not a vote. Used only for proposals with no token
+   * configured, and the response then states `manual`.
    */
-  weight: z.string().regex(/^\d+$/, "무게는 음이 아닌 정수 문자열이어야 한다").optional(),
+  weight: z.string().regex(/^\d+$/, "Weight must be a non-negative integer string").optional(),
 });
 
 const transitionSchema = z.object({
@@ -114,14 +114,14 @@ const transitionSchema = z.object({
     "failed",
     "cancelled",
   ]),
-  reason: z.string().min(1, "상태를 바꾼 이유는 비워 둘 수 없다"),
+  reason: z.string().min(1, "Reason for the state change cannot be empty"),
 });
 
 export interface GovernanceChain {
-  /** 현재 head 블록. 스냅숏 시점을 정하는 데 쓴다. */
+  /** Current head block. Used to fix the snapshot point. */
   headBlockNumber(): Promise<number>;
   readBalance: BalanceReader;
-  /** 정족수의 분모. 무게와 같은 블록에서 읽는다. */
+  /** Quorum denominator. Read at the same block as the weights. */
   readTotalSupply(input: {
     readonly tokenAddress: string;
     readonly blockNumber: number;
@@ -132,15 +132,15 @@ export interface GovernanceChain {
 }
 
 /**
- * 이 space에서 온체인 스냅숏을 쓸 수 있는가 — 09 §9.1.
+ * Whether this space can use an on-chain snapshot — 09 §9.1.
  *
- * `GOVERNANCE_TOKEN_ADDRESS`는 **MPC 토큰**이다. protocol space의 voter는 MPC
- * holder이고 project space의 voter는 해당 프로젝트의 AT holder다. 하나를 양쪽에
- * 쓰면 MPC 보유자가 남의 프로젝트 처분에 무게를 갖는다 — 02 §2.4 규칙 7·8이
- * 금지하는 것이다.
+ * `GOVERNANCE_TOKEN_ADDRESS` is the **MPC token**. Protocol-space voters are MPC
+ * holders; project-space voters are that project's AT holders. Using one for both
+ * gives MPC holders weight over another project's disposition — which 02 §2.4 rules 7 and 8
+ * forbid.
  *
- * AT 컨트랙트는 OD-07의 gate 뒤에 있어 아직 없다. 없는 것과 잘못된 것을 읽는
- * 것은 다르므로, project space는 온체인 경로를 열지 않고 수동 무게로 남는다.
+ * The AT contract sits behind the OD-07 gate and does not exist yet. Reading nothing and
+ * reading the wrong thing differ, so project space keeps manual weight with no on-chain path.
  */
 function chainForSpace(
   chain: GovernanceChain | undefined,
@@ -180,13 +180,13 @@ interface TallyRow {
 }
 
 /**
- * 사람이 넣은 분모로 계산된 정족수.
+ * Quorum computed from a human-entered denominator.
  *
- * 온체인 총공급을 읽을 수 없는 제안은 사람이 분모를 정한다. 그 값의 근거는
- * 코드 밖에 있으므로 결과를 온체인 근거로 읽으면 안 된다.
+ * For proposals whose on-chain total supply is unreadable, a person sets the denominator. Its
+ * evidence lies outside the code, so the result must not be read as on-chain evidence.
  */
 const MANUAL_ELIGIBLE_WEIGHT_LIMITATION =
-  "정족수의 분모는 사람이 지정한 값이며 온체인 총공급으로 확인되지 않았다";
+  "The quorum denominator is a human-specified value and was not confirmed against on-chain total supply";
 
 async function loadProposal(
   tx: postgres.TransactionSql | postgres.Sql,
@@ -233,11 +233,11 @@ function toView(
   const participated = forWeight + againstWeight + abstainWeight;
 
   /**
-   * 정족수의 분모.
+   * Quorum denominator.
    *
-   * 투표를 열 때 고정된다. 그 전에는 표가 없으므로 어느 값을 써도 결과가 같다 —
-   * 던진 표의 합으로 두면 `참여 × D >= 참여 × N`이 항상 참이 되어 정족수가
-   * 통과만 하므로, 고정된 값이 있으면 반드시 그것을 쓴다.
+   * Fixed when voting opens. Before that there are no votes, so any value gives the same result —
+   * using the sum of cast votes makes `participation × D >= participation × N` always true and
+   * quorum always passes, so a fixed value, when present, is always used.
    */
   const eligibleWeight =
     row.eligible_weight === null ? participated : BigInt(row.eligible_weight);
@@ -281,21 +281,21 @@ function toView(
       participatedWeight: participated.toString(),
       quorumMet: result.quorumMet,
       thresholdMet: result.thresholdMet,
-      // 확정이 아니다. 마감 전에는 "지금 마감하면"이다.
+      // Not final. Before close it means "if closed now".
       provisionalOutcome: result.outcome,
       reason: result.reason,
     },
     transitions: loaded.transitions,
-    // 무게가 어디서 왔는지 밝힌다. 수동 무게로 집계된 결과를 온체인 근거로
-    // 읽으면 안 된다.
+    // States where the weight came from. A result tallied with manual weight must not be
+    // read as on-chain evidence.
     weightSource: row.snapshot_block ? "onchain_snapshot" : "manual",
     snapshotBlock: row.snapshot_block,
-    /** 정족수의 분모. 투표를 열기 전에는 아직 고정되지 않아 null일 수 있다. */
+    /** Quorum denominator. May be null before voting opens, as it is not yet fixed. */
     eligibleWeight: row.eligible_weight,
     eligibleWeightSource: row.eligible_weight_source,
     limitations: [
       ...GOVERNANCE_LIMITATIONS,
-      ...(row.snapshot_block ? [`무게는 블록 ${row.snapshot_block} 시점의 잔고다`] : []),
+      ...(row.snapshot_block ? [`Weight is the balance at block ${row.snapshot_block}`] : []),
       ...(row.eligible_weight_source === "manual" ? [MANUAL_ELIGIBLE_WEIGHT_LIMITATION] : []),
     ],
     requestId,
@@ -304,10 +304,10 @@ function toView(
 }
 
 /**
- * 제안이 걸린 프로젝트. 프로토콜 제안이면 null이다.
+ * The project the proposal belongs to. Null for a protocol proposal.
  *
- * 멱등 블록 **밖에서** 읽는다. replay는 저장된 응답을 그대로 돌려주므로, 안에
- * 두면 남의 key를 재생한 요청이 인가를 지나지 않는다.
+ * Read **outside** the idempotency block. Replay returns the stored response as is, so if
+ * this were inside, a request replaying someone else's key would skip authorization.
  */
 async function proposalProjectId(
   sql: postgres.Sql,
@@ -319,11 +319,11 @@ async function proposalProjectId(
       SELECT project_id FROM core.governance_proposals WHERE id = ${proposalId}
     `,
   );
-  if (!row) throw notFound("제안을 찾을 수 없다");
+  if (!row) throw notFound("Proposal not found");
   return row.project_id;
 }
 
-/** 제안 리소스. 프로젝트 제안이면 그 프로젝트 범위로 판정한다. */
+/** Proposal resource. A project proposal is judged within that project's scope. */
 function proposalResource(tenantId: string, projectId: string | null) {
   return projectId === null
     ? tenantResource(tenantId, { sensitivity: "public" })
@@ -340,12 +340,12 @@ export async function registerGovernanceRoutes(
     const { requestId, asOf } = request.context;
 
     /**
-     * 목록도 제안과 같은 민감도로 본다.
+     * The list has the same sensitivity as a proposal.
      *
-     * 여기만 `tenantResource`의 기본값(`restricted`)을 쓰고 있었다. 그래서
-     * `wallet_only`인 `protocol_voter`는 **투표는 할 수 있는데 무엇에 투표하는지
-     * 목록을 볼 수 없었다** — 화면에는 "제안이 없다"와 403이 함께 떴다.
-     * 제안은 어느 경로에서든 `public`이다(같은 파일의 `proposalResource`).
+     * This was the only place using the `tenantResource` default (`restricted`). So a
+     * `wallet_only` `protocol_voter` **could vote but could not list what it was voting
+     * on** — the screen showed "no proposals" alongside a 403.
+     * A proposal is `public` on every path (`proposalResource` in this file).
      */
     assertAuthorized(
       session,
@@ -355,14 +355,14 @@ export async function registerGovernanceRoutes(
     );
 
     /**
-     * 목록을 프로젝트 범위로 거른다 — 02 §2.1.
+     * Filters the list to project scope — 02 §2.1.
      *
-     * 쓰기 경로는 제안의 프로젝트로 범위를 보는데 조회는 tenant 전체를 돌려주고
-     * 있었다. 그러면 범위 밖 프로젝트의 제안 제목·근거·집계가 그대로 나간다 —
-     * 손대지 못한다는 것이 보지 못한다는 뜻은 아니다.
+     * Write paths scope by the proposal's project, but reads returned the whole tenant. That
+     * leaks titles, rationale, and tallies of out-of-scope projects' proposals — being
+     * unable to modify something does not mean being unable to see it.
      *
-     * **프로토콜 제안(`project_id IS NULL`)은 거르지 않는다.** 그것은 프로젝트에
-     * 매인 사안이 아니고, 투표권은 보유에서 나오지 소속에서 나오지 않는다(04 §4.5).
+     * **Protocol proposals (`project_id IS NULL`) are not filtered.** They are not tied to
+     * a project, and voting rights come from holdings, not membership (04 §4.5).
      */
     const visible = visibleProjectScope(session, "governance.read");
 
@@ -399,10 +399,10 @@ export async function registerGovernanceRoutes(
       const proposal = await withTenant(sql, { tenantId }, (tx) =>
         loadProposal(tx, request.params.proposalId),
       );
-      if (!proposal) throw notFound("제안을 찾을 수 없다");
+      if (!proposal) throw notFound("Proposal not found");
 
-      // 프로젝트를 안 뒤에야 범위를 판정할 수 있다. 프로토콜 제안은 프로젝트에
-      // 매이지 않으므로 tenant 범위로 본다.
+      // Scope can be judged only once the project is known. Protocol proposals are not tied to
+      // a project, so they are judged at tenant scope.
       assertAuthorized(
         session,
         "governance.read",
@@ -419,15 +419,15 @@ export async function registerGovernanceRoutes(
 
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
     }
 
     /**
-     * 프로젝트 제안은 그 프로젝트 범위 안에서만 만들 수 있다 — 04 §4.5.
+     * A project proposal can be created only within that project's scope — 04 §4.5.
      *
-     * 프로토콜 제안(`projectId` 없음)은 프로젝트 경계가 없다.
+     * A protocol proposal (no `projectId`) has no project boundary.
      */
     const data = parsed.data;
 
@@ -440,28 +440,28 @@ export async function registerGovernanceRoutes(
       sessionFacts(session),
     );
 
-    // 금지 대상은 어떤 space에서도 제안할 수 없다. 법적 사실·개인 자격·검토
-    // 결과는 투표로 만들어지지 않는다.
+    // Forbidden targets cannot be proposed in any space. Legal facts, personal credentials,
+    // and review outcomes are not made by vote.
     if (isForbiddenTarget(data.proposalType)) {
-      throw unprocessable("GOVERNANCE_TARGET_FORBIDDEN", "투표로 정할 수 없는 대상이다", {
+      throw unprocessable("GOVERNANCE_TARGET_FORBIDDEN", "This target cannot be decided by vote", {
         proposalType: data.proposalType,
       });
     }
 
-    // space 판정은 도메인이 한다. 라우트가 목록을 다시 쓰면 둘이 갈라진다.
+    // The domain judges the space. If the route rewrote the list, the two would diverge.
     const spaceCheck = checkProposalSpace(
       data.space === "protocol" ? "protocol" : { kind: "project", projectId: data.projectId ?? "" },
       data.proposalType,
     );
     if (!spaceCheck.allowed) {
-      throw unprocessable(spaceCheck.reason, "이 space에서 제안할 수 없는 유형이다", {
+      throw unprocessable(spaceCheck.reason, "This proposal type is not allowed in this space", {
         space: data.space,
         proposalType: data.proposalType,
       });
     }
 
     if (data.space === "project" && !data.projectId) {
-      throw badRequest("PROPOSAL_PROJECT_REQUIRED", "project space에는 projectId가 필요하다");
+      throw badRequest("PROPOSAL_PROJECT_REQUIRED", "projectId is required for project space");
     }
 
     const { requestId, asOf, correlationId } = request.context;
@@ -504,11 +504,11 @@ export async function registerGovernanceRoutes(
   });
 
   /**
-   * 상태 전이.
+   * State transition.
    *
-   * 투표 마감(`voting → succeeded|defeated|no_quorum`)은 **집계 결과와 일치해야
-   * 한다.** 요청한 결과와 계산한 결과가 다르면 거절한다 — 그렇지 않으면 표를
-   * 무시하고 결과를 선언할 수 있다.
+   * Closing a vote (`voting → succeeded|defeated|no_quorum`) **must match the tally.** A
+   * requested result that differs from the computed one is rejected — otherwise votes could
+   * be ignored and a result declared.
    */
   app.post<{ Params: { proposalId: string } }>(
     "/api/v1/governance/proposals/:proposalId/transitions",
@@ -518,7 +518,7 @@ export async function registerGovernanceRoutes(
 
       const parsed = transitionSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -544,12 +544,12 @@ export async function registerGovernanceRoutes(
             WHERE id = ${request.params.proposalId}
             FOR UPDATE
           `;
-          if (!current) throw notFound("제안을 찾을 수 없다");
+          if (!current) throw notFound("Proposal not found");
 
           assertVersionMatches(expectedVersion, current.version, "governance_proposal");
 
           if (!canTransition(proposalMachine, current.state, toState)) {
-            throw conflict("INVALID_STATE_TRANSITION", "허용되지 않는 상태 전이다", {
+            throw conflict("INVALID_STATE_TRANSITION", "State transition not allowed", {
               fromState: current.state,
               toState,
               allowedTransitions: [...(proposalMachine.transitions[current.state] ?? [])],
@@ -559,10 +559,10 @@ export async function registerGovernanceRoutes(
           const loaded = await loadProposal(tx, current.id);
           const view = toView(loaded!, requestId, asOf);
 
-          // 투표 마감은 집계와 일치해야 한다. 표를 무시하고 결과를 선언할 수 없다.
+          // Closing a vote must match the tally. A result cannot be declared by ignoring votes.
           const CLOSING = ["succeeded", "defeated", "no_quorum"];
           if (CLOSING.includes(toState) && view.tally.provisionalOutcome !== toState) {
-            throw unprocessable("TALLY_MISMATCH", "집계 결과와 다른 상태로 마감할 수 없다", {
+            throw unprocessable("TALLY_MISMATCH", "Cannot close with a state that differs from the tally", {
               requested: toState,
               computed: view.tally.provisionalOutcome,
               reason: view.tally.reason,
@@ -570,11 +570,11 @@ export async function registerGovernanceRoutes(
           }
 
           /**
-           * 투표를 열 때 스냅숏 블록과 정족수 분모를 함께 고정한다.
+           * Opening voting fixes the snapshot block and the quorum denominator together.
            *
-           * head가 아니라 확정된 블록을 쓴다 — head는 재구성될 수 있고 그러면
-           * 무게 근거가 사라진다. 분모도 같은 블록에서 읽어야 무게와 기준
-           * 시점이 어긋나지 않는다.
+           * Uses a finalized block, not head — head can be reorganized, and then the weight
+           * evidence disappears. The denominator is read at the same block so weight and baseline
+           * do not drift apart.
            */
           const spaceChain = chainForSpace(chain, current.space);
           let snapshotBlock: number | null = null;
@@ -595,23 +595,23 @@ export async function registerGovernanceRoutes(
                   blockNumber: snapshotBlock,
                 });
               } catch (error) {
-                // 조회 실패를 0으로 읽으면 정족수가 무조건 통과한다. 0은
-                // "투표권이 없다"는 사실이고 실패는 "모른다"다.
+                // Reading a lookup failure as 0 makes quorum always pass. 0 is
+                // the fact "no voting power"; failure is "unknown".
                 throw unprocessable(
                   "ELIGIBLE_WEIGHT_UNAVAILABLE",
-                  "스냅숏 시점의 총공급을 읽지 못해 투표를 열 수 없다",
+                  "Cannot open voting: total supply at the snapshot block could not be read",
                   { blockNumber: String(snapshotBlock), reason: String(error).slice(0, 200) },
                 );
               }
 
-              // 0은 조회 실패와 다르지만 분모로는 똑같이 쓸 수 없다 —
-              // `참여 × D >= 0 × N`이 항상 참이다. 잘못된 주소를 읽어도 0이
-              // 나오므로 조용히 통과시키면 정족수가 사라진다. 판정은 catch
-              // 밖에서 한다 — 안에 두면 "읽지 못했다"로 바뀐다.
+              // 0 differs from a lookup failure but is equally unusable as a denominator —
+              // `participation × D >= 0 × N` is always true. A wrong address also reads 0,
+              // so passing it silently would erase quorum. The check runs outside
+              // the catch — inside, it would turn into "could not read".
               if (totalSupply === 0n) {
                 throw unprocessable(
                   "ELIGIBLE_WEIGHT_ZERO",
-                  "총공급이 0이라 정족수의 분모로 쓸 수 없다",
+                  "Total supply is 0 and cannot serve as the quorum denominator",
                   { blockNumber: String(snapshotBlock), tokenAddress: spaceChain.tokenAddress },
                 );
               }
@@ -622,11 +622,11 @@ export async function registerGovernanceRoutes(
               eligibleWeight = current.eligible_weight;
               eligibleWeightSource = "manual";
             } else {
-              // 분모 없이 열면 `참여 × D >= 참여 × N`이 항상 참이 되어
-              // `no_quorum`이 구조적으로 나올 수 없다(09 §9.6).
+              // Opening without a denominator makes `participation × D >= participation × N`
+              // always true, so `no_quorum` can structurally never occur (09 §9.6).
               throw unprocessable(
                 "ELIGIBLE_WEIGHT_REQUIRED",
-                "정족수의 분모가 없어 투표를 열 수 없다",
+                "Cannot open voting: no quorum denominator",
                 { space: current.space },
               );
             }
@@ -673,11 +673,11 @@ export async function registerGovernanceRoutes(
             correlationId,
             requestIp: request.ip,
             /**
-             * 분모의 출처를 함께 남긴다.
+             * Records the denominator's source as well.
              *
-             * 나중에 "그때 정족수의 분모가 어디서 왔나"를 물으면 답할 수 있어야
-             * 한다. 제안 행에는 현재 값만 있고, 그것이 언제 무엇으로 정해졌는지는
-             * 이 기록에만 남는다.
+             * Later, "where did the quorum denominator come from then?" must be answerable. The
+             * proposal row holds only the current value; when and from what it was set is kept
+             * only in this record.
              */
             detail: {
               fromState: current.state,
@@ -705,10 +705,10 @@ export async function registerGovernanceRoutes(
   );
 
   /**
-   * 투표.
+   * Vote.
    *
-   * 같은 사람이 다시 던지면 갱신한다 — 두 표가 남으면 어느 것이 유효한지
-   * 판정이 필요해진다. 투표 기간이 아니면 DB 트리거가 거절한다.
+   * A repeat vote by the same person updates the earlier one — two stored votes would need a
+   * ruling on which is valid. Outside the voting period a DB trigger rejects it.
    */
   app.post<{ Params: { proposalId: string } }>(
     "/api/v1/governance/proposals/:proposalId/votes",
@@ -717,7 +717,7 @@ export async function registerGovernanceRoutes(
 
       const parsed = voteSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -740,16 +740,16 @@ export async function registerGovernanceRoutes(
           const [proposal] = await tx<ProposalRow[]>`
             SELECT * FROM core.governance_proposals WHERE id = ${request.params.proposalId}
           `;
-          if (!proposal) throw notFound("제안을 찾을 수 없다");
+          if (!proposal) throw notFound("Proposal not found");
 
           if (proposal.state !== "voting") {
-            throw conflict("VOTING_NOT_OPEN", "투표 기간이 아니다", {
+            throw conflict("VOTING_NOT_OPEN", "Voting is not open", {
               state: proposal.state,
             });
           }
 
-          // 무게는 스냅숏에서 온다. 요청 본문의 값은 토큰이 설정되지 않은
-          // 제안에서만 쓰인다.
+          // Weight comes from the snapshot. The request body value is used only for proposals
+          // with no token configured.
           const resolved = await resolveVoteWeight(
             tx,
             {
@@ -760,11 +760,11 @@ export async function registerGovernanceRoutes(
               snapshotTokenAddress: proposal.snapshot_token_address,
               manualWeight: parsed.data.weight ?? null,
             },
-            // space 밖의 토큰으로 무게를 읽지 않는다. 스냅숏이 없는 제안에서는
-            // 애초에 호출되지 않는다.
+            // Weight is never read from a token outside the space. For proposals without a snapshot
+            // this is never called.
             chainForSpace(chain, proposal.space)?.readBalance ??
               (async () => {
-                throw new Error("체인 클라이언트가 설정되지 않았다");
+                throw new Error("Chain client is not configured");
               }),
           );
 
@@ -788,7 +788,7 @@ export async function registerGovernanceRoutes(
             resourceId: proposal.id,
             correlationId,
             requestIp: request.ip,
-            // 무게는 남기지만 누가 무엇을 골랐는지는 votes 테이블에만 둔다.
+            // Weight is recorded, but who chose what stays only in the votes table.
             detail: {
               choice: parsed.data.choice,
               weightSource: resolved.source,

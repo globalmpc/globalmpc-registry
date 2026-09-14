@@ -9,31 +9,31 @@ import {
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
- * 공개 Registry 목록·검색.
+ * Public Registry list and search.
  *
- * 세 화면(Explorer · Projects · Verification Records)이 같은 것을 본다. 다른
- * 것은 registry type과 문구뿐이므로 목록 자체는 한 곳에 둔다 — 셋으로 나누면
- * 페이지네이션과 경계 표시가 셋 다 조금씩 달라진다.
+ * Three screens (Explorer · Projects · Verification Records) show the same thing. Only
+ * the registry type and copy differ, so the list lives in one place — split into three,
+ * pagination and boundary display drift slightly in each.
  *
- * **"더 보기"이지 페이지 번호가 아니다.** 서버가 keyset cursor를 주고 총계를
- * 세지 않는다. 총 페이지 수를 화면에 적으려면 매 요청마다 전체를 세야 하고,
- * 공개 목록은 그 비용이 계속 커진다.
+ * **"Load more", not page numbers.** The server returns a keyset cursor and does not
+ * count totals. Showing a total page count would require a full count on every request,
+ * and that cost keeps growing for public lists.
  */
 
 export interface PublicRegistryBrowserProps {
   readonly registryType: "project" | "verification" | "asset";
-  /** 항목을 여는 곳. 없으면 링크 없이 목록만 보인다. */
+  /** Where an item opens. If absent, the list is shown without links. */
   readonly hrefFor?: (item: PublicRegistryListItem) => string;
   readonly searchPlaceholder: string;
-  /** 아무것도 게시되지 않았을 때의 안내. 권한 문제와 구분되게 적는다(§11.7). */
+  /** Guidance when nothing is published. Worded to be distinct from a permission problem (§11.7). */
   readonly emptyMessage: string;
-  /** 표에 추가로 낼 projection 필드. 없으면 이름과 상태만 낸다. */
+  /** Extra projection fields to show in the table. If absent, only name and status are shown. */
   readonly columns?: readonly { readonly field: string; readonly label: string }[];
 }
 
 const PAGE_SIZE = 20;
 
-/** projection 값은 allowlist 안이지만 타입은 unknown이다. 표시 전에 좁힌다. */
+/** Projection values are within the allowlist but typed unknown. Narrow before display. */
 function text(projection: Record<string, unknown>, field: string): string {
   const value = projection[field];
   if (typeof value === "string") return value;
@@ -65,7 +65,7 @@ export function PublicRegistryBrowser({
           limit: PAGE_SIZE,
           cursor: options.cursor ?? undefined,
         });
-        // 이어 받을 때만 붙인다. 검색어가 바뀌면 이전 결과가 남아 있으면 안 된다.
+        // Append only when continuing. When the query changes, previous results must not remain.
         setItems((previous) => (options.append ? [...previous, ...page.items] : page.items));
         setCursor(page.nextCursor);
       } catch (caught) {
@@ -103,8 +103,8 @@ export function PublicRegistryBrowser({
             />
           </div>
           {/*
-            라벨이 로딩 중에 바뀌므로 이름으로 집으면 타이밍에 따라 다른 것을
-            집는다. 테스트가 붙잡을 자리를 따로 둔다.
+            The label changes while loading, so selecting by name picks different elements depending on
+            timing. Provide a separate anchor for tests.
           */}
           <button
             className="primary"
@@ -167,8 +167,8 @@ export function PublicRegistryBrowser({
                       <td key={column.field}>{text(item.projection, column.field)}</td>
                     ))}
                     <td className="mono">
-                      {/* 철회·대체를 상태 옆에 그대로 둔다. 최신처럼 보이게
-                          하지 않는 것이 §11.6이다. */}
+                      {/* Keep revocation/supersession next to the status. Not making it look current
+                          is what §11.6 requires. */}
                       {item.status}
                       {item.revokedAt ? (
                         <span style={{ color: "var(--destructive-text)" }}> · revoked</span>

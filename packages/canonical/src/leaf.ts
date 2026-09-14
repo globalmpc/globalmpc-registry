@@ -3,21 +3,21 @@ import { assertBytes32, hexToBytes, keccak256, type Hex } from "./hash.js";
 import { canonicalBytes, type CanonicalValue } from "./jcs.js";
 
 /**
- * anchor batch의 leaf.
+ * A leaf of an anchor batch.
  *
- * spec 08 §8.11: leaf는 공개 승인된 registry version의 식별자와 content
- * commitment만 결합한다. Authority record, Source Receipt, credential,
- * attestation 원문, PII·계약·좌표·API response는 chain storage에도 event에도
- * 넣지 않는다(OD-41, AC-22).
+ * spec 08 §8.11: a leaf combines only the identifier of a publicly approved registry version and
+ * a content commitment. Authority records, Source Receipts, credentials, raw attestations, PII,
+ * contracts, coordinates, and API responses go neither into chain storage nor into events
+ * (OD-41, AC-22).
  *
- * `contentHash`는 disclosure allowlist를 통과한 public projection의
- * keccak256(canonicalBytes(projection))이다. 즉 원문이 아니라 커밋먼트다.
+ * `contentHash` is keccak256(canonicalBytes(projection)) of the public projection that passed
+ * the disclosure allowlist — a commitment, not the raw content.
  */
 export interface RegistryLeaf {
   readonly registryType: "project" | "verification" | "asset";
   readonly entryVersionId: string;
   readonly subjectId: string;
-  /** 정수 version의 decimal string. number를 쓰지 않는다. */
+  /** Decimal string of an integer version. Never a number. */
   readonly version: string;
   readonly status: "published" | "revoked" | "superseded";
   readonly serializationVersion: "1";
@@ -33,7 +33,7 @@ function requireNonEmpty(value: string, field: string): void {
   if (typeof value !== "string" || value.length === 0) {
     throw new CanonicalError(
       "E_LEAF_INVALID_FIELD",
-      `leaf.${field}는 비어 있을 수 없다`,
+      `leaf.${field} must not be empty`,
       `/${field}`,
     );
   }
@@ -43,28 +43,28 @@ export function assertValidLeaf(leaf: RegistryLeaf): void {
   if (!REGISTRY_TYPES.has(leaf.registryType)) {
     throw new CanonicalError(
       "E_LEAF_INVALID_FIELD",
-      `알 수 없는 registryType: ${leaf.registryType}`,
+      `Unknown registryType: ${leaf.registryType}`,
       "/registryType",
     );
   }
   if (!LEAF_STATUSES.has(leaf.status)) {
     throw new CanonicalError(
       "E_LEAF_INVALID_FIELD",
-      `알 수 없는 status: ${leaf.status}`,
+      `Unknown status: ${leaf.status}`,
       "/status",
     );
   }
   if (leaf.serializationVersion !== "1") {
     throw new CanonicalError(
       "E_LEAF_INVALID_FIELD",
-      `지원하지 않는 serializationVersion: ${leaf.serializationVersion}`,
+      `Unsupported serializationVersion: ${leaf.serializationVersion}`,
       "/serializationVersion",
     );
   }
   if (!/^(0|[1-9][0-9]*)$/.test(leaf.version)) {
     throw new CanonicalError(
       "E_LEAF_INVALID_FIELD",
-      `leaf.version은 선행 0이 없는 decimal string이어야 한다: ${leaf.version}`,
+      `leaf.version must be a decimal string without leading zeros: ${leaf.version}`,
       "/version",
     );
   }
@@ -76,10 +76,10 @@ export function assertValidLeaf(leaf: RegistryLeaf): void {
 }
 
 /**
- * leaf 해시 — **이중 keccak256**.
+ * Leaf hash — **double keccak256**.
  *
- * 내부 노드는 단일 keccak256이므로, leaf를 이중 해시하면 leaf 하나가 내부 노드로
- * 위장하는 second-preimage 경로가 닫힌다(OpenZeppelin MerkleProof 권장 패턴).
+ * Internal nodes are single keccak256, so double-hashing leaves closes the second-preimage path
+ * where a leaf masquerades as an internal node (OpenZeppelin MerkleProof recommended pattern).
  */
 export function hashLeaf(leaf: RegistryLeaf): Hex {
   assertValidLeaf(leaf);
@@ -87,7 +87,7 @@ export function hashLeaf(leaf: RegistryLeaf): Hex {
   return keccak256(hexToBytes(inner));
 }
 
-/** public projection의 content commitment. leaf.contentHash에 넣는 값이다. */
+/** Content commitment of a public projection. The value placed in leaf.contentHash. */
 export function hashProjection(projection: CanonicalValue): Hex {
   return keccak256(canonicalBytes(projection));
 }

@@ -9,11 +9,11 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 /**
  * Registries — spec 11 §11.2.
  *
- * 게시 상태는 프로젝트를 열어야만 보였다. 그러면 "이 tenant에서 무엇이
- * 게시됐나"에 답하려면 프로젝트를 하나씩 열어야 하고, 그것은 답이 아니다.
+ * Publication state used to be visible only inside a project. Answering "what has this tenant
+ * published" then meant opening projects one by one, which is not an answer.
  *
- * **게시와 anchor를 한 칸에 합치지 않는다.** 합치면 "게시됐으니 체인에 있다"로
- * 읽힌다. 둘은 다른 사건이고 사이에 batch 생성과 확정이 있다.
+ * **Publication and anchor stay in separate columns.** Merged, they read as "published, so it is
+ * on chain". They are different events, with batch creation and confirmation in between.
  */
 
 const TYPES = ["project", "verification", "asset"] as const;
@@ -100,8 +100,8 @@ export default function RegistriesPage() {
                       {item.status === "draft" ? (
                         item.publicKey
                       ) : (
-                        // 게시된 것만 공개 URL을 갖는다. draft에 링크를 걸면
-                        // 404가 정상 동작이 된다.
+                        // Only published items have a public URL. Linking a draft
+                        // makes a 404 the expected behavior.
                         <Link
                           href={`/explorer?registryType=${item.registryType}&publicKey=${encodeURIComponent(item.publicKey)}`}
                         >
@@ -122,7 +122,7 @@ export default function RegistriesPage() {
                       {item.anchored ? (
                         <span style={{ color: "var(--positive)" }}>in a batch</span>
                       ) : (
-                        // 아직 batch에 들어가지 않았다는 것은 실패가 아니다.
+                        // Not yet in a batch is not a failure.
                         <span className="meta">not yet</span>
                       )}
                     </td>

@@ -1,68 +1,68 @@
 /**
  * Asset/Offering activation gate — OD-07, spec 12 §R6.
  *
- * **거래 기능을 구현하지 않는다.** feature flag 뒤에 숨겨 두지도 않는다 —
- * 미승인 규제 기능은 flag 뒤에 있어도 코드·보안·운영 책임과 오활성화 위험을
- * 만든다(OD-07).
+ * **No trading functionality is implemented.** Nor is it hidden behind a feature flag —
+ * an unapproved regulated feature behind a flag still creates code, security, and operational
+ * liability and the risk of accidental activation (OD-07).
  *
- * 여기 있는 것은 **"왜 아직 안 되는가"를 판정하는 코드**다. 선행조건을 목록으로
- * 두면 세 가지가 가능해진다.
+ * What lives here is **code that decides "why not yet"**. Keeping the preconditions as a list
+ * makes three things possible.
  *
- * 1. 화면이 빈 자리 대신 남은 조건을 보여준다.
- * 2. 조건이 충족되는 것을 추적할 수 있다.
- * 3. 구현 착수 시점이 판단이 아니라 판정이 된다.
+ * 1. The UI shows the remaining conditions instead of an empty slot.
+ * 2. Progress toward meeting the conditions can be tracked.
+ * 3. When implementation starts becomes a determination, not a judgment call.
  *
- * `buy`·`subscribe`·`transfer`·`custody` 같은 동사는 이 파일에도, 어디에도 없다.
+ * Verbs like `buy`, `subscribe`, `transfer`, `custody` appear neither in this file nor anywhere else.
  */
 
 /**
- * R6 선행조건.
+ * R6 preconditions.
  *
- * 하나라도 빠지면 활성화하지 않는다. **부분 활성화가 없다** — "송금만 먼저"는
- * 규제 관점에서 전체를 연 것과 같다.
+ * Missing any one means no activation. **There is no partial activation** — "remittance first"
+ * is, from a regulatory standpoint, the same as opening everything.
  */
 export const OFFERING_PRECONDITIONS = [
   {
     key: "issuer_identified",
-    label: "프로젝트별 Issuer 확정",
-    why: "발행 주체가 정해지지 않으면 누가 무엇에 책임지는지 알 수 없다",
-    owner: "Issuer·법무",
+    label: "Per-project issuer confirmed",
+    why: "Without a settled issuer, no one can tell who is responsible for what",
+    owner: "Issuer · Legal",
   },
   {
     key: "host_country_spv",
-    label: "소재국 SPV 설립 확인",
-    why: "자산이 귀속될 법인이 없으면 권리가 어디에 있는지 정의되지 않는다",
-    owner: "Issuer·법무",
+    label: "Local SPV incorporation confirmed",
+    why: "Without an entity to hold the asset, where the rights reside is undefined",
+    owner: "Issuer · Legal",
   },
   {
     key: "jurisdiction_determined",
-    label: "적용 관할 확정",
-    why: "관할마다 요구되는 인가와 공시 의무가 다르다",
-    owner: "법무",
+    label: "Applicable jurisdiction confirmed",
+    why: "Each jurisdiction requires different licenses and disclosure obligations",
+    owner: "Legal",
   },
   {
     key: "ersp_engaged",
-    label: "기능별 ERSP 계약",
-    why: "투자자 확인·자금 보관·이전 기록은 인가받은 외부 법인이 수행한다(OD-25·OD-27)",
-    owner: "Issuer·법무",
+    label: "Per-function ERSP contracts",
+    why: "Investor verification, custody, and transfer records are performed by licensed external entities (OD-25·OD-27)",
+    owner: "Issuer · Legal",
   },
   {
     key: "legal_issuance_decision",
-    label: "법적 발행 결정",
-    why: "데이터 준비도나 거버넌스 통과가 발행 승인을 대신하지 않는다",
-    owner: "Issuer·법무",
+    label: "Legal issuance decision",
+    why: "Data readiness or a governance pass does not substitute for issuance approval",
+    owner: "Issuer · Legal",
   },
   {
     key: "security_audit",
-    label: "보안 감사 완료",
-    why: "자금 이동 경로가 생기면 손실 상한이 가스비를 넘어선다(O1)",
-    owner: "보안",
+    label: "Security audit complete",
+    why: "Once a fund-movement path exists, the loss cap exceeds gas costs (O1)",
+    owner: "Security",
   },
   {
     key: "separate_implementation_plan",
-    label: "별도 구현 계획 승인",
-    why: "실제 ERSP API와 법률 요구를 확인한 뒤 설계해야 낭비가 없다(OD-07)",
-    owner: "제품책임자·CTO",
+    label: "Separate implementation plan approved",
+    why: "Designing only after confirming the real ERSP APIs and legal requirements avoids waste (OD-07)",
+    owner: "Product owner · CTO",
   },
 ] as const;
 
@@ -70,9 +70,9 @@ export type OfferingPreconditionKey = (typeof OFFERING_PRECONDITIONS)[number]["k
 
 export interface PreconditionStatus {
   readonly key: OfferingPreconditionKey;
-  /** 충족 여부. 확인되지 않은 것은 충족이 아니다. */
+  /** Whether it is met. Anything unconfirmed is not met. */
   readonly satisfied: boolean;
-  /** 무엇으로 확인했는가. 충족이라면 반드시 있어야 한다. */
+  /** What it was confirmed with. Required when met. */
   readonly evidenceRef: string | null;
 }
 
@@ -85,17 +85,17 @@ export type OfferingGateDecision =
         readonly why: string;
         readonly owner: string;
       }[];
-      /** 근거 없이 충족으로 표시된 항목. 이것 자체가 문제다. */
+      /** Items marked as met without evidence. This itself is a problem. */
       readonly unsupported: readonly OfferingPreconditionKey[];
     }
   | { readonly activatable: true };
 
 /**
- * 활성화 가능 여부.
+ * Whether activation is possible.
  *
- * **`activatable: true`가 곧 기능이 있다는 뜻은 아니다.** 조건이 다 찼다는
- * 판정일 뿐이고, 구현은 그 뒤에 별도 계획으로 한다. 이 함수가 true를 반환해도
- * 코드에는 여전히 거래 경로가 없다.
+ * **`activatable: true` does not mean the feature exists.** It only means every condition is
+ * met; implementation follows under a separate plan. Even when this returns true, the code
+ * still has no trading path.
  */
 export function checkOfferingGate(
   statuses: readonly PreconditionStatus[],
@@ -111,8 +111,8 @@ export function checkOfferingGate(
     owner: precondition.owner,
   }));
 
-  // 충족이라고 표시했는데 근거가 없는 것. 빠진 것보다 위험하다 — 확인됐다고
-  // 믿게 만든다.
+  // Marked as met but lacking evidence. More dangerous than a missing item — it makes people
+  // believe it was confirmed.
   const unsupported = statuses
     .filter((status) => status.satisfied && !status.evidenceRef)
     .map((status) => status.key);
@@ -125,11 +125,11 @@ export function checkOfferingGate(
 }
 
 /**
- * 화면이 보여야 하는 것 — 11 §11.3.
+ * What the UI must show — 11 §11.3.
  *
- * 거래 CTA 자리에 빈 공간이나 비활성 버튼을 두지 않는다. 비활성 버튼은
- * "곧 생긴다"로 읽히고, 빈 공간은 "여기 뭔가 있어야 하는데"로 읽힌다.
- * 대신 남은 조건과 그 담당을 보여준다.
+ * No empty space or disabled button in place of a trading CTA. A disabled button reads as
+ * "coming soon", and empty space reads as "something should be here".
+ * Show the remaining conditions and their owners instead.
  */
 export const OFFERING_ABSENCE_COPY = {
   ko: "이 프로젝트에는 자산·청약 기능이 없습니다. 기능을 만들지 않았고 숨겨 두지도 않았습니다.",

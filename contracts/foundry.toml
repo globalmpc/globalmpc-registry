@@ -6,7 +6,7 @@ test = "test"
 solc_version = "0.8.28"
 optimizer = true
 optimizer_runs = 200
-# 재현 가능한 빌드 — 08 §8.10 배포 gate의 "compiler/dependency pinning".
+# Reproducible build — "compiler/dependency pinning" from the 08 §8.10 deployment gate.
 bytecode_hash = "none"
 cbor_metadata = false
 remappings = [

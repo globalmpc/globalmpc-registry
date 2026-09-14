@@ -8,7 +8,7 @@ import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from 
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
-describeDb("Registry 게시와 공개 조회", () => {
+describeDb("Registry publication and public lookup", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let tokens: { operatorA: string; stewardA: string };
@@ -17,7 +17,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
-    // R1부터 인증은 SIWE 서명 → 세션 토큰이다. 테스트도 같은 경로를 지난다.
+    // From R1, auth is SIWE signature → session token. Tests follow the same path.
     tokens = {
       operatorA: await signIn(app, fx.operatorA),
       stewardA: await signIn(app, fx.stewardA),
@@ -37,7 +37,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       asOf: "2026-08-01T00:00:00.000Z",
       sourceAge: "12",
       staleStatus: "fresh",
-      limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+      limitations: ["Legal rights verification is outside this review scope"],
       legalEffect: "none",
       disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
       ...overrides,
@@ -63,13 +63,14 @@ describeDb("Registry 게시와 공개 조회", () => {
   }
 
   /**
-   * 04 §4.3 — `draft→registered`의 guard는 "Project Registry 최소 필드와 책임 주체"다.
+   * 04 §4.3 — the guard for `draft→registered` is "Project Registry minimum fields
+   * and accountable party".
    *
-   * 그 조건을 만족시키는 행위가 바로 Project Registry 게시다. 게시 권한
-   * (`registry.publish`)을 이미 가진 사람이 하는 일이므로 새로운 권한이 생기지 않는다.
-   * 나머지 전이(suspend·offering·closure)는 결정 주체가 미정이다.
+   * The act that satisfies it is Project Registry publication. It is done by someone who
+   * already holds `registry.publish`, so no new permission arises.
+   * The remaining transitions (suspend, offering, closure) have no decided owner yet.
    */
-  describe("프로젝트 lifecycle (04 §4.3)", () => {
+  describe("project lifecycle (04 §4.3)", () => {
     async function newProject() {
       const response = await app.inject({
         method: "POST",
@@ -77,7 +78,7 @@ describeDb("Registry 게시와 공개 조회", () => {
         headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
         payload: {
           projectKey: `LC-${randomUUID().slice(0, 8)}`,
-          name: "lifecycle 테스트",
+          name: "lifecycle test",
           hostCountryIso3: "MNG",
           minerals: ["copper"],
           ownerOrganizationId: fx.orgA,
@@ -96,7 +97,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       return row!.lifecycle_state;
     }
 
-    it("project registry 게시가 draft를 registered로 옮긴다", async () => {
+    it("project registry publication moves draft to registered", async () => {
       const projectId = await newProject();
 
       const response = await publish(tokens.operatorA, { subjectId: projectId });
@@ -105,9 +106,9 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(await lifecycleOf(projectId)).toBe("registered");
     });
 
-    it("같은 프로젝트를 다시 게시해도 registered에 머문다", async () => {
-      // 전이는 한 번만 일어난다. 다시 밀면 `registered→registered`가 되고 04 §4.3의
-      // 전이표에 없는 전이가 된다.
+    it("republishing the same project stays registered", async () => {
+      // The transition happens once. Repeating it would be `registered→registered`, which is
+      // not in the 04 §4.3 transition table.
       const projectId = await newProject();
       await publish(tokens.operatorA, { subjectId: projectId });
       const again = await publish(tokens.operatorA, { subjectId: projectId });
@@ -116,9 +117,9 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(await lifecycleOf(projectId)).toBe("registered");
     });
 
-    it("verification registry 게시는 프로젝트 lifecycle을 건드리지 않는다", async () => {
-      // Verification Registry는 검토 결과의 등록부다. 프로젝트가 등록됐다는 뜻이
-      // 아니다.
+    it("verification registry publication does not touch the project lifecycle", async () => {
+      // The Verification Registry records review outcomes. It does not mean the project is
+      // registered.
       const projectId = await newProject();
 
       const response = await publish(tokens.operatorA, {
@@ -131,7 +132,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     });
   });
 
-  it("allowlist 필드만 있으면 게시된다", async () => {
+  it("publishes when only allowlisted fields are present", async () => {
     const response = await publish(tokens.operatorA);
     expect(response.statusCode).toBe(200);
 
@@ -141,7 +142,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     expect(body.contentHash).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
-  it("AC-22: allowlist 밖 필드가 있으면 거절한다", async () => {
+  it("AC-22: rejects fields outside the allowlist", async () => {
     const response = await publish(tokens.operatorA, {
       projection: validProjection({ rawSourceResponse: "{...}" }),
     });
@@ -149,7 +150,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     expect(response.json().details.offendingFields).toContain("rawSourceResponse");
   });
 
-  it("AC-22: 원문·PII 성격 필드를 거절한다", async () => {
+  it("AC-22: rejects raw-text and PII-like fields", async () => {
     for (const field of [
       "personalIdentifier",
       "contractBody",
@@ -164,7 +165,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     }
   });
 
-  it("AC-32: 자연인 식별자는 safeguard 없이 공개할 수 없다", async () => {
+  it("AC-32: cannot publish natural-person identifiers without a safeguard", async () => {
     const response = await publish(tokens.operatorA, {
       containsPersonLevelIdentifier: true,
       personIdentifierSafeguards: {
@@ -179,7 +180,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     expect(response.json().code).toBe("PUBLICATION_PERSON_IDENTIFIER_GUARD");
   });
 
-  it("AC-13: commercial_reuse가 unconfirmed면 상업적 근거로 게시할 수 없다", async () => {
+  it("AC-13: unconfirmed commercial_reuse cannot back a commercial publication", async () => {
     const response = await publish(tokens.operatorA, {
       commercialReuse: "unconfirmed",
       publishedAsCommercialBasis: true,
@@ -188,14 +189,14 @@ describeDb("Registry 게시와 공개 조회", () => {
     expect(response.json().code).toBe("PUBLICATION_SOURCE_LICENSE_UNCONFIRMED");
   });
 
-  it("limitations 없는 projection을 거절한다", async () => {
+  it("rejects a projection without limitations", async () => {
     const projection = validProjection();
     delete (projection as Record<string, unknown>)["limitations"];
     const response = await publish(tokens.operatorA, { projection });
     expect(response.statusCode).toBe(422);
   });
 
-  it("게시된 projection을 덮어쓸 수 없다", async () => {
+  it("cannot overwrite a published projection", async () => {
     const published = (await publish(tokens.operatorA)).json();
     await expect(
       fx.sql`
@@ -206,7 +207,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     ).rejects.toThrow(/덮어쓸 수 없다/);
   });
 
-  it("새 version이 이전 것을 superseded로 연결한다 — 삭제하지 않는다", async () => {
+  it("a new version links the previous one as superseded — does not delete it", async () => {
     const publicKey = `KEY-${randomUUID().slice(0, 8)}`;
     const first = (await publish(tokens.operatorA, { publicKey })).json();
     const second = (await publish(tokens.operatorA, { publicKey })).json();
@@ -220,7 +221,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     expect(previous!.superseded_by_id).toBe(second.id);
   });
 
-  it("revoke는 삭제가 아니라 새 상태다", async () => {
+  it("revoke is a new state, not a deletion", async () => {
     const publicKey = `KEY-${randomUUID().slice(0, 8)}`;
     const published = (await publish(tokens.operatorA, { publicKey })).json();
 
@@ -243,7 +244,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     expect(row!.public_projection).not.toBeNull();
   });
 
-  describe("멈춘 batch 재제출", () => {
+  describe("resubmitting a stuck batch", () => {
     async function makeBatch() {
       const publicKey = `RESUB-${randomUUID().slice(0, 8)}`;
       await publish(tokens.operatorA, { publicKey });
@@ -271,18 +272,18 @@ describeDb("Registry 게시와 공개 조회", () => {
       });
     }
 
-    it("진행 중인 batch는 재제출하지 않는다", async () => {
+    it("does not resubmit an in-progress batch", async () => {
       const batchId = await makeBatch();
 
-      // created·submitted·included를 되돌리면 이미 체인에 있는 트랜잭션을 잊고
-      // 같은 root를 다시 올린다.
+      // Resetting created/submitted/included would forget a transaction already on chain
+      // and submit the same root again.
       const response = await resubmit(batchId);
       expect(response.statusCode).toBe(409);
       expect(response.json().code).toBe("ANCHOR_NOT_RESUBMITTABLE");
       expect(response.json().details.currentState).toBe("created");
     });
 
-    it("멈춘 batch는 시도 횟수를 되돌려 다시 올린다", async () => {
+    it("resets the attempt count of a stuck batch and resubmits", async () => {
       const batchId = await makeBatch();
       await fx.sql`
         UPDATE chain.transactions
@@ -297,13 +298,13 @@ describeDb("Registry 게시와 공개 조회", () => {
       const [row] = await fx.sql<{ state: string; attempts: number; tx_hash: string | null }[]>`
         SELECT state, attempts, tx_hash FROM chain.transactions WHERE batch_id = ${batchId}
       `;
-      // 사람이 원인을 확인하고 결정한 것이므로 이전 시도의 상한을 물려받지 않는다.
+      // A person checked the cause and decided, so it does not inherit the previous attempt cap.
       expect(row!.state).toBe("created");
       expect(row!.attempts).toBe(0);
       expect(row!.tx_hash).toBeNull();
     });
 
-    it("재제출에도 anchor.submit 권한이 필요하다", async () => {
+    it("resubmission also requires anchor.submit", async () => {
       const batchId = await makeBatch();
       const response = await app.inject({
         method: "POST",
@@ -318,7 +319,7 @@ describeDb("Registry 게시와 공개 조회", () => {
     });
   });
 
-  describe("철회의 동시성 (If-Match)", () => {
+  describe("revocation concurrency (If-Match)", () => {
     function revoke(entryId: string, version: unknown) {
       return app.inject({
         method: "POST",
@@ -332,7 +333,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       });
     }
 
-    it("어느 version을 철회하는지 밝히지 않으면 거절한다", async () => {
+    it("rejects when the version to revoke is not stated", async () => {
       const publicKey = `KEY-${randomUUID().slice(0, 8)}`;
       const published = (await publish(tokens.operatorA, { publicKey })).json();
 
@@ -340,11 +341,11 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(response.statusCode).toBe(428);
     });
 
-    it("조회 이후 새 version이 게시되면 낡은 철회 요청을 거절한다", async () => {
+    it("rejects a stale revoke request when a new version was published after lookup", async () => {
       const publicKey = `KEY-${randomUUID().slice(0, 8)}`;
       const first = (await publish(tokens.operatorA, { publicKey })).json();
 
-      // 누군가 정정본을 게시했다. v1을 철회하려던 요청은 이제 v2를 철회하게 된다.
+      // Someone published a correction. A request meant to revoke v1 would now revoke v2.
       await publish(tokens.operatorA, { publicKey });
 
       const response = await revoke(first.entryId, `"${first.version}"`);
@@ -352,7 +353,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(response.json().details.currentVersion).toBe("2");
     });
 
-    it("공개 조회 응답이 ETag로 현재 version을 알려준다", async () => {
+    it("public lookup response exposes the current version as ETag", async () => {
       const publicKey = `KEY-${randomUUID().slice(0, 8)}`;
       await publish(tokens.operatorA, { publicKey });
 
@@ -361,20 +362,20 @@ describeDb("Registry 게시와 공개 조회", () => {
         url: `/api/v1/public/registries/project/${publicKey}`,
       });
 
-      // 본문의 version과 같은 값이어야 한다. 다르면 클라이언트가 어느 쪽을
-      // If-Match에 넣어야 하는지 알 수 없다.
+      // Must equal the body version. Otherwise the client cannot tell which one goes into
+      // If-Match.
       expect(response.headers["etag"]).toBe(`"${response.json().version}"`);
     });
   });
 
-  it("권한 없는 계정은 게시할 수 없다", async () => {
+  it("an account without permission cannot publish", async () => {
     const response = await publish(tokens.stewardA);
     expect(response.statusCode).toBe(403);
     expect(response.json().details.requiredRoles).toContain("mpc_operator");
   });
 
-  describe("공개 조회 (무인증)", () => {
-    it("인증 없이 게시된 projection을 조회한다", async () => {
+  describe("public lookup (unauthenticated)", () => {
+    it("reads a published projection without auth", async () => {
       const publicKey = `PUB-${randomUUID().slice(0, 8)}`;
       await publish(tokens.operatorA, { publicKey });
 
@@ -387,7 +388,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(response.json().status).toBe("published");
     });
 
-    it("없는 키는 404다", async () => {
+    it("returns 404 for an unknown key", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/public/registries/project/DOES-NOT-EXIST",
@@ -395,7 +396,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(response.statusCode).toBe(404);
     });
 
-    it("응답에 limitations와 legalEffect가 있다", async () => {
+    it("response includes limitations and legalEffect", async () => {
       const publicKey = `PUB-${randomUUID().slice(0, 8)}`;
       await publish(tokens.operatorA, { publicKey });
 
@@ -410,7 +411,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(body.legalEffect).toBe("none");
     });
 
-    it("정정·철회 이력을 감추지 않는다", async () => {
+    it("does not hide correction and revocation history", async () => {
       const publicKey = `PUB-${randomUUID().slice(0, 8)}`;
       await publish(tokens.operatorA, { publicKey });
       await publish(tokens.operatorA, { publicKey });
@@ -427,7 +428,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(body.history[0].status).toBe("superseded");
     });
 
-    it("tenant를 특정할 수 있는 정보가 응답에 없다", async () => {
+    it("response has no information that identifies the tenant", async () => {
       const publicKey = `PUB-${randomUUID().slice(0, 8)}`;
       await publish(tokens.operatorA, { publicKey });
 
@@ -443,8 +444,8 @@ describeDb("Registry 게시와 공개 조회", () => {
     });
   });
 
-  describe("anchor와 inclusion proof", () => {
-    it("게시된 version으로 batch를 만든다", async () => {
+  describe("anchor and inclusion proof", () => {
+    it("builds a batch from published versions", async () => {
       await publish(tokens.operatorA);
 
       const response = await app.inject({
@@ -458,12 +459,12 @@ describeDb("Registry 게시와 공개 조회", () => {
       const body = response.json();
       expect(body.recordCount).toBeGreaterThan(0);
       expect(body.root).toMatch(/^0x[0-9a-f]{64}$/);
-      // 아직 체인에 올라가지 않았다.
+      // Not on chain yet.
       expect(body.confirmationState).toBe("created");
     });
 
-    it("anchor할 것이 없으면 빈 batch를 만들지 않는다", async () => {
-      // 앞 테스트에서 모두 anchor됐다.
+    it("does not create an empty batch when nothing is pending", async () => {
+      // Everything was anchored in the previous test.
       const response = await app.inject({
         method: "POST",
         url: "/api/v1/anchor-batches",
@@ -474,7 +475,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(response.json().code).toBe("ANCHOR_BATCH_EMPTY");
     });
 
-    it("proof가 오프체인에서 검증된다", async () => {
+    it("verifies the proof off-chain", async () => {
       const publicKey = `PRF-${randomUUID().slice(0, 8)}`;
       const published = (await publish(tokens.operatorA, { publicKey })).json();
 
@@ -498,9 +499,9 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(proof.merkleVerified).toBe(true);
     });
 
-    it("proof가 leaf를 다시 만들 규격을 함께 준다", async () => {
-      // 규격 버전이 없으면 검증자가 **어떤 규격으로** 재구성해야 하는지 모른다.
-      // 그러면 proof는 재현 가능한 확인이 아니라 "믿어라"가 된다.
+    it("proof includes the spec needed to rebuild the leaf", async () => {
+      // Without a spec version, a verifier does not know **which spec** to rebuild with.
+      // The proof then becomes "trust me" rather than a reproducible check.
       const publicKey = `PRF-${randomUUID().slice(0, 8)}`;
       const published = (
         await publish(tokens.operatorA, {
@@ -521,16 +522,16 @@ describeDb("Registry 게시와 공개 조회", () => {
         await app.inject({ method: "GET", url: `/api/v1/public/proofs/${published.id}` })
       ).json();
 
-      // 게시할 때 준 값이 그대로 나온다 — 상수로 고정돼 있지 않다.
+      // Returns the value given at publication — not a hard-coded constant.
       expect(proof.policyVersion).toBe("mn-core-9.9.9");
       expect(proof.schemaVersion).toBe("project-registry-9");
       expect(proof.serializationVersion).toBe("1");
 
-      // 주체는 담지 않는다. 규격 이름만 담는다.
+      // Carries no subject. Only the spec name.
       expect(proof.subjectId).toBeUndefined();
     });
 
-    it("AC-23: confirmed가 아니면 included가 false다", async () => {
+    it("AC-23: included is false unless confirmed", async () => {
       const publicKey = `PRF-${randomUUID().slice(0, 8)}`;
       const published = (await publish(tokens.operatorA, { publicKey })).json();
       await app.inject({
@@ -545,12 +546,12 @@ describeDb("Registry 게시와 공개 조회", () => {
       ).json();
 
       expect(proof.confirmationState).toBe("created");
-      // Merkle은 맞지만 체인 확정 전이므로 포함으로 표시하지 않는다.
+      // The Merkle proof holds, but the chain has not finalized, so it is not marked included.
       expect(proof.merkleVerified).toBe(true);
       expect(proof.included).toBe(false);
     });
 
-    it("AC-23: proof가 무엇을 증명하지 않는지 명시한다", async () => {
+    it("AC-23: states what the proof does not prove", async () => {
       const publicKey = `PRF-${randomUUID().slice(0, 8)}`;
       const published = (await publish(tokens.operatorA, { publicKey })).json();
       await app.inject({
@@ -565,13 +566,13 @@ describeDb("Registry 게시와 공개 조회", () => {
       ).json();
 
       const doesNotProve = (proof.doesNotProve as string[]).join(" ");
-      expect(doesNotProve).toContain("사실성");
-      expect(doesNotProve).toContain("법률 효력");
-      expect(doesNotProve).toContain("투자 적합성");
-      expect((proof.proves as string[]).join(" ")).toContain("포함");
+      expect(doesNotProve).toContain("Factual accuracy");
+      expect(doesNotProve).toContain("Legal effect");
+      expect(doesNotProve).toContain("Investment suitability");
+      expect((proof.proves as string[]).join(" ")).toContain("included");
     });
 
-    it("anchor되지 않은 version은 proof가 없다", async () => {
+    it("an unanchored version has no proof", async () => {
       const published = (await publish(tokens.operatorA)).json();
       const response = await app.inject({
         method: "GET",
@@ -581,7 +582,7 @@ describeDb("Registry 게시와 공개 조회", () => {
       expect(response.json().retryable).toBe(true);
     });
 
-    it("anchor batch는 수정할 수 없다", async () => {
+    it("cannot modify an anchor batch", async () => {
       await publish(tokens.operatorA);
       const batch = (
         await app.inject({

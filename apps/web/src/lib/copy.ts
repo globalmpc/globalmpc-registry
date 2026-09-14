@@ -15,18 +15,18 @@
  */
 
 /**
- * 인증 워크스페이스 navigation — spec 11 §11.2.
+ * Authenticated workspace navigation — spec 11 §11.2.
  *
- * 스펙의 10개와 이 목록이 일대일은 아니다. `Data Room`·`Verification`·
- * `Readiness & Gates`는 프로젝트 하위 화면이므로 프로젝트를 고르기 전에는 갈 곳이
- * 없다 — 전역 nav에 두면 "무엇의 Data Room인가"에 답이 없는 링크가 된다.
+ * This list does not map one-to-one to the spec's ten items. `Data Room`, `Verification`, and
+ * `Readiness & Gates` are project sub-screens, so there is nowhere to go before a project is
+ * chosen — in the global nav they become links with no answer to "whose Data Room?".
  *
- * **역할에 없는 메뉴는 보이지 않는다**(§11.2). `requires`는 그 화면이
- * 부르는 API의 action이고, 세션이 준 action 목록(`/auth/session`의 `actions`)으로
- * 거른다. 숨김은 보안 통제가 아니다 — 서버가 요청마다 다시 판정한다(02 §2.1).
- * `"subject"`는 역할이 아니라 지갑에 묶인 주체가 있으면 보이는 화면이다.
+ * **Menus outside the user's roles are hidden** (§11.2). `requires` is the API action the
+ * screen calls, filtered against the action list the session provides (`actions` from `/auth/session`).
+ * Hiding is not a security control — the server re-checks every request (02 §2.1).
+ * `"subject"` is not a role: the screen is shown when a subject is bound to the wallet.
  *
- * 공개 화면은 여기에 두지 않는다. 로그인 뒤에도 `PUBLIC_NAV`가 따로 보인다.
+ * Public screens do not belong here. `PUBLIC_NAV` is shown separately even after login.
  */
 export interface NavEntry {
   readonly href: string;

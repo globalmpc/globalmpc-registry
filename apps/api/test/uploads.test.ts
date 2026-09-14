@@ -7,12 +7,12 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 파일 업로드 — 05 §5.2, 06 §6.7.
+ * File uploads — 05 §5.2, 06 §6.7.
  *
- * 이 파일이 확인하는 것의 핵심은 **감염 파일이 evidence가 되는 경로가 없다**는
- * 것이다. 나머지는 그 보장이 성립하기 위한 조건이다.
+ * The core of what this file checks: **there is no path by which an infected file becomes
+ * evidence.** The rest are the conditions that guarantee rests on.
  */
-describeDb("업로드", () => {
+describeDb("uploads", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let stewardToken: string;
@@ -40,8 +40,8 @@ describeDb("업로드", () => {
       url: `/api/v1/projects/${fx.projectA}/uploads`,
       headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
       payload: {
-        // 케이스마다 다른 내용을 쓴다. content hash가 프로젝트 안에서 UNIQUE라
-        // 같은 내용을 쓰면 두 번째부터 기존 행이 돌아온다.
+        // Each case uses different content. The content hash is UNIQUE within a project,
+        // so reusing content returns the existing row from the second call on.
         contentBase64: Buffer.from(`license extract ${counter}`).toString("base64"),
         contentType: "application/pdf",
         originalFilename: "mining-license.pdf",
@@ -50,26 +50,26 @@ describeDb("업로드", () => {
     });
   }
 
-  describe("content type 제한", () => {
-    it("실행 가능한 문서 형식을 거절한다", async () => {
+  describe("content type restrictions", () => {
+    it("rejects executable document types", async () => {
       /**
-       * 저장소 오리진은 우리 권한 검사를 지나지 않는다. `text/html`로 저장되면
-       * 다운로드 링크를 여는 것만으로 그 오리진에서 실행된다.
+       * The storage origin does not pass through our permission checks. Stored as `text/html`,
+       * the file runs on that origin just by opening the download link.
        */
       const response = await upload(stewardToken, { contentType: "text/html" });
       expect(response.statusCode).toBe(400);
       expect(response.json().code).toBe("REQUEST_INVALID");
     });
 
-    it("svg도 거절한다 — 스크립트를 담을 수 있다", async () => {
+    it("rejects svg too — it can carry scripts", async () => {
       const response = await upload(stewardToken, { contentType: "image/svg+xml" });
       expect(response.statusCode).toBe(400);
     });
 
-    it("파라미터가 붙은 형식은 media type으로 판정한다", async () => {
+    it("judges a type with parameters by its media type", async () => {
       const response = await upload(stewardToken, { contentType: "text/csv; charset=utf-8" });
       expect(response.statusCode).toBe(200);
-      // 저장은 정규화된 값으로 한다. 파라미터까지 저장하면 같은 형식이 갈라진다.
+      // Stores the normalized value. Storing parameters would split one type into several.
       expect(response.json().contentType).toBe("text/csv");
     });
   });
@@ -79,7 +79,7 @@ describeDb("업로드", () => {
       method: "POST",
       url: `/api/v1/uploads/${uploadId}/scan-result`,
       headers: {
-        // 검사 서비스만 결과를 만들 수 있다. steward는 파일을 올린 쪽이다.
+        // Only the scan service can produce results. The steward is the uploader.
         authorization: `Bearer ${scanToken}`,
         "idempotency-key": idempotencyKey(),
         "if-match": `"${version}"`,
@@ -101,32 +101,32 @@ describeDb("업로드", () => {
     });
   }
 
-  it("업로드는 quarantine으로 들어간다", async () => {
+  it("places uploads in quarantine", async () => {
     const response = await upload(stewardToken);
 
     expect(response.statusCode).toBe(200);
-    // evidence가 아니다. 검사를 통과해야 승격된다.
+    // Not evidence. Promotion requires passing the scan.
     expect(response.json().state).toBe("quarantined");
     expect(response.json().promotedArtifactId).toBeNull();
   });
 
-  it("저장소 키에 파일명이 들어가지 않는다", async () => {
+  it("keeps the filename out of the storage key", async () => {
     const created = (await upload(stewardToken)).json();
 
     const [row] = await fx.sql<{ object_key: string }[]>`
       SELECT object_key FROM core.object_uploads WHERE id = ${created.id}
     `;
-    // 키는 로그·URL·오류 메시지를 타고 흐른다. 문서 제목도 새어 나가면 안 된다.
+    // Keys flow through logs, URLs, and error messages. Document titles must not leak.
     expect(row!.object_key).not.toContain("mining-license");
     expect(row!.object_key).toContain("quarantine/");
   });
 
-  it("다음에 할 수 있는 것을 서버가 알려준다", async () => {
+  it("returns the available next actions", async () => {
     const created = (await upload(stewardToken)).json();
-    expect(created.nextActions).toContain("검사 결과 기록");
+    expect(created.nextActions).toContain("Record scan result");
   });
 
-  it("검사를 통과하면 evidence로 승격되고 artifact가 생긴다", async () => {
+  it("promotes to evidence and creates an artifact after a clean scan", async () => {
     const created = (await upload(stewardToken)).json();
     const scanned = await scan(created.id, created.version, "clean");
     expect(scanned.json().state).toBe("scanned_clean");
@@ -143,28 +143,28 @@ describeDb("업로드", () => {
     expect(artifact!.object_key).toContain("evidence/");
   });
 
-  it("감염 판정된 파일은 승격되지 않는다", async () => {
+  it("does not promote a file judged infected", async () => {
     const created = (await upload(stewardToken)).json();
     const scanned = await scan(created.id, created.version, "infected");
     expect(scanned.json().state).toBe("scanned_infected");
 
-    // 상태기계에 `scanned_infected → promoted` 경로가 없다.
+    // The state machine has no `scanned_infected → promoted` path.
     const promoted = await promote(created.id, scanned.json().version);
     expect(promoted.statusCode).toBe(409);
     expect(promoted.json().code).toBe("INVALID_STATE_TRANSITION");
   });
 
-  it("감염 판정은 되돌릴 수 없다", async () => {
+  it("does not reverse an infected verdict", async () => {
     const created = (await upload(stewardToken)).json();
     const scanned = await scan(created.id, created.version, "infected");
 
-    // 재검사로 clean이 될 수 없다. 다시 보려면 새로 올린다.
+    // A rescan cannot make it clean. To try again, upload anew.
     const recheck = await scan(created.id, scanned.json().version, "clean");
     expect(recheck.statusCode).toBe(409);
-    expect(scanned.json().nextActions).not.toContain("evidence로 승격");
+    expect(scanned.json().nextActions).not.toContain("Promote to evidence");
   });
 
-  it("감염 파일의 다운로드 링크를 만들지 않는다", async () => {
+  it("does not issue download links for infected files", async () => {
     const created = (await upload(stewardToken)).json();
     const scanned = await scan(created.id, created.version, "infected");
     expect(scanned.statusCode).toBe(200);
@@ -179,7 +179,7 @@ describeDb("업로드", () => {
     expect(link.json().code).toBe("UPLOAD_INFECTED");
   });
 
-  it("다운로드 링크는 단기이며 무엇을 우회하지 않는지 밝힌다", async () => {
+  it("issues short-lived download links and states what they bypass", async () => {
     const created = (await upload(stewardToken)).json();
 
     const link = await app.inject({
@@ -190,13 +190,13 @@ describeDb("업로드", () => {
     });
 
     expect(link.statusCode).toBe(200);
-    // 영구 URL을 만들지 않는다(06 §6.7).
+    // Never creates permanent URLs (06 §6.7).
     expect(link.json().expiresInSeconds).toBeLessThanOrEqual(900);
-    // 링크를 받은 사람은 권한 검사를 다시 지나지 않는다.
-    expect(link.json().warning).toContain("로그인 없이");
+    // Whoever receives the link does not go through permission checks again.
+    expect(link.json().warning).toContain("without signing in");
   });
 
-  it("같은 내용을 두 번 올리면 기존 업로드를 돌려준다", async () => {
+  it("returns the existing upload for duplicate content", async () => {
     const body = {
       contentBase64: Buffer.from("identical content").toString("base64"),
       contentType: "application/pdf",
@@ -206,11 +206,11 @@ describeDb("업로드", () => {
     const first = await upload(stewardToken, body);
     const second = await upload(stewardToken, body);
 
-    // 두 번 저장하면 evidence가 갈라지고 어느 쪽이 검토 대상인지 모르게 된다.
+    // Storing twice splits the evidence, leaving it unclear which copy is under review.
     expect(second.json().id).toBe(first.json().id);
   });
 
-  describe("multipart 스트리밍", () => {
+  describe("multipart streaming", () => {
     function streamUpload(token: string, content: string, filename = "big.pdf") {
       const boundary = "----mpcboundary";
       const body = Buffer.concat([
@@ -235,14 +235,14 @@ describeDb("업로드", () => {
       });
     }
 
-    it("스트리밍으로 올려도 quarantine으로 들어간다", async () => {
+    it("places streamed uploads in quarantine too", async () => {
       const response = await streamUpload(stewardToken, `stream content ${Date.now()}`);
 
       expect(response.statusCode).toBe(200);
       expect(response.json().state).toBe("quarantined");
     });
 
-    it("base64 경로와 같은 content hash를 만든다", async () => {
+    it("produces the same content hash as the base64 path", async () => {
       const content = `same bytes ${Date.now()}`;
       const viaStream = (await streamUpload(stewardToken, content)).json();
       const viaBase64 = (
@@ -251,12 +251,12 @@ describeDb("업로드", () => {
         })
       ).json();
 
-      // 두 경로가 다른 해시를 만들면 같은 파일이 두 evidence가 된다.
+      // If the paths hashed differently, one file would become two pieces of evidence.
       expect(viaBase64.contentHash).toBe(viaStream.contentHash);
       expect(viaBase64.id).toBe(viaStream.id);
     });
 
-    it("파일 파트가 없으면 거절한다", async () => {
+    it("rejects a request without a file part", async () => {
       const response = await app.inject({
         method: "POST",
         url: `/api/v1/projects/${fx.projectA}/uploads/stream`,
@@ -270,16 +270,16 @@ describeDb("업로드", () => {
       expect(response.statusCode).toBe(400);
     });
 
-    it("권한 없는 계정은 스트리밍으로도 올릴 수 없다", async () => {
-      // 경로가 둘이면 한쪽만 권한이 느슨해질 수 있다.
+    it("rejects streamed uploads from an unauthorized account", async () => {
+      // With two paths, permissions can loosen on just one of them.
       const response = await streamUpload(operatorToken, "denied");
       expect(response.statusCode).toBe(403);
     });
   });
 
-  it("UUID가 아닌 경로 파라미터는 400이다", async () => {
-    // DB에 그대로 넘기면 타입 오류가 500으로 나가고 클라이언트는 서버 장애로
-    // 오인해 재시도한다.
+  it("returns 400 for a non-UUID path parameter", async () => {
+    // Passed straight to the DB, the type error surfaces as 500 and the client retries,
+    // mistaking it for a server outage.
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/projects/new/uploads",
@@ -289,19 +289,19 @@ describeDb("업로드", () => {
     expect(response.json().code).toBe("PATH_PARAM_INVALID");
   });
 
-  it("빈 파일을 받지 않는다", async () => {
+  it("rejects empty files", async () => {
     const response = await upload(stewardToken, { contentBase64: "" });
     expect(response.statusCode).toBe(400);
   });
 
-  it("source.upload 권한이 없으면 거절한다", async () => {
-    // mpc_operator에게는 이 권한이 없다(02 §2.3).
+  it("rejects without the source.upload permission", async () => {
+    // mpc_operator lacks this permission (02 §2.3).
     const response = await upload(operatorToken);
     expect(response.statusCode).toBe(403);
     expect(response.json().details.requiredRoles).toContain("data_steward");
   });
 
-  it("검사 결과 기록에 If-Match가 필요하다", async () => {
+  it("requires If-Match to record a scan result", async () => {
     const created = (await upload(stewardToken)).json();
 
     const response = await app.inject({
@@ -313,11 +313,11 @@ describeDb("업로드", () => {
     expect(response.statusCode).toBe(428);
   });
 
-  it("올린 사람은 자기 파일의 검사 결과를 만들 수 없다", async () => {
+  it("does not let the uploader record the scan result for their own file", async () => {
     const created = (await upload(stewardToken)).json();
 
-    // `source.upload`를 재사용했다면 통과했을 것이다. quarantine이 형식만
-    // 남지 않게 별도 action으로 분리했다.
+    // Reusing `source.upload` would have let this pass. The check is a separate action so
+    // quarantine does not become a formality.
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/uploads/${created.id}/scan-result`,
@@ -332,7 +332,7 @@ describeDb("업로드", () => {
     expect(response.json().details.requiredRoles).toEqual(["scan_service"]);
   });
 
-  it("다른 tenant의 업로드는 보이지 않는다", async () => {
+  it("hides uploads from other tenants", async () => {
     await upload(stewardToken);
 
     const response = await app.inject({
@@ -345,7 +345,7 @@ describeDb("업로드", () => {
     expect(response.json().items).toEqual([]);
   });
 
-  it("감사 로그에 파일명이 남지 않는다", async () => {
+  it("keeps filenames out of the audit log", async () => {
     const created = (await upload(stewardToken)).json();
 
     const [event] = await fx.sql<{ detail: Record<string, unknown> }[]>`
@@ -353,24 +353,24 @@ describeDb("업로드", () => {
       WHERE resource_type = 'object_upload' AND resource_id = ${created.id}
       ORDER BY occurred_at LIMIT 1
     `;
-    // 감사 로그가 restricted 정보의 통로가 되면 안 된다.
+    // The audit log must not become a channel for restricted information.
     expect(JSON.stringify(event!.detail)).not.toContain("mining-license");
   });
 
   /**
-   * 저장 등급 게이트 — OD-17·OD-18 (2026-08-14 초안 결정).
+   * Storage tier gate — OD-17·OD-18 (2026-08-14 draft decision).
    *
-   * 초안 저장 경로는 provider 관리 키를 쓰고 tenant별 키 분리도 파기 절차도
-   * 없다. 실제 계약서·개인정보는 secured route가 열린 뒤에 올린다.
+   * The draft storage path uses provider-managed keys, with neither per-tenant key separation
+   * nor a destruction procedure. Real contracts and personal data wait for the secured route.
    */
-  describe("저장 등급 게이트", () => {
-    it("confidential 업로드를 거절하고 다음 행동을 알려준다", async () => {
+  describe("storage tier gate", () => {
+    it("rejects confidential uploads and returns the next action", async () => {
       const response = await app.inject({
         method: "POST",
         url: `/api/v1/projects/${fx.projectA}/uploads`,
         headers: { authorization: `Bearer ${stewardToken}`, "idempotency-key": idempotencyKey() },
         payload: {
-          contentBase64: Buffer.from("계약서 내용").toString("base64"),
+          contentBase64: Buffer.from("contract body").toString("base64"),
           contentType: "application/pdf",
           originalFilename: "contract.pdf",
           sensitivity: "confidential",
@@ -382,13 +382,13 @@ describeDb("업로드", () => {
       expect(response.json().details.requiredTier).toBe("secured");
     });
 
-    it("restricted는 그대로 받는다", async () => {
+    it("accepts restricted uploads as is", async () => {
       const response = await app.inject({
         method: "POST",
         url: `/api/v1/projects/${fx.projectA}/uploads`,
         headers: { authorization: `Bearer ${stewardToken}`, "idempotency-key": idempotencyKey() },
         payload: {
-          contentBase64: Buffer.from("일반 자료").toString("base64"),
+          contentBase64: Buffer.from("general material").toString("base64"),
           contentType: "application/pdf",
           sensitivity: "restricted",
         },
@@ -397,8 +397,8 @@ describeDb("업로드", () => {
       expect(response.statusCode).toBe(200);
     });
 
-    it("DB도 같은 것을 막는다", async () => {
-      // 라우트를 우회하는 경로가 생겨도 남아야 한다.
+    it("blocks the same at the DB level", async () => {
+      // Must hold even if a path that bypasses the route appears.
       await expect(
         fx.sql`
           UPDATE core.object_uploads SET sensitivity = 'confidential'

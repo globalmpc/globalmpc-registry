@@ -1,14 +1,14 @@
 import type postgres from "postgres";
 
 /**
- * Outbox 발행 — 07 §7.5.
+ * Outbox publishing — 07 §7.5.
  *
- * **at-least-once다.** 발행에 성공한 뒤에 `published_at`을 기록하므로, 발행 직후
- * 크래시가 나면 같은 이벤트가 다시 나갈 수 있다. 그래서 consumer는 `core.inbox`에
- * `(eventId, handlerVersion)`으로 중복을 제거한다.
+ * **At-least-once.** `published_at` is written after a successful publish, so a crash right
+ * after publishing can resend the same event. Consumers therefore deduplicate in `core.inbox`
+ * by `(eventId, handlerVersion)`.
  *
- * 반대 순서(먼저 표시하고 발행)로 하면 at-most-once가 되어 이벤트가 사라진다.
- * 중복은 consumer가 흡수할 수 있지만 소실은 복구할 수 없다.
+ * The reverse order (mark first, then publish) is at-most-once and loses events. Consumers can
+ * absorb duplicates; a loss cannot be recovered.
  */
 
 export interface OutboxRow {
@@ -33,11 +33,11 @@ export interface PublishResult {
 }
 
 /**
- * 미발행 이벤트를 한 배치 발행한다.
+ * Publishes one batch of unpublished events.
  *
- * 한 이벤트의 발행이 실패해도 나머지를 계속 시도한다. 하나가 막혀 전체가 멈추면
- * 무관한 이벤트까지 지연된다. 실패한 이벤트는 `published_at`이 비어 있으므로
- * 다음 호출에서 다시 시도된다.
+ * A failed publish does not stop the rest. If one blocked event halted the batch, unrelated
+ * events would be delayed too. Failed events keep an empty `published_at` and are retried on
+ * the next call.
  */
 export async function publishBatch(
   sql: postgres.Sql,
@@ -69,11 +69,10 @@ export async function publishBatch(
 }
 
 /**
- * consumer 측 중복 제거 — 07 §7.5.
+ * Consumer-side deduplication — 07 §7.5.
  *
- * at-least-once 전달을 받는 쪽에서 같은 이벤트를 두 번 처리하지 않게 한다.
- * `handlerVersion`을 키에 포함하는 이유: handler 로직이 바뀌면 과거 이벤트를
- * 다시 처리해야 할 수 있다.
+ * Keeps an at-least-once receiver from processing the same event twice. `handlerVersion` is
+ * part of the key because a handler logic change may require reprocessing past events.
  */
 export async function claimEvent(
   sql: postgres.Sql,
@@ -95,10 +94,10 @@ export interface BacklogStats {
 }
 
 /**
- * 미발행 backlog. 운영 화면과 알림이 쓴다.
+ * Unpublished backlog. Used by the operator screen and alerts.
  *
- * 06 §6.8: 장애 시 hidden success를 만들지 않는다. backlog가 쌓이는 것을
- * 관측할 수 없으면 이벤트가 멈춘 것을 아무도 모른다.
+ * 06 §6.8: no hidden success on failure. If a growing backlog cannot be observed, nobody
+ * knows events have stopped.
  */
 export async function backlogStats(sql: postgres.Sql): Promise<BacklogStats> {
   const [row] = await sql<{ pending: string; oldest: Date | null }[]>`

@@ -1,39 +1,39 @@
--- 출처 변경 전파 — spec 05, AC-04 · AC-21.
+-- Source change propagation — spec 05, AC-04 · AC-21.
 --
--- 지금까지 전파는 authority → source connection 한 구간뿐이었다(0020). 그 아래가
--- 없었던 이유는 트리거를 안 만들어서가 아니라 **claim이 receipt를 가리키지
--- 않았기 때문이다.**
+-- Until now propagation covered one hop only: authority → source connection (0020). Nothing
+-- went further, not for lack of a trigger but **because claims did not point to
+-- receipts.**
 --
--- `claims.source_coordinate`는 `{"page":"1","document":"extract"}` 형태로 **문서
--- 안의 위치**만 담는다. 어느 receipt에서 나온 값인지는 어디에도 없었다. 즉:
+-- `claims.source_coordinate` holds only a **position inside a document**, e.g.
+-- `{"page":"1","document":"extract"}`. Which receipt a value came from was recorded nowhere. So:
 --
---   1. 출처가 취소돼도 그 출처에서 나온 claim을 찾을 수 없다.
---   2. claim이 근거 없이 존재할 수 있고, 그것을 검출할 방법이 없다.
+--   1. When a source is revoked, the claims derived from it cannot be found.
+--   2. A claim can exist without evidence, and there is no way to detect it.
 --
--- 두 번째가 더 크다. 이 제품의 전제가 "claim은 검증 가능한 receipt에 근거한다"인데
--- 그 연결이 자유 텍스트였다.
+-- The second is worse. The product's premise is "claims rest on verifiable receipts",
+-- yet that link was free text.
 
 ALTER TABLE core.claims
   /**
-   * 이 claim이 나온 receipt.
+   * The receipt this claim came from.
    *
-   * nullable이다 — 이 컬럼이 없던 동안 만들어진 claim이 있고, receipt 없이
-   * 사람이 직접 입력하는 경로도 남아 있다. **없는 것을 있다고 채우지 않는다.**
-   * 대신 아래 `evidence_backed` 뷰가 근거 있는 claim과 없는 claim을 나눈다.
+   * Nullable — claims were created while this column did not exist, and a path for manual
+   * entry without a receipt remains. **Nothing missing is filled in as present.**
+   * Instead the `evidence_backed` view below separates claims with and without evidence.
    */
   ADD COLUMN source_receipt_id UUID,
   /**
-   * 이 claim의 근거가 흔들린 시점 — AC-21.
+   * When this claim's evidence went stale — AC-21.
    *
-   * `verification_state`를 건드리지 않는다. 그 값은 "누가 어느 수준으로
-   * 검토했나"이고 그 사실은 출처가 취소돼도 바뀌지 않는다. **검토는 실제로
-   * 있었다.** 달라진 것은 그 검토가 딛고 있던 근거다.
+   * Does not touch `verification_state`. That value records "who reviewed at what level",
+   * which does not change when a source is revoked. **The review did
+   * happen.** What changed is the evidence it rested on.
    */
   ADD COLUMN stale_since  TIMESTAMPTZ,
   ADD COLUMN stale_reason TEXT,
   ADD CONSTRAINT claims_stale_needs_reason
     CHECK (stale_since IS NULL OR (stale_reason IS NOT NULL AND length(btrim(stale_reason)) > 0)),
-  -- tenant 경계를 넘는 참조를 FK 검사가 통과시킨다(RLS는 FK를 우회한다).
+  -- FK checks let references cross tenant boundaries (RLS bypasses FKs).
   ADD CONSTRAINT claims_source_receipt_fk
     FOREIGN KEY (tenant_id, source_receipt_id)
     REFERENCES core.source_receipts (tenant_id, id);
@@ -43,18 +43,18 @@ CREATE INDEX claims_source_receipt_idx ON core.claims (source_receipt_id)
 CREATE INDEX claims_stale_idx ON core.claims (project_id) WHERE stale_since IS NOT NULL;
 
 ALTER TABLE core.verification_attestations
-  -- attestation은 이미 `stale_candidate` 상태를 갖는다(0001 CHECK). 없는 것은
-  -- 왜 그렇게 됐는지다. 이유 없이 상태만 바뀌면 다음 사람이 판단할 수 없다.
+  -- Attestations already have a `stale_candidate` state (0001 CHECK). What is missing is
+  -- why. A state change without a reason leaves the next person unable to judge.
   ADD COLUMN stale_reason TEXT;
 
 /**
- * receipt → claim 전파.
+ * receipt → claim propagation.
  *
- * receipt는 append-only라 UPDATE되지 않는다. 대신 **연동이 내려갈 때** 그
- * 연동에서 나온 receipt에 딸린 claim을 표시한다.
+ * Receipts are append-only and never UPDATEd. Instead, **when a connection goes down**,
+ * mark the claims attached to receipts from that connection.
  *
- * `degraded`·`disabled`만 본다. `access_confirmed`(수동 전환)는 접근이 사라진
- * 것이 아니라 자동 호출 경로가 없어진 것이므로 근거가 흔들린 것이 아니다.
+ * Only `degraded`·`disabled` count. `access_confirmed` (manual switch) means the automatic
+ * call path is gone, not that access was lost, so the evidence is not stale.
  */
 CREATE OR REPLACE FUNCTION core.propagate_connection_to_claims() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -73,7 +73,7 @@ BEGIN
     FROM core.source_receipts r
     WHERE c.source_receipt_id = r.id
       AND r.connection_id = NEW.id
-      -- 이미 표시된 것은 그대로 둔다. 처음 흔들린 시점이 기록이다.
+      -- Leave already-marked rows as is. The first stale time is the record.
       AND c.stale_since IS NULL
     RETURNING c.id
   )
@@ -88,15 +88,15 @@ CREATE TRIGGER source_connections_propagate_to_claims
   FOR EACH ROW EXECUTE FUNCTION core.propagate_connection_to_claims();
 
 /**
- * claim → attestation 전파 — AC-21.
+ * claim → attestation propagation — AC-21.
  *
- * attestation의 `claim_scope`가 이 claim을 담고 있으면 재검토 대상이다.
+ * An attestation whose `claim_scope` contains this claim needs re-review.
  *
- * **`active`만 옮긴다.** `signed`는 아직 활성이 아니고, `revoked`·`superseded`는
- * 이미 끝난 것이며, `disputed`는 이미 사람이 보고 있다. 끝난 기록을 다시
- * 건드리면 "언제 무엇이 유효했나"가 흐려진다.
+ * **Only `active` moves.** `signed` is not yet active, `revoked`·`superseded` are
+ * already closed, and `disputed` is already under human review. Touching closed records
+ * again blurs "what was valid when".
  *
- * 서명 사실은 지우지 않는다. 상태만 재검토 대기로 옮긴다.
+ * The signature itself is not erased. Only the state moves to awaiting re-review.
  */
 CREATE OR REPLACE FUNCTION core.propagate_claim_to_attestations() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -121,11 +121,11 @@ CREATE TRIGGER claims_propagate_to_attestations
   FOR EACH ROW EXECUTE FUNCTION core.propagate_claim_to_attestations();
 
 /**
- * 근거 없는 claim을 드러내는 뷰.
+ * View exposing claims without evidence.
  *
- * **자동으로 고치지 않는다.** 근거 없는 claim이 존재한다는 사실 자체가 정보이고,
- * 그것을 조용히 지우거나 등급을 낮추면 왜 그랬는지가 사라진다. 운영이 보고
- * 판단한다.
+ * **No automatic fix.** The existence of an unbacked claim is itself information;
+ * silently deleting or downgrading it erases the reason. Operations reviews and
+ * decides.
  */
 CREATE OR REPLACE VIEW core.claims_without_evidence AS
 SELECT c.id, c.tenant_id, c.project_id, c.claim_type, c.evidence_tier,

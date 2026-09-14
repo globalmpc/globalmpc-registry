@@ -1,8 +1,8 @@
 /**
- * Canonical 계층의 실패는 전부 코드로 식별한다.
+ * Every failure in the canonical layer is identified by a code.
  *
- * 이 계층이 조용히 값을 강제 변환하면 anchor root가 갈라진다. 강제 변환 대신
- * 거절하는 것이 이 모듈의 유일한 오류 전략이다.
+ * If this layer silently coerced values, anchor roots would diverge. Rejecting instead of
+ * coercing is this module's only error strategy.
  */
 export type CanonicalErrorCode =
   | "E_CANONICAL_NUMBER_FORBIDDEN"
@@ -17,7 +17,7 @@ export type CanonicalErrorCode =
 
 export class CanonicalError extends Error {
   readonly code: CanonicalErrorCode;
-  /** 실패한 값의 JSON Pointer 경로. 루트 실패는 빈 문자열이다. */
+  /** JSON Pointer path of the failing value. A root failure is the empty string. */
   readonly path: string;
 
   constructor(code: CanonicalErrorCode, message: string, path = "") {

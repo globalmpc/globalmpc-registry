@@ -17,24 +17,24 @@ import { assertVersionMatches, requireIfMatch, requireMutationContext } from "./
 import { requireReadContext } from "./shared.js";
 
 /**
- * Authority Registry 운영 경로 — spec 02 §2.8, 05 §5.11, REQ-DAPP-043.
+ * Authority Registry operations — spec 02 §2.8, 05 §5.11, REQ-DAPP-043.
  *
- * 여기가 없으면 기관 등록이 DB 직접 INSERT다. 그러면 **누가 올렸고 누가
- * 승인했는지가 남지 않고**, 이력도 남지 않는다.
+ * Without this, registering an authority means a direct DB INSERT. Then **who submitted it and
+ * who approved it is not recorded**, and no history is kept either.
  *
- * 02 §2.8이 정한 분리를 이 파일이 강제한다:
+ * This file enforces the separation set by 02 §2.8:
  *
- * - 등록은 Trust Registry 운영자(`authority.register`)
- * - `accepted` 전환은 독립 reviewer(`authority.review`)
- * - **등록한 사람은 승인할 수 없다** — 권한이 둘 다 있어도 막힌다
- * - 연동을 켜는 것이 기관 승인이 되지 않는다 — DB 트리거가 본다
+ * - Registration is by a Trust Registry operator (`authority.register`)
+ * - The `accepted` transition is by an independent reviewer (`authority.review`)
+ * - **The registrant cannot approve** — blocked even when holding both permissions
+ * - Enabling a connection does not approve the authority — a DB trigger checks this
  */
 
 const registerSchema = z.object({
   name: z.string().min(1),
   jurisdiction: z.string().length(3),
   proves: z.array(z.string().min(1)).min(1),
-  // 한계 없는 authority는 존재하지 않는다(05 §5.11). DB CHECK도 같은 것을 본다.
+  // No authority exists without limitations (05 §5.11). A DB CHECK enforces the same.
   doesNotProve: z.array(z.string().min(1)).min(1),
   recognizedScope: z.array(z.string().min(1)).min(1),
   verificationMethod: z.string().min(1),
@@ -70,7 +70,7 @@ const connectionSchema = z.object({
     ])
     .optional(),
   accessBasis: z.string().min(1).optional(),
-  // 값이 아니라 참조만 받는다. 값이 API를 지나가면 요청 로그에 남는다.
+  // Only a reference is accepted, not the value. A value passing through the API ends up in request logs.
   secretReference: z.string().min(1).nullable().optional(),
   state: z
     .enum([
@@ -84,8 +84,8 @@ const connectionSchema = z.object({
     ])
     .optional(),
   /**
-   * 호출 대상. **형식만이 아니라 어디를 가리키는지도 본다** — 서버가 자격증명을
-   * 붙여 부르는 주소이므로 내부망을 가리키면 그 경로가 통로가 된다.
+   * Call target. **Checks where it points, not just its format** — the server calls this
+   * address with credentials attached, so if it points into the internal network it becomes a conduit.
    */
   endpoint: z
     .string()
@@ -99,7 +99,7 @@ const connectionSchema = z.object({
       } catch (error) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: error instanceof Error ? error.message : "endpoint를 사용할 수 없다",
+          message: error instanceof Error ? error.message : "Endpoint cannot be used",
         });
       }
     }),
@@ -172,15 +172,15 @@ function toConnectionView(row: ConnectionRow) {
     collectionMethod: row.collection_method,
     state: row.state,
     endpoint: row.endpoint,
-    // 값이 아니라 **설정 여부**만 알린다. 화면은 "자격증명 없음"을 알아야 하고
-    // 값은 알 필요가 없다.
+    // Reports only **whether it is set**, not the value. The UI needs to know "no credential"
+    // but does not need the value.
     hasSecret: row.secret_reference !== null,
     lastSuccessAt: row.last_success_at?.toISOString() ?? null,
     version: row.version,
   };
 }
 
-/** 이력 한 줄. 변경 뒤의 상태를 그대로 박제한다. */
+/** One history row. Freezes the post-change state as is. */
 async function recordVersion(
   tx: postgres.TransactionSql,
   tenantId: string,
@@ -204,20 +204,20 @@ async function recordVersion(
 }
 
 /**
- * 연동을 활성으로 두려면 기관이 승인돼 있어야 한다 — 02 §2.8.
+ * Keeping a connection active requires the authority to be approved — 02 §2.8.
  *
- * 연동이 붙었다는 사실과 그 기관을 신뢰하기로 했다는 판단은 다른 것이다.
- * 이 검사가 없으면 연동을 켜는 것만으로 승인 절차를 건너뛸 수 있다.
+ * A connection being attached and the decision to trust that authority are different things.
+ * Without this check, merely enabling a connection could skip the approval process.
  */
 function assertActivatable(connectionState: string, authorityState: string): void {
   if (connectionState !== "active" || authorityState === "accepted") return;
 
   throw unprocessable(
     "CONNECTION_REQUIRES_ACCEPTED_AUTHORITY",
-    "승인되지 않은 기관의 연동은 활성이 될 수 없다",
+    "A connection to an unapproved authority cannot be active",
     {
       authorityState,
-      nextAction: "독립 검토자가 기관을 승인한 뒤 다시 시도한다",
+      nextAction: "Retry after an independent reviewer approves the authority",
     },
   );
 }
@@ -226,14 +226,14 @@ export async function registerAuthorityAdminRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
 ): Promise<void> {
-  // --- 등록 ----------------------------------------------------------------
+  // --- Registration ----------------------------------------------------------------
 
   app.post("/api/v1/authorities", async (request, reply) => {
     const { session, tenantId, idempotencyKey } = requireMutationContext(request);
 
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
     }
@@ -254,10 +254,10 @@ export async function registerAuthorityAdminRoutes(
         const id = randomUUID();
 
         /**
-         * 항상 `proposed`다.
+         * Always `proposed`.
          *
-         * 요청이 상태를 정할 수 있으면 등록하는 사람이 승인까지 하게 된다 —
-         * 02 §2.8이 금지하는 바로 그것이다.
+         * If the request could set the state, the registrant would also approve —
+         * exactly what 02 §2.8 forbids.
          */
         const [row] = await tx<AuthorityRow[]>`
           INSERT INTO core.authorities (
@@ -305,7 +305,7 @@ export async function registerAuthorityAdminRoutes(
     return reply.code(201).send({ ...result, requestId, asOf });
   });
 
-  // --- 갱신 ----------------------------------------------------------------
+  // --- Update ----------------------------------------------------------------
 
   app.patch<{ Params: { authorityId: string } }>(
     "/api/v1/authorities/:authorityId",
@@ -315,7 +315,7 @@ export async function registerAuthorityAdminRoutes(
 
       const parsed = updateSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -336,7 +336,7 @@ export async function registerAuthorityAdminRoutes(
           WHERE id = ${request.params.authorityId}
           FOR UPDATE
         `;
-        if (!current) throw notFound("기관을 찾을 수 없다");
+        if (!current) throw notFound("Authority not found");
 
         assertVersionMatches(expectedVersion, current.version, "authority");
 
@@ -375,7 +375,7 @@ export async function registerAuthorityAdminRoutes(
     },
   );
 
-  // --- 상태 전환 -------------------------------------------------------------
+  // --- State transition -------------------------------------------------------------
 
   app.post<{ Params: { authorityId: string } }>(
     "/api/v1/authorities/:authorityId/state",
@@ -385,7 +385,7 @@ export async function registerAuthorityAdminRoutes(
 
       const parsed = stateSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -394,7 +394,7 @@ export async function registerAuthorityAdminRoutes(
         session,
         "authority.review",
         tenantResource(tenantId, {
-          // 이 판단은 독립성이 요건이다. conflict가 미해소면 막힌다.
+          // This decision requires independence. It is blocked while a conflict is unresolved.
           separationSensitive: true,
         }),
         sessionFacts(session),
@@ -409,29 +409,29 @@ export async function registerAuthorityAdminRoutes(
           WHERE id = ${request.params.authorityId}
           FOR UPDATE
         `;
-        if (!current) throw notFound("기관을 찾을 수 없다");
+        if (!current) throw notFound("Authority not found");
 
         assertVersionMatches(expectedVersion, current.version, "authority");
 
         /**
-         * 등록한 사람은 승인할 수 없다 — 02 §2.8.
+         * The registrant cannot approve — 02 §2.8.
          *
-         * 권한 검사만으로는 막지 못한다. 한 사람이 `authority.register`와
-         * `authority.review`를 동시에 가질 수 있고, 그러면 혼자서 올리고 혼자서
-         * 승인한다. 그 경우를 여기서 본다.
+         * Permission checks alone cannot prevent this. One person can hold both `authority.register`
+         * and `authority.review`, and then submits and approves alone. That case is checked
+         * here.
          *
-         * `accepted`에만 적용한다. 정지·취소는 위험을 줄이는 방향이라
-         * 등록자라도 즉시 할 수 있어야 한다 — 막으면 사고에 대응하지 못한다.
+         * Applies only to `accepted`. Suspension and cancellation reduce risk, so even the
+         * registrant must be able to do them immediately — blocking them would prevent incident response.
          */
         if (data.state === "accepted" && current.registered_by === session.subjectId) {
-          throw forbidden("SEPARATION_OF_DUTIES", "등록한 사람은 같은 기관을 승인할 수 없다", {
+          throw forbidden("SEPARATION_OF_DUTIES", "The registrant cannot approve the same authority", {
             registeredBy: "self",
-            requiredAction: "다른 검토자가 승인한다",
+            requiredAction: "Another reviewer approves",
           });
         }
 
         if (current.state === data.state) {
-          throw conflict("AUTHORITY_STATE_UNCHANGED", `이미 ${data.state} 상태다`);
+          throw conflict("AUTHORITY_STATE_UNCHANGED", `Already in state ${data.state}`);
         }
 
         const accepting = data.state === "accepted";
@@ -473,8 +473,8 @@ export async function registerAuthorityAdminRoutes(
           payload: { fromState: current.state, toState: data.state },
         });
 
-        // 승인이 풀리면 연동이 내려간다(트리거). 응답이 그 사실을 알린다 —
-        // 화면이 다시 조회하지 않으면 연동이 살아 있다고 믿는다.
+        // Losing approval takes the connection down (trigger). The response says so —
+        // unless the UI refetches, it believes the connection is still live.
         const demoted = !accepting && current.state === "accepted";
 
         return {
@@ -487,7 +487,7 @@ export async function registerAuthorityAdminRoutes(
     },
   );
 
-  // --- 이력 ----------------------------------------------------------------
+  // --- History ----------------------------------------------------------------
 
   app.get<{ Params: { authorityId: string } }>(
     "/api/v1/authorities/:authorityId/versions",
@@ -547,7 +547,7 @@ export async function registerAuthorityAdminRoutes(
     },
   );
 
-  // --- 연동 ----------------------------------------------------------------
+  // --- Connections ----------------------------------------------------------------
 
   app.get<{ Params: { authorityId: string } }>(
     "/api/v1/authorities/:authorityId/connections",
@@ -586,7 +586,7 @@ export async function registerAuthorityAdminRoutes(
 
       const parsed = connectionSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -595,7 +595,7 @@ export async function registerAuthorityAdminRoutes(
       if (!data.connectionKey || !data.collectionMethod || !data.accessBasis) {
         throw badRequest(
           "REQUEST_INVALID",
-          "연동을 만들려면 connectionKey·collectionMethod·accessBasis가 필요하다",
+          "Creating a connection requires connectionKey, collectionMethod, and accessBasis",
         );
       }
 
@@ -615,10 +615,10 @@ export async function registerAuthorityAdminRoutes(
             SELECT id, state::text AS state FROM core.authorities
             WHERE id = ${request.params.authorityId}
           `;
-          if (!authority) throw notFound("기관을 찾을 수 없다");
+          if (!authority) throw notFound("Authority not found");
 
-          // DB 트리거가 같은 것을 막지만 거기서 걸리면 500이 나간다. 예상 가능한
-          // 거절은 이유와 함께 422로 돌려준다.
+          // The DB trigger blocks the same thing, but failing there returns 500. A foreseeable
+          // rejection is returned as 422 with its reason.
           assertActivatable(data.state ?? "planned", authority.state);
 
           const id = randomUUID();
@@ -654,7 +654,7 @@ export async function registerAuthorityAdminRoutes(
             requestIp: request.ip,
             reason: data.reason,
             afterVersion: row!.version,
-            // endpoint는 남긴다. 자격증명은 참조조차 감사에 넣지 않는다.
+            // The endpoint is kept. Credentials are not put in the audit, not even as a reference.
             detail: { connectionKey: row!.connection_key, state: row!.state },
           });
 
@@ -674,7 +674,7 @@ export async function registerAuthorityAdminRoutes(
 
       const parsed = connectionSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -710,7 +710,7 @@ export async function registerAuthorityAdminRoutes(
           WHERE c.id = ${request.params.connectionId}
           FOR UPDATE
         `;
-        if (!current) throw notFound("연동을 찾을 수 없다");
+        if (!current) throw notFound("Connection not found");
 
         assertVersionMatches(expectedVersion, current.version, "source_connection");
 

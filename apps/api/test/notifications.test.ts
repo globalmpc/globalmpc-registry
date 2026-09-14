@@ -8,15 +8,15 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 알림.
+ * Notifications.
  *
- * 검토 요청·gap·stale·revoke가 일어나도 당사자가 아는 경로는 화면을 다시 여는
- * 것뿐이었다. 여기서 지키는 것은 둘이다.
+ * When a review request, gap, stale or revoke happened, the only way people found out was
+ * reopening the screen. Two things are enforced here.
  *
- * 1. 사건이 **어느 경로로 들어오든** 알림이 생긴다 — 그래서 트리거로 만든다.
- * 2. 역할로 간 알림은 한 사람이 읽어도 **남에게 남는다.**
+ * 1. A notification is created **whatever path the event takes** — hence a trigger.
+ * 2. A role notification read by one person **stays unread for others.**
  */
-describeDb("알림", () => {
+describeDb("notifications", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let stewardToken: string;
@@ -42,10 +42,10 @@ describeDb("알림", () => {
     });
   }
 
-  it("stale 신호가 생기면 역할에게 알림이 간다", async () => {
+  it("notifies the role when a stale signal appears", async () => {
     const reason = `stale-${randomUUID().slice(0, 8)}`;
-    // 신호는 트리거로도 만들어지지만, 여기서는 **어느 경로로 들어와도** 알림이
-    // 생기는지를 본다.
+    // Signals are also created by triggers; here we check that a notification appears
+    // **whatever path they come in by**.
     await fx.sql`
       INSERT INTO core.evidence_stale_signals (
         id, tenant_id, project_id, target_type, target_id, reason
@@ -65,16 +65,16 @@ describeDb("알림", () => {
     const found = items.find((item) => item.summary.includes(reason));
 
     expect(found).toBeDefined();
-    // 아무에게도 배정되지 않은 사건이다. 특정인에게 보내면 그 사람이 자리를
-    // 비운 동안 아무도 모른다.
+    // The event is assigned to nobody. Sending it to one person means nobody knows
+    // while that person is away.
     expect(found!.audience).toBe("role");
     expect(found!.audienceRole).toBe("data_steward");
-    // 알림만 있고 갈 곳이 없으면 다시 찾아야 한다.
+    // A notification with no link forces a search.
     expect(found!.link).toBeTruthy();
     expect(found!.read).toBe(false);
   });
 
-  it("역할 알림을 한 사람이 읽어도 다른 사람에게는 남는다", async () => {
+  it("a role notification read by one person stays for others", async () => {
     const reason = `shared-${randomUUID().slice(0, 8)}`;
     await fx.sql`
       INSERT INTO core.evidence_stale_signals (
@@ -84,7 +84,7 @@ describeDb("알림", () => {
         ${randomUUID()}, ${reason}
       )
     `;
-    // steward와 같은 역할을 가진 두 번째 사람을 만든다.
+    // Creates a second person with the same role as steward.
     const secondSubject = randomUUID();
     await fx.sql`
       INSERT INTO core.subjects (id, tenant_id, kind, display_name)
@@ -108,8 +108,8 @@ describeDb("알림", () => {
     expect(marked.statusCode).toBe(200);
     expect(marked.json().read).toBe(true);
 
-    // 같은 알림이 다른 사람에게는 여전히 안 읽음이어야 한다. 읽음을 알림 행에
-    // 두면 한 사람이 읽는 순간 나머지에게서 사라진다.
+    // The same notification must still be unread for the other person. Storing read state
+    // on the notification row hides it from everyone once one person reads it.
     const [otherRead] = await fx.sql<{ count: string }[]>`
       SELECT count(*) FROM core.notification_reads
       WHERE notification_id = ${mine!.id} AND subject_id = ${secondSubject}
@@ -117,7 +117,7 @@ describeDb("알림", () => {
     expect(Number(otherRead!.count)).toBe(0);
   });
 
-  it("공개 기록이 철회되면 운영자에게 알림이 간다", async () => {
+  it("notifies operators when a public record is revoked", async () => {
     const publicKey = `NOTIF-${randomUUID().slice(0, 8)}`;
     const published = await app.inject({
       method: "POST",
@@ -134,7 +134,7 @@ describeDb("알림", () => {
           asOf: "2026-08-01T00:00:00.000Z",
           sourceAge: "12",
           staleStatus: "fresh",
-          limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+          limitations: ["Legal title verification is outside this review's scope"],
           legalEffect: "none",
           disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
         },
@@ -152,11 +152,11 @@ describeDb("알림", () => {
     `;
 
     const items = (await list(operatorToken)).json().items as { summary: string }[];
-    // 철회는 공개된 것을 내리는 일이라 알림이 늦으면 그 사이 인용이 계속된다.
+    // A revoke takes down something public; a late notice lets citations continue meanwhile.
     expect(items.some((item) => item.summary.includes(publicKey))).toBe(true);
   });
 
-  it("다른 tenant의 알림은 보이지 않는다", async () => {
+  it("another tenant's notifications are not visible", async () => {
     const operatorB = await signIn(app, fx.operatorB);
     const mine = (await list(operatorToken)).json().items as { id: string }[];
     const theirs = (await list(operatorB)).json().items as { id: string }[];
@@ -167,7 +167,7 @@ describeDb("알림", () => {
     }
   });
 
-  it("없는 알림을 읽음 처리하지 않는다", async () => {
+  it("does not mark a nonexistent notification as read", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/notifications/00000000-0000-4000-8000-000000000000/read",

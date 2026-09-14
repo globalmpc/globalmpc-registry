@@ -2,20 +2,20 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 /**
- * `/api/*`를 API 서버로 same-origin 프록시한다.
+ * Same-origin proxy from `/api/*` to the API server.
  *
- * CORS를 여는 대신 프록시를 쓰는 이유: 브라우저 요청이 같은 출처가 되므로 세션
- * 쿠키로 전환할 때 SameSite 설정을 그대로 쓸 수 있다. CORS + 크로스 오리진 쿠키는
- * 설정 실수가 그대로 인증 우회가 된다.
+ * Why a proxy instead of opening CORS: browser requests become same-origin, so moving to session
+ * cookies can use SameSite settings as-is. With CORS plus cross-origin cookies,
+ * a configuration mistake becomes an authentication bypass.
  *
- * **`next.config.ts`의 `rewrites()`가 아니라 여기 있는 이유가 있다.** `rewrites()`는
- * 빌드 시점에 평가되어 목적지 문자열이 `routes-manifest.json`에 박힌다. 이미지를
- * 만들 때는 API 주소를 모르므로 기본값 `http://localhost:3001`이 박히고, 실행
- * 시점에 준 `API_ORIGIN`은 무시된다 — 컨테이너 안에서 localhost는 자기 자신이라
- * 모든 API 호출이 갈 곳을 잃는다. proxy는 요청마다 실행되므로 그 시점의
- * 환경변수를 읽는다.
+ * **There is a reason this lives here and not in `rewrites()` in `next.config.ts`.** `rewrites()` is
+ * evaluated at build time and the destination string is baked into `routes-manifest.json`. The API address
+ * is unknown when the image is built, so the default `http://localhost:3001` gets baked in, and the
+ * `API_ORIGIN` given at runtime is ignored — inside a container localhost is the container itself, so
+ * every API call has nowhere to go. The proxy runs per request, so it reads the environment
+ * variables at that moment.
  *
- * 기본값은 로컬 개발용이다. 배포에서는 반드시 주어진다.
+ * The default is for local development. Deployments always provide it.
  */
 export function proxy(request: NextRequest): NextResponse {
   const origin = process.env.API_ORIGIN ?? "http://localhost:3001";

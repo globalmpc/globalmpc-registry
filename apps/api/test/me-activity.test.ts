@@ -16,13 +16,13 @@ import {
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 로그인 뒤 "나"의 화면.
+ * The signed-in "me" screen.
  *
- * 1. 내 활동은 이 지갑의 주체가 한 일만 담는다. 같은 tenant의 다른 사람 기록은
- *    역할이 있어도 여기로 나오지 않는다.
- * 2. 세션은 허용 action 목록을 준다. 메뉴는 그것으로 거른다.
+ * 1. My activity holds only what this wallet's subject did. Other people's records in the
+ *    same tenant do not appear here, whatever the role.
+ * 2. The session returns the allowed action list. Menus filter by it.
  */
-describeDb("내 활동과 세션 action", () => {
+describeDb("my activity and session actions", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let tokens: { operator: string; steward: string; reader: string };
@@ -44,7 +44,7 @@ describeDb("내 활동과 세션 action", () => {
         headers: { ...bearer(tokens.operator), "idempotency-key": idempotencyKey() },
         payload: {
           projectKey: `ACT-${randomUUID().slice(0, 8)}`,
-          name: "활동 시험",
+          name: "activity test",
           hostCountryIso3: "MNG",
           minerals: ["copper"],
           ownerOrganizationId: fx.orgA,
@@ -68,7 +68,7 @@ describeDb("내 활동과 세션 action", () => {
     });
   }
 
-  it("내가 한 일이 나온다", async () => {
+  it("lists what I did", async () => {
     const response = await activity(tokens.operator);
     expect(response.statusCode).toBe(200);
     const ids = (response.json() as { items: { resourceId: string | null }[] }).items.map(
@@ -77,7 +77,7 @@ describeDb("내 활동과 세션 action", () => {
     for (const id of created) expect(ids).toContain(id);
   });
 
-  it("다른 사람이 한 일은 나오지 않는다", async () => {
+  it("does not list what others did", async () => {
     const response = await activity(tokens.steward);
     expect(response.statusCode).toBe(200);
     const ids = (response.json() as { items: { resourceId: string | null }[] }).items.map(
@@ -86,7 +86,7 @@ describeDb("내 활동과 세션 action", () => {
     for (const id of created) expect(ids).not.toContain(id);
   });
 
-  it("cursor로 다음 쪽을 이어 받는다", async () => {
+  it("fetches the next page with cursor", async () => {
     const first = (await activity(tokens.operator, "?limit=1")).json() as {
       items: { id: string }[];
       nextCursor: string | null;
@@ -101,14 +101,14 @@ describeDb("내 활동과 세션 action", () => {
     expect(second.items[0]!.id).not.toBe(first.items[0]!.id);
   });
 
-  it("로그인하지 않으면 401이다", async () => {
+  it("returns 401 when not signed in", async () => {
     const response = await activity(null);
     expect(response.statusCode).toBe(401);
   });
 
-  it("조직에 묶이지 않은 지갑은 401이 아니라 403 WALLET_NOT_ENROLLED다", async () => {
-    // 어느 지갑이든 서명으로 로그인은 된다. 그 뒤의 거절이 "다시 로그인하라"로
-    // 읽히면 사용자는 같은 서명을 되풀이한다.
+  it("a wallet with no organization gets 403 WALLET_NOT_ENROLLED, not 401", async () => {
+    // Any wallet can sign in by signature. If the later rejection reads as "sign in
+    // again", users repeat the same signature.
     const unbound = await signIn(app, newAccount());
 
     for (const url of ["/api/v1/projects", "/api/v1/my-work", "/api/v1/me/activity"]) {
@@ -120,13 +120,13 @@ describeDb("내 활동과 세션 action", () => {
     }
   });
 
-  it("세션은 역할로 허용된 action만 알려 준다", async () => {
+  it("the session reports only role-allowed actions", async () => {
     const steward = (
       await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: bearer(tokens.steward) })
     ).json() as { actions: string[] };
     expect(steward.actions).toContain("source.upload");
     expect(steward.actions).not.toContain("admin.read");
-    // 인가 내부 값은 화면에 주지 않는다.
+    // Authorization internals are not sent to the UI.
     expect(steward).not.toHaveProperty("organizationProjectIds");
 
     const reader = (

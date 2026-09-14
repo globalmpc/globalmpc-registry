@@ -1,62 +1,62 @@
 #!/usr/bin/env bash
 #
-# 백업 — PostgreSQL + 객체저장소를 **한 단위로** 받는다.
+# Backup — takes PostgreSQL and object storage **as one unit**.
 #
-# 둘을 따로 받으면 복구할 수 없다. DB에는 artifact 행이 있는데 객체가 없으면
-# 증빙을 열 수 없고, 객체만 있으면 그것이 무엇의 증빙인지 알 수 없다. 그래서 이
-# 스크립트는 둘을 같은 디렉터리에 넣고 하나의 manifest로 묶는다.
+# Taken separately, they cannot be restored. If the DB has artifact rows but the objects are
+# missing, evidence cannot be opened; with only objects, nobody knows what they are evidence of.
+# So this script puts both in one directory and binds them with a single manifest.
 #
-# 받지 않는 것: cluster role(`mpc_app_login`·`mpc_worker_login`)과 비밀. pg_dump는
-# 데이터베이스 안의 것만 받는다. 복구할 때 role은 다시 만들어야 한다 — restore.sh가
-# 그것을 확인한다.
+# Not taken: cluster roles (`mpc_app_login`, `mpc_worker_login`) and secrets. pg_dump takes
+# only what is inside the database. Roles must be recreated on restore — restore.sh
+# checks for that.
 #
-# 사용:
+# Usage:
 #   DATABASE_URL=postgres://... BACKUP_DIR=/backups/2026-08-26T00-00-00Z ./backup.sh
 #
-# 객체저장소까지 받으려면 (선택이 아니라 운영에서는 필수):
+# To also take object storage (not optional in production — required):
 #   OBJECT_ENDPOINT=https://... OBJECT_BUCKET=mpc-evidence \
 #   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... ./backup.sh
 
 set -euo pipefail
 
-: "${DATABASE_URL:?DATABASE_URL이 필요하다}"
-: "${BACKUP_DIR:?BACKUP_DIR이 필요하다}"
+: "${DATABASE_URL:?DATABASE_URL is required}"
+: "${BACKUP_DIR:?BACKUP_DIR is required}"
 
 if [ -e "$BACKUP_DIR" ]; then
-  # 덮어쓰면 어느 시점의 백업인지 알 수 없게 된다. 시각을 디렉터리 이름에 넣는다.
-  echo "BACKUP_DIR이 이미 있다: $BACKUP_DIR" >&2
+  # Overwriting would lose which point in time the backup is. Put the time in the directory name.
+  echo "BACKUP_DIR already exists: $BACKUP_DIR" >&2
   exit 1
 fi
 
-command -v pg_dump >/dev/null || { echo "pg_dump가 없다" >&2; exit 1; }
+command -v pg_dump >/dev/null || { echo "pg_dump not found" >&2; exit 1; }
 
 server_version=$(psql "$DATABASE_URL" -tAc "SHOW server_version_num")
 server_major=$((server_version / 10000))
 dump_major=$(pg_dump --version | sed -E 's/.*PostgreSQL\) ([0-9]+).*/\1/')
 
-# pg_dump는 자기보다 **새로운** 서버를 받지 못한다. 받아도 되는 것처럼 실패하면
-# 백업이 있다고 믿는 상태로 운영하게 된다.
+# pg_dump cannot dump a server **newer** than itself. If that failed while looking like it
+# worked, operations would run believing a backup exists.
 if [ "$dump_major" -lt "$server_major" ]; then
-  echo "pg_dump $dump_major 로 서버 $server_major 를 받을 수 없다" >&2
+  echo "pg_dump $dump_major cannot dump server $server_major" >&2
   exit 1
 fi
 
 mkdir -p "$BACKUP_DIR"
 taken_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# dump와 통계를 **같은 스냅숏에서** 뜬다 — 2026-09-10 실사 A6.
+# Take the dump and the stats **from the same snapshot** — 2026-09-10 audit A6.
 #
-# 예전에는 `pg_dump` 뒤에 별도 연결로 `audit.events`를 셌다. 그 사이에 업무
-# 이벤트가 하나라도 들어오면 dump의 행 수와 manifest의 행 수가 달라지고,
-# **정상 dump가 복구 검증에서 실패한다.** 로컬의 조용한 복구 훈련은 그 조건을
-# 만들지 않으므로 이 어긋남은 운영에서 처음 드러난다.
+# Previously `audit.events` was counted over a separate connection after `pg_dump`. If even
+# one business event arrived in between, the dump's row count and the manifest's differed,
+# and **a good dump failed restore verification.** A quiet local restore drill never creates
+# that condition, so the mismatch would first surface in production.
 #
-# 방법: 트랜잭션을 열어 스냅숏을 내보내고, 그 스냅숏으로 `pg_dump`를 돌리고,
-# **같은 트랜잭션 안에서** 통계를 읽는다. `\!`는 psql이 트랜잭션을 연 채로
-# 셸 명령을 돌리는 자리다.
+# Method: open a transaction and export its snapshot, run `pg_dump` with that snapshot, and
+# read the stats **inside the same transaction**. `\!` is where psql runs a shell command
+# while keeping the transaction open.
 #
-# `\o`의 인자는 작은따옴표로 감싼다. psql 메타커맨드는 공백으로 인자를 나누므로
-# 감싸지 않으면 `BACKUP_DIR`에 공백이 있을 때 파일이 엉뚱한 곳에 쓰인다.
+# `\o` arguments are single-quoted. psql meta-commands split arguments on whitespace, so
+# unquoted, a space in `BACKUP_DIR` would write the file somewhere unexpected.
 export DATABASE_URL
 
 snapshot_file="$BACKUP_DIR/.snapshot"
@@ -80,13 +80,13 @@ SELECT count(*) FROM audit.events;
 COMMIT;
 PSQL
 
-# `\!`의 실패는 psql을 멈추지 않는다. 표시를 따로 본다 — 보지 않으면 빈
-# dump에 통계만 붙은 백업이 성공으로 끝난다.
+# A failing `\!` does not stop psql. Check the marker separately — otherwise a backup with
+# an empty dump plus stats would end as a success.
 if [ -f "$dump_failed" ]; then
-  echo "pg_dump가 실패했다" >&2
+  echo "pg_dump failed" >&2
   exit 1
 fi
-[ -s "$BACKUP_DIR/db.dump" ] || { echo "db.dump가 비었다" >&2; exit 1; }
+[ -s "$BACKUP_DIR/db.dump" ] || { echo "db.dump is empty" >&2; exit 1; }
 
 dump_sha=$(shasum -a 256 "$BACKUP_DIR/db.dump" | awk '{print $1}')
 migrations=$(sed -n '1p' "$stats_file")
@@ -95,14 +95,14 @@ audit_events=$(sed -n '3p' "$stats_file")
 rm -f "$snapshot_file" "$stats_file"
 
 for value in "$migrations" "$latest_migration" "$audit_events"; do
-  [ -n "$value" ] || { echo "스냅숏 통계를 읽지 못했다" >&2; exit 1; }
+  [ -n "$value" ] || { echo "Could not read snapshot stats" >&2; exit 1; }
 done
 
 object_count="null"
 object_bytes="null"
 object_digest="null"
 if [ -n "${OBJECT_BUCKET:-}" ]; then
-  command -v aws >/dev/null || { echo "aws CLI가 없다 — 객체를 받을 수 없다" >&2; exit 1; }
+  command -v aws >/dev/null || { echo "aws CLI not found — cannot take objects" >&2; exit 1; }
   mkdir -p "$BACKUP_DIR/objects"
   aws s3 sync "s3://$OBJECT_BUCKET" "$BACKUP_DIR/objects" \
     ${OBJECT_ENDPOINT:+--endpoint-url "$OBJECT_ENDPOINT"} --only-show-errors
@@ -110,26 +110,26 @@ if [ -n "${OBJECT_BUCKET:-}" ]; then
   object_bytes=$(find "$BACKUP_DIR/objects" -type f -exec wc -c {} + \
     | tail -1 | awk '{print $1}')
 
-  # 객체별 해시 — 2026-09-10 실사 A5.
+  # Per-object hashes — 2026-09-10 audit A5.
   #
-  # 개수와 바이트만으로는 **내용이 바뀐 것**을 잡지 못한다. 증빙이 조용히
-  # 다른 파일로 바뀐 백업은 복구 뒤에도 정상으로 보인다.
+  # Count and bytes alone do not catch **changed contents**. A backup in which evidence was
+  # silently swapped for another file still looks fine after restore.
   ( cd "$BACKUP_DIR/objects" && find . -type f -print0 \
       | sort -z | xargs -0 shasum -a 256 ) > "$BACKUP_DIR/objects.sha256"
-  # 목록 자체가 바뀌는 것도 잡는다. manifest에 이 해시가 들어간다.
+  # Also catch changes to the list itself. The manifest includes this hash.
   object_digest="\"$(shasum -a 256 "$BACKUP_DIR/objects.sha256" | awk '{print $1}')\""
 else
-  # 객체 없이 받은 백업은 **복구용이 아니다.** manifest에 그 사실이 남는다.
-  echo "OBJECT_BUCKET이 없다 — DB만 받는다. 이 백업으로는 증빙을 복구할 수 없다" >&2
+  # A backup taken without objects is **not usable for restore.** The manifest records that.
+  echo "OBJECT_BUCKET not set — taking the DB only. Evidence cannot be restored from this backup" >&2
 fi
 
-# JSON 값을 heredoc **밖에서** 만든다.
+# Build JSON values **outside** the heredoc.
 #
-# 처음에는 `${OBJECT_BUCKET:+\"...\"}${OBJECT_BUCKET:-null}`을 heredoc 안에 뒀는데
-# 두 분기가 **모두** 펼쳐져(`\"버킷\"버킷`) manifest가 JSON이 아니게 됐다. 게다가
-# 인용되지 않은 heredoc에서 `\"`는 이스케이프가 아니라 역슬래시 그대로 나간다.
-# 하필 객체를 함께 받은 경우 — 즉 **복구에 쓸 수 있는 유일한 백업** — 에서만
-# 깨지므로 눈에 띄지 않았다.
+# At first `${OBJECT_BUCKET:+\"...\"}${OBJECT_BUCKET:-null}` sat inside the heredoc, and
+# **both** branches expanded (`\"bucket\"bucket`), so the manifest was not JSON. Worse, in
+# an unquoted heredoc `\"` is not an escape; the backslash is emitted literally. It broke
+# only when objects were taken too — i.e. **the only backup usable for restore** — so it
+# went unnoticed.
 if [ -n "${OBJECT_BUCKET:-}" ]; then
   object_bucket_json="\"$OBJECT_BUCKET\""
 else
@@ -152,17 +152,17 @@ cat > "$BACKUP_DIR/manifest.json" <<JSON
 }
 JSON
 
-# manifest가 JSON인지 **스스로 확인한다.**
+# The manifest **checks itself** for valid JSON.
 #
-# restore.sh는 이 파일을 grep으로 읽으므로 깨진 JSON에도 그럴듯한 값을 뽑아낸다.
-# 즉 깨진 manifest는 복구할 때가 아니라 그 훨씬 뒤에 드러난다. 만든 자리에서
-# 확인하면 백업이 실패로 끝나고, 그것이 옳은 결과다.
+# restore.sh reads this file with grep, so it extracts plausible values even from broken
+# JSON. A broken manifest would surface not at restore but much later. Checking where it is
+# made ends the backup as a failure, which is the correct outcome.
 if command -v python3 >/dev/null; then
   python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$BACKUP_DIR/manifest.json" || {
-    echo "manifest.json이 JSON이 아니다. 이 백업을 신뢰하지 않는다" >&2
+    echo "manifest.json is not JSON. This backup is not trusted" >&2
     exit 1
   }
 fi
 
-echo "백업 완료: $BACKUP_DIR"
+echo "Backup done: $BACKUP_DIR"
 cat "$BACKUP_DIR/manifest.json"

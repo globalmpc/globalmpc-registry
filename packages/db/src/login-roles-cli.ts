@@ -2,10 +2,10 @@ import postgres from "postgres";
 import { ensureLoginRoles, LoginRoleError } from "./login-roles.js";
 
 /**
- * login role 생성 실행기.
+ * Login role creation runner.
  *
- * migration 다음, API·worker가 뜨기 전에 한 번 돌린다. 재실행해도 안전하다 —
- * 없으면 만들고, 있으면 비밀번호만 맞춘다.
+ * Run once after migrations, before the API and worker start. Safe to re-run —
+ * creates the roles if missing, and otherwise only resets their passwords.
  */
 
 const url = process.env["DATABASE_URL"];
@@ -21,7 +21,7 @@ const missing = [
   .map(([name]) => name);
 
 if (missing.length > 0) {
-  process.stderr.write(`환경변수가 없다 — ${missing.join(", ")}\n`);
+  process.stderr.write(`Missing environment variables — ${missing.join(", ")}\n`);
   process.exit(1);
 }
 
@@ -32,7 +32,7 @@ try {
     appPassword: appPassword as string,
     workerPassword: workerPassword as string,
   });
-  // 비밀번호는 찍지 않는다. 무엇을 만들었는지만 남긴다.
+  // Never print passwords. Record only what was created.
   process.stdout.write(
     `${JSON.stringify({
       msg: "login-roles.ready",
@@ -41,7 +41,7 @@ try {
   );
 } catch (error) {
   const message = error instanceof LoginRoleError ? error.message : String(error);
-  process.stderr.write(`login role 생성 실패 — ${message}\n`);
+  process.stderr.write(`Login role creation failed — ${message}\n`);
   process.exitCode = 1;
 } finally {
   await sql.end();

@@ -2,14 +2,14 @@ import { defineConfig, devices } from "@playwright/test";
 import { generatePrivateKey } from "viem/accounts";
 
 /**
- * 데모 계정 키를 **실행할 때 만든다.**
+ * Demo account keys are **generated at run time.**
  *
- * 저장소에 두면 그것을 아는 누구나 배포된 주소에서 그 역할로 로그인한다. 지운
- * 뒤에도 과거 커밋에 남으므로, 애초에 넣지 않는다.
+ * A key in the repository lets anyone who knows it log in with that role at the deployed address.
+ * It stays in past commits even after deletion, so it is never committed in the first place.
  *
- * 같은 값이 세 곳으로 간다 — 웹(계정 카드와 서명), seed(role_bindings가 붙을
- * 주소), 그리고 worker 프로세스. worker는 이 설정 파일을 다시 읽으므로 여기서
- * 새로 만들면 runner와 어긋난다. 이미 있으면 그것을 쓴다.
+ * The same value goes to three places — the web (account cards and signing), seed (addresses that
+ * role_bindings attach to), and worker processes. Workers re-read this config file, so generating
+ * new keys here would diverge from the runner. If keys already exist, they are reused.
  */
 const DEMO_ACCOUNT_LABELS = [
   "Operator A",
@@ -30,31 +30,31 @@ const DEMO_ACCOUNT_KEYS =
     Object.fromEntries(DEMO_ACCOUNT_LABELS.map((label) => [label, generatePrivateKey()])),
   );
 
-// globalSetup과 seed-cli는 자식 프로세스다. 환경으로 물려준다.
+// globalSetup and seed-cli are child processes. Pass values down through the environment.
 process.env["E2E_DEMO_ACCOUNT_KEYS"] = DEMO_ACCOUNT_KEYS;
 
 /**
- * E2E 설정.
+ * E2E configuration.
  *
- * API와 웹을 함께 띄운다. 웹만 띄우면 화면은 렌더되지만 실제 데이터가 흐르는지
- * 검증할 수 없다 — 목업과 다를 게 없어진다.
+ * Starts the API and the web together. With only the web, screens render but there is no way to
+ * verify that real data flows — no different from a mockup.
  *
- * DB는 E2E 전용(`mpc_e2e`)을 쓴다. globalSetup이 스키마를 새로 만들고 고정 계정을
- * seed한다.
+ * Uses an E2E-only DB (`mpc_e2e`). globalSetup recreates the schema and seeds fixed
+ * accounts.
  */
 
 /**
- * 기본값은 `docker-compose.yml`의 postgres가 노출하는 포트(55432)를 가리킨다.
+ * The default points at the port exposed by postgres in `docker-compose.yml` (55432).
  *
- * 호스트의 5432를 피해 옮긴 포트이므로 여기 기본값이 그것과 어긋나면 env를 주지
- * 않은 로컬 실행이 접속부터 실패한다. DB 이름만 `mpc_e2e`로 갈라 `mpc_dev`를
- * 건드리지 않는다 — globalSetup이 스키마를 매번 드롭하고 다시 만든다.
+ * That port was moved off the host's 5432, so if the default here diverges, a local run
+ * without env fails at connection. Only the DB name differs (`mpc_e2e`) so `mpc_dev`
+ * is not touched — globalSetup drops and recreates the schema every time.
  *
- * 그 DB는 compose가 만들지 않는다. 처음 한 번만 직접 만든다.
+ * compose does not create that DB. Create it manually once.
  *
  *   createdb -h localhost -p 55432 -U postgres mpc_e2e
  *
- * CI는 자체 postgres service를 쓰므로 두 URL을 env로 덮어쓴다.
+ * CI uses its own postgres service, so both URLs are overridden via env.
  */
 const SUPERUSER_URL =
   process.env["E2E_DATABASE_URL"] ?? "postgres://postgres:postgres@localhost:55432/mpc_e2e";
@@ -62,20 +62,20 @@ const APP_URL =
   process.env["E2E_APP_DATABASE_URL"] ??
   "postgres://mpc_app_login:app@localhost:55432/mpc_e2e";
 
-// globalSetup은 자식이 아니라 같은 프로세스에서 돌지만 seed는 자식 프로세스다.
-// 여기서 환경에 못 박아 **기본값이 두 곳에 각각 있는 상태**를 없앤다 — 갈리면
-// seed가 다른 DB에 들어가고, 앱은 예전 데이터를 보며 조용히 어긋난다.
+// globalSetup runs in the same process, not a child, but seed is a child process.
+// Pinning the value in the environment here removes **defaults living in two places** — if they diverge,
+// seed goes into another DB and the app silently diverges while reading old data.
 process.env["E2E_DATABASE_URL"] = SUPERUSER_URL;
 /**
- * 앱 URL도 같이 못 박는다.
+ * Pin the app URL as well.
  *
- * 위 주석의 사고가 **한 번 더 형태를 바꿔 일어났다.** `E2E_DATABASE_URL`만 주고
- * `E2E_APP_DATABASE_URL`을 두면 seed는 준 DB에 들어가고 **API는 기본값의 DB에
- * 붙는다.** 그 DB가 없으면 API는 뜨긴 하지만 아무것도 읽지 못한다 — 공개 화면은
- * 빈 상태로 잘 렌더되므로 통과하고, **로그인이 필요한 것만 전부 깨진다.**
- * 원인이 화면 어디에도 안 보여 코드 문제로 보인다.
+ * The incident in the comment above **happened again in another form.** Setting only `E2E_DATABASE_URL`
+ * and leaving `E2E_APP_DATABASE_URL` puts seed into the given DB while **the API connects to the
+ * default DB.** If that DB is missing, the API starts but reads nothing — public screens
+ * render fine in an empty state and pass, while **only things that need login all fail.**
+ * The cause shows nowhere on screen, so it looks like a code problem.
  *
- * globalSetup이 이 값을 seed 대상과 대조한다.
+ * globalSetup checks this value against the seed target.
  */
 process.env["E2E_APP_DATABASE_URL"] = APP_URL;
 
@@ -91,14 +91,14 @@ export default defineConfig({
   globalSetup: "./e2e/global-setup.ts",
 
   /**
-   * assertion 타임아웃 — 기본값 5초로는 부족하다.
+   * Assertion timeout — the default 5 seconds is not enough.
    *
-   * CI는 `reuseExistingServer: !CI` 때문에 항상 새 dev 서버를 띄우고, Next는
-   * route를 **처음 접근할 때** 컴파일한다. 등록 직후 이동처럼 새 route로 가는
-   * assertion이 첫 실행에서만 5초를 넘긴다.
+   * Because of `reuseExistingServer: !CI`, CI always starts a fresh dev server, and Next compiles
+   * a route **on first access**. Assertions that go to a new route, such as navigation right after
+   * registration, exceed 5 seconds only on the first run.
    *
-   * 재시도로 덮지 않는다 — 재시도는 두 번째에 route가 이미 컴파일돼 있어서
-   * 통과하는 것이고, 그러면 "느린 경로"와 "깨진 경로"를 구분할 수 없다.
+   * Not covered by retries — a retry passes because the route is already compiled the second time,
+   * and then "slow path" cannot be told apart from "broken path".
    */
   expect: { timeout: 15_000 },
 
@@ -127,43 +127,43 @@ export default defineConfig({
         NODE_ENV: "development",
         LOG_LEVEL: "warn",
         /**
-         * 로그인 상한을 E2E 동안만 올린다.
+         * Raise the login limit only during E2E.
          *
-         * 기본값은 1분에 10회다(`AUTH_RATE_LIMIT_MAX`). 스펙 하나가 여러 역할로
-         * 갈아타며 로그인하므로 한 실행에서 그 값을 훌쩍 넘고, 넘는 순간 429가
-         * 로그인 실패로 나타나 **원인과 무관한 테스트가 깨진다.** 상한 자체를
-         * 낮게 유지하는 것이 목적이므로 기본값은 건드리지 않는다.
+         * The default is 10 per minute (`AUTH_RATE_LIMIT_MAX`). A single spec logs in switching between
+         * several roles, so one run easily exceeds that, and once exceeded a 429 shows up as
+         * a login failure and **breaks tests unrelated to the cause.** The goal is to keep the limit
+         * itself low, so the default is left unchanged.
          */
         AUTH_RATE_LIMIT_MAX: "1000",
         /**
-         * 일반 상한도 E2E 동안만 올린다 — 2026-09-10 실사.
+         * Raise the general limit only during E2E as well — 2026-09-10 audit.
          *
-         * 여기가 비어 있어서 기본값 300회/분이 그대로 걸렸다. **E2E의 모든
-         * 요청은 한 요청자로 셈된다** — Playwright가 API를 직접 부르므로
-         * `request.ip`가 전부 127.0.0.1이다. 74개 스펙이 병렬로 돌면 1분 안에
-         * 300을 넘고, 넘는 순간 429가 **원인과 무관한 실패**로 나타난다.
+         * This was empty, so the default 300/min applied as-is. **Every E2E
+         * request counts as one requester** — Playwright calls the API directly, so
+         * `request.ip` is always 127.0.0.1. With 74 specs running in parallel, 300 is exceeded
+         * within a minute, and once exceeded a 429 appears as **a failure unrelated to the cause**.
          *
-         * 실제로 `review-lifecycle.spec.ts:42`의 역할 전환이 그렇게 끊겼다:
-         * 화면에 `No account connected`와 `429 RATE_LIMITED`가 같이 남았고
-         * 자동 재시도에서 통과해 flaky로 보였다.
+         * That is exactly how the role switch in `review-lifecycle.spec.ts:42` was cut off:
+         * the screen showed both `No account connected` and `429 RATE_LIMITED`,
+         * and it passed on automatic retry, so it looked flaky.
          *
-         * 상한 자체를 낮게 두는 것이 목적이므로 기본값은 건드리지 않는다.
-         * 상한 동작을 보는 시험은 `rate-limit.test.ts`가 따로 갖는다.
+         * The goal is to keep the limit itself low, so the default is left unchanged.
+         * Tests of rate-limit behavior live separately in `rate-limit.test.ts`.
          */
         RATE_LIMIT_MAX: "20000",
       },
     },
     {
-      // `--webpack` 플래그는 `package.json`의 dev 스크립트가 갖는다. 여기서 next를
-      // 직접 부르면 플래그가 두 곳으로 갈린다.
+      // The `--webpack` flag lives in the dev script of `package.json`. Calling next directly
+      // here would split the flag across two places.
       command: "pnpm dev",
       port: 3000,
       reuseExistingServer: !process.env["CI"],
       timeout: 120_000,
       env: {
-        // E2E는 데모 계정으로 로그인한다. 이 값이 없으면 로그인 화면에 계정이
-        // 없어 모든 스펙이 첫 단계에서 멈춘다. 배포 빌드는 이 값을 주지 않으므로
-        // 데모 계정이 생기지 않는다.
+        // E2E logs in with demo accounts. Without this value the login screen has no
+        // accounts and every spec stops at the first step. Deployment builds do not provide this value,
+        // so no demo accounts exist there.
         NEXT_PUBLIC_DEMO_ACCOUNT_KEYS: DEMO_ACCOUNT_KEYS,
       },
     },

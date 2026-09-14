@@ -7,16 +7,16 @@ import { createApiClient } from "./api-client.js";
 import { createHeartbeat } from "./heartbeat.js";
 
 /**
- * 바이러스 검사 worker.
+ * Virus scan worker.
  *
- * quarantine 업로드를 하나씩 집어 ClamAV에 넘긴다. 감염 파일의 바이트가 API
- * 프로세스를 지나지 않게 하는 것이 이 프로세스를 분리한 이유다.
+ * Claims quarantined uploads one at a time and hands them to ClamAV. This process is separate so
+ * that infected file bytes never pass through the API process.
  *
- * API와 **같은 저장소 설정**을 쓴다. 다르면 worker가 다른 버킷을 보게 되고,
- * 그러면 검사 대기가 쌓이는데 원인이 보이지 않는다.
+ * Uses **the same storage config** as the API. If it differed, the worker would see another
+ * bucket and the scan queue would grow with no visible cause.
  *
- * 결과는 API로 보고한다 — 상태기계 검사·감사 기록·If-Match를 우회하지 않기
- * 위해서다. 인증도 사람과 같은 SIWE 경로를 지난다.
+ * Results are reported through the API — so state machine checks, audit records, and If-Match
+ * are not bypassed. Authentication goes through the same SIWE path as people.
  */
 
 function emit(record: Record<string, unknown>): void {
@@ -26,7 +26,7 @@ function emit(record: Record<string, unknown>): void {
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
-    process.stderr.write(`${name}가 필요하다\n`);
+    process.stderr.write(`${name} is required\n`);
     process.exit(1);
   }
   return value;
@@ -35,8 +35,8 @@ function required(name: string): string {
 const databaseUrl = resolveSecret("DATABASE_URL", process.env["DATABASE_URL"]);
 const pollIntervalMs = Number(process.env["SCAN_POLL_MS"] ?? "3000");
 const maxAttempts = Number(process.env["SCAN_MAX_ATTEMPTS"] ?? "3");
-// 검사 + 보고에 걸리는 시간보다 넉넉해야 한다. 짧으면 다른 worker가 같은 파일을
-// 중복 검사한다.
+// Must comfortably exceed scan + report time. Too short and another worker scans the same file
+// again.
 const leaseMs = Number(process.env["SCAN_LEASE_MS"] ?? String(2 * 60 * 1000));
 
 const scannerOptions = {
@@ -81,8 +81,8 @@ const store =
       })
     : createMemoryObjectStore();
 
-// prepared statement를 쓰지 않는다. 오래 붙어 있는 프로세스라 그 사이 migration이
-// 돌면 캐시된 계획의 결과 형식이 어긋나 루프가 죽는다.
+// No prepared statements. This is a long-lived process; a migration in the meantime makes the
+// cached plan's result shape mismatch and kills the loop.
 const sql = postgres(databaseUrl, { onnotice: () => {}, prepare: false });
 
 let running = true;
@@ -99,7 +99,7 @@ emit({
   msg: "scan.worker.started",
   scanner: `${scannerOptions.host}:${scannerOptions.port}`,
   objectStore: process.env["OBJECT_STORE"] ?? "memory",
-  // 주소는 공개 정보다. 개인키는 어디에도 찍지 않는다.
+  // The address is public. The private key is never printed anywhere.
   identity: api.walletAddress,
   maxAttempts,
 });
@@ -117,8 +117,8 @@ while (running) {
           `/api/v1/uploads/${uploadId}/scan-result`,
           { result: verdict, ...(detail ? { detail } : {}) },
           {
-            // 같은 업로드·같은 버전의 보고는 한 번만 반영된다. 재시도가 상태를
-            // 두 번 밀지 않는다.
+            // A report for the same upload and version applies once. A retry does not advance
+            // the state twice.
             "idempotency-key": `scan-${uploadId}-v${version}`,
             "if-match": `"${version}"`,
           },
@@ -128,15 +128,15 @@ while (running) {
       emit,
     );
 
-    // 큐가 비어 있어도 신호를 남긴다 — 비어 있는 것과 worker가 없는 것을
-    // 구분하는 것이 이 신호의 목적이다.
+    // Beat even when the queue is empty — telling "empty" apart from "no worker" is the point
+    // of this signal.
     await heartbeat({ handled: result.handled });
 
     if (!result.handled) {
       const backlog = await scanBacklog(sql, maxAttempts);
       if (backlog.stuck > 0) {
-        // 시도 상한에 닿은 것은 자동으로 풀리지 않는다. 조용히 두면 업로드가
-        // 검사되지 않은 채 남아 있는데 아무도 모른다.
+        // Uploads at the attempt cap do not recover on their own. Left silent, they stay
+        // unscanned and nobody knows.
         emit({ level: "warn", msg: "scan.stuck", ...backlog });
       }
       await sleep(pollIntervalMs);

@@ -18,62 +18,62 @@ import {
 } from "@mpc/domain";
 
 /**
- * Source Adapter 구현 — spec 05 §5.12, OD-42.
+ * Source Adapter implementation — spec 05 §5.12, OD-42.
  *
- * 프레임워크(`@mpc/domain/adapter`)가 규칙을 정하고 여기서 실제 호출을 한다.
- * **기관 이름이 이 파일에 없다** — 어떤 기관을 어떤 방식으로 부를지는 설정으로
- * 온다(OD-43).
+ * The framework (`@mpc/domain/adapter`) sets the rules; the actual calls happen here.
+ * **No authority names appear in this file** — which authority to call and how comes from
+ * config (OD-43).
  *
- * 두 가지 수집 방식만 구현한다.
+ * Only two collection methods are implemented.
  *
- * - `http` — 인증된 API. 응답 상태와 본문으로 12개 결과 중 하나를 정한다.
- * - `manual` — 사람이 조회한 결과를 받는다. adapter를 부르지 않는다.
+ * - `http` — authenticated API. Response status and body decide one of 12 outcomes.
+ * - `manual` — accepts a result a person looked up. Does not call the adapter.
  *
- * 나머지(bulk export, 서명 문서)는 실제 대상이 확인된 뒤에 만든다. 지금 만들면
- * 쓰지 않는 코드가 유지 대상이 된다.
+ * The rest (bulk export, signed documents) get built once real targets are confirmed. Building
+ * them now would turn unused code into a maintenance burden.
  */
 
 export interface HttpAdapterConfig {
   readonly endpoint: string;
-  /** 인증 헤더. 값은 secret manager에서 온다 — 여기에 저장하지 않는다. */
+  /** Auth header. The value comes from the secret manager — not stored here. */
   readonly headers: Readonly<Record<string, string>>;
   readonly timeoutMs: number;
-  /** 응답에서 기준일을 꺼낼 JSON 경로. 없으면 null이다. */
+  /** JSON path for extracting the as-of date from the response. Null if absent. */
   readonly effectiveAtField: string | null;
-  /** 이 출처의 응답이 어떻게 생겼는가. 선언이 없으면 확정하지 않는다. */
+  /** What this source's response looks like. Without a declaration nothing is confirmed. */
   readonly responseProfile: ResponseProfile;
 }
 
 /**
- * 출처 응답 profile — 2026-09-10 실사 A7.
+ * Source response profile — 2026-09-10 audit A7.
  *
- * 이전에는 **JSON 파싱이 되면 스키마가 맞는 것으로 봤다.** 그래서 HTTP 200에
- * `{"error":"unavailable"}`이나 `{}`가 와도 `confirmed_from_source`가 됐다 —
- * 출처가 "답할 수 없다"고 말한 것을 확인으로 기록하는 경로다.
+ * Previously **a response that parsed as JSON was taken as matching the schema.** So HTTP 200
+ * with `{"error":"unavailable"}` or `{}` became `confirmed_from_source` — a path that records a
+ * source saying "cannot answer" as confirmation.
  *
- * 선언은 연동(`core.source_connections`)이 갖는다. **코드에 기관이 없다**(OD-43).
+ * The declaration belongs to the connection (`core.source_connections`). **No authority is in code** (OD-43).
  */
 export interface ResponseProfile {
   /**
-   * 정상 응답이 반드시 갖는 최상위 필드.
+   * Top-level fields a normal response always has.
    *
-   * **비어 있으면 확정하지 않는다.** 모르는 형식을 일치로 읽지 않는다 —
-   * `official_bulk_export`의 `schema_fingerprint`와 같은 규칙이다.
+   * **Empty means nothing is confirmed.** An unknown format is not read as a match —
+   * the same rule as `schema_fingerprint` for `official_bulk_export`.
    */
   readonly requiredFields: readonly string[];
-  /** "그 조건의 기록이 없다"를 담는 필드. `{"found": false}`의 `found`. */
+  /** Field carrying "no record for that condition". `found` in `{"found": false}`. */
   readonly recordAbsentField: string | null;
-  /** 그 필드가 이 값이면 기록 없음이다. `found`에 대해 `"false"`. */
+  /** When that field equals this value, there is no record. `"false"` for `found`. */
   readonly recordAbsentValue: string | null;
-  /** 200인데 업무 오류를 담는 필드. 값이 있으면 성공이 아니다. */
+  /** Field carrying a business error in a 200. Any value means not a success. */
   readonly businessErrorField: string | null;
 }
 
 /**
- * 본문 판정.
+ * Body verdict.
  *
- * 상태 코드와 분리한다 — 200이라는 사실과 그 본문이 우리가 아는 답이라는 사실은
- * 다른 것이고, 둘을 합치면 전자가 후자를 덮는다.
+ * Kept separate from the status code — the fact of a 200 and the fact that the body is an
+ * answer we recognize are different, and merging them lets the former mask the latter.
  */
 export type BodyVerdict =
   | "match"
@@ -90,18 +90,18 @@ export interface BodyEvaluation {
   readonly parsed: unknown;
 }
 
-/** 최상위 필드를 읽는다. 중첩 경로는 profile이 자라면 그때 만든다. */
+/** Reads a top-level field. Nested paths get built when profiles grow. */
 function fieldOf(parsed: unknown, field: string): unknown {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   return (parsed as Record<string, unknown>)[field];
 }
 
 /**
- * 응답 본문을 profile로 판정한다.
+ * Judges the response body against the profile.
  *
- * 순서가 규칙이다. 업무 오류와 기록 없음을 **필드 대조보다 먼저** 본다 —
- * 그 응답들은 정상 응답의 필드를 갖지 않으므로, 순서를 뒤집으면 전부
- * `schema_changed`가 되어 "출처가 뭐라고 답했는가"를 잃는다.
+ * The order is the rule. Business errors and no-record are checked **before field matching** —
+ * those responses lack the normal response's fields, so reversing the order turns them all
+ * into `schema_changed` and loses "what the source actually answered".
  */
 export function evaluateResponseBody(body: string, profile: ResponseProfile): BodyEvaluation {
   if (body.trim().length === 0) return { verdict: "empty", detail: null, parsed: null };
@@ -110,12 +110,12 @@ export function evaluateResponseBody(body: string, profile: ResponseProfile): Bo
   try {
     parsed = JSON.parse(body);
   } catch {
-    // JSON이 아니다. 값을 추측하지 않는다.
+    // Not JSON. Do not guess values.
     return { verdict: "unparsable", detail: null, parsed: null };
   }
 
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { verdict: "drift", detail: "최상위가 객체가 아니다", parsed };
+    return { verdict: "drift", detail: "Top level is not an object", parsed };
   }
 
   if (profile.businessErrorField) {
@@ -132,7 +132,7 @@ export function evaluateResponseBody(body: string, profile: ResponseProfile): Bo
     }
   }
 
-  // 선언이 없으면 일치를 말할 수 없다. 200과 유효 JSON은 형식일 뿐이다.
+  // Without a declaration a match cannot be claimed. A 200 and valid JSON are only form.
   if (profile.requiredFields.length === 0) {
     return { verdict: "unprofiled", detail: null, parsed };
   }
@@ -141,73 +141,73 @@ export function evaluateResponseBody(body: string, profile: ResponseProfile): Bo
     (field) => fieldOf(parsed, field) === undefined,
   );
   if (missing.length > 0) {
-    return { verdict: "drift", detail: `없는 필드: ${missing.join(", ")}`, parsed };
+    return { verdict: "drift", detail: `Missing fields: ${missing.join(", ")}`, parsed };
   }
 
   return { verdict: "match", detail: null, parsed };
 }
 
 /**
- * HTTP 응답을 12개 결과 중 하나로 정규화한다.
+ * Normalizes an HTTP response into one of 12 outcomes.
  *
- * **여기가 이 모듈의 핵심이다.** 상태 코드를 그대로 성공/실패로 나누면
- * "기록 없음"(404)과 "출처 장애"(503)가 같은 실패가 되고, 사용자는 존재하지
- * 않는 기록을 계속 재시도한다.
+ * **This is the core of the module.** Splitting status codes straight into success/failure
+ * makes "no record" (404) and "source outage" (503) the same failure, and users keep
+ * retrying records that do not exist.
  */
 export function classifyHttpResponse(input: {
   readonly status: number;
   readonly signatureValid: boolean | null;
-  /** 본문 판정. `evaluateResponseBody`가 만든다. */
+  /** Body verdict. Produced by `evaluateResponseBody`. */
   readonly body: BodyVerdict;
 }): SourceResult {
-  // 인증 실패와 권한 없음은 다르다. 전자는 우리 설정 문제고 후자는 협의 문제다.
+  // Auth failure and no permission differ: the former is our config problem, the latter an agreement problem.
   if (input.status === 401) return "authentication_failed";
   if (input.status === 403) return "access_not_authorized";
 
-  // 404는 장애가 아니라 사실이다 — 그 조건으로는 기록이 없다.
+  // 404 is a fact, not an outage — there is no record for that condition.
   if (input.status === 404) return "source_returned_no_record";
 
   if (input.status === 429 || input.status >= 500) return "source_unavailable";
 
-  // 3xx. 리다이렉트를 따라가지 않는다 — 출처가 우리를 다른 곳으로 보내고 있고,
-  // 그 대상이 내부망일 수 있다. 자동으로 따라가면 등록부 조회가 내부 주소를
-  // 읽는 통로가 된다. 사람이 새 주소를 확인하고 설정을 고친다.
+  // 3xx. Redirects are not followed — the source is sending us elsewhere, and the target may be
+  // on the internal network. Following automatically turns registry lookups into a channel for
+  // reading internal addresses. A person verifies the new address and fixes the config.
   if (input.status >= 300 && input.status < 400) return "manual_review_required";
 
   if (input.status >= 200 && input.status < 300) {
-    // 서명이 붙은 응답인데 검증에 실패했다. 내용이 맞더라도 신뢰할 수 없다.
+    // A signed response failed verification. Even if the content is right it cannot be trusted.
     if (input.signatureValid === false) return "signature_invalid";
 
     switch (input.body) {
-      // 스키마가 바뀌었다. 파싱은 되지만 우리가 아는 형식이 아니다 — 값을
-      // 추측해 넣으면 틀린 사실이 기록된다.
+      // The schema changed. It parses, but not in a format we know — guessing values
+      // would record false facts.
       case "unparsable":
       case "drift":
         return "schema_changed";
 
-      // 출처가 "그 조건의 기록이 없다"고 답했다. 장애가 아니라 사실이다.
+      // The source answered "no record for that condition". A fact, not an outage.
       case "no_record":
         return "source_returned_no_record";
 
       /**
-       * 200인데 본문이 업무 오류를 담고 있다.
+       * A 200 whose body carries a business error.
        *
-       * `source_unavailable`로 두지 않는다 — 그것은 재시도 대상이고 연동을
-       * degraded로 만든다. 출처가 무엇을 말했는지 우리가 모르는 상태에서
-       * 그렇게 단정할 수 없다. 사람이 detail을 읽는다.
+       * Not left as `source_unavailable` — that is a retry target and marks the connection
+       * degraded. We cannot assert that without knowing what the source said.
+       * A person reads the detail.
        */
       case "business_error":
         return "manual_review_required";
 
-      // 200인데 본문이 비었다. 기록 없음과 구분되지 않으므로 사람이 본다.
+      // A 200 with an empty body. Indistinguishable from no-record, so a person looks.
       case "empty":
         return "manual_review_required";
 
       /**
-       * 이 출처의 정상 응답이 어떻게 생겼는지 선언되지 않았다.
+       * This source's normal response shape is not declared.
        *
-       * **여기가 A7의 핵심이다.** 파싱 성공만으로 확정하면 `{}`도
-       * `{"error":"..."}`도 확인이 된다. 선언이 없으면 확정하지 않는다.
+       * **This is the core of A7.** Confirming on parse success alone makes both `{}` and
+       * `{"error":"..."}` confirmations. Without a declaration nothing is confirmed.
        */
       case "unprofiled":
         return "manual_review_required";
@@ -217,11 +217,11 @@ export function classifyHttpResponse(input: {
     }
   }
 
-  // 알 수 없는 상태. 성공으로 넘기지 않는다.
+  // Unknown status. Not passed as success.
   return "manual_review_required";
 }
 
-/** 원문 해시. 재현 가능성의 근거이며 저장소를 신뢰 기반에서 뺀다. */
+/** Hash of the original. The basis for reproducibility; takes storage out of the trust base. */
 export function hashRawResponse(body: string): string {
   return `0x${createHash("sha256").update(body).digest("hex")}`;
 }
@@ -233,11 +233,11 @@ export interface InvokeInput {
 }
 
 /**
- * HTTP adapter 호출.
+ * HTTP adapter call.
  *
- * **호출 가능 여부를 먼저 판정한다.** `pending_access`인 출처를 부르면 미확인
- * 통합을 약속하는 것이 되고, 401을 받아 "인증 실패"로 기록하게 된다 — 실제로는
- * 협의가 안 된 것이다.
+ * **Callability is judged first.** Calling a `pending_access` source promises an unverified
+ * integration and records a 401 as "auth failure" — when in fact no agreement has been
+ * reached.
  */
 export async function invokeHttpAdapter(
   input: InvokeInput,
@@ -248,7 +248,7 @@ export async function invokeHttpAdapter(
   if (!availability.callable) {
     return {
       kind: "failed",
-      // 접근이 승인되지 않은 것을 인증 실패로 기록하지 않는다.
+      // Do not record unapproved access as an auth failure.
       result:
         availability.reason === "MANUAL_COLLECTION_ONLY"
           ? "manual_review_required"
@@ -258,14 +258,14 @@ export async function invokeHttpAdapter(
   }
 
   /**
-   * 부르기 직전에 대상을 다시 본다 — SSRF.
+   * Re-checks the target right before calling — SSRF.
    *
-   * 저장 시점에도 검사하지만 그것만으로는 이름이 사설 주소를 가리키도록 DNS를
-   * 바꾸는 우회를 막지 못한다. 여기서 걸리면 요청을 보내지 않았으므로 출처
-   * 장애가 아니라 우리 설정 문제다 — 결과를 그렇게 기록한다.
+   * It is also checked at save time, but that alone does not stop a bypass that changes DNS so
+   * the name points to a private address. If it trips here, no request was sent, so it is our
+   * config problem, not a source outage — the result records it that way.
    *
-   * **판정에 쓴 주소를 받아 그대로 연결한다.** 다시 풀면 그 사이에 응답이
-   * 바뀔 수 있고(rebinding), 그러면 검사한 주소와 연결한 주소가 다르다.
+   * **The address used for the verdict is taken and connected to as is.** Resolving again could
+   * change the answer in between (rebinding), making the checked and connected addresses differ.
    */
   let pinnedAddresses: readonly string[];
   try {
@@ -274,7 +274,7 @@ export async function invokeHttpAdapter(
     return {
       kind: "failed",
       result: "manual_review_required",
-      detail: error instanceof Error ? error.message : "endpoint를 사용할 수 없다",
+      detail: error instanceof Error ? error.message : "Endpoint is not usable",
     };
   }
 
@@ -292,18 +292,18 @@ export async function invokeHttpAdapter(
     response = await fetchImpl(url, {
       headers: input.config.headers,
       signal: controller.signal,
-      // 리다이렉트를 따라가지 않는다. 위 분류가 3xx를 사람 확인으로 돌린다.
+      // Do not follow redirects. The classification above routes 3xx to a manual check.
       redirect: "manual",
       pinnedAddresses,
     });
     body = await response.text();
   } catch (error) {
-    // 응답이 상한을 넘은 것은 출처 장애가 아니다. 우리가 읽지 못한 것이고,
-    // 무엇이 왔는지는 사람이 확인한다.
+    // A response over the cap is not a source outage. We could not read it, and
+    // a person checks what arrived.
     if (error instanceof SourceResponseTooLargeError) {
       return { kind: "failed", result: "manual_review_required", detail: error.message };
     }
-    // 타임아웃·연결 실패는 출처 장애다. 기록 없음이 아니다.
+    // Timeouts and connection failures are source outages, not no-record.
     return {
       kind: "failed",
       result: "source_unavailable",
@@ -317,7 +317,7 @@ export async function invokeHttpAdapter(
 
   const result = classifyHttpResponse({
     status: response.status,
-    // 서명 검증은 출처마다 방식이 달라 R5 profile에서 붙인다.
+    // Signature verification differs per source, so it is added in the R5 profile.
     signatureValid: null,
     body: evaluation.verdict,
   });
@@ -338,8 +338,8 @@ export async function invokeHttpAdapter(
       result,
       rawHash: hashRawResponse(body),
       queryBasis: input.queryBasis,
-      // adapter가 더할 한계는 여기서 넣지 않는다. authority가 선언한 것이
-      // `toReceiptInput`에서 반드시 합쳐진다.
+      // Limitations the adapter would add are not inserted here. Those the authority declared are
+      // always merged in `toReceiptInput`.
       limitations: [],
       effectiveAt: extractEffectiveAt(evaluation.parsed, input.config.effectiveAtField),
     },
@@ -347,10 +347,10 @@ export async function invokeHttpAdapter(
 }
 
 /**
- * 출처가 밝힌 기준일.
+ * As-of date stated by the source.
  *
- * 조회 시각과 다르다 — 등록부가 어제 갱신됐다면 오늘 조회해도 기준일은 어제다.
- * 둘을 같게 두면 자료가 실제보다 최신으로 보인다.
+ * Differs from lookup time — if the registry was updated yesterday, the as-of date is yesterday
+ * even when queried today. Treating them as equal makes data look fresher than it is.
  */
 function extractEffectiveAt(parsed: unknown, field: string | null): string | null {
   if (!field || parsed === null || typeof parsed !== "object") return null;
@@ -363,10 +363,10 @@ function extractEffectiveAt(parsed: unknown, field: string | null): string | nul
 }
 
 /**
- * adapter 결과를 Source Receipt 본문으로 만든다.
+ * Turns an adapter result into a Source Receipt body.
  *
- * `toReceiptInput`이 authority의 한계를 반드시 합친다 — adapter가 빠뜨려도
- * 한계 없는 receipt가 만들어지지 않는다.
+ * `toReceiptInput` always merges the authority's limitations — even if the adapter omits
+ * them, no receipt is created without limitations.
  */
 export function buildReceiptBody(
   descriptor: AdapterDescriptor,
@@ -394,7 +394,7 @@ export function buildReceiptBody(
     queryBasis: normalized.queryBasis,
     endpointOrDocumentRef: extra.endpointOrDocumentRef,
     authenticationMethod: extra.authenticationMethod,
-    // 조회에 실패하면 원문이 없다. 가짜 해시를 만들지 않는다.
+    // A failed lookup has no original. Do not fabricate a hash.
     rawHash: normalized.rawHash ?? `0x${"0".repeat(64)}`,
     sourceSchemaVersion: extra.sourceSchemaVersion,
     adapterVersion: extra.adapterVersion,

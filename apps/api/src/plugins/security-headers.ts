@@ -1,28 +1,28 @@
 import type { FastifyInstance } from "fastify";
 
 /**
- * API 응답 보안 헤더 — 10 §10.6.
+ * Security headers for API responses — 10 §10.6.
  *
- * 웹 쪽 CSP는 `apps/web/next.config.ts`가 갖는다. 그 정책은 화면을 그리는 문서를
- * 위한 것이고, 여기는 **JSON만 돌려주는 표면**이다. 그래서 정책이 "무엇을
- * 허용할까"가 아니라 `default-src 'none'`이다 — API 응답이 스크립트를 부르거나
- * frame에 들어가야 할 이유가 없다.
+ * The web CSP lives in `apps/web/next.config.ts`. That policy is for documents that render
+ * screens; this is **a surface that returns only JSON**. So the policy is not "what to
+ * allow" but `default-src 'none'` — an API response has no reason to load scripts or
+ * sit in a frame.
  *
- * 헤더가 막는 것은 서버 권한 검사를 **지나온 뒤** 브라우저 쪽에서 벌어지는 일이다.
- * 오류 본문에 반사된 값이 문서로 해석되는 것, content sniffing, frame 삽입은
- * 권한 코드로는 닿지 않는다.
+ * The headers block what happens on the browser side **after** passing server authorization.
+ * A value reflected in an error body being interpreted as a document, content sniffing, and
+ * framing are out of reach of authorization code.
  *
- * 배포에서 브라우저는 `web`의 `/api/*` 프록시를 지나 여기 닿지만, API가 다른
- * 경로로 직접 노출되는 순간(디버깅, 별도 도메인, 내부 도구) 프록시가 붙여 주던
- * 헤더는 사라진다. 그러므로 API가 자기 헤더를 직접 붙인다.
+ * In deployment the browser reaches here through `web`'s `/api/*` proxy, but the moment the API
+ * is exposed directly another way (debugging, a separate domain, internal tools), headers the
+ * proxy added disappear. So the API attaches its own headers.
  */
 
 export interface SecurityHeaderOptions {
-  /** production에서만 HSTS를 보낸다. */
+  /** Send HSTS only in production. */
   readonly production: boolean;
 }
 
-/** 1년. preload 요건이며 그보다 짧으면 중간자 다운그레이드 창이 남는다. */
+/** One year. A preload requirement; anything shorter leaves a MITM downgrade window. */
 const HSTS_MAX_AGE_SECONDS = 31_536_000;
 
 export function securityHeaders(
@@ -36,9 +36,9 @@ export function securityHeaders(
       "form-action 'none'",
     ].join("; "),
     "x-content-type-options": "nosniff",
-    // CSP frame-ancestors를 못 읽는 브라우저를 위한 같은 뜻의 옛 헤더.
+    // Legacy header with the same meaning, for browsers that cannot read CSP frame-ancestors.
     "x-frame-options": "DENY",
-    // API 응답에는 사용자가 따라갈 링크가 없다. 보낼 referrer도 없다.
+    // API responses have no links for users to follow. There is no referrer to send.
     "referrer-policy": "no-referrer",
     "permissions-policy": "geolocation=(), camera=(), microphone=(), payment=()",
     "cross-origin-resource-policy": "same-origin",
@@ -46,11 +46,11 @@ export function securityHeaders(
   };
 
   /**
-   * HSTS는 production에서만 보낸다.
+   * HSTS is sent only in production.
    *
-   * 로컬은 http다. 거기서 HSTS를 받은 브라우저는 그 호스트를 https로 강제
-   * 기억하고, 같은 호스트명을 쓰는 다른 로컬 프로젝트까지 접속이 막힌다.
-   * 개발자가 브라우저 설정에서 직접 지워야 풀리므로 기본값으로 두지 않는다.
+   * Local is http. A browser that receives HSTS there remembers the host as https-only, which
+   * also blocks other local projects using the same hostname. Developers must clear it in the
+   * browser settings to undo it, so it is not the default.
    */
   if (options.production) {
     headers["strict-transport-security"] =
@@ -67,10 +67,10 @@ export async function registerSecurityHeaders(
   const headers = securityHeaders(options);
 
   /**
-   * `onRequest`에 건다.
+   * Attached at `onRequest`.
    *
-   * 상한 초과(429)와 오류 응답도 같은 헤더를 받아야 한다. 정상 경로에만 붙이면,
-   * 값이 반사돼 나갈 가능성이 가장 큰 응답에서 정확히 헤더가 빠진다.
+   * Cap overruns (429) and error responses must get the same headers. Attaching them only on the
+   * normal path drops them from exactly the responses most likely to reflect values.
    */
   app.addHook("onRequest", async (_request, reply) => {
     for (const [name, value] of Object.entries(headers)) {

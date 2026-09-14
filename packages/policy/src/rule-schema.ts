@@ -3,11 +3,11 @@ import { ATTESTATION_TYPES, GRADES } from "@mpc/domain";
 import type { Predicate } from "./predicate.js";
 
 /**
- * Readiness rule schema — OD-15 해소.
+ * Readiness rule schema — resolves OD-15.
  *
- * spec 05 §5.4의 requirement 필드를 실행 가능한 스키마로 고정한다.
- * Rule Set 변경은 기존 Assessment를 덮어쓰지 않고 새 projection을 만든다.
- * 소급 여부는 `retroactive`에 명시한다(D-34).
+ * Pins the requirement fields of spec 05 §5.4 as an executable schema.
+ * A Rule Set change creates a new projection instead of overwriting existing Assessments.
+ * Whether it applies retroactively is stated in `retroactive` (D-34).
  */
 
 const predicateSchema: z.ZodType<Predicate> = z.lazy(() =>
@@ -23,27 +23,27 @@ const predicateSchema: z.ZodType<Predicate> = z.lazy(() =>
     z.object({
       op: z.literal("gte"),
       path: z.string().min(1),
-      value: z.string().regex(/^-?(0|[1-9][0-9]*)$/, "정수 decimal string이어야 한다"),
+      value: z.string().regex(/^-?(0|[1-9][0-9]*)$/, "must be an integer decimal string"),
     }),
     z.object({
       op: z.literal("lte"),
       path: z.string().min(1),
-      value: z.string().regex(/^-?(0|[1-9][0-9]*)$/, "정수 decimal string이어야 한다"),
+      value: z.string().regex(/^-?(0|[1-9][0-9]*)$/, "must be an integer decimal string"),
     }),
   ]),
 ) as z.ZodType<Predicate>;
 
 export const requirementSchema = z.object({
   requirementId: z.string().min(1),
-  /** 사용자에게 보여줄 요구 이름. UI가 문구를 하드코딩하지 않게 규칙이 소유한다. */
+  /** Requirement name shown to users. Owned by the rule so the UI does not hardcode copy. */
   label: z.string().min(1),
-  /** 이 requirement가 적용되는 조건. false면 평가 대상에서 제외된다. */
+  /** Condition under which this requirement applies. When false, it is excluded from evaluation. */
   appliesWhen: predicateSchema,
   requiredClaimTypes: z.array(z.string().min(1)),
   minimumGrade: z.enum(GRADES),
   /**
-   * 근거의 최대 허용 경과일. null이면 freshness를 요구하지 않는다.
-   * 실제 값은 source·claim type별로 다르며 OD-16에서 확정한다.
+   * Maximum allowed evidence age in days. null means freshness is not required.
+   * Actual values vary by source and claim type and are settled in OD-16.
    */
   freshnessThresholdDays: z
     .string()
@@ -51,9 +51,9 @@ export const requirementSchema = z.object({
     .nullable(),
   requiredAttestations: z.array(z.enum(ATTESTATION_TYPES)),
   blockingConflictTypes: z.array(z.string().min(1)),
-  /** 판단 기준 자체가 없는 조건 — gap이 아니라 not_evaluable이다. */
+  /** Condition with no evaluation basis at all — not_evaluable, not gap. */
   notEvaluableWhen: predicateSchema,
-  /** 진행 가능하지만 monitoring이 필요한 조건. */
+  /** Condition that allows progress but needs monitoring. */
   watchWhen: predicateSchema.nullable(),
 });
 
@@ -62,12 +62,12 @@ export type Requirement = z.infer<typeof requirementSchema>;
 export const ruleSetSchema = z
   .object({
     ruleSetId: z.string().min(1),
-    version: z.string().regex(/^\d+\.\d+\.\d+$/, "semver여야 한다"),
+    version: z.string().regex(/^\d+\.\d+\.\d+$/, "must be semver"),
     effectiveFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/, "ISO 8601 UTC"),
     supersededBy: z.string().nullable(),
     jurisdictionProfile: z.string().min(1),
     gateId: z.string().min(1),
-    /** 기존 발행분에 소급 적용하는가(D-34). 기본은 비소급이다. */
+    /** Whether it applies retroactively to existing issuances (D-34). Default is non-retroactive. */
     retroactive: z.boolean(),
     requirements: z.array(requirementSchema).min(1),
   })
@@ -78,7 +78,7 @@ export const ruleSetSchema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["requirements", index, "requirementId"],
-          message: `requirementId가 중복된다: ${requirement.requirementId}`,
+          message: `duplicate requirementId: ${requirement.requirementId}`,
         });
       }
       seen.add(requirement.requirementId);

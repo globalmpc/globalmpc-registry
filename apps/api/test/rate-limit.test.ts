@@ -8,10 +8,10 @@ import { setupFixture, testEnv, type TestFixture } from "./helpers/db.js";
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 이 묶음은 DB 없이 돈다. 상한이 DB보다 앞에 있는지를 실제 hook 순서로 확인한다.
- * 가짜 SQL은 호출 횟수만 세므로, 429 요청이 세션 조회에 닿으면 바로 드러난다.
+ * This group runs without a DB. It checks, in real hook order, that the cap runs before the DB.
+ * The fake SQL only counts calls, so a 429 request that reaches session lookup shows at once.
  */
-describe("검증 전 요청 상한", () => {
+describe("pre-validation request cap", () => {
   let app: FastifyInstance;
   let sqlCalls: number;
 
@@ -38,7 +38,7 @@ describe("검증 전 요청 상한", () => {
     await app.close();
   });
 
-  it("가짜 Bearer를 바꿔도 새 몫을 얻지 못하고 429는 세션 DB를 읽지 않는다", async () => {
+  it("rotating fake Bearers gets no new quota, and a 429 does not read the session DB", async () => {
     const statuses: number[] = [];
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -54,11 +54,11 @@ describe("검증 전 요청 상한", () => {
     }
 
     expect(statuses).toEqual([200, 200, 429, 429]);
-    // 허용된 두 요청만 resolve_session_token을 호출한다.
+    // Only the two allowed requests call resolve_session_token.
     expect(sqlCalls).toBe(2);
   });
 
-  it("SIWE는 Bearer 헤더를 무시하고 IP별 좁은 상한을 적용한다", async () => {
+  it("SIWE ignores the Bearer header and applies a narrow per-IP cap", async () => {
     const callsBefore = sqlCalls;
     const statuses: number[] = [];
 
@@ -76,18 +76,18 @@ describe("검증 전 요청 상한", () => {
     }
 
     expect(statuses).toEqual([200, 200, 429, 429]);
-    // SIWE route에서는 세션 조회를 생략하고 허용된 nonce INSERT만 수행한다.
+    // SIWE routes skip session lookup and run only the allowed nonce INSERTs.
     expect(sqlCalls - callsBefore).toBe(2);
   });
 });
 
 /**
- * 요청 상한 — 06 §6.9.
+ * Request cap — 06 §6.9.
  *
- * 계약은 무인증 경로에 별도 상한이 있다고 밝힌다. 다른 테스트는 상한을 넉넉히
- * 두고 돌기 때문에, 상한이 실제로 걸리는지는 **여기서만** 확인된다.
+ * The contract states that unauthenticated paths have a separate cap. Other tests run
+ * with a generous cap, so whether the cap actually trips is checked **only here**.
  */
-describeDb("요청 상한", () => {
+describeDb("request cap", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
 
@@ -112,7 +112,7 @@ describeDb("요청 상한", () => {
     });
   }
 
-  it("로그인 경로는 좁은 상한을 갖는다", async () => {
+  it("sign-in paths have a narrow cap", async () => {
     const statuses: number[] = [];
     for (let attempt = 0; attempt < 5; attempt += 1) {
       statuses.push((await nonce()).statusCode);
@@ -122,7 +122,7 @@ describeDb("요청 상한", () => {
     expect(statuses.slice(3)).toEqual([429, 429]);
   });
 
-  it("상한에 걸려도 envelope 형식을 지킨다 — 화면이 다음 행동을 안다", async () => {
+  it("keeps the envelope format when capped — the UI knows what to do next", async () => {
     for (let attempt = 0; attempt < 4; attempt += 1) await nonce();
 
     const response = await nonce();
@@ -135,13 +135,13 @@ describeDb("요청 상한", () => {
       details?: { retryAfterSeconds?: string };
     };
     expect(body.code).toBe("RATE_LIMITED");
-    // 상한은 시간이 지나면 풀린다. 재시도 불가로 표시하면 사용자가 포기한다.
+    // The cap lifts over time. Marking it non-retryable makes users give up.
     expect(body.retryable).toBe(true);
     expect(body.correlationId).not.toBe("unknown");
     expect(body.details?.retryAfterSeconds).toBeDefined();
   });
 
-  it("운영 endpoint는 상한에서 제외된다 — 수집 주기가 상한을 먹지 않는다", async () => {
+  it("ops endpoints are exempt — scrape intervals do not consume the cap", async () => {
     const statuses: number[] = [];
     for (let attempt = 0; attempt < 60; attempt += 1) {
       statuses.push((await app.inject({ method: "GET", url: "/health/live" })).statusCode);
@@ -152,17 +152,17 @@ describeDb("요청 상한", () => {
 });
 
 /**
- * 프록시 뒤에서의 요청 상한 — 06 §6.9.
+ * Request cap behind a proxy — 06 §6.9.
  *
- * 배포에서 API는 `web`의 `/api/*` 프록시를 지나서만 도달한다(`apps/web/src/proxy.ts`).
- * 그러면 API가 보는 소켓 주소는 **모든 요청에서 web 컨테이너 하나**다. 상한 키가
- * 그 주소로 떨어지면 무인증 경로(SIWE nonce·verify)의 상한이 사이트 전체 합산이
- * 되어, 한 사람이 10회를 쓰면 그 분에는 아무도 로그인하지 못한다.
+ * In deployment the API is reached only through the `web` `/api/*` proxy (`apps/web/src/proxy.ts`).
+ * So the socket address the API sees is **the one web container for every request**. If the
+ * cap key falls to that address, the unauthenticated-path cap (SIWE nonce/verify) becomes
+ * site-wide, and one person using 10 requests blocks everyone's sign-in for that minute.
  *
- * 그래서 **신뢰하는 홉 수만큼 `x-forwarded-for`의 오른쪽에서 세어** 요청자를
- * 정한다. 왼쪽은 요청자가 마음대로 채울 수 있으므로 세지 않는다.
+ * So the requester is found by **counting trusted hops from the right of `x-forwarded-for`**.
+ * The left side is requester-controlled, so it is not counted.
  */
-describeDb("프록시 뒤의 요청 상한", () => {
+describeDb("request cap behind a proxy", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
 
@@ -188,37 +188,37 @@ describeDb("프록시 뒤의 요청 상한", () => {
     });
   }
 
-  it("요청자마다 상한을 따로 센다 — 한 사람이 전체 로그인을 막지 못한다", async () => {
+  it("counts the cap per requester — one person cannot block all sign-ins", async () => {
     const first: number[] = [];
     for (let attempt = 0; attempt < 3; attempt += 1) {
       first.push((await nonce("203.0.113.10")).statusCode);
     }
     expect(first).toEqual([200, 200, 429]);
 
-    // 앞 사람이 자기 몫을 다 썼어도 다른 요청자는 그대로 쓴다.
+    // Even after the first requester uses up their quota, others still get theirs.
     expect((await nonce("203.0.113.11")).statusCode).toBe(200);
   });
 
-  it("헤더 왼쪽에 값을 덧붙여도 새 몫을 얻지 못한다 — 상한 우회가 안 된다", async () => {
+  it("prepending values to the header gets no new quota — the cap cannot be bypassed", async () => {
     expect((await nonce("198.51.100.7")).statusCode).toBe(200);
     expect((await nonce("198.51.100.7")).statusCode).toBe(200);
     expect((await nonce("198.51.100.7")).statusCode).toBe(429);
 
-    // 신뢰하지 않는 왼쪽 항목이 바뀌어도 오른쪽이 같으면 같은 몫이다.
+    // If the untrusted left entries change but the right side is the same, the quota is the same.
     expect((await nonce("9.9.9.9, 198.51.100.7")).statusCode).toBe(429);
     expect((await nonce("1.1.1.1, 2.2.2.2, 198.51.100.7")).statusCode).toBe(429);
   });
 });
 
 /**
- * 홉 수가 틀렸다는 것을 서버가 스스로 말하게 한다.
+ * Makes the server report a wrong hop count by itself.
  *
- * `TRUSTED_PROXY_HOPS`가 실제 프록시 수보다 작으면 요청자가 컨테이너의 사설
- * 주소로 판정된다 — 상한이 사이트 전체 합산이 되는 상태다. 이 상태는 오류 없이
- * 200을 돌려주므로 사람이 알아챌 신호가 없다. 그래서 상한 키가 사설 주소로
- * 떨어지는 첫 순간에 경고를 남긴다.
+ * If `TRUSTED_PROXY_HOPS` is below the real proxy count, the requester resolves to the
+ * container's private address — the cap becomes site-wide. This state returns 200 with
+ * no error, so nobody gets a signal. So a warning is logged the first time the cap key
+ * falls to a private address.
  */
-describeDb("요청자 주소 경고", () => {
+describeDb("requester address warning", () => {
   let fx: TestFixture;
 
   beforeAll(async () => {
@@ -247,11 +247,11 @@ describeDb("요청자 주소 경고", () => {
     return JSON.stringify(collected);
   }
 
-  it("사설 주소로 판정되면 무엇이 잘못됐는지 이름을 대고 알린다", async () => {
+  it("names what is misconfigured when the requester resolves to a private address", async () => {
     expect(await warningsFor(undefined)).toMatch(/TRUSTED_PROXY_HOPS/);
   });
 
-  it("공인 주소로 판정되면 아무 말도 하지 않는다 — 정상 배포에서 소음이 없다", async () => {
+  it("stays silent for a public address — no noise in a correct deployment", async () => {
     expect(await warningsFor("203.0.113.7")).not.toMatch(/TRUSTED_PROXY_HOPS/);
   });
 });

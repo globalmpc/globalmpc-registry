@@ -10,9 +10,9 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 /**
  * Evidence channel parity — AC-29.
  *
- * 네 채널이 같은 Source Receipt를 통과하되 각자가 막아야 하는 것을 막는가.
- * **약한 채널이 쉬운 채널이 되면 안 된다** — 그러면 확인이 어려운 사실일수록
- * 검증 없이 들어온다.
+ * Do the four channels share one Source Receipt while each blocks what it must block?
+ * **A weak channel must not become the easy channel** — otherwise the harder a fact is
+ * to confirm, the more likely it enters unverified.
  */
 describeDb("Evidence channel", () => {
   let fx: TestFixture;
@@ -22,10 +22,10 @@ describeDb("Evidence channel", () => {
   let scanService: string;
 
   /**
-   * 기관의 서명 키쌍 — 2026-09-10 실사 A1.
+   * The authority's signing key pair — 2026-09-10 audit A1.
    *
-   * 공개키는 연동에 등록되고 개인키는 **테스트가 기관 역할**을 할 때만 쓴다.
-   * 서버는 개인키를 보지 못한다 — 그것이 이 채널의 요점이다.
+   * The public key is registered on the integration; the private key is used only when **the
+   * test acts as the authority**. The server never sees the private key — that is the point.
    */
   const authorityKeys = generateKeyPairSync("ed25519");
   const authorityPublicKeyPem = authorityKeys.publicKey
@@ -47,7 +47,7 @@ describeDb("Evidence channel", () => {
     `;
   });
 
-  /** 파일을 올리고 검사를 통과시킨다. 검사 전 파일은 확정 근거가 아니다. */
+  /** Uploads a file and passes its scan. An unscanned file is not confirmed evidence. */
   async function uploadClean(content: Buffer, contentType: string): Promise<string> {
     const created = await app.inject({
       method: "POST",
@@ -63,8 +63,8 @@ describeDb("Evidence channel", () => {
     expect(created.statusCode).toBe(200);
     const uploadId = created.json().id as string;
 
-    // 같은 내용은 두 번 저장되지 않는다(content hash UNIQUE). 이미 검사를 지난
-    // 업로드를 다시 검사하면 409다 — 그것은 이 헬퍼가 볼 일이 아니다.
+    // Identical content is not stored twice (content hash UNIQUE). Rescanning an already
+    // scanned upload returns 409 — not this helper's concern.
     if (created.json().state !== "quarantined") return uploadId;
 
     const scanned = await app.inject({
@@ -95,8 +95,8 @@ describeDb("Evidence channel", () => {
         connectionId: fx.connectionA,
         authorityId: fx.authorityA,
         result: "confirmed_from_source",
-        // 채널은 overrides가 정한다. 기본값(authenticated_api)의 확정은 이제
-        // 서버 조회 경로에서만 만들어진다(A1).
+        // overrides sets the channel. Confirmation for the default (authenticated_api) is now
+        // produced only by the server lookup path (A1).
         collectionMethod: "authenticated_api",
         queryBasis: { licenseNumber: "MN-1" },
         endpointOrDocumentRef: "https://registry.example.test/x",
@@ -116,16 +116,17 @@ describeDb("Evidence channel", () => {
   }
 
   /**
-   * 서명 문서 — 2026-09-10 실사 A1.
+   * Signed document — 2026-09-10 audit A1.
    *
-   * 이전에는 요청 본문의 `signatureValid: true` 하나로 확정됐다. 문서 바이트도
-   * 실제 서명도 신뢰된 공개키도 보지 않았다. 지금은 셋을 서버가 본다.
+   * Previously `signatureValid: true` in the request body alone confirmed it, without looking
+   * at document bytes, the actual signature, or a trusted public key. The server now checks
+   * all three.
    */
   describe("signed document", () => {
     async function signedReceipt(
       overrides: Record<string, unknown> = {},
       signer = authorityKeys.privateKey,
-      document = Buffer.from("공식 등록부 발급 문서 v1"),
+      document = Buffer.from("official registry-issued document v1"),
     ) {
       const uploadId = await uploadClean(document, "application/pdf");
       const signature = cryptoSign(null, document, signer);
@@ -138,7 +139,7 @@ describeDb("Evidence channel", () => {
       });
     }
 
-    it("문서와 서명 없이 확정될 수 없다", async () => {
+    it("cannot confirm without a document and signature", async () => {
       const response = await createReceipt(steward, {
         collectionMethod: "verifiable_signed_document",
       });
@@ -147,8 +148,8 @@ describeDb("Evidence channel", () => {
       expect(response.json().code).toBe("SIGNATURE_EVIDENCE_MISSING");
     });
 
-    it("업로더가 검증 결과를 보내는 것으로 확정할 수 없다", async () => {
-      // A1의 원래 경로. 이제 이 필드들은 스키마에 없고 근거로도 쓰이지 않는다.
+    it("cannot confirm by the uploader sending a verification result", async () => {
+      // The original A1 path. These fields are no longer in the schema nor used as evidence.
       const response = await createReceipt(steward, {
         collectionMethod: "verifiable_signed_document",
         signatureValid: true,
@@ -159,17 +160,17 @@ describeDb("Evidence channel", () => {
       expect(response.json().code).toBe("SIGNATURE_EVIDENCE_MISSING");
     });
 
-    it("다른 사람의 서명은 확정되지 않는다", async () => {
-      // 유효한 서명이지만 이 기관의 것이 아니다.
+    it("does not confirm a signature by someone else", async () => {
+      // A valid signature, but not from this authority.
       const response = await signedReceipt({}, otherKeys.privateKey);
 
       expect(response.statusCode).toBe(422);
       expect(response.json().code).toBe("SIGNATURE_NOT_VERIFIED");
     });
 
-    it("문서가 바뀌면 서명이 맞지 않는다", async () => {
-      const document = Buffer.from("공식 등록부 발급 문서 v1");
-      const tampered = Buffer.from("공식 등록부 발급 문서 v1 (수정)");
+    it("the signature no longer matches when the document changes", async () => {
+      const document = Buffer.from("official registry-issued document v1");
+      const tampered = Buffer.from("official registry-issued document v1 (edited)");
       const uploadId = await uploadClean(tampered, "application/pdf");
       const signature = cryptoSign(null, document, authorityKeys.privateKey);
 
@@ -183,8 +184,8 @@ describeDb("Evidence channel", () => {
       expect(response.json().code).toBe("SIGNATURE_NOT_VERIFIED");
     });
 
-    it("검사를 통과하지 않은 파일은 확정 근거가 될 수 없다", async () => {
-      const document = Buffer.from("검사 전 문서");
+    it("a file that has not passed scanning cannot be confirmed evidence", async () => {
+      const document = Buffer.from("unscanned document");
       const created = await app.inject({
         method: "POST",
         url: `/api/v1/projects/${fx.projectA}/uploads`,
@@ -207,7 +208,7 @@ describeDb("Evidence channel", () => {
       expect(response.json().code).toBe("UPLOAD_NOT_VERIFIABLE");
     });
 
-    it("등록된 공개키가 없으면 확정되지 않는다", async () => {
+    it("does not confirm without a registered public key", async () => {
       await fx.sql`
         UPDATE core.source_connections SET signing_key_reference = NULL
         WHERE id = ${fx.connectionA}
@@ -225,8 +226,8 @@ describeDb("Evidence channel", () => {
       }
     });
 
-    it("서버가 검증한 서명이면 확정되고 근거가 결속돼 남는다", async () => {
-      const document = Buffer.from("공식 등록부 발급 문서 v2");
+    it("confirms a server-verified signature and keeps the evidence bound", async () => {
+      const document = Buffer.from("official registry-issued document v2");
       const response = await signedReceipt({}, authorityKeys.privateKey, document);
 
       expect(response.statusCode).toBe(200);
@@ -237,15 +238,15 @@ describeDb("Evidence channel", () => {
         SELECT channel_evidence, raw_hash FROM core.source_receipts
         WHERE id = ${response.json().id}
       `;
-      // 무엇을 무슨 규칙으로 확인했는지가 함께 남는다.
+      // Records what was checked and under which rule.
       expect(row?.channel_evidence["verifiedBy"]).toBe("server");
       expect(row?.channel_evidence["verifierVersion"]).toBe("sig-1");
       expect(row?.channel_evidence["signatureValid"]).toBe(true);
       expect(row?.channel_evidence["documentHash"]).toBe(row?.raw_hash);
     });
 
-    it("실패 결과는 서명 증거 없이도 기록된다", async () => {
-      // 실패는 실패대로 남아야 다음 사람이 같은 시도를 반복하지 않는다.
+    it("records a failed result even without signature evidence", async () => {
+      // Failures must be kept so the next person does not repeat the same attempt.
       const response = await createReceipt(steward, {
         collectionMethod: "verifiable_signed_document",
         result: "signature_invalid",
@@ -256,9 +257,9 @@ describeDb("Evidence channel", () => {
   });
 
   /**
-   * bulk export — 2026-09-10 실사 A1.
+   * bulk export — 2026-09-10 audit A1.
    *
-   * `observedFields`를 요청자가 적어 보내던 것을 서버가 파일에서 뽑는다.
+   * The server extracts `observedFields` from the file instead of taking the requester's list.
    */
   describe("bulk export", () => {
     beforeAll(async () => {
@@ -277,15 +278,15 @@ describeDb("Evidence channel", () => {
       });
     }
 
-    it("파일 없이 확정될 수 없다", async () => {
+    it("cannot confirm without a file", async () => {
       const response = await bulkReceipt(null);
 
       expect(response.statusCode).toBe(422);
       expect(response.json().code).toBe("BULK_FILE_MISSING");
     });
 
-    it("요청자가 적어 보낸 필드 목록으로 확정할 수 없다", async () => {
-      // A1의 원래 경로. 파일 없이 목록만 보내던 것이다.
+    it("cannot confirm with a field list sent by the requester", async () => {
+      // The original A1 path: sending only a list, without a file.
       const response = await createReceipt(steward, {
         collectionMethod: "official_bulk_export",
         observedFields: ["licenseId", "holder", "expiresAt"],
@@ -295,8 +296,8 @@ describeDb("Evidence channel", () => {
       expect(response.json().code).toBe("BULK_FILE_MISSING");
     });
 
-    it("파일에서 뽑은 스키마가 다르면 확정될 수 없다", async () => {
-      // expiresAt이 사라졌다. 파서가 빈 값으로 넘기면 없는 사실이 기록된다.
+    it("cannot confirm when the schema extracted from the file differs", async () => {
+      // expiresAt is gone. If the parser passed it as empty, a nonexistent fact would be recorded.
       const uploadId = await uploadClean(
         Buffer.from("licenseId,holder\nMN-1,광업사\n"),
         "text/csv",
@@ -308,7 +309,7 @@ describeDb("Evidence channel", () => {
       expect(response.json().details.removed).toBe("expiresAt");
     });
 
-    it("파일에서 뽑은 스키마가 같으면 확정되고 대조 결과가 남는다", async () => {
+    it("confirms when the extracted schema matches and records the comparison", async () => {
       const uploadId = await uploadClean(
         Buffer.from('licenseId,holder,"expiresAt"\nMN-1,광업사,2027-01-01\n'),
         "text/csv",
@@ -331,7 +332,7 @@ describeDb("Evidence channel", () => {
       expect(row?.channel_evidence["documentHash"]).toBe(row?.raw_hash);
     });
 
-    it("스키마를 읽을 수 없는 형식은 확정되지 않는다", async () => {
+    it("does not confirm a format whose schema cannot be read", async () => {
       const uploadId = await uploadClean(Buffer.from([0x89, 0x50, 0x4e, 0x47]), "image/png");
 
       const response = await bulkReceipt(uploadId);
@@ -341,17 +342,17 @@ describeDb("Evidence channel", () => {
   });
 
   describe("manual confirmation", () => {
-    it("두 번째 검토 없이 확정될 수 없다", async () => {
+    it("cannot confirm without a second review", async () => {
       const response = await createReceipt(steward, {
         collectionMethod: "manual_official_registry_confirmation",
       });
 
-      // 한 사람의 진술이 유일한 근거인 채널이 가장 쉬운 채널이 되면 안 된다.
+      // A channel whose only evidence is one person's statement must not be the easiest channel.
       expect(response.statusCode).toBe(422);
       expect(response.json().code).toBe("CHANNEL_REQUIREMENT_UNMET");
     });
 
-    it("두 번째 검토를 거쳐 확정된다", async () => {
+    it("confirms after a second review", async () => {
       const created = await createReceipt(steward, {
         collectionMethod: "manual_official_registry_confirmation",
         result: "manual_review_required",
@@ -362,14 +363,14 @@ describeDb("Evidence channel", () => {
         method: "POST",
         url: `/api/v1/source-receipts/${created.json().id}/second-review`,
         headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() },
-        payload: { observation: "같은 등록부에서 동일한 기록을 확인했다", confirmed: true },
+        payload: { observation: "confirmed the same record in the same registry", confirmed: true },
       });
 
       expect(response.statusCode).toBe(200);
       expect(response.json().result).toBe("confirmed_from_source");
     });
 
-    it("처음 확인한 사람은 두 번째 검토를 할 수 없다", async () => {
+    it("the first checker cannot perform the second review", async () => {
       const created = await createReceipt(steward, {
         collectionMethod: "manual_official_registry_confirmation",
         result: "manual_review_required",
@@ -379,14 +380,14 @@ describeDb("Evidence channel", () => {
         method: "POST",
         url: `/api/v1/source-receipts/${created.json().id}/second-review`,
         headers: { authorization: `Bearer ${steward}`, "idempotency-key": idempotencyKey() },
-        payload: { observation: "내가 다시 봤다", confirmed: true },
+        payload: { observation: "I checked it again", confirmed: true },
       });
 
       expect(response.statusCode).toBe(403);
       expect(response.json().code).toBe("SECOND_REVIEW_SAME_PERSON");
     });
 
-    it("두 번째 검토가 다른 것을 봤으면 확정되지 않는다", async () => {
+    it("does not confirm when the second review saw something different", async () => {
       const created = await createReceipt(steward, {
         collectionMethod: "manual_official_registry_confirmation",
         result: "manual_review_required",
@@ -396,15 +397,15 @@ describeDb("Evidence channel", () => {
         method: "POST",
         url: `/api/v1/source-receipts/${created.json().id}/second-review`,
         headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() },
-        payload: { observation: "등록부에 해당 기록이 없다", confirmed: false },
+        payload: { observation: "the registry has no such record", confirmed: false },
       });
 
       expect(response.statusCode).toBe(200);
-      // 두 번째 사람이 다른 것을 봤다는 사실 자체가 기록이다.
+      // That the second person saw something different is itself a record.
       expect(response.json().result).toBe("conflicting");
     });
 
-    it("두 번 검토할 수 없다", async () => {
+    it("cannot review twice", async () => {
       const created = await createReceipt(steward, {
         collectionMethod: "manual_official_registry_confirmation",
         result: "manual_review_required",
@@ -415,21 +416,21 @@ describeDb("Evidence channel", () => {
           method: "POST",
           url: `/api/v1/source-receipts/${created.json().id}/second-review`,
           headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() },
-          payload: { observation: "확인했다", confirmed: true },
+          payload: { observation: "confirmed", confirmed: true },
         });
 
       expect((await send()).statusCode).toBe(200);
       expect((await send()).statusCode).toBe(409);
     });
 
-    it("API 채널에는 두 번째 검토가 없다", async () => {
+    it("the API channel has no second review", async () => {
       const created = await createReceipt(steward, { result: "source_unavailable" });
 
       const response = await app.inject({
         method: "POST",
         url: `/api/v1/source-receipts/${created.json().id}/second-review`,
         headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() },
-        payload: { observation: "확인", confirmed: true },
+        payload: { observation: "checked", confirmed: true },
       });
 
       expect(response.statusCode).toBe(422);
@@ -437,9 +438,9 @@ describeDb("Evidence channel", () => {
     });
   });
 
-  describe("DB 제약", () => {
-    it("같은 사람을 두 확인자로 넣을 수 없다", async () => {
-      // receipt는 append-only다. UPDATE가 아니라 INSERT로 시험한다.
+  describe("DB constraints", () => {
+    it("cannot use the same person as both checkers", async () => {
+      // Receipts are append-only. Tested with INSERT, not UPDATE.
       await expect(
         fx.sql`
           INSERT INTO core.source_receipts (
@@ -461,10 +462,10 @@ describeDb("Evidence channel", () => {
     });
 
     /**
-     * 2026-09-10 실사 A1 — 라우트를 우회한 경로도 막는가.
+     * 2026-09-10 audit A1 — are paths that bypass the route also blocked?
      *
-     * 라우트가 먼저 422로 막지만 **라우트는 하나가 아니고 앞으로 더 생긴다.**
-     * 한 곳만 막으면 그곳을 지나지 않는 경로가 생기는 순간 조용히 열린다.
+     * The route rejects with 422 first, but **there is more than one route, and more will come.**
+     * Blocking in one place silently opens the moment a path bypasses it.
      */
     function insertReceipt(
       method: string,
@@ -489,8 +490,8 @@ describeDb("Evidence channel", () => {
       `;
     }
 
-    it("서명 확정에 서버 검증 표시가 없으면 거절한다", async () => {
-      // 0021의 제약은 `signatureValid: true`라는 **주장의 존재**만 요구했다.
+    it("rejects a signature confirmation without the server-verified marker", async () => {
+      // The 0021 constraint only required the **presence of the claim** `signatureValid: true`.
       await expect(
         insertReceipt("verifiable_signed_document", {
           signatureValid: true,
@@ -499,26 +500,26 @@ describeDb("Evidence channel", () => {
       ).rejects.toThrow(/signed_document_confirmation_is_server_bound/);
     });
 
-    it("bulk 확정에 추출기 표시가 없으면 거절한다", async () => {
+    it("rejects a bulk confirmation without the extractor marker", async () => {
       await expect(
         insertReceipt("official_bulk_export", { observedFields: ["a"] }),
       ).rejects.toThrow(/bulk_export_confirmation_is_server_bound/);
     });
 
-    it("API 확정에 서버 수집 표시가 없으면 거절한다", async () => {
-      // 부르지 않고 "불러서 확인했다"를 기록할 수 없다.
+    it("rejects an API confirmation without the server-collected marker", async () => {
+      // Cannot record "called and checked" without actually calling.
       await expect(insertReceipt("authenticated_api", {})).rejects.toThrow(
         /api_confirmation_requires_server_collection/,
       );
     });
 
-    it("서버가 만든 근거를 갖춘 확정은 들어간다", async () => {
+    it("accepts a confirmation carrying server-produced evidence", async () => {
       await expect(
         insertReceipt("authenticated_api", { collector: "server_adapter" }),
       ).resolves.toBeDefined();
     });
 
-    it("두 번째 검토 없는 수동 확정을 거절한다", async () => {
+    it("rejects a manual confirmation without a second review", async () => {
       await expect(
         fx.sql`
           INSERT INTO core.source_receipts (

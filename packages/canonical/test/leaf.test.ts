@@ -16,40 +16,40 @@ const VALID: RegistryLeaf = {
 };
 
 describe("assertValidLeaf", () => {
-  it("올바른 leaf를 통과시킨다", () => {
+  it("passes a valid leaf", () => {
     expect(() => assertValidLeaf(VALID)).not.toThrow();
   });
 
-  it("알 수 없는 registryType을 거절한다", () => {
+  it("rejects an unknown registryType", () => {
     expect(() => assertValidLeaf({ ...VALID, registryType: "offering" as never })).toThrowError(
       /registryType/,
     );
   });
 
-  it("알 수 없는 status를 거절한다", () => {
+  it("rejects an unknown status", () => {
     expect(() => assertValidLeaf({ ...VALID, status: "draft" as never })).toThrowError(/status/);
   });
 
-  it("선행 0이 있는 version을 거절한다", () => {
+  it("rejects a version with a leading zero", () => {
     expect(() => assertValidLeaf({ ...VALID, version: "03" })).toThrowError(/decimal string/);
   });
 
-  it("version이 0인 것은 허용한다", () => {
+  it("allows version 0", () => {
     expect(() => assertValidLeaf({ ...VALID, version: "0" })).not.toThrow();
   });
 
-  it("빈 필드를 거절한다", () => {
-    expect(() => assertValidLeaf({ ...VALID, subjectId: "" })).toThrowError(/비어 있을 수 없다/);
+  it("rejects empty fields", () => {
+    expect(() => assertValidLeaf({ ...VALID, subjectId: "" })).toThrowError(/must not be empty/);
     expect(() => assertValidLeaf({ ...VALID, policyVersion: "" })).toThrowError(
-      /비어 있을 수 없다/,
+      /must not be empty/,
     );
   });
 
-  it("32바이트가 아닌 contentHash를 거절한다", () => {
-    expect(() => assertValidLeaf({ ...VALID, contentHash: "0xdead" })).toThrowError(/32바이트/);
+  it("rejects a contentHash that is not 32 bytes", () => {
+    expect(() => assertValidLeaf({ ...VALID, contentHash: "0xdead" })).toThrowError(/32-byte/);
   });
 
-  it("지원하지 않는 serializationVersion을 거절한다", () => {
+  it("rejects an unsupported serializationVersion", () => {
     expect(() =>
       assertValidLeaf({ ...VALID, serializationVersion: "2" as never }),
     ).toThrowError(/serializationVersion/);
@@ -57,12 +57,12 @@ describe("assertValidLeaf", () => {
 });
 
 describe("hashLeaf", () => {
-  it("이중 keccak256이다 — 내부 노드와 충돌하지 않는다", () => {
+  it("is double keccak256 — never collides with an internal node", () => {
     const inner = keccak256(canonicalBytes(VALID as never));
     expect(hashLeaf(VALID)).toBe(keccak256(hexToBytes(inner)));
   });
 
-  it("필드 정의 순서가 달라도 같은 해시가 나온다", () => {
+  it("the same hash regardless of field definition order", () => {
     const reordered: RegistryLeaf = {
       contentHash: VALID.contentHash,
       schemaVersion: VALID.schemaVersion,
@@ -77,7 +77,7 @@ describe("hashLeaf", () => {
     expect(hashLeaf(reordered)).toBe(hashLeaf(VALID));
   });
 
-  it("어느 필드든 바뀌면 해시가 바뀐다", () => {
+  it("changing any field changes the hash", () => {
     const base = hashLeaf(VALID);
     expect(hashLeaf({ ...VALID, version: "4" })).not.toBe(base);
     expect(hashLeaf({ ...VALID, status: "revoked" })).not.toBe(base);
@@ -85,32 +85,32 @@ describe("hashLeaf", () => {
     expect(hashLeaf({ ...VALID, registryType: "project" })).not.toBe(base);
   });
 
-  it("검증되지 않은 leaf는 해시하지 않는다", () => {
-    expect(() => hashLeaf({ ...VALID, contentHash: "0x00" })).toThrowError(/32바이트/);
+  it("does not hash an unvalidated leaf", () => {
+    expect(() => hashLeaf({ ...VALID, contentHash: "0x00" })).toThrowError(/32-byte/);
   });
 });
 
 describe("hashProjection", () => {
-  it("public projection의 커밋먼트를 만든다", () => {
+  it("produces the commitment of a public projection", () => {
     const projection = {
       projectKey: "MPC-XXX-999",
       hostCountry: "MNG",
       status: "registered",
       asOf: "2026-08-01",
-      limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+      limitations: ["Legal title verification is outside the scope of this review"],
     };
     expect(hashProjection(projection)).toBe(keccak256(canonicalBytes(projection)));
   });
 
-  it("키 순서가 달라도 같은 커밋먼트다", () => {
+  it("the same commitment regardless of key order", () => {
     const a = hashProjection({ b: "2", a: "1" });
     const b = hashProjection({ a: "1", b: "2" });
     expect(a).toBe(b);
   });
 
-  it("projection에 number가 있으면 거절한다", () => {
+  it("rejects a projection containing a number", () => {
     expect(() => hashProjection({ tonnage: 1200 } as never)).toThrowError(
-      /JSON number를 쓸 수 없다/,
+      /JSON numbers are not allowed/,
     );
   });
 });

@@ -9,13 +9,13 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 무인증 공개 거버넌스와 공개 이력.
+ * Unauthenticated public governance and public history.
  *
- * 검증하는 것은 "목록이 나온다"가 아니라 **공개하기로 한 것만 나가는가**다.
- * project space, `draft`, 투표자 명단 셋이 새면 이 두 endpoint는 공개 경계를
- * 갖지 않은 것이 된다.
+ * What is verified is not "a list comes back" but **only what was chosen for disclosure goes
+ * out**. If project space, `draft`, or the voter list leaks, these two endpoints have no
+ * public boundary.
  */
-describeDb("공개 거버넌스와 공개 이력", () => {
+describeDb("public governance and public history", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let proposerToken: string;
@@ -43,8 +43,8 @@ describeDb("공개 거버넌스와 공개 이력", () => {
       payload: {
         space: "protocol",
         proposalType: "attestation_schema_approval",
-        title: "스키마 변경",
-        rationale: "현행 스키마가 한계를 담지 못한다",
+        title: "Schema change",
+        rationale: "The current schema cannot express limitations",
         eligibleWeight: "100",
         ...body,
       },
@@ -60,7 +60,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
         "idempotency-key": idempotencyKey(),
         "if-match": `"${version}"`,
       },
-      payload: { toState, reason: "다음 단계" },
+      payload: { toState, reason: "next stage" },
     });
   }
 
@@ -77,14 +77,14 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     return app.inject({ method: "GET", url: "/api/v1/public/governance/proposals?limit=100" });
   }
 
-  it("draft 제안은 공개되지 않는다", async () => {
+  it("does not disclose draft proposals", async () => {
     const draft = (await propose({ title: `DRAFT-${randomUUID().slice(0, 8)}` })).json();
 
     const listed = (await publicProposals()).json();
     expect(listed.items.map((item: { id: string }) => item.id)).not.toContain(draft.id);
   });
 
-  it("draft를 벗어난 protocol 제안은 로그인 없이 보인다", async () => {
+  it("shows non-draft protocol proposals without login", async () => {
     const opened = await openVoting({ title: `OPEN-${randomUUID().slice(0, 8)}` });
 
     const response = await publicProposals();
@@ -92,9 +92,9 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     expect(response.json().items.map((item: { id: string }) => item.id)).toContain(opened.id);
   });
 
-  it("project space 제안은 공개되지 않는다", async () => {
-    // protocol governance가 특정 프로젝트의 처분을 정하지 않는 것과 짝이다 —
-    // 프로젝트 내부 의사결정을 공개 목록에 싣지 않는다.
+  it("does not disclose project space proposals", async () => {
+    // Counterpart to protocol governance not deciding a specific project's disposition —
+    // internal project decisions stay off the public list.
     const created = await app.inject({
       method: "POST",
       url: "/api/v1/governance/proposals",
@@ -104,12 +104,12 @@ describeDb("공개 거버넌스와 공개 이력", () => {
         projectId: fx.projectA,
         proposalType: "project_data_room_publication",
         title: `PROJECT-${randomUUID().slice(0, 8)}`,
-        rationale: "프로젝트 내부 결정",
+        rationale: "Internal project decision",
         eligibleWeight: "100",
       },
     });
 
-    // 만들어졌든 거절됐든, 공개 목록에는 project space가 한 건도 없어야 한다.
+    // Created or rejected, the public list must contain no project space proposal.
     const listed = (await publicProposals()).json();
     if (created.statusCode === 200 || created.statusCode === 201) {
       expect(listed.items.map((item: { id: string }) => item.id)).not.toContain(
@@ -122,7 +122,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     }
   });
 
-  it("집계는 내고 투표자는 내지 않는다", async () => {
+  it("returns tallies but not voters", async () => {
     const opened = await openVoting({ title: `TALLY-${randomUUID().slice(0, 8)}` });
     await app.inject({
       method: "POST",
@@ -140,14 +140,14 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     const body = detail.json();
     expect(body.tally.for).toBe("30");
     expect(body.tally.voterCount).toBe(1);
-    // 개별 투표자는 subject이고 자연인 식별자로 이어진다(AC-32).
+    // Individual voters are subjects and link to natural-person identifiers (AC-32).
     expect(JSON.stringify(body)).not.toContain(fx.voterA.address);
     expect(body).not.toHaveProperty("votes");
     expect(body).not.toHaveProperty("proposerSubjectId");
   });
 
-  it("무게를 JSON number로 내지 않는다", async () => {
-    // NUMERIC(78,0)은 number에 담기지 않는다. 담으면 조용히 반올림된다(ADR-T07).
+  it("does not return weight as a JSON number", async () => {
+    // NUMERIC(78,0) does not fit in a number; it would be silently rounded (ADR-T07).
     const listed = (await publicProposals()).json();
     for (const item of listed.items) {
       expect(typeof item.tally.for).toBe("string");
@@ -155,13 +155,13 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     }
   });
 
-  it("tenant를 드러내지 않는다", async () => {
+  it("does not expose the tenant", async () => {
     const listed = await publicProposals();
 
     expect(listed.body).not.toContain(fx.tenantA);
   });
 
-  it("없는 제안은 404다", async () => {
+  it("returns 404 for a missing proposal", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/public/governance/proposals/00000000-0000-4000-8000-000000000000",
@@ -170,12 +170,12 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     expect(response.statusCode).toBe(404);
   });
 
-  it("공개 이력이 덮지 않는 사건 종류를 응답이 밝힌다", async () => {
-    // 빈 목록과 "그 종류는 애초에 여기 오지 않는다"를 구분하지 않으면 사용자가
-    // "그런 일이 없었다"로 읽는다.
+  it("states the event kinds public history does not cover", async () => {
+    // Without separating an empty list from "that kind never comes here", users read it as
+    // "it never happened".
     //
-    // 2026-09-09 결정 뒤로 남는 것은 credential 철회 하나다 —
-    // 그 "기록"이 사람이라 "일어났다 + 언제 + 어느 기록" 규칙으로 표현되지 않는다.
+    // After the 2026-09-09 decision only credential revocation remains — its "record" is a
+    // person, so it cannot be expressed as "happened + when + which record".
     const response = await app.inject({ method: "GET", url: "/api/v1/public/disclosures" });
 
     expect(response.statusCode).toBe(200);
@@ -186,9 +186,9 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     }
   });
 
-  it("suspension·pause·dispute는 이제 덮는다", async () => {
-    // 넷 중 셋이 `notCovered`에서 빠졌다. 빠진 것이 실제로 나오는지는 아래
-    // 케이스들이 본다 — 여기서는 **범위 선언이 갈라지지 않았는지**만 본다.
+  it("now covers suspension, pause, and dispute", async () => {
+    // Three of four left `notCovered`. The cases below check that they actually appear —
+    // this one only checks that **the scope declaration has not diverged**.
     const response = await app.inject({ method: "GET", url: "/api/v1/public/disclosures" });
     const kinds = response.json().notCovered.map((entry: { kind: string }) => entry.kind);
 
@@ -197,7 +197,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     }
   });
 
-  it("철회된 공개 version이 이력에 나오고 allowlist를 지킨다", async () => {
+  it("lists a revoked public version in history and honors the allowlist", async () => {
     const publicKey = `DISC-${randomUUID().slice(0, 8)}`;
     const published = await app.inject({
       method: "POST",
@@ -214,7 +214,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
           asOf: "2026-08-01T00:00:00.000Z",
           sourceAge: "12",
           staleStatus: "fresh",
-          limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+          limitations: ["Legal rights verification is outside this review's scope"],
           legalEffect: "none",
           disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
         },
@@ -225,8 +225,8 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     });
     expect(published.statusCode).toBe(200);
 
-    // 철회는 저장소 안 경로가 아직 route로 없다. 사건 자체가 만들어지는지가
-    // 아니라 **만들어졌을 때 공개 경계를 지키는지**를 본다.
+    // Revocation has no in-repo route yet. This checks not whether the event is created but
+    // **whether it respects the public boundary once created**.
     await fx.sql`
       UPDATE core.registry_entry_versions
       SET status = 'revoked', revoked_at = now()
@@ -245,19 +245,19 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     );
     expect(leaked).toEqual([]);
 
-    // registry version에서 온 사건만 이 묶음을 갖는다.
+    // Only events from a registry version carry this bundle.
     expect(mine.lifecycle).toBeNull();
     expect(mine.resolvedAt).toBeNull();
   });
 
-  // --- 결정: "일어났다 + 언제 + 어느 기록" ------------------------------
+  // --- Decision: "happened + when + which record" ---------------------
 
   /**
-   * 프로젝트 하나를 만들고 공개 registry entry를 붙인다.
+   * Creates a project and attaches a public registry entry.
    *
-   * **매번 새로 만든다.** `fx.projectA`를 쓰면 한 케이스가 그것을 공개로 만든
-   * 뒤 다른 케이스의 "공개되지 않은 프로젝트" 전제가 무너진다 — 실행 순서에
-   * 따라 결과가 달라지는 시험은 통과해도 아무것도 보장하지 않는다.
+   * **Created fresh every time.** With `fx.projectA`, one case making it public breaks another
+   * case's "undisclosed project" premise — a test whose result depends on execution order
+   * guarantees nothing even when it passes.
    */
   async function newProject(): Promise<string> {
     const projectId = randomUUID();
@@ -289,7 +289,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
           asOf: "2026-08-01T00:00:00.000Z",
           sourceAge: "12",
           staleStatus: "fresh",
-          limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+          limitations: ["Legal rights verification is outside this review's scope"],
           legalEffect: "none",
           disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
         },
@@ -302,7 +302,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     return publicKey;
   }
 
-  /** 응답 하나의 모양. 계약은 `publicDisclosureEvent`가 갖고, 여기서는 읽는 것만 적는다. */
+  /** Shape of one response item. `publicDisclosureEvent` owns the contract; only read fields here. */
   interface DisclosureEvent {
     readonly eventId: string;
     readonly eventKind: string;
@@ -321,9 +321,9 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     return response.json();
   }
 
-  const SECRET_REASON = "정지 사유는 공개되지 않는다 SUSPEND_SECRET";
+  const SECRET_REASON = "suspension reason is not disclosed SUSPEND_SECRET";
 
-  it("suspension이 나오되 사유와 행위자는 나오지 않는다", async () => {
+  it("returns a suspension without its reason or actor", async () => {
     const projectId = await newProject();
     const publicKey = await publishPublic(projectId);
 
@@ -345,28 +345,28 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     expect(mine?.lifecycle).toEqual({ fromState: "registered", toState: "suspended" });
     expect(mine?.registryVersion).toBeNull();
 
-    // 응답 **전체**에 사유와 행위자 id가 없어야 한다. 필드 하나만 보면 다른
-    // 자리로 새어 나가는 것을 놓친다.
+    // The **entire** response must lack the reason and actor id. Checking one field misses
+    // leaks elsewhere.
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain(SECRET_REASON);
     expect(serialized).not.toContain(fx.reviewerSubjectA);
   });
 
-  it("공개되지 않은 프로젝트의 suspension은 나오지 않는다", async () => {
-    // 나가면 **비공개 프로젝트가 있다는 사실 자체**가 드러난다.
+  it("does not return suspensions of undisclosed projects", async () => {
+    // Otherwise **the very existence of an undisclosed project** is revealed.
     const projectId = await newProject();
 
     await fx.sql`
       INSERT INTO core.project_lifecycle_transitions (
         tenant_id, project_id, from_state, to_state, reason
-      ) VALUES (${fx.tenantA}, ${projectId}, 'registered', 'suspended', '비공개')
+      ) VALUES (${fx.tenantA}, ${projectId}, 'registered', 'suspended', 'undisclosed')
     `;
 
     const body = await disclosures();
     expect(JSON.stringify(body)).not.toContain(projectId);
   });
 
-  it("pause가 나오되 법적 근거와 요구 기관은 나오지 않는다", async () => {
+  it("returns a pause without its legal basis or requesting authority", async () => {
     const projectId = await newProject();
     const publicKey = await publishPublic(projectId);
 
@@ -386,7 +386,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     );
 
     expect(mine).toBeDefined();
-    // 아직 풀리지 않았다.
+    // Not yet lifted.
     expect(mine?.resolvedAt).toBeNull();
 
     const serialized = JSON.stringify(body);
@@ -394,7 +394,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     expect(serialized).not.toContain("AUTHORITY_SECRET");
   });
 
-  it("발효 전(draft) pause는 나오지 않는다", async () => {
+  it("does not return a pause before it takes effect (draft)", async () => {
     const projectId = await newProject();
     const publicKey = await publishPublic(projectId);
 
@@ -415,7 +415,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     expect(paused).toEqual([]);
   });
 
-  it("dispute가 나오되 사유와 제기자는 나오지 않는다", async () => {
+  it("returns a dispute without its reason or raiser", async () => {
     const projectId = await newProject();
     const publicKey = await publishPublic(projectId);
 
@@ -466,7 +466,7 @@ describeDb("공개 거버넌스와 공개 이력", () => {
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain("REASON_CODE_SECRET");
     expect(serialized).not.toContain("DETAIL_SECRET");
-    // attestation id도 나가지 않는다 — "어느 기록"은 공개된 project entry다.
+    // The attestation id is not returned either — "which record" is the public project entry.
     expect(serialized).not.toContain(attestationId);
   });
 });

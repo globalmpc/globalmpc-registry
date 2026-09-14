@@ -1,78 +1,78 @@
-# MPC dApp — API·worker·web 공용 이미지
+# MPC dApp — shared image for API, worker, and web
 #
-# **빌드 컨텍스트는 저장소 루트다.**
+# **The build context is the repository root.**
 #
 #   docker build -t mpc-dapp .
 #
-# 하나의 이미지에 세 프로세스를 담고 실행 시 명령으로 고른다. 이미지를 나누면
-# 같은 커밋의 세 이미지가 어긋날 수 있고, monorepo에서 공유 패키지가 바뀌었을 때
-# 어느 것을 다시 만들어야 하는지 추적해야 한다.
+# One image holds all three processes; the run command picks one. Split images could drift
+# for the same commit, and in a monorepo you would have to track which ones to rebuild when a
+# shared package changes.
 #
-# **빌드에 시크릿을 넣지 않는다.** 이미지 레이어는 지워도 남는다. 모든 비밀은
-# 런타임에 `file:`·`env:` 참조로 주입한다(packages/config).
+# **No secrets go into the build.** Image layers persist even after deletion. Every secret is
+# injected at runtime via `file:`/`env:` references (packages/config).
 
-# --- 의존성 --------------------------------------------------------------------
+# --- Dependencies ---------------------------------------------------------------
 FROM node:22-bookworm-slim AS deps
 
 WORKDIR /repo
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
-# pnpm 버전은 package.json의 packageManager가 고정한다. corepack이 최신을 받아오면
-# 로컬과 다른 동작을 하고 그것이 이 이미지에서만 나타난다.
+# The pnpm version is pinned by packageManager in package.json. If corepack fetched the latest,
+# behavior would differ from local and show up only in this image.
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 
-# 소스를 통째로 복사한 뒤 설치한다.
+# Copy the whole source tree, then install.
 #
-# manifest만 골라 복사하면 의존성 레이어가 잘 캐시되지만, **패키지를 새로 만들
-# 때마다 이 목록을 고쳐야 하고 빠뜨리면 런타임에야 드러난다.**
+# Copying only manifests caches the dependency layer well, but **the list must be edited for
+# every new package, and an omission only shows up at runtime.**
 #
-# `design-system/`도 이 안에 있다. 웹이 `link:../../design-system`으로 참조하므로
-# manifest만으로는 CSS import가 해결되지 않고 파일이 실제로 있어야 한다.
+# `design-system/` is included too. The web app references it via `link:../../design-system`,
+# so manifests alone do not resolve CSS imports — the files must actually be present.
 #
-# pnpm store를 캐시 마운트로 두므로 재설치 자체는 빠르다. 잃는 것은 레이어
-# 캐시이고 얻는 것은 목록을 유지하지 않아도 된다는 것이다.
+# The pnpm store is a cache mount, so reinstalling is fast. What is lost is layer caching;
+# what is gained is not having to maintain the list.
 COPY . .
 
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile
 
-# --- 웹 빌드 -------------------------------------------------------------------
+# --- Web build ------------------------------------------------------------------
 FROM deps AS web-build
 
-# deps가 이미 전체 소스를 갖고 있다. 다시 복사하면 node_modules를 덮어쓴다.
-# workspace TS 패키지를 그대로 쓰므로 webpack 모드로 빌드한다 — `--webpack`은
-# `apps/web/package.json`의 build 스크립트가 갖는다.
+# deps already holds the full source. Copying again would overwrite node_modules.
+# Workspace TS packages are used as-is, so the build runs in webpack mode — `--webpack`
+# lives in the build script of `apps/web/package.json`.
 RUN pnpm --filter @mpc/web build
 
-# --- 런타임 --------------------------------------------------------------------
+# --- Runtime --------------------------------------------------------------------
 FROM node:22-bookworm-slim AS runtime
 
 WORKDIR /repo
-# COREPACK_HOME을 공유 경로로 고정한다. 기본값은 `$HOME/.cache`라서 빌드(root)와
-# 실행(mpc)이 서로 다른 곳을 본다 — 그러면 실행 시 다시 받아오려 하고, 비루트
-# 사용자는 그 디렉터리를 만들지 못한다.
+# Pin COREPACK_HOME to a shared path. The default is `$HOME/.cache`, so build (root) and
+# run (mpc) look in different places — then it tries to re-download at run time, and the
+# non-root user cannot create that directory.
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH NODE_ENV=production COREPACK_HOME=/opt/corepack
-# pnpm을 **빌드 시점에** 준비한다. 실행 시 받아오게 두면 컨테이너 기동이
-# 네트워크에 의존한다.
+# Prepare pnpm **at build time**. Leaving it to download at run time makes container
+# startup depend on the network.
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate \
  && chmod -R a+rX /opt/corepack
 
-# root로 돌리지 않는다. 컨테이너 탈출 시 호스트 권한이 그대로 따라간다.
+# Do not run as root. On container escape, host privileges would follow.
 RUN groupadd --system --gid 10001 mpc \
  && useradd --system --uid 10001 --gid mpc --home /repo mpc
 
-# 트리를 통째로 가져온다.
+# Bring over the whole tree.
 #
-# pnpm workspace는 패키지마다 `node_modules` 심볼릭 링크를 만든다. 루트
-# `node_modules`만 복사하면 `packages/db`가 `postgres`를 찾지 못한다 — 링크가
-# 없기 때문이다. 조각으로 옮기면 어느 링크가 빠졌는지 런타임에야 드러난다.
+# A pnpm workspace creates `node_modules` symlinks in each package. Copying only the root
+# `node_modules` leaves `packages/db` unable to find `postgres` — the links are missing.
+# Moving it in pieces means a missing link only shows up at runtime.
 #
-# 대신 이미지에 devDependency가 함께 들어간다. 크기와 정확성을 맞바꾼 것이며,
-# 줄이려면 `pnpm deploy`로 프로덕션 트리를 따로 만들어야 한다.
+# In exchange, devDependencies ship in the image. Size is traded for correctness; to shrink
+# it, a production tree would need to be built separately with `pnpm deploy`.
 COPY --from=web-build /repo /repo
 
 USER mpc
 
-# 프로세스는 실행 시 고른다:
+# The process is chosen at run time:
 #   api    — pnpm --filter @mpc/api start
 #   worker — pnpm --filter @mpc/worker start:anchor
 #   web    — pnpm --filter @mpc/web exec next start

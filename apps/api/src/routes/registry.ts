@@ -31,15 +31,15 @@ import {
 import { buildAnchorBatch, buildInclusionProof } from "../services/anchor-batch.js";
 
 /**
- * Registry 게시와 공개 조회 — spec 05 §5.6·§5.7, 08 §8.11.
+ * Registry publication and public lookup — spec 05 §5.6·§5.7, 08 §8.11.
  *
- * 이 라우트가 지키는 것:
+ * What this route guarantees:
  *
- * - allowlist 밖 필드가 하나라도 있으면 게시를 거절한다(AC-22).
- * - 자연인 식별자는 safeguard 다섯 개가 모두 있어야 공개된다(AC-32).
- * - 게시된 version은 덮어쓸 수 없다. revoke는 삭제가 아니라 새 상태다.
- * - 공개 route는 무인증이며 게시된 version만 반환한다.
- * - inclusion proof는 무엇을 증명하지 **않는지**를 함께 반환한다(AC-23).
+ * - Publication is rejected if any field is outside the allowlist (AC-22).
+ * - Natural-person identifiers are public only when all five safeguards are present (AC-32).
+ * - A published version cannot be overwritten. Revoke is a new state, not a deletion.
+ * - Public routes are unauthenticated and return only published versions.
+ * - An inclusion proof is returned with what it does **not** prove (AC-23).
  */
 
 const publishSchema = z.object({
@@ -75,14 +75,14 @@ export async function registerRegistryRoutes(
   sql: postgres.Sql,
   config: AppConfig,
 ): Promise<void> {
-  // --- 게시 ---------------------------------------------------------------
+  // --- Publish -----------------------------------------------------------
 
   app.post("/api/v1/registry-entries", async (request) => {
     const { session, tenantId, idempotencyKey } = requireMutationContext(request);
 
     const parsed = publishSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
     }
@@ -102,7 +102,7 @@ export async function registerRegistryRoutes(
     const { requestId, asOf, correlationId } = request.context;
     const requestHash = hashRequest(request.body);
 
-    // 공개 가능 여부는 도메인이 판정한다. 라우트가 allowlist를 다시 쓰지 않는다.
+    // The domain decides publishability. The route does not rewrite the allowlist.
     const publishCheck = checkPublishable({
       fields: Object.keys(data.projection),
       sensitivity: "public",
@@ -114,15 +114,15 @@ export async function registerRegistryRoutes(
     });
 
     if (!publishCheck.allowed) {
-      throw unprocessable(publishCheck.reason, "이 projection은 공개할 수 없다", {
+      throw unprocessable(publishCheck.reason, "This projection cannot be published", {
         offendingFields: publishCheck.offendingFields,
       });
     }
 
-    // 스키마로 한 번 더 거른다. `.strict()`가 allowlist 밖 필드를 거절한다.
+    // Filters once more through the schema. `.strict()` rejects fields outside the allowlist.
     const projectionCheck = publicProjection.safeParse(data.projection);
     if (!projectionCheck.success) {
-      throw unprocessable("PUBLICATION_PROJECTION_INVALID", "projection이 공개 스키마와 다르다", {
+      throw unprocessable("PUBLICATION_PROJECTION_INVALID", "Projection does not match the public schema", {
         issues: projectionCheck.error.issues,
       });
     }
@@ -154,15 +154,15 @@ export async function registerRegistryRoutes(
         const nextVersion = (previous?.version ?? 0) + 1;
 
         /**
-         * `status`는 게시 **이후**의 lifecycle을 담는다.
+         * `status` holds the lifecycle **after** publication.
          *
-         * 클라이언트가 보낸 값을 그대로 저장하면 첫 게시 version이 `draft`로
-         * 남는다. 화면이 게시 직전 상태를 담아 보내기 때문이다. 그런데 11 §11.4의
-         * `registered`는 "Registry 기록 존재"이고, 그 기록을 만드는 것이 바로 이
-         * 요청이다 — 즉 저장되는 순간 이미 `draft`가 아니다.
+         * Storing the client's value as is would leave the first published version as `draft`,
+         * because the UI sends the pre-publication state. But `registered` in 11 §11.4 means
+         * "a Registry record exists", and this very request creates that record — so the moment
+         * it is stored, it is no longer `draft`.
          *
-         * 서버가 정한다. lifecycle은 공개 projection에서 **클라이언트가 주장할
-         * 값이 아니다.**
+         * The server decides. In the public projection, lifecycle is **not a value the client
+         * gets to claim.**
          */
         const publishedProjection = { ...(data.projection as Record<string, unknown>) };
         if (data.registryType === "project") {
@@ -171,8 +171,8 @@ export async function registerRegistryRoutes(
             WHERE tenant_id = ${tenantId} AND id = ${data.subjectId}
           `;
           if (current) {
-            // `draft`였다면 이 게시가 그것을 옮긴다(아래). 다른 상태였다면
-            // 그대로다 — 게시가 상태를 앞으로 밀지 않는다.
+            // If it was `draft`, this publication moves it (below). Any other state
+            // stays — publication does not push the state forward.
             publishedProjection["status"] =
               current.lifecycle_state === "draft" ? "registered" : current.lifecycle_state;
           }
@@ -191,7 +191,7 @@ export async function registerRegistryRoutes(
           )
         `;
 
-        // 이전 version은 지우지 않고 superseded로 연결한다(불변조건 4).
+        // The previous version is not deleted; it is linked as superseded (invariant 4).
         if (previous) {
           await tx`
             UPDATE core.registry_entry_versions
@@ -203,16 +203,16 @@ export async function registerRegistryRoutes(
         /**
          * 04 §4.3 — `draft→registered`.
          *
-         * 전이표의 guard는 "Project Registry 최소 필드와 책임 주체"이고, 그것을
-         * 만족시키는 행위가 바로 이 게시다. `registry.publish`를 이미 가진 사람이
-         * 하는 일이므로 새 권한이 생기지 않는다.
+         * The transition table's guard is "Project Registry minimum fields and accountable subject",
+         * and this publication is what satisfies it. It is done by someone who already holds
+         * `registry.publish`, so no new permission is created.
          *
-         * **`draft`에서만 움직인다.** `WHERE`가 그 guard다 — 다른 상태에서 게시하면
-         * 상태는 그대로다. suspended를 게시로 되돌리면 incident closure 없이
-         * 복귀시키는 셈이 되고, 그 판단 주체는 아직 정해지지 않았다.
+         * **Moves only from `draft`.** The `WHERE` is that guard — publishing from another state
+         * leaves the state as is. Reverting suspended via publication would reinstate without
+         * incident closure, and who decides that is not yet determined.
          *
-         * verification·asset registry는 프로젝트가 등록됐다는 뜻이 아니므로 건드리지
-         * 않는다.
+         * Verification and asset registries do not mean the project is registered, so they are not
+         * touched.
          */
         if (data.registryType === "project") {
           const moved = await tx<{ id: string; version: number }[]>`
@@ -224,18 +224,18 @@ export async function registerRegistryRoutes(
 
           if (moved.length > 0) {
             /**
-             * 전이 이력에도 남긴다 — 마이그레이션 `0031`.
+             * Also recorded in the transition history — migration `0031`.
              *
-             * 감사 로그와 다른 표인 이유: 감사는 "누가 무엇을 했나"이고 이력은
-             * "이 프로젝트가 어디를 지나왔나"다. 후자를 감사 로그에서 뽑으려면
-             * command 문자열을 파싱해야 하고, 그러면 문자열이 스키마가 된다.
+             * Why a separate table from the audit log: audit is "who did what" and history is
+             * "where this project has been". Extracting the latter from the audit log would require
+             * parsing command strings, which turns the strings into a schema.
              */
             await tx`
               INSERT INTO core.project_lifecycle_transitions (
                 tenant_id, project_id, from_state, to_state, reason, actor_subject_id
               ) VALUES (
                 ${tenantId}, ${data.subjectId}, 'draft', 'registered',
-                'Project Registry 게시가 04 §4.3의 guard를 만족시켰다',
+                'Project Registry publication satisfied the 04 §4.3 guard',
                 ${session.subjectId}
               )
             `;
@@ -300,12 +300,12 @@ export async function registerRegistryRoutes(
     "/api/v1/registry-entries/:entryId/revoke",
     async (request) => {
       const { session, tenantId, idempotencyKey } = requireMutationContext(request);
-      // 어느 version을 철회하는지 밝힌다. 밝히지 않으면 조회 이후에 새 version이
-      // 게시된 경우 의도하지 않은 것을 철회한다.
+      // States which version is revoked. Otherwise, if a new version was published after the
+      // lookup, the wrong one would be revoked.
       const expectedVersion = requireIfMatch(request);
 
       const parsed = z.object({ reasonCode: z.string().min(1) }).safeParse(request.body);
-      if (!parsed.success) throw badRequest("REQUEST_INVALID", "reasonCode가 필요하다");
+      if (!parsed.success) throw badRequest("REQUEST_INVALID", "reasonCode is required");
 
       const effectiveRole = assertAuthorized(
         session,
@@ -331,10 +331,10 @@ export async function registerRegistryRoutes(
             LIMIT 1
           `;
 
-          if (!version) throw notFound("게시된 version을 찾을 수 없다");
+          if (!version) throw notFound("Published version not found");
           assertVersionMatches(expectedVersion, version.version, "registry_entry_version");
 
-          // 삭제가 아니라 상태 전이다. projection과 content_hash는 그대로 남는다.
+          // A state transition, not a deletion. projection and content_hash remain as is.
           await tx`
             UPDATE core.registry_entry_versions
             SET status = 'revoked', revoked_at = now()
@@ -416,7 +416,7 @@ export async function registerRegistryRoutes(
           `;
         }
 
-        // 트랜잭션은 아직 created다. 제출·확정은 chain worker가 한다.
+        // The transaction is still created. The chain worker submits and confirms it.
         await tx`
           INSERT INTO chain.transactions (
             id, tenant_id, batch_id, intent_key, chain_id, state
@@ -453,7 +453,7 @@ export async function registerRegistryRoutes(
           root: batch.root,
           manifestHash: batch.manifestHash,
           recordCount: batch.recordCount,
-          // 아직 체인에 올라가지 않았다. included·confirmed와 구분한다.
+          // Not on chain yet. Kept distinct from included/confirmed.
           confirmationState: "created",
           requestId,
           asOf,
@@ -463,25 +463,25 @@ export async function registerRegistryRoutes(
   });
 
   /**
-   * anchor batch 상태 조회 — 08 §8.9.
+   * Anchor batch status lookup — 08 §8.9.
    *
-   * batch를 만든 뒤 무슨 일이 일어났는지 볼 경로가 없으면, 운영자는 제출이
-   * 막혔는지 확정을 기다리는 중인지 구분할 수 없다. 상태를 "진행중/완료"로
-   * 뭉개지 않고 체인 상태 그대로 돌려준다.
+   * Without a way to see what happened after a batch was created, an operator cannot tell
+   * whether submission is stuck or awaiting confirmation. The state is not flattened into
+   * "in progress/done"; the chain state is returned as is.
    */
   app.get("/api/v1/anchor-batches", async (request) => {
     const { session, tenantId } = requireReadContext(request);
     const { requestId, asOf } = request.context;
 
     /**
-     * 읽기에도 역할을 본다 — 02 §2.1.
+     * Reads also check roles — 02 §2.1.
      *
-     * 이전에는 "RLS가 tenant로 막으니 충분하다"였다. 그러면 tenant에 wallet이
-     * 묶였다는 사실이 곧 읽기 권한이 되고, 역할 없는 계정이 batch 상태·트랜잭션
-     * 해시를 그대로 본다. 게시된 root는 공개지만 **제출 이력과 실패 상태는
-     * 운영 정보**다.
+     * Previously it was "RLS scopes by tenant, so that is enough". That made a wallet bound
+     * to a tenant equal read permission, letting accounts without roles see batch state and
+     * transaction hashes. Published roots are public, but **submission history and failure state
+     * are operational information**.
      *
-     * 공개 조회는 아래 `/api/v1/public/*`이 담당하며 그쪽은 무인증이다.
+     * Public lookup is handled by `/api/v1/public/*` below, which is unauthenticated.
      */
     assertAuthorized(
       session,
@@ -543,7 +543,7 @@ export async function registerRegistryRoutes(
         recordCount: row.record_count,
         createdAt: row.created_at.toISOString(),
         chainId: row.chain_id ?? config.chainId,
-        // 트랜잭션 행이 없으면 아직 만들어지지 않은 것이다. 성공으로 보이지 않게 한다.
+        // No transaction row means it has not been created yet. It must not look like success.
         confirmationState: row.state ?? "created",
         transactionHash: row.tx_hash,
         blockNumber: row.block_number,
@@ -553,7 +553,7 @@ export async function registerRegistryRoutes(
         submittedAt: row.submitted_at?.toISOString() ?? null,
         confirmedAt: row.confirmed_at?.toISOString() ?? null,
         reorgCount: Number(row.reorg_count),
-        // 자동으로 풀리지 않는 상태를 따로 표시한다. 사람이 개입해야 한다.
+        // Flags states that do not resolve on their own. A person must intervene.
         needsAttention: ["failed", "reverted", "dropped", "reconciliation_required"].includes(
           row.state ?? "",
         ),
@@ -572,15 +572,15 @@ export async function registerRegistryRoutes(
   });
 
   /**
-   * 멈춘 anchor batch 재제출 — 08 §8.9.
+   * Resubmission of a stuck anchor batch — 08 §8.9.
    *
-   * `dropped`·`reconciliation_required`·`failed`는 자동으로 풀리지 않는다.
-   * worker가 알아서 재제출하면 같은 root를 두 번 올릴 수 있고, 컨트랙트가
-   * `BatchAlreadyExists`로 거절하더라도 가스는 소모된다.
+   * `dropped`, `reconciliation_required`, and `failed` do not resolve on their own.
+   * If the worker resubmitted on its own it could post the same root twice, and even if the
+   * contract rejects with `BatchAlreadyExists`, gas is spent.
    *
-   * **root는 다시 만들지 않는다.** 같은 batch를 같은 root로 다시 올린다 —
-   * 재제출은 새 사실을 만드는 것이 아니라 이미 정해진 사실을 체인에 올리는
-   * 시도를 반복하는 것이다.
+   * **The root is not rebuilt.** The same batch is posted again with the same root —
+   * resubmission does not create a new fact; it retries putting an already settled fact
+   * on chain.
    */
   app.post<{ Params: { batchId: string } }>(
     "/api/v1/anchor-batches/:batchId/resubmit",
@@ -614,20 +614,20 @@ export async function registerRegistryRoutes(
             LIMIT 1
           `;
 
-          if (!transaction) throw notFound("이 batch의 트랜잭션을 찾을 수 없다");
+          if (!transaction) throw notFound("Transaction for this batch not found");
 
-          // 진행 중인 것을 되돌리지 않는다. submitted·included를 created로 돌리면
-          // 이미 체인에 있는 트랜잭션을 잊고 같은 root를 다시 올린다.
+          // Does not roll back in-flight work. Resetting submitted/included to created would forget
+          // a transaction already on chain and post the same root again.
           const RESUBMITTABLE = ["dropped", "reconciliation_required", "failed", "reverted"];
           if (!RESUBMITTABLE.includes(transaction.state)) {
-            throw conflict("ANCHOR_NOT_RESUBMITTABLE", "이 상태는 재제출 대상이 아니다", {
+            throw conflict("ANCHOR_NOT_RESUBMITTABLE", "This state is not eligible for resubmission", {
               currentState: transaction.state,
               resubmittableStates: RESUBMITTABLE,
             });
           }
 
-          // 시도 횟수를 0으로 되돌린다. 사람이 원인을 확인하고 결정한 것이므로
-          // 이전 시도의 상한을 물려받지 않는다.
+          // Resets the attempt count to 0. A person checked the cause and decided, so the
+          // previous attempts' cap is not inherited.
           await tx`
             UPDATE chain.transactions
             SET state = 'created', attempts = 0,

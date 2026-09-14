@@ -7,20 +7,20 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 공식 출처 조회 — 05 §5.12, OD-42.
+ * Official source lookup — 05 §5.12, OD-42.
  *
- * 이 파일이 지키는 것은 **응답을 사실대로 나누는가**와 **부르지 않은 것을 부른
- * 것처럼 남기지 않는가**다.
+ * This file guards two things: **responses are classified truthfully**, and **a call that
+ * was not made is never recorded as if it were.**
  */
-describeDb("출처 조회", () => {
+describeDb("source lookup", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let stewardToken: string;
   let operatorToken: string;
 
-  /** 다음 응답. 테스트가 출처 역할을 한다. */
+  /** The next response. The test plays the source. */
   let nextResponse: () => Response | Promise<Response>;
-  /** 실제로 나간 요청. 부르지 않아야 할 때 부르지 않았는지 본다. */
+  /** Requests actually sent. Checks that nothing was called when it should not be. */
   let calls: { url: string; headers: Record<string, string> }[] = [];
 
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -35,7 +35,7 @@ describeDb("출처 조회", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql, {
       fetchImpl,
-      // 테스트는 실제 DNS를 쓰지 않는다. 공개 주소로 해석된 것으로 둔다.
+      // Tests do not use real DNS. Treat the host as resolved to a public address.
       resolveHost: async () => ["203.0.113.10"],
     });
     stewardToken = await signIn(app, fx.stewardA);
@@ -61,7 +61,7 @@ describeDb("출처 조회", () => {
     });
   }
 
-  it("200과 스키마 일치는 확인으로 기록된다", async () => {
+  it("records 200 with a matching schema as confirmed", async () => {
     const response = await collect(stewardToken);
     expect(response.statusCode).toBe(200);
 
@@ -69,41 +69,41 @@ describeDb("출처 조회", () => {
     expect(body.result).toBe("confirmed_from_source");
     expect(body.confirmed).toBe(true);
 
-    // 확인됐어도 authority가 선언한 한계는 반드시 붙는다.
+    // Even when confirmed, the limitations the authority declared are always attached.
     expect(body.limitations).toContain("economic_viability");
   });
 
-  it("404는 출처 장애가 아니라 기록 없음이다", async () => {
+  it("treats 404 as no record, not a source outage", async () => {
     nextResponse = () => new Response("", { status: 404 });
 
     const body = (await collect(stewardToken)).json();
-    // 이 둘을 섞으면 존재하지 않는 기록을 계속 재시도한다.
+    // Mixing the two keeps retrying a record that does not exist.
     expect(body.result).toBe("source_returned_no_record");
     expect(body.confirmed).toBe(false);
   });
 
-  it("503은 출처 장애로 기록된다", async () => {
+  it("records 503 as a source outage", async () => {
     nextResponse = () => new Response("", { status: 503 });
     expect((await collect(stewardToken)).json().result).toBe("source_unavailable");
   });
 
-  it("리다이렉트를 따라가지 않는다", async () => {
-    // 따라가면 등록부 조회가 내부 주소를 읽는 통로가 된다.
+  it("does not follow redirects", async () => {
+    // Following them would turn a registry lookup into a channel for reading internal addresses.
     nextResponse = () =>
       new Response("", { status: 302, headers: { location: "http://169.254.169.254/" } });
 
     const body = (await collect(stewardToken)).json();
     expect(body.result).toBe("manual_review_required");
-    // 두 번째 요청이 나가지 않았다.
+    // No second request was sent.
     expect(calls).toHaveLength(1);
   });
 
-  it("JSON이 아니면 값을 추측하지 않는다", async () => {
-    nextResponse = () => new Response("<html>점검 중</html>", { status: 200 });
+  it("does not guess values from a non-JSON body", async () => {
+    nextResponse = () => new Response("<html>Under maintenance</html>", { status: 200 });
     expect((await collect(stewardToken)).json().result).toBe("schema_changed");
   });
 
-  it("실패도 receipt로 남는다", async () => {
+  it("records failures as receipts too", async () => {
     nextResponse = () => new Response("", { status: 404 });
     const receiptId = (await collect(stewardToken)).json().receiptId;
 
@@ -111,11 +111,11 @@ describeDb("출처 조회", () => {
       SELECT result, raw_hash FROM core.source_receipts WHERE id = ${receiptId}
     `;
     expect(row?.result).toBe("source_returned_no_record");
-    // 원문이 없으면 가짜 해시를 만들지 않는다.
+    // Without a raw body, no fake hash is made.
     expect(row?.raw_hash).toBe(`0x${"0".repeat(64)}`);
   });
 
-  it("확인됐을 때만 last_success_at이 갱신된다", async () => {
+  it("updates last_success_at only when confirmed", async () => {
     await fx.sql`UPDATE core.source_connections SET last_success_at = NULL WHERE id = ${fx.connectionA}`;
 
     nextResponse = () => new Response("", { status: 503 });
@@ -124,10 +124,11 @@ describeDb("출처 조회", () => {
     const [after] = await fx.sql<{ last_success_at: Date | null }[]>`
       SELECT last_success_at FROM core.source_connections WHERE id = ${fx.connectionA}
     `;
-    // 장애 응답을 성공 시각으로 남기면 "언제 마지막으로 답을 받았나"가 거짓이 된다.
+    // Recording an outage response as the success time makes "when did we last get an
+    // answer" false.
     expect(after?.last_success_at).toBeNull();
 
-    // 선언된 필드가 있어야 확정이다(A7). `{ok:true}`는 이제 schema_changed다.
+    // Confirmation requires the declared fields (A7). `{ok:true}` is now schema_changed.
     nextResponse = () => new Response(JSON.stringify({ licenseId: "MN-1" }), { status: 200 });
     await collect(stewardToken);
 
@@ -138,12 +139,12 @@ describeDb("출처 조회", () => {
   });
 
   /**
-   * 응답 profile — 2026-09-10 실사 A7.
+   * Response profile — 2026-09-10 audit A7.
    *
-   * 이전에는 200 + 유효 JSON이면 확정이었다. 출처가 "답할 수 없다"고 말한
-   * 응답도 확인으로 기록됐다.
+   * Previously, 200 + valid JSON meant confirmed. Even a response in which the source said
+   * "cannot answer" was recorded as confirmed.
    */
-  it("200이어도 선언된 필드가 없으면 확정하지 않는다", async () => {
+  it("does not confirm a 200 without the declared fields", async () => {
     nextResponse = () => new Response(JSON.stringify({ unexpected: 1 }), { status: 200 });
 
     const body = (await collect(stewardToken)).json();
@@ -151,7 +152,7 @@ describeDb("출처 조회", () => {
     expect(body.confirmed).toBe(false);
   });
 
-  it("200 본문의 업무 오류를 확인으로 읽지 않는다", async () => {
+  it("does not read a business error in a 200 body as confirmed", async () => {
     nextResponse = () => new Response(JSON.stringify({ error: "unavailable" }), { status: 200 });
 
     const body = (await collect(stewardToken)).json();
@@ -159,7 +160,7 @@ describeDb("출처 조회", () => {
     expect(body.detail).toContain("unavailable");
   });
 
-  it("200으로 온 '기록 없음'을 확정으로 읽지 않는다", async () => {
+  it("does not read a 'no record' sent as 200 as confirmed", async () => {
     nextResponse = () =>
       new Response(JSON.stringify({ found: false }), { status: 200 });
 
@@ -167,7 +168,7 @@ describeDb("출처 조회", () => {
     expect(body.result).toBe("source_returned_no_record");
   });
 
-  it("응답 형식이 선언되지 않은 연동은 확정하지 않는다", async () => {
+  it("does not confirm for a connection without a declared response format", async () => {
     await fx.sql`
       UPDATE core.source_connections SET schema_fingerprint = NULL WHERE id = ${fx.connectionA}
     `;
@@ -184,19 +185,20 @@ describeDb("출처 조회", () => {
     }
   });
 
-  // AC-24: 실제 API가 없는 출처는 수동 확인으로 진행하되 `active API`나
-  // 정부 협력으로 표시되지 않는다.
-  it("pending_access인 연동은 호출되지 않는다", async () => {
+  // AC-24: a source without a real API proceeds by manual check but is not shown as an
+  // `active API` or as government cooperation.
+  it("does not call a pending_access connection", async () => {
     await fx.sql`UPDATE core.source_connections SET state = 'planned' WHERE id = ${fx.connectionA}`;
 
     const response = await collect(stewardToken);
     expect(response.statusCode).toBe(422);
     expect(response.json().code).toBe("SOURCE_NOT_CALLABLE");
 
-    // 부르면 401을 받아 "인증 실패"로 남는다. 실제로는 협의가 안 된 것이다.
+    // Calling would get a 401 recorded as "authentication failed". In fact access was never
+    // agreed.
     expect(calls).toHaveLength(0);
 
-    // receipt도 만들지 않는다 — 조회하지 않았으므로 조회 기록이 있으면 안 된다.
+    // No receipt either — nothing was looked up, so no lookup record may exist.
     const [count] = await fx.sql<{ n: string }[]>`
       SELECT count(*)::text AS n FROM core.source_receipts
       WHERE connection_id = ${fx.connectionA} AND result = 'access_not_authorized'
@@ -206,7 +208,7 @@ describeDb("출처 조회", () => {
     await fx.sql`UPDATE core.source_connections SET state = 'active' WHERE id = ${fx.connectionA}`;
   });
 
-  it("조회 권한이 없는 역할은 부를 수 없다", async () => {
+  it("does not let a role without lookup permission call", async () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/source-connections/${fx.connectionA}/collect`,
@@ -221,11 +223,11 @@ describeDb("출처 조회", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("mpc_operator도 부를 수 있다", async () => {
+  it("lets mpc_operator call too", async () => {
     expect((await collect(operatorToken)).statusCode).toBe(200);
   });
 
-  it("다른 tenant의 연동은 보이지 않는다", async () => {
+  it("does not expose another tenant's connection", async () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/source-connections/${fx.connectionA}/collect`,
@@ -240,7 +242,7 @@ describeDb("출처 조회", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("같은 Idempotency-Key는 한 번만 조회한다", async () => {
+  it("looks up only once for the same Idempotency-Key", async () => {
     const key = idempotencyKey();
     const send = () =>
       app.inject({
@@ -254,17 +256,17 @@ describeDb("출처 조회", () => {
     const second = (await send()).json();
 
     expect(second.receiptId).toBe(first.receiptId);
-    // 재시도가 출처에 부하를 만들면 안 된다.
+    // Retries must not put load on the source.
     expect(calls).toHaveLength(1);
   });
 });
 
 /**
- * DB 제약 — 0019.
+ * DB constraints — 0019.
  *
- * 애플리케이션이 우회해도 남는 규칙이다.
+ * Rules that hold even if the application bypasses them.
  */
-describeDb("연동 설정 제약", () => {
+describeDb("connection configuration constraints", () => {
   let fx: TestFixture;
 
   beforeAll(async () => {
@@ -275,7 +277,7 @@ describeDb("연동 설정 제약", () => {
     await fx.close();
   });
 
-  it("호출 대상 없이 active가 될 수 없다", async () => {
+  it("cannot become active without a call target", async () => {
     await expect(
       fx.sql`
         UPDATE core.source_connections SET endpoint = NULL WHERE id = ${fx.connectionA}
@@ -283,8 +285,8 @@ describeDb("연동 설정 제약", () => {
     ).rejects.toThrow(/source_connections_active_needs_endpoint/);
   });
 
-  it("http endpoint를 거절한다", async () => {
-    // 등록부로 가는 요청이 평문으로 나갈 수 없다.
+  it("rejects an http endpoint", async () => {
+    // Requests to a registry cannot go out in plaintext.
     await expect(
       fx.sql`
         UPDATE core.source_connections
@@ -293,12 +295,12 @@ describeDb("연동 설정 제약", () => {
     ).rejects.toThrow(/source_connections_endpoint_check/);
   });
 
-  it("URL 안의 자격증명을 거절한다", async () => {
-    // URL에 든 비밀은 로그·감사·에러 메시지에 그대로 남는다.
+  it("rejects credentials inside the URL", async () => {
+    // A secret in a URL stays verbatim in logs, audit records and error messages.
     //
-    // 제약 이름으로 본다. PostgreSQL의 오류 문구는 서버 로케일을 따르므로
-    // 영어 문구로 대조하면 한국어 로케일에서 통과하지 못한다 — 제약은
-    // 걸렸는데 테스트만 실패한다.
+    // Match on the constraint name. PostgreSQL error text follows the server locale, so
+    // matching English text fails under a Korean locale — the constraint fires but the test
+    // still fails.
     await expect(
       fx.sql`
         UPDATE core.source_connections

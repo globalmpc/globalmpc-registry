@@ -1,23 +1,23 @@
 /**
- * 메트릭 — spec 06 §6.9.
+ * Metrics — spec 06 §6.9.
  *
- * Prometheus 텍스트 형식으로 노출한다. 라이브러리를 쓰지 않는 이유: 필요한 것이
- * counter·histogram 몇 개뿐이고, 의존성 하나가 늘면 그것도 supply-chain 표면이다.
+ * Exposed in Prometheus text format. No library: only a few counters and histograms are
+ * needed, and each added dependency is also supply-chain surface.
  *
- * **레이블에 고유값을 넣지 않는다.** 경로에 UUID가 들어가면 시계열이 무한히
- * 늘어나 수집기가 죽는다. 경로는 route 템플릿(`/api/v1/projects/:projectId`)으로
- * 정규화한다.
+ * **No unique values in labels.** A UUID in the path grows series without bound and kills
+ * the collector. Paths are normalized to route templates
+ * (`/api/v1/projects/:projectId`).
  *
- * **tenant를 레이블로 쓰지 않는다.** 메트릭은 보통 인증 없이 수집되므로 tenant
- * 목록이 그대로 노출된다.
+ * **Tenant is not used as a label.** Metrics are usually scraped without auth, so the tenant
+ * list would be exposed as is.
  */
 
 /**
- * 스크레이프 시점에 DB에서 읽는 값.
+ * Values read from the DB at scrape time.
  *
- * 프로세스가 세는 counter로는 잡히지 않는 것이 있다. worker가 죽어 있으면 그
- * worker의 counter는 **아무것도 보고하지 않고**, 알림 규칙은 조용해진다. 쌓인
- * 행을 DB에서 세면 멈춘 상태 자체가 값으로 보인다.
+ * Some things in-process counters cannot catch. When a worker is dead its counters
+ * **report nothing**, and alert rules go quiet. Counting accumulated rows in the DB
+ * makes the stalled state itself visible as a value.
  */
 export interface Gauge {
   readonly metric: string;
@@ -27,14 +27,14 @@ export interface Gauge {
 
 export interface MetricsRegistry {
   observeRequest(method: string, route: string, statusCode: number, durationMs: number): void;
-  /** 백그라운드 작업 결과. worker가 아니라 API가 관측한 것만 담는다. */
+  /** Background job results. Holds only what the API observed, not the worker. */
   incrementCounter(name: string, labels?: Record<string, string>): void;
-  /** 스크레이프마다 갱신한다. 누적이 아니라 현재 상태다. */
+  /** Refreshed on every scrape. Current state, not cumulative. */
   setGauges(gauges: readonly Gauge[]): void;
   render(): string;
 }
 
-/** 응답 시간 버킷(ms). 상한 없는 마지막 버킷은 `+Inf`다. */
+/** Response time buckets (ms). The final unbounded bucket is `+Inf`. */
 const DURATION_BUCKETS = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
 
 function labelsToKey(labels: Record<string, string>): string {
@@ -57,8 +57,8 @@ export function createMetricsRegistry(): MetricsRegistry {
 
   return {
     observeRequest(method, route, statusCode, durationMs) {
-      // statusCode를 그대로 쓰지 않고 계열로 묶는다. 200과 201을 나눌 이유가 없고
-      // 시계열만 늘어난다.
+      // statusCode is grouped by class rather than used as is. There is no reason to split 200 and
+      // 201; it only adds series.
       const key = labelsToKey({
         method: method.toUpperCase(),
         route,
@@ -88,13 +88,13 @@ export function createMetricsRegistry(): MetricsRegistry {
     render() {
       const lines: string[] = [];
 
-      lines.push("# HELP http_requests_total 처리한 HTTP 요청 수");
+      lines.push("# HELP http_requests_total HTTP requests handled");
       lines.push("# TYPE http_requests_total counter");
       for (const [key, value] of counters) {
         if (key.startsWith("http_requests_total")) lines.push(`${key} ${value}`);
       }
 
-      lines.push("# HELP http_request_duration_ms 응답 시간 분포");
+      lines.push("# HELP http_request_duration_ms Response time distribution");
       lines.push("# TYPE http_request_duration_ms histogram");
       for (const [key, buckets] of histogramBuckets) {
         let cumulative = 0;
@@ -115,8 +115,8 @@ export function createMetricsRegistry(): MetricsRegistry {
         for (const [key, value] of others) lines.push(`${key} ${value}`);
       }
 
-      // gauge는 이름별로 묶어 HELP·TYPE을 한 번만 낸다. 반복하면 Prometheus가
-      // 중복 정의로 스크레이프 전체를 버린다.
+      // Gauges are grouped by name so HELP and TYPE are emitted once. Repeating them makes
+      // Prometheus drop the whole scrape as a duplicate definition.
       for (const metric of [...new Set(gauges.map((gauge) => gauge.metric))]) {
         lines.push(`# TYPE mpc_${metric} gauge`);
         for (const gauge of gauges.filter((entry) => entry.metric === metric)) {

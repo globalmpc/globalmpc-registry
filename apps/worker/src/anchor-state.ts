@@ -1,22 +1,23 @@
 /**
- * anchor 트랜잭션 상태 전이 — spec 06 §6.8, 08 §8.9.
+ * Anchor transaction state transitions — spec 06 §6.8, 08 §8.9.
  *
- * IO 없이 "관측한 사실 → 다음 상태"만 계산한다. RPC·DB와 섞으면 reorg처럼 재현이
- * 어려운 경우를 테스트할 수 없다.
+ * Computes only "observed facts → next state", with no IO. Mixing in RPC or DB makes hard-to-
+ * reproduce cases such as reorgs untestable.
  *
- * 핵심 규칙 세 개.
+ * Three core rules.
  *
- * 1. **`included`는 성공이 아니다.** 블록에 들어간 것과 확정된 것은 다르다.
- *    확정 깊이를 채워야 `confirmed`가 되고, 그때만 공개 증명이 included=true다.
- * 2. **뒤로 가는 전이가 있다.** reorg는 확정을 되돌린다. 앞으로만 가는 상태기계로
- *    모델링하면 사라진 블록을 확정으로 남겨 두게 된다.
- * 3. **revert는 재시도 대상이 아니다.** 컨트랙트가 거절한 것은 다시 보내도 같다.
- *    가스 부족·nonce 충돌 같은 제출 실패와 구분한다.
+ * 1. **`included` is not success.** Being in a block differs from being confirmed. Only after
+ *    the confirmation depth is met does it become `confirmed`, and only then is the public
+ *    proof included=true.
+ * 2. **Transitions can go backward.** A reorg reverses confirmation. A forward-only state machine
+ *    would leave a vanished block recorded as confirmed.
+ * 3. **A revert is not retried.** What the contract rejected stays rejected on resend. It is
+ *    distinct from submission failures such as insufficient gas or a nonce conflict.
  */
 
 export type TransactionState =
   | "created"
-  /** Safe에 제안만 만든 상태. 아직 체인에 아무것도 없다. */
+  /** Only a Safe proposal exists. Nothing is on chain yet. */
   | "proposed"
   | "signed"
   | "submitted"
@@ -29,26 +30,26 @@ export type TransactionState =
   | "failed"
   | "reconciliation_required";
 
-/** 체인에서 관측한 사실. 없는 것과 실패한 것을 구분한다. */
+/** A fact observed on chain. Distinguishes "absent" from "failed". */
 export type Observation =
   | { readonly kind: "pending" }
-  /** 영수증이 있다. status로 성공·실패가 갈린다. */
+  /** A receipt exists. status decides success or failure. */
   | {
       readonly kind: "receipt";
       readonly status: "success" | "reverted";
       readonly blockNumber: number;
       readonly blockHash: string;
       /**
-       * 실제로 태운 가스와 그때의 가스 가격.
+       * Gas actually burned and the gas price paid.
        *
-       * 선택값이 아니다 — 일일 상한(O1)이 이 둘의 곱을 합산해 판정한다. 없어도
-       * 되게 두면 영수증이 와도 0으로 세고 상한이 영원히 열려 있게 된다.
-       * `reverted` 영수증도 가스는 태운다. 그래서 status와 무관하게 받는다.
+       * Not optional — the daily cap (O1) sums their product to decide. If they could be
+       * absent, a receipt would count as 0 and the cap would stay open forever.
+       * A `reverted` receipt still burns gas, so both are taken regardless of status.
        */
       readonly gasUsed: bigint;
       readonly effectiveGasPrice: bigint;
     }
-  /** 제출은 했는데 노드가 트랜잭션을 모른다 — mempool에서 빠졌을 수 있다. */
+  /** Submitted, but the node does not know the transaction — it may have left the mempool. */
   | { readonly kind: "unknown" };
 
 export interface TrackInput {
@@ -58,7 +59,7 @@ export interface TrackInput {
   readonly observation: Observation;
   readonly headBlockNumber: number;
   readonly confirmationDepth: number;
-  /** 제출 후 경과 시간(ms). mempool 이탈 판정에 쓴다. */
+  /** Time since submission (ms). Used to decide a mempool drop. */
   readonly elapsedSinceSubmitMs: number;
   readonly dropTimeoutMs: number;
 }
@@ -68,21 +69,21 @@ export interface TrackResult {
   readonly confirmations: number;
   readonly blockNumber: number | null;
   readonly blockHash: string | null;
-  /** 상태가 뒤로 갔는가. reorg 기록을 남길지 판정한다. */
+  /** Whether the state went backward. Decides whether to record a reorg. */
   readonly reorged: boolean;
   readonly reason: string;
 }
 
 export function confirmationsOf(blockNumber: number, headBlockNumber: number): number {
-  // 자기 블록도 1 confirmation으로 센다. head == blockNumber이면 1이다.
+  // The containing block counts as 1 confirmation. head == blockNumber gives 1.
   return Math.max(0, headBlockNumber - blockNumber + 1);
 }
 
 /**
- * 관측 결과로 다음 상태를 계산한다.
+ * Computes the next state from an observation.
  *
- * 이미 종료 상태(`confirmed` 제외)인 트랜잭션은 건드리지 않는다. `confirmed`는
- * reorg로 뒤집힐 수 있으므로 계속 관측 대상이다.
+ * Transactions already in a terminal state (except `confirmed`) are left alone. `confirmed` can
+ * be overturned by a reorg, so it stays under observation.
  */
 export function trackTransaction(input: TrackInput): TrackResult {
   const keep = (reason: string): TrackResult => ({
@@ -107,7 +108,7 @@ export function trackTransaction(input: TrackInput): TrackResult {
     const { status, blockNumber, blockHash } = input.observation;
 
     if (status === "reverted") {
-      // 컨트랙트가 거절했다. 같은 payload를 다시 보내면 같은 결과다.
+      // The contract rejected it. Resending the same payload gives the same result.
       return {
         nextState: "reverted",
         confirmations: 0,
@@ -118,7 +119,7 @@ export function trackTransaction(input: TrackInput): TrackResult {
       };
     }
 
-    // 같은 트랜잭션이 다른 블록에서 관측됐다면 이전에 본 블록은 사라졌다.
+    // If the same transaction shows up in a different block, the previously seen block is gone.
     const reorged =
       input.recordedBlockHash !== null && input.recordedBlockHash !== blockHash;
 
@@ -126,8 +127,8 @@ export function trackTransaction(input: TrackInput): TrackResult {
     const confirmed = confirmations >= input.confirmationDepth;
 
     return {
-      // reorg 뒤 재확정이라도 상태는 다시 계산한다. 확정 깊이를 못 채웠으면
-      // included로 되돌아간다 — 확정을 유지한 채 블록만 바꾸지 않는다.
+      // Recompute the state even on re-confirmation after a reorg. Below the confirmation depth
+      // it returns to included — never keep confirmed while only swapping the block.
       nextState: confirmed ? "confirmed" : "included",
       confirmations,
       blockNumber,
@@ -138,7 +139,7 @@ export function trackTransaction(input: TrackInput): TrackResult {
   }
 
   if (input.observation.kind === "unknown") {
-    // 확정으로 봤던 것이 사라졌다. 재조정이 필요하며 자동으로 되돌리지 않는다.
+    // What was seen as confirmed is gone. Reconciliation is required; no automatic rollback.
     if (input.state === "confirmed" || input.state === "included") {
       return {
         nextState: "reconciliation_required",
@@ -151,8 +152,8 @@ export function trackTransaction(input: TrackInput): TrackResult {
     }
 
     if (input.elapsedSinceSubmitMs >= input.dropTimeoutMs) {
-      // mempool에서 빠진 것으로 본다. 재제출은 사람이 판단한다 — 자동 재제출은
-      // 같은 root를 두 번 올릴 위험이 있다.
+      // Treat it as dropped from the mempool. A human decides on resubmission — automatic
+      // resubmission risks anchoring the same root twice.
       return {
         nextState: "dropped",
         confirmations: 0,
@@ -170,17 +171,17 @@ export function trackTransaction(input: TrackInput): TrackResult {
 }
 
 /**
- * 제출 전 안전 점검.
+ * Pre-submission safety check.
  *
- * O1: 이 worker가 잃을 수 있는 것은 anchor signer 지갑의 가스뿐이다. 상한을
- * 코드로 고정해 두면 가스 급등이나 무한 재시도가 지갑을 비우지 못한다.
+ * O1: the only thing this worker can lose is gas from the anchor signer wallet. With caps fixed
+ * in code, a gas spike or endless retries cannot drain the wallet.
  *
- * **세 상한은 서로 다른 것을 막는다.**
+ * **The three caps guard against different things.**
  *
- * - `feeCapWei` — 트랜잭션 **한 건**의 가스 가격. 급등한 순간에 올리지 않는다.
- * - `maxAttempts` — **한 batch**의 재시도. 같은 root를 무한히 다시 올리지 않는다.
- * - `dailySpendCapWei` — **하루 총액**. 위 둘을 다 지켜도 서로 다른 batch가 계속
- *   생기면 지갑은 빈다. O1이 요구하는 손실 상한은 이 세 번째다.
+ * - `feeCapWei` — gas price of **one** transaction. Do not submit during a spike.
+ * - `maxAttempts` — retries for **one batch**. Never resubmit the same root endlessly.
+ * - `dailySpendCapWei` — **daily total**. Even with both above honored, a steady stream of
+ *   distinct batches drains the wallet. The loss cap O1 requires is this third one.
  */
 export interface SubmitGuardInput {
   readonly chainId: number;
@@ -188,23 +189,23 @@ export interface SubmitGuardInput {
   readonly feeCapWei: bigint;
   readonly attempts: number;
   readonly maxAttempts: number;
-  /** EOA 단독 제출을 허용하는 체인. 그 외에는 Safe multisig가 제출한다. */
+  /** Chains that allow solo EOA submission. Elsewhere the Safe multisig submits. */
   readonly eoaAllowedChainIds: readonly number[];
-  /** Safe multisig 주소. EOA가 막힌 체인에서 제안을 만들 대상이다. */
+  /** Safe multisig address. Receives proposals on chains where EOA submission is blocked. */
   readonly safeAddress: string | null;
-  /** 하루에 태울 수 있는 가스 총액(wei). 운영자가 정하며 기본값이 없다. */
+  /** Total gas (wei) that may be burned per day. Set by the operator; no default. */
   readonly dailySpendCapWei: bigint;
-  /** 오늘(UTC) 이미 태운 가스 총액(wei). 영수증이 도착한 것만 센다. */
+  /** Gas (wei) already burned today (UTC). Counts only transactions with a receipt. */
   readonly spentTodayWei: bigint;
 }
 
 /**
- * 제출 방식.
+ * Submission mode.
  *
- * - `eoa` — worker가 직접 서명해 보낸다. 로컬·테스트넷 전용.
- * - `safe_proposal` — 제안만 만들고 실행하지 않는다. 서명 수집과 실행은 Safe에서
- *   사람이 한다. **제안이 만들어진 것은 제출된 것이 아니다.**
- * - `blocked` — 어느 쪽도 할 수 없다.
+ * - `eoa` — the worker signs and sends directly. Local and testnet only.
+ * - `safe_proposal` — creates a proposal only; does not execute. Humans collect signatures and
+ *   execute in Safe. **A created proposal is not a submission.**
+ * - `blocked` — neither is possible.
  */
 export type SubmitGuard =
   | { readonly allow: true; readonly via: "eoa" }
@@ -213,11 +214,11 @@ export type SubmitGuard =
 
 export function checkSubmitAllowed(input: SubmitGuardInput): SubmitGuard {
   if (!input.eoaAllowedChainIds.includes(input.chainId)) {
-    // 컨트랙트의 ANCHOR_SUBMITTER_ROLE은 Safe multisig가 보유한다. EOA로 직접
-    // 제출하는 경로는 로컬·테스트넷 전용이며 prod에서 열리면 안 된다.
+    // The Safe multisig holds the contract's ANCHOR_SUBMITTER_ROLE. Direct EOA submission is
+    // local/testnet only and must never open in prod.
     //
-    // Safe 주소가 설정돼 있으면 제안을 만든다. 없으면 아무것도 할 수 없고,
-    // 그 사실을 조용히 두지 않는다.
+    // With a Safe address configured, create a proposal. Without one nothing can be done, and
+    // that fact is not left silent.
     if (input.safeAddress) {
       return { allow: true, via: "safe_proposal" };
     }
@@ -227,10 +228,10 @@ export function checkSubmitAllowed(input: SubmitGuardInput): SubmitGuard {
     };
   }
 
-  // 일일 상한을 가스 상한보다 먼저 본다. 둘 다 걸릴 때 남아야 하는 이유는
-  // 손실 상한 쪽이다 — FEE_ABOVE_CAP은 요금이 내려가면 풀리지만 일일 상한은
-  // 날짜가 바뀌어야 풀린다. 운영자가 보는 마지막 사유가 덜 심각한 쪽이면
-  // "요금만 기다리면 된다"고 읽는다.
+  // Check the daily cap before the fee cap. When both trip, the recorded reason must be the
+  // loss cap — FEE_ABOVE_CAP clears when fees drop, but the daily cap clears only when the date
+  // changes. If the last reason the operator sees is the milder one, it reads as "just wait
+  // for fees".
   if (input.spentTodayWei >= input.dailySpendCapWei) {
     return { allow: false, reason: "DAILY_SPEND_CAP_REACHED" };
   }

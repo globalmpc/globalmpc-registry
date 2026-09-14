@@ -1,21 +1,21 @@
--- inclusion proof에 규격 버전을 담는다.
+-- Carries spec versions in the inclusion proof.
 --
--- **문제:** proof는 "이 바이트가 이 batch에 있었다"를 말하지만, 검증자가 그
--- 바이트를 **어떤 규격으로 다시 만들어야 하는지**는 말하지 않는다. leaf는
--- canonical serialization으로 만들어지고 그 규격은 버전이 있다. 버전을 모르면
--- 재구성이 재현되지 않고, 재현되지 않으면 proof는 "믿어라"가 된다.
+-- **Problem:** a proof says "these bytes were in this batch", but not **which spec the verifier
+-- must use to rebuild** those bytes. A leaf is built by
+-- canonical serialization, and that spec is versioned. Without the version,
+-- reconstruction is not reproducible, and a non-reproducible proof becomes "trust me".
 --
--- **결정 (2026-09-09, 사용자 지시): 비식별 버전 문자열 셋만 담는다.**
+-- **Decision (2026-09-09, user instruction): carry only three non-identifying version strings.**
 --
--- `policy_version` · `schema_version` · `serialization_version`. 셋 다 규격을
--- 가리키는 이름이며 **어떤 주체도 식별하지 않는다.** leaf의 원문이나
--- `subject_id`를 담자는 것이 아니다 — 그것은 별개 결정이며 여기서 정하지
--- 않는다(D-41).
+-- `policy_version` · `schema_version` · `serialization_version`. All three name
+-- specs and **identify no subject.** This is not about carrying the leaf's raw content or
+-- `subject_id` — that is a separate decision and is not made
+-- here (D-41).
 --
--- `serialization_version`은 route가 `"1"`로 **고정해 내보내고 있었다.** 컬럼에
--- 기본값 `'1'`이 있어 지금까지는 같았지만, 규격을 올리면(CLAUDE.md — 이미
--- anchor된 root를 재현하려면 버전을 올린다) 응답만 옛 값을 계속 말한다.
--- 저장된 값을 그대로 내보내야 그 사고가 생기지 않는다.
+-- The route **emitted `serialization_version` as a hardcoded `"1"`.** The column
+-- defaults to `'1'`, so they matched so far, but once the spec is bumped (CLAUDE.md — bump the
+-- version to reproduce already-anchored roots) only the response keeps reporting the old value.
+-- Emitting the stored value as is prevents that incident.
 
 DROP FUNCTION IF EXISTS core.public_inclusion_proof(UUID);
 
@@ -48,7 +48,7 @@ AS $$
     WHERE batch_id = b.id ORDER BY created_at DESC LIMIT 1
   ) t ON true
   WHERE l.entry_version_id = p_entry_version_id
-    -- 게시되지 않은 version의 proof는 제공하지 않는다.
+    -- Proofs are not provided for unpublished versions.
     AND v.status IN ('published', 'revoked', 'superseded')
 $$;
 

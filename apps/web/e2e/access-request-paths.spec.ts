@@ -1,18 +1,18 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * 거절이 가리키는 경로에 화면이 있는지 확인한다 — 11 §11.7.
+ * Checks that a screen exists at the path a denial points to — 11 §11.7.
  *
- * `authorize()`가 거절할 때 `accessRequestPath`를 주고 `ErrorNotice`가 그것을
- * 링크로 건다. 그 경로에 화면이 없으면 안내를 따라간 사용자가 404를 만난다.
- * 이 검사는 그 링크가 끊기지 않았는지만 본다.
+ * When `authorize()` denies, it returns an `accessRequestPath`, and `ErrorNotice` links
+ * to it. If no screen exists at that path, a user following the guidance hits a 404.
+ * This check only verifies that the link is not broken.
  *
- * 경로 정본은 `packages/api-contract`의 `ACCESS_REQUEST_PATHS`다. 웹은 그 패키지를
- * 의존하지 않으므로 여기서는 같은 값을 적고, 계약 쪽 테스트가 목록이 바뀌면
- * 깨지도록 잠가 둔다.
+ * The canonical paths are `ACCESS_REQUEST_PATHS` in `packages/api-contract`. The web does
+ * not depend on that package, so the same values are written here, and a contract-side
+ * test is locked to break if the list changes.
  *
- * **로그인하지 않고 연다.** 권한이 없어 막힌 사람이 도착하는 자리이므로, 세션이
- * 없어도 무엇이 부족한지 읽을 수 있어야 한다.
+ * **Opened without sign-in.** This is where a person blocked for lack of permission lands,
+ * so what is missing must be readable without a session.
  */
 
 const PATHS = [
@@ -24,15 +24,15 @@ const PATHS = [
   },
 ] as const;
 
-test.describe("§11.7 — access request 경로에 화면이 있다", () => {
+test.describe("§11.7 — access request paths have screens", () => {
   for (const { path, heading } of PATHS) {
     test(path, async ({ page }) => {
       const response = await page.goto(path);
       expect(response?.status()).toBe(200);
       await expect(page.getByRole("heading", { name: heading })).toBeVisible();
 
-      // 없는 기능을 있는 것처럼 보이지 않는다. 접수 API가 없다는 사실이 화면에
-      // 있어야 누른 사람이 기다리지 않는다.
+      // A missing feature must not look present. The screen must state that there is no
+      // filing API so the person who pressed it does not wait.
       await expect(page.getByText("This screen does not file a request")).toBeVisible();
     });
   }

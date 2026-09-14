@@ -5,7 +5,7 @@ export async function registerErrorHandler(app: FastifyInstance): Promise<void> 
   app.setErrorHandler((error, request, reply) => {
     const status = error instanceof AppError ? error.statusCode : 500;
 
-    // 서버 로그에는 상세를, 응답에는 envelope만 보낸다.
+    // Details go to the server log; the response carries only the envelope.
     request.log.error(
       { err: error, correlationId: request.context?.correlationId },
       "request failed",
@@ -19,7 +19,7 @@ export async function registerErrorHandler(app: FastifyInstance): Promise<void> 
   app.setNotFoundHandler((request, reply) => {
     reply.status(404).send({
       code: "NOT_FOUND",
-      message: "요청한 경로가 없다",
+      message: "The requested route does not exist",
       retryable: false,
       correlationId: request.context?.correlationId ?? "unknown",
     });

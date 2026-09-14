@@ -1,33 +1,33 @@
-# Alertmanager — 기본 구성(무수신).
+# Alertmanager — default config (no receivers).
 #
-# **수신처는 배포가 정한다.** 저장소에 Slack webhook이나 메일 주소를 넣지 않는다 —
-# 넣으면 그것이 시크릿이 되고, 지운 뒤에도 커밋에 남는다.
+# **The deployment decides receivers.** No Slack webhook or email address goes in the repo —
+# it would become a secret and stay in commits even after removal.
 #
-# 여기 있던 `url: "${ALERTMANAGER_WEBHOOK_URL:-...}"`는 **동작하지 않았다**
-# (2026-09-10 실사 A4). Compose는 마운트된 파일의 **내용**을 치환하지 않고, 이
-# 배포에는 렌더링 단계도 없다. 그래서 Alertmanager는 그 문자열을 URL로 읽으려
-# 하고 설정 적재 자체가 실패한다:
+# The `url: "${ALERTMANAGER_WEBHOOK_URL:-...}"` that used to be here **did not work**
+# (2026-09-10 audit A4). Compose does not substitute the **contents** of mounted files, and
+# this deployment has no rendering step. So Alertmanager tried to read that string as a URL
+# and loading the config itself failed:
 #
 #   FAILED: parse "${ALERTMANAGER_WEBHOOK_URL:-http://localhost:9093/-/void}":
 #   first path segment in URL cannot contain colon
 #
-# 규칙과 런북이 있어도 이 파일로는 알림 구성이 서지 않는다. observability
-# 프로파일이 꺼져 있으면 그 사실조차 드러나지 않는다.
+# Even with rules and runbooks, this file did not produce a working alert setup. With the
+# observability profile off, not even that was visible.
 #
-# **무수신은 통합이 하나도 없는 receiver로 명시한다.** 그것은 유효한 구성이며
-# `amtool check-config`를 통과한다. 보내는 곳이 없어도 Alertmanager UI에 발화
-# 이력이 남으므로 "규칙은 있는데 아무도 못 받았다"와 "규칙이 울린 적이 없다"를
-# 구분할 수 있다.
+# **No-receiver mode is expressed as a receiver with no integrations.** That is a valid config
+# and passes `amtool check-config`. Even with nowhere to send, the Alertmanager UI keeps the
+# firing history, so "rules existed but nobody received them" can be told apart from "the
+# rules never fired".
 #
-# 수신처가 있는 배포는 이 파일 대신 `alertmanager.webhook.yml`로 뜬다 —
-# `ALERTMANAGER_WEBHOOK_URL`이 있으면 `start.sh`가 그쪽을 고른다.
+# Deployments with a receiver start with `alertmanager.webhook.yml` instead of this file —
+# `start.sh` picks it when `ALERTMANAGER_WEBHOOK_URL` is set.
 
 route:
   receiver: default
   group_by: ["alertname"]
   group_wait: 30s
   group_interval: 5m
-  # page는 4시간마다 다시 알린다. 조용해지면 해결된 것으로 착각한다.
+  # Pages re-notify every 4 hours. Silence gets mistaken for resolution.
   repeat_interval: 4h
   routes:
     - matchers: [severity="page"]
@@ -35,5 +35,5 @@ route:
       repeat_interval: 1h
 
 receivers:
-  # 통합이 없다 = 아무 데도 보내지 않는다. 이것이 무수신 모드의 명시다.
+  # No integrations = send nowhere. This is the explicit form of no-receiver mode.
   - name: default

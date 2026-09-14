@@ -3,24 +3,24 @@ import type postgres from "postgres";
 import { keccak256 } from "@mpc/canonical";
 
 /**
- * 세션 토큰 — R1 Task 8.
+ * Session token — R1 Task 8.
  *
- * 개발용 wallet 헤더 인증을 대체한다. 그 경로는 서명 검증 없이 주소를 믿었으므로
- * 인증 우회였다.
+ * Replaces dev wallet header authentication. That path trusted the address without signature
+ * verification, so it was an auth bypass.
  *
- * 설계 결정:
+ * Design decisions:
  *
- * - **opaque random 토큰**을 쓴다. JWT가 아니다 — key 분실·역할 변경·incident에서
- *   즉시 폐기할 수 있어야 한다(AC-27). JWT는 만료 전까지 무효화할 수 없다.
- * - DB에는 토큰의 **해시**만 저장한다. DB가 유출돼도 세션을 탈취할 수 없다.
- * - 조회는 SECURITY DEFINER 함수로 한다. 세션을 찾기 전에는 tenant를 모른다.
+ * - Uses an **opaque random token**, not JWT — it must be revocable at once on key loss, role
+ *   change, or incident (AC-27). A JWT cannot be invalidated before it expires.
+ * - The DB stores only the token's **hash**. A DB leak does not allow session theft.
+ * - Lookup uses a SECURITY DEFINER function. The tenant is unknown before the session is found.
  */
 
 const TOKEN_BYTES = 32;
 export const SESSION_TTL_SECONDS = 8 * 60 * 60;
 
 export interface IssuedSession {
-  /** 클라이언트에만 전달된다. 서버는 저장하지 않는다. */
+  /** Sent only to the client. The server does not store it. */
   readonly token: string;
   readonly sessionId: string;
   readonly expiresAt: string;
@@ -75,10 +75,10 @@ export async function revokeSessionToken(sql: postgres.Sql, token: string): Prom
 }
 
 /**
- * Authorization 헤더에서 토큰을 꺼낸다.
+ * Extracts the token from the Authorization header.
  *
- * `Bearer 0x...`(개발용 wallet 주소) 형식은 더 이상 받지 않는다. 그 형식이
- * 들어오면 토큰으로 취급되고 조회에 실패해 401이 된다 — 조용히 통과하지 않는다.
+ * The `Bearer 0x...` (dev wallet address) form is no longer accepted. If it arrives it is
+ * treated as a token, fails lookup, and yields 401 — it does not pass silently.
  */
 export function extractBearerToken(header: string | undefined): string | null {
   if (!header?.startsWith("Bearer ")) return null;
@@ -86,7 +86,7 @@ export function extractBearerToken(header: string | undefined): string | null {
   return token.length > 0 ? token : null;
 }
 
-/** 상수 시간 비교. 토큰 비교에 `===`를 쓰면 타이밍 정보가 샌다. */
+/** Constant-time comparison. Using `===` on tokens leaks timing information. */
 export function tokensEqual(a: string, b: string): boolean {
   const bufferA = Buffer.from(a);
   const bufferB = Buffer.from(b);

@@ -1,14 +1,14 @@
--- project lifecycle 전이 이력 — spec 04 §4.3.
+-- Project lifecycle transition history — spec 04 §4.3.
 --
--- `core.projects.lifecycle_state`는 `draft`로 들어온 뒤 Registry 게시가
--- `registered`로 한 번 옮기는 것이 전부였다. 나머지 전이 — suspension, 복귀,
--- offering, closure — 는 **경로 자체가 없었다.** 12 §12.4가 R2 데모로 적은
--- `evidence revoke → … → suspended → reinstatement`가 배포본에서 실행되지 않았다.
+-- `core.projects.lifecycle_state` entered as `draft`, and a Registry publish moving it once to
+-- `registered` was the only transition. The rest — suspension, reinstatement,
+-- offering, closure — **had no path at all.** The R2 demo in 12 §12.4,
+-- `evidence revoke → … → suspended → reinstatement`, did not run in the deployed build.
 --
--- **왜 이력 표가 따로 필요한가:** 현재 상태만으로는 "정족수 미달로 끝났다"와
--- "취소됐다"가 구분되지 않는 것(0017의 governance_transitions)과 같은 문제다.
--- `suspended`에서 돌아온 프로젝트와 한 번도 멈춘 적 없는 프로젝트는 현재 상태가
--- 같다. 그 둘을 구분하지 못하면 감사가 성립하지 않는다.
+-- **Why a separate history table:** current state alone cannot tell "ended below quorum" from
+-- "cancelled" — the same problem as governance_transitions in 0017.
+-- A project reinstated from `suspended` and one that never stopped have the same current
+-- state. Without telling them apart, an audit is impossible.
 
 CREATE TABLE core.project_lifecycle_transitions (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -16,7 +16,7 @@ CREATE TABLE core.project_lifecycle_transitions (
   project_id       UUID NOT NULL,
   from_state       core.at_lifecycle_state NOT NULL,
   to_state         core.at_lifecycle_state NOT NULL,
-  -- 이유 없는 전이는 나중에 판단할 근거가 없다. governance_transitions와 같다.
+  -- A transition without a reason leaves nothing to judge later. Same as governance_transitions.
   reason           TEXT NOT NULL CHECK (length(btrim(reason)) > 0),
   actor_subject_id UUID REFERENCES core.subjects(id),
   occurred_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -37,25 +37,25 @@ CREATE POLICY project_lifecycle_transitions_tenant ON core.project_lifecycle_tra
 GRANT SELECT, INSERT ON core.project_lifecycle_transitions TO mpc_app;
 
 /**
- * 누가 멈췄는가 — lifecycle 결정의 강제 지점.
+ * Who suspended it — the enforcement point for lifecycle decisions.
  *
- * suspension은 급한 일이라 **1인**이 한다. 2인을 요구하면 두 번째 사람을
- * 기다리는 동안 문제가 있는 프로젝트가 계속 돈다(지갑 비활성과 같은 논리).
+ * Suspension is urgent, so **one person** does it. Requiring two means a problematic project
+ * keeps running while waiting for the second person (same logic as wallet deactivation).
  *
- * 대신 **복귀는 멈춘 사람이 할 수 없다.** 같은 사람이 멈추고 되돌리면 1인이
- * 프로젝트 상태를 자유롭게 오가는 것이 되고, suspension은 통제가 아니라
- * 개인의 재량이 된다. 이 컬럼이 그 판정의 근거다.
+ * In exchange, **the person who suspended cannot reinstate.** If one person could suspend and
+ * revert, a single person could move the project state at will, and suspension would become
+ * personal discretion rather than a control. This column is the basis for that check.
  */
 ALTER TABLE core.projects
   ADD COLUMN suspended_by_subject_id UUID REFERENCES core.subjects(id);
 
 /**
- * 이력은 **route가 명시적으로 남긴다.** 트리거로 하지 않는다.
+ * The history is **written explicitly by the route.** Not by a trigger.
  *
- * 트리거가 더 안전해 보이지만, 이 이력에 필요한 두 값 — 누가, 왜 — 은 세션에
- * 있고 트리거는 그것을 모른다. 세션 GUC로 밀어 넣으면 값이 어디서 왔는지가
- * 흐려지고, 설정을 잊은 경로가 "시스템이 옮겼다"로 조용히 기록된다.
+ * A trigger looks safer, but the two values this history needs — who and why — live in the
+ * session, and a trigger does not know them. Pushing them through a session GUC obscures where
+ * the values came from, and a path that forgot to set it is silently recorded as "the system moved it".
  *
- * 전이를 쓰는 곳은 둘뿐이다 — Registry 게시(`draft→registered`)와 lifecycle
- * 전이 route. 둘 다 이 표에 명시적으로 쓴다.
+ * Only two places write transitions — the Registry publish (`draft→registered`) and the lifecycle
+ * transition route. Both write to this table explicitly.
  */

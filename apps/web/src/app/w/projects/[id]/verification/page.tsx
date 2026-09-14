@@ -28,17 +28,17 @@ import { Address } from "@/components/Address";
 /**
  * Verification Workbench — spec 11 §11.3, 04 §4.4.
  *
- * 4단계가 각각 별도 행동으로 보인다.
+ * Each of the four steps appears as a separate action.
  *
- * 1. **배정** — 근거(claim)를 골라 case를 만든다. 이 시점의 evidence snapshot이
- *    고정된다. 근거 없는 검토는 만들 수 없다.
- * 2. **초안** — findings·citations·limitations를 적는다. `limitations`가 비면
- *    초안 자체가 만들어지지 않는다(AC-01).
- * 3. **서명 요청** — 서버가 EIP-712 구조와 사람이 읽을 수 있는 요약을 준다.
- * 4. **서명** — 브라우저가 서명한다. 서버는 대리 서명하지 않으며 복구된 주소가
- *    배정된 검토자인지 따로 대조한다.
+ * 1. **Assign** — pick evidence (claims) and create a case. The evidence snapshot is
+ *    fixed at this point. A review without evidence cannot be created.
+ * 2. **Draft** — write findings, citations, limitations. With empty `limitations`
+ *    no draft is created at all (AC-01).
+ * 3. **Signature request** — the server returns the EIP-712 structure and a human-readable summary.
+ * 4. **Sign** — the browser signs. The server never signs on anyone's behalf and separately checks
+ *    that the recovered address is the assigned reviewer.
  *
- * 서명 요청 이후 근거가 바뀌면 그 요청은 무효다. 화면이 이것을 숨기지 않는다.
+ * If evidence changes after a signature request, the request is void. The screen does not hide this.
  */
 export default function VerificationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -191,8 +191,8 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
 
         {cases.length > 0 ? (
           <div className="table-scroll" style={{ marginTop: 18 }}>
-            {/* 배정한 사람과 서명하는 사람이 다르므로, 검토자는 이 목록에서
-                자기 배정을 찾는다. */}
+            {/* The assigner and the signer are different people, so the reviewer finds
+                their assignment in this list. */}
             <table data-testid="case-list">
               <thead>
                 <tr>
@@ -240,8 +240,8 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
         <div className="panel">
           <h2>1-1. Record a state change</h2>
           <p className="sub" style={{ marginTop: 0 }}>
-            {/* 서명하거나 아무 일도 없거나 둘뿐이면 잘못된 근거를 발견해도 남길
-                자리가 없다. */}
+            {/* If the only options were sign or nothing, there would be no place to record
+                finding bad evidence. */}
             When the evidence falls short, request more. No state changes without a reason.
           </p>
 
@@ -271,9 +271,9 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
                         { toState: state, reason: transitionReason.trim() },
                         newIdempotencyKey(),
                       );
-                      // 목록을 다시 읽어 그 결과로 선택을 갱신한다. 전이 응답에는
-                      // 이력이 없으므로 응답만으로 화면을 채우면 방금 남긴 기록이
-                      // 보이지 않는다.
+                      // Re-read the list and refresh the selection from it. The transition response
+                      // has no history, so filling the screen from it alone would hide
+                      // the record just written.
                       const refreshed = await load();
                       const updated = refreshed.find((item) => item.id === verificationCase.id);
                       if (updated) setVerificationCase(updated);
@@ -288,8 +288,8 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
 
           {verificationCase.transitions && verificationCase.transitions.length > 0 ? (
             <div className="table-scroll" style={{ marginTop: 14 }}>
-              {/* 지나온 경로를 감추지 않는다. 반려 후 재배정된 case와 처음부터
-                  진행된 case는 현재 상태만으로 같아 보인다. */}
+              {/* Do not hide the path taken. A case reassigned after rejection and one that
+                  went straight through look the same by current state alone. */}
               <table data-testid="transition-history">
                 <thead>
                   <tr>
@@ -326,7 +326,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
           />
         </div>
         <p className="meta" style={{ marginTop: 0, marginBottom: 12 }}>
-          {/* 한계 없는 서명은 읽는 쪽에서 전체 보증으로 읽힌다. */}
+          {/* A signature without limitations reads as a full guarantee. */}
           Leave it empty and no draft is created. The server and the database each refuse it.
         </p>
         <button
@@ -387,8 +387,8 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
 
         {signatureRequest ? (
           <>
-            {/* 서명 대상은 typedData지만 사람이 읽을 수 있는 형태를 함께 보여준다.
-                무엇에 서명하는지 모르는 서명은 동의가 아니다(§11.4). */}
+            {/* The signed payload is typedData, but a human-readable form is shown with it.
+                A signature without knowing what is signed is not consent (§11.4). */}
             <pre
               data-testid="signing-payload"
               style={{
@@ -446,7 +446,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
             <dd className="mono">{signed.ongoingApplicability}</dd>
             <dt>Validity of past signatures</dt>
             <dd>
-              {/* 자격이 나중에 만료돼도 서명 당시의 사실은 바뀌지 않는다(AC-17). */}
+              {/* A credential expiring later does not change the facts at signing time (AC-17). */}
               {signed.pastSignatureRemainsValid
                 ? "Stands as it was at the time of signing"
                 : "Void"}
@@ -459,7 +459,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
         <div className="panel">
           <h2>5. Dispute</h2>
           <p className="sub" style={{ marginTop: 0 }}>
-            {/* 서명을 삭제하면 잘못된 검토를 감추는 것과 구분되지 않는다. */}
+            {/* Deleting a signature is indistinguishable from hiding a bad review. */}
             The signature is not deleted. The judgement made at signing time stands, and the
             dispute is added as a new fact. A dispute is not a finding that the review was wrong;
             it marks that it needs another look.
@@ -500,8 +500,8 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
               </div>
 
               <div className="table-scroll">
-                {/* 해소된 이의도 함께 보여준다. 감추면 "한 번 문제가 제기됐다"는
-                    사실이 사라지고, 그것은 잘못된 검토를 덮는 것과 같아진다. */}
+                {/* Resolved disputes are shown too. Hiding them erases the fact that
+                    "an issue was raised once", which amounts to covering up a bad review. */}
                 <table data-testid="dispute-table">
                   <thead>
                     <tr>
@@ -561,7 +561,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
               </div>
 
               <p className="meta" style={{ marginTop: 10 }}>
-                {/* 틀렸다고 확인된 검토를 유효로 표시할 수 없다. */}
+                {/* A review confirmed wrong cannot be shown as valid. */}
                 Upholding a dispute does not return the review to valid. Correcting it is a
                 separate decision — supersede it with a new signature, or revoke it.
               </p>
@@ -580,7 +580,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
   );
 }
 
-/** seed가 만든 데모 검토자·자격·스키마. R5에서 실제 배정 흐름으로 대체한다. */
+/** Demo reviewer, credential, and schema created by seed. Replaced by the real assignment flow in R5. */
 const DEMO_REVIEWER_SUBJECT_ID = "aaaaaaaa-0000-0000-0000-000000000006";
 const DEMO_CREDENTIAL_ID = "eeeeeeee-0000-0000-0000-000000000001";
 const DEMO_SCHEMA_ID = "eeeeeeee-0000-0000-0000-000000000002";

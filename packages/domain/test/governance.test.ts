@@ -12,59 +12,59 @@ import {
 const PROJECT_A: GovernanceSpace = { kind: "project", projectId: "01JZPROJECTA" };
 const PROJECT_B: GovernanceSpace = { kind: "project", projectId: "01JZPROJECTB" };
 
-describe("AC-05 — cross-governance 차단", () => {
-  it("protocol space에서 project disposition을 제안할 수 없다", () => {
+describe("AC-05 — cross-governance blocking", () => {
+  it("cannot propose a project disposition in the protocol space", () => {
     const result = checkProposalSpace("protocol", "project_disposition");
     expect(result.allowed).toBe(false);
     if (!result.allowed) expect(result.reason).toBe("GOVERNANCE_SPACE_MISMATCH");
   });
 
-  it("project space에서 protocol treasury를 제안할 수 없다", () => {
+  it("cannot propose protocol treasury in the project space", () => {
     const result = checkProposalSpace(PROJECT_A, "protocol_treasury");
     expect(result.allowed).toBe(false);
     if (!result.allowed) expect(result.reason).toBe("GOVERNANCE_SPACE_MISMATCH");
   });
 
-  it("project space에서 fee schedule을 바꿀 수 없다", () => {
+  it("cannot change the fee schedule in the project space", () => {
     expect(checkProposalSpace(PROJECT_A, "fee_schedule").allowed).toBe(false);
   });
 
-  it("project space에서 reviewer pool 기준을 바꿀 수 없다", () => {
+  it("cannot change reviewer pool criteria in the project space", () => {
     expect(checkProposalSpace(PROJECT_A, "reviewer_pool_criteria").allowed).toBe(false);
   });
 
-  it("모든 protocol type은 protocol space에서만 허용된다", () => {
+  it("every protocol type is allowed only in the protocol space", () => {
     for (const type of PROTOCOL_PROPOSAL_TYPES) {
       expect(checkProposalSpace("protocol", type).allowed).toBe(true);
       expect(checkProposalSpace(PROJECT_A, type).allowed).toBe(false);
     }
   });
 
-  it("모든 project type은 project space에서만 허용된다", () => {
+  it("every project type is allowed only in the project space", () => {
     for (const type of PROJECT_PROPOSAL_TYPES) {
       expect(checkProposalSpace(PROJECT_A, type).allowed).toBe(true);
       expect(checkProposalSpace("protocol", type).allowed).toBe(false);
     }
   });
 
-  it("알 수 없는 proposal type을 거절한다", () => {
+  it("rejects an unknown proposal type", () => {
     const result = checkProposalSpace("protocol", "arbitrary_admin_action");
     expect(result.allowed).toBe(false);
     if (!result.allowed) expect(result.reason).toBe("GOVERNANCE_UNKNOWN_PROPOSAL_TYPE");
   });
 });
 
-describe("투표 자격", () => {
-  it("protocol voter는 protocol proposal에만 투표한다", () => {
+describe("voting eligibility", () => {
+  it("a protocol voter votes only on protocol proposals", () => {
     expect(checkVoteEligibility("protocol", "protocol").allowed).toBe(true);
     expect(checkVoteEligibility("protocol", PROJECT_A).allowed).toBe(false);
   });
 
-  it("project voter는 protocol proposal에 투표할 수 없다", () => {
+  it("a project voter cannot vote on protocol proposals", () => {
     expect(checkVoteEligibility(PROJECT_A, "protocol").allowed).toBe(false);
   });
 
-  it("project voter는 자기 프로젝트에만 투표한다", () => {
+  it("a project voter votes only on its own project", () => {
     expect(checkVoteEligibility(PROJECT_A, PROJECT_A).allowed).toBe(true);
     const cross = checkVoteEligibility(PROJECT_A, PROJECT_B);
     expect(cross.allowed).toBe(false);
@@ -72,37 +72,37 @@ describe("투표 자격", () => {
   });
 });
 
-describe("어느 space에서도 금지되는 대상", () => {
-  it("readiness override는 governance로 만들 수 없다", () => {
+describe("targets forbidden in every space", () => {
+  it("governance cannot create a readiness override", () => {
     expect(isForbiddenTarget("readiness_override")).toBe(true);
   });
 
-  it("legal issuance 승인은 governance로 만들 수 없다", () => {
+  it("governance cannot create legal issuance approval", () => {
     expect(isForbiddenTarget("legal_issuance_approval")).toBe(true);
   });
 
-  it("audit log 변경은 governance로 만들 수 없다", () => {
+  it("governance cannot change the audit log", () => {
     expect(isForbiddenTarget("audit_log_mutation")).toBe(true);
   });
 
-  it("attestation 내용 변경은 governance로 만들 수 없다", () => {
+  it("governance cannot change attestation content", () => {
     expect(isForbiddenTarget("attestation_content_change")).toBe(true);
   });
 
-  it("정상 protocol parameter는 금지 대상이 아니다", () => {
+  it("a normal protocol parameter is not forbidden", () => {
     expect(isForbiddenTarget("fee_schedule")).toBe(false);
   });
 });
 
-describe("proposal type 집합의 배타성", () => {
-  it("두 집합이 겹치지 않는다", () => {
+describe("exclusivity of the proposal type sets", () => {
+  it("the two sets do not overlap", () => {
     const protocol = new Set<string>(PROTOCOL_PROPOSAL_TYPES);
     const overlap = PROJECT_PROPOSAL_TYPES.filter((type) => protocol.has(type));
     expect(overlap).toEqual([]);
   });
 });
 
-describe("투표 집계", () => {
+describe("vote tally", () => {
   const base = {
     forWeight: 0n,
     againstWeight: 0n,
@@ -114,15 +114,15 @@ describe("투표 집계", () => {
     thresholdDenominator: 2,
   };
 
-  it("참여가 정족수에 못 미치면 no_quorum이다", () => {
+  it("no_quorum when participation is below quorum", () => {
     const result = tallyVotes({ ...base, forWeight: 100n });
     // 100/1000 = 10% < 25%
     expect(result.outcome).toBe("no_quorum");
     expect(result.quorumMet).toBe(false);
   });
 
-  it("정족수 미달과 부결을 구분한다", () => {
-    // 다음에 할 일이 다르다 — 전자는 다시 알리는 것이고 후자는 제안을 고치는 것이다.
+  it("distinguishes missing quorum from rejection", () => {
+    // The next step differs — the former means announcing again, the latter revising the proposal.
     const noQuorum = tallyVotes({ ...base, forWeight: 100n });
     const defeated = tallyVotes({ ...base, forWeight: 100n, againstWeight: 400n });
 
@@ -131,27 +131,27 @@ describe("투표 집계", () => {
     expect(noQuorum.reason).not.toBe(defeated.reason);
   });
 
-  it("기권도 참여로 센다", () => {
-    // 정족수는 "얼마나 관심을 보였나"이지 "얼마나 찬성했나"가 아니다.
+  it("counts abstentions as participation", () => {
+    // Quorum measures "how much interest", not "how much support".
     const result = tallyVotes({ ...base, forWeight: 200n, abstainWeight: 100n });
     expect(result.quorumMet).toBe(true);
     expect(result.participatedWeight).toBe(300n);
   });
 
-  it("기권을 반대로 세지 않는다", () => {
-    // 300 찬성 / 0 반대 / 200 기권 → 찬반 합 300 중 300이 찬성이라 통과다.
+  it("does not count abstentions as against", () => {
+    // 300 for / 0 against / 200 abstain → 300 of the 300 for+against are for, so it passes.
     const result = tallyVotes({ ...base, forWeight: 300n, abstainWeight: 200n });
     expect(result.outcome).toBe("succeeded");
   });
 
-  it("기권만 있으면 판정하지 않는다", () => {
+  it("does not decide when there are only abstentions", () => {
     const result = tallyVotes({ ...base, abstainWeight: 500n });
     expect(result.outcome).toBe("defeated");
-    expect(result.reason).toContain("기권만");
+    expect(result.reason).toContain("Only abstentions");
   });
 
-  it("경계값에서 분수로 판정한다", () => {
-    // 정확히 25%. 부동소수점이면 0.25 비교에서 갈릴 수 있다.
+  it("decides with fractions at the boundary", () => {
+    // Exactly 25%. Floating point can split on a 0.25 comparison.
     const exact = tallyVotes({ ...base, forWeight: 250n });
     expect(exact.quorumMet).toBe(true);
 
@@ -159,8 +159,8 @@ describe("투표 집계", () => {
     expect(justBelow.quorumMet).toBe(false);
   });
 
-  it("통과 기준도 경계에서 정확하다", () => {
-    // 찬반 합 500 중 정확히 250 찬성 = 50%. 기준이 1/2이므로 통과다.
+  it("the pass threshold is exact at the boundary too", () => {
+    // Exactly 250 for out of 500 for+against = 50%. The threshold is 1/2, so it passes.
     const exact = tallyVotes({ ...base, forWeight: 250n, againstWeight: 250n });
     expect(exact.outcome).toBe("succeeded");
 
@@ -168,8 +168,8 @@ describe("투표 집계", () => {
     expect(justBelow.outcome).toBe("defeated");
   });
 
-  it("큰 수에서도 정확하다", () => {
-    // 토큰 무게는 18 decimals다. number로 다루면 정밀도를 잃는다.
+  it("is exact with large numbers", () => {
+    // Token weight has 18 decimals. Handling it as number loses precision.
     const huge = 10n ** 30n;
     const result = tallyVotes({
       ...base,

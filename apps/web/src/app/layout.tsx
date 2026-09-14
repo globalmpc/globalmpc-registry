@@ -21,9 +21,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <TopBar />
             <main className="main">{children}</main>
             {/*
-              약관·데이터 처리·지원은 footer에 둔다. 공개 navigation은
-              스펙 11 §11.2의 일곱 항목이고, 여기에 여덟 번째를 끼우면 그 목록이
-              무엇을 뜻하는지가 흐려진다.
+              Terms, data processing, and support live in the footer. Public navigation is
+              the seven items of spec 11 §11.2; inserting an eighth blurs what
+              that list means.
             */}
             <footer className="footer">
               <Link href="/legal">Terms, data handling, and support</Link>

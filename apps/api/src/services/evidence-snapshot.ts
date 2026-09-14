@@ -5,14 +5,14 @@ import { badRequest } from "../errors.js";
 /**
  * Evidence snapshot — spec 04 §4.2, 05 §5.12.
  *
- * 검토자가 서명하는 대상은 "그 시점의 근거 집합"이다. 시점을 고정하지 않으면
- * 서명 후 근거가 바뀌어도 서명이 유효해 보인다.
+ * What a reviewer signs is "the evidence set at that moment". Without pinning the moment, the
+ * signature still looks valid after the evidence changes.
  *
- * 두 가지 규칙:
+ * Two rules:
  *
- * 1. **artifact ID를 정렬한 뒤 직렬화한다.** 같은 집합이면 순서와 무관하게 같은
- *    hash가 나와야 한다 — 조회 순서가 달라졌다고 snapshot이 달라지면 재현할 수 없다.
- * 2. **빈 snapshot을 만들 수 없다.** 근거 없는 검토는 존재하지 않는다.
+ * 1. **Sort artifact IDs before serializing.** The same set must yield the same hash regardless
+ *    of order — if the snapshot changed with query order, it could not be reproduced.
+ * 2. **An empty snapshot cannot be created.** A review without evidence does not exist.
  */
 
 export interface EvidenceSnapshot {
@@ -26,7 +26,7 @@ interface SnapshotInput {
   readonly claimIds: readonly string[];
   readonly artifactIds: readonly string[];
   readonly receiptIds: readonly string[];
-  /** claim의 현재 내용까지 포함해야 값이 바뀐 것을 탐지할 수 있다. */
+  /** The claim's current content must be included to detect changed values. */
   readonly claimFingerprints: readonly { id: string; valueText: string; grade: string }[];
 }
 
@@ -52,9 +52,9 @@ export function hashSnapshotInput(input: SnapshotInput): Hex {
 }
 
 /**
- * verification case의 현재 근거로 snapshot을 만든다.
+ * Builds a snapshot from the verification case's current evidence.
  *
- * case에 연결된 claim과 그 claim이 근거로 삼는 artifact·receipt를 모은다.
+ * Collects the claims linked to the case and the artifacts and receipts those claims rely on.
  */
 export async function buildEvidenceSnapshot(
   tx: postgres.TransactionSql,
@@ -64,7 +64,7 @@ export async function buildEvidenceSnapshot(
   if (claimIds.length === 0) {
     throw badRequest(
       "EVIDENCE_SNAPSHOT_EMPTY",
-      "근거 없는 검토는 만들 수 없다. claim을 하나 이상 지정한다",
+      "A review without evidence cannot be created. Specify at least one claim",
     );
   }
 
@@ -76,7 +76,7 @@ export async function buildEvidenceSnapshot(
   if (claims.length !== claimIds.length) {
     throw badRequest(
       "EVIDENCE_SNAPSHOT_CLAIM_MISSING",
-      "지정한 claim 중 이 프로젝트에 없는 것이 있다",
+      "Some of the specified claims are not in this project",
       { requested: claimIds.length, found: claims.length },
     );
   }

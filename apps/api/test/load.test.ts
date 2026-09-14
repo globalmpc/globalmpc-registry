@@ -7,19 +7,19 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 부하 특성 — spec 06 §6.9.
+ * Load behavior — spec 06 §6.9.
  *
- * 이것은 성능 벤치마크가 아니다. 절대 수치는 기계마다 다르고 CI에서 재현되지
- * 않는다. **동시성 아래에서 불변조건이 깨지지 않는가**를 본다.
+ * This is not a performance benchmark. Absolute numbers vary by machine and do not
+ * reproduce in CI. It checks that **invariants hold under concurrency**.
  *
- * - 같은 Idempotency-Key로 동시에 들어온 요청이 하나만 반영되는가
- * - 동시 mutation이 버전을 건너뛰거나 덮어쓰지 않는가
- * - RLS가 부하 아래에서도 tenant를 섞지 않는가
- * - 연결 풀이 고갈되어도 오류가 조용히 성공으로 바뀌지 않는가
+ * - concurrent requests with the same Idempotency-Key apply only once
+ * - concurrent mutations do not skip or overwrite versions
+ * - RLS does not mix tenants under load
+ * - pool exhaustion does not silently turn errors into success
  *
- * 순차 실행에서는 절대 나타나지 않는 것들이라 별도 파일로 둔다.
+ * None of these show up in sequential runs, hence a separate file.
  */
-describeDb("동시성 아래 불변조건", () => {
+describeDb("invariants under concurrency", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operatorToken: string;
@@ -46,7 +46,7 @@ describeDb("동시성 아래 불변조건", () => {
       headers: { authorization: `Bearer ${token}`, "idempotency-key": idem },
       payload: {
         projectKey: key,
-        name: "부하 확인용",
+        name: "load check",
         hostCountryIso3: "MNG",
         minerals: ["copper"],
         ownerOrganizationId: fx.orgA,
@@ -54,11 +54,11 @@ describeDb("동시성 아래 불변조건", () => {
     });
   }
 
-  it("같은 Idempotency-Key로 동시에 들어와도 하나만 만들어진다", async () => {
+  it("creates only one resource for concurrent requests with the same Idempotency-Key", async () => {
     const key = `LOAD-IDEM-${Date.now()}`;
     const idem = idempotencyKey();
 
-    // 네트워크 재시도는 순차가 아니라 동시에 온다. 순차 테스트는 이것을 못 잡는다.
+    // Network retries arrive concurrently, not in sequence. Sequential tests miss this.
     const responses = await Promise.all(
       Array.from({ length: 8 }, () => createProject(operatorToken, key, idem)),
     );
@@ -66,7 +66,7 @@ describeDb("동시성 아래 불변조건", () => {
     const created = responses.filter((response) => response.statusCode === 200);
     expect(created.length).toBeGreaterThan(0);
 
-    // 성공한 것들은 모두 같은 프로젝트를 가리켜야 한다.
+    // All successes must point to the same project.
     const ids = new Set(created.map((response) => response.json().id));
     expect(ids.size).toBe(1);
 
@@ -76,7 +76,7 @@ describeDb("동시성 아래 불변조건", () => {
     expect(Number(rows[0]!.count)).toBe(1);
   });
 
-  it("서로 다른 key는 동시에 와도 각각 만들어진다", async () => {
+  it("different keys each create a resource even when concurrent", async () => {
     const stamp = Date.now();
     const responses = await Promise.all(
       Array.from({ length: 10 }, (_, index) =>
@@ -88,7 +88,7 @@ describeDb("동시성 아래 불변조건", () => {
     expect(new Set(responses.map((response) => response.json().id)).size).toBe(10);
   });
 
-  it("동시 conflict 기록이 버전을 건너뛰지 않는다", async () => {
+  it("concurrent conflict writes do not skip versions", async () => {
     const claim = (
       await app.inject({
         method: "POST",
@@ -104,7 +104,7 @@ describeDb("동시성 아래 불변조건", () => {
       })
     ).json();
 
-    // 같은 버전을 본 10명이 동시에 기록한다.
+    // 10 writers who saw the same version write concurrently.
     const responses = await Promise.all(
       Array.from({ length: 10 }, () =>
         app.inject({
@@ -121,7 +121,7 @@ describeDb("동시성 아래 불변조건", () => {
     );
 
     const succeeded = responses.filter((response) => response.statusCode === 200);
-    // If-Match가 없으면 10개가 모두 통과하고 9명의 판단이 사라진다.
+    // Without If-Match all 10 pass and 9 judgments are lost.
     expect(succeeded).toHaveLength(1);
 
     const [row] = await fx.sql<{ version: number }[]>`
@@ -130,11 +130,11 @@ describeDb("동시성 아래 불변조건", () => {
     expect(row!.version).toBe(claim.version + 1);
   });
 
-  it("동시 부하에서도 tenant가 섞이지 않는다", async () => {
+  it("tenants do not mix under concurrent load", async () => {
     const stamp = Date.now();
 
-    // 두 tenant가 번갈아 요청한다. 연결 풀을 공유하므로 세션 변수가 새면
-    // 여기서 드러난다.
+    // Two tenants alternate requests. They share the pool, so a leaking session variable
+    // shows up here.
     await Promise.all(
       Array.from({ length: 20 }, (_, index) =>
         index % 2 === 0
@@ -164,11 +164,11 @@ describeDb("동시성 아래 불변조건", () => {
     });
 
     const keys = (listA.json().items as { projectKey: string }[]).map((item) => item.projectKey);
-    // 한 건이라도 섞이면 RLS가 부하 아래에서 깨진 것이다.
+    // Even one mixed row means RLS broke under load.
     expect(keys.filter((key) => key.startsWith(`LOAD-B-${stamp}`))).toEqual([]);
   });
 
-  it("동시 읽기가 오류 없이 처리된다", async () => {
+  it("handles concurrent reads without errors", async () => {
     const responses = await Promise.all(
       Array.from({ length: 40 }, () =>
         app.inject({
@@ -179,8 +179,8 @@ describeDb("동시성 아래 불변조건", () => {
       ),
     );
 
-    // 연결 풀이 모자라면 대기하거나 503이어야 한다. 조용히 빈 목록을 주면
-    // 데이터가 없는 것과 구분되지 않는다.
+    // If the pool runs short, it must wait or return 503. A silently empty list is
+    // indistinguishable from no data.
     for (const response of responses) {
       expect([200, 503]).toContain(response.statusCode);
       if (response.statusCode === 200) {
@@ -189,7 +189,7 @@ describeDb("동시성 아래 불변조건", () => {
     }
   });
 
-  it("동시 요청의 requestId가 서로 다르다", async () => {
+  it("concurrent requests get distinct requestIds", async () => {
     const responses = await Promise.all(
       Array.from({ length: 20 }, () =>
         app.inject({
@@ -200,7 +200,7 @@ describeDb("동시성 아래 불변조건", () => {
       ),
     );
 
-    // 같은 값이 나오면 추적이 무의미해진다 — 로그에서 요청을 구분할 수 없다.
+    // Duplicate values make tracing meaningless — requests cannot be told apart in logs.
     const ids = responses.map((response) => response.headers["x-request-id"]);
     expect(new Set(ids).size).toBe(ids.length);
   });

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 #
-# 배포된 스택에 무엇이 켜져 있는지 밖에서 확인한다.
+# Checks from the outside what is turned on in a deployed stack.
 #
-# 두 미결 항목은 "저장소 안에서 알 수 없다"로 열려 있었다. 실제로 알 수 없는
-# 것은 **플랫폼 콘솔 설정**이고, 그 결과로 나타나는 **동작**은 밖에서 볼 수 있다.
-# 이 스크립트는 볼 수 있는 것을 보고, 볼 수 없는 것은 무엇을 봐야 하는지 적는다.
+# Two open items were left as "cannot be known from inside the repository". What truly cannot
+# be known is the **platform console settings**; the **behavior** they produce is visible from
+# outside. This script checks what is visible and, for what is not, notes what to look at.
 #
 #   ./verify-deployment.sh https://stg.example.test
-#   LOAD_PROBE=1 ./verify-deployment.sh https://stg.example.test   # rate limit까지
+#   LOAD_PROBE=1 ./verify-deployment.sh https://stg.example.test   # including rate limit
 #
-# **읽기만 한다.** 기본 동작은 GET 몇 번이다. `LOAD_PROBE=1`일 때만 공개
-# endpoint에 연속 요청을 보내며, 그것도 기본 60회다 — 운영 중 스택에 돌릴
-# 것이므로 부하를 스스로 정하지 않는다.
+# **Read-only.** By default it makes a few GETs. Only with `LOAD_PROBE=1` does it send
+# consecutive requests to a public endpoint, 60 by default — it runs against a live stack,
+# so it does not decide the load on its own.
 
 set -euo pipefail
 
 BASE="${1:-}"
 if [[ -z "$BASE" ]]; then
-  echo "사용법: $0 <base-url>   (예: https://stg.example.test)" >&2
+  echo "Usage: $0 <base-url>   (e.g. https://stg.example.test)" >&2
   exit 2
 fi
 BASE="${BASE%/}"
@@ -31,138 +31,138 @@ fail=0
 unknown=0
 
 say()   { printf '%s\n' "$*"; }
-ok()    { printf '  [확인] %s\n' "$*"; pass=$((pass + 1)); }
-bad()   { printf '  [문제] %s\n' "$*"; fail=$((fail + 1)); }
-dunno() { printf '  [모름] %s\n' "$*"; unknown=$((unknown + 1)); }
+ok()    { printf '  [ok]      %s\n' "$*"; pass=$((pass + 1)); }
+bad()   { printf '  [problem] %s\n' "$*"; fail=$((fail + 1)); }
+dunno() { printf '  [unknown] %s\n' "$*"; unknown=$((unknown + 1)); }
 
-say "대상: $BASE"
+say "Target: $BASE"
 say ""
 
 # ---------------------------------------------------------------------------
-# 1. 살아 있는가
+# 1. Is it alive?
 # ---------------------------------------------------------------------------
-say "1. 기동 상태"
+say "1. Startup state"
 
 if ready="$("${CURL[@]}" -o /dev/null -w '%{http_code}' "$BASE/health/ready")"; then
   case "$ready" in
     200) ok "/health/ready 200" ;;
-    *)   bad "/health/ready $ready — DB나 객체 저장소가 준비되지 않았다" ;;
+    *)   bad "/health/ready $ready — the DB or object storage is not ready" ;;
   esac
 else
-  bad "/health/ready에 닿지 못했다"
+  bad "Could not reach /health/ready"
 fi
 
 # ---------------------------------------------------------------------------
-# 2. chain·scan 프로파일이 켜져 있는가
+# 2. Are the chain and scan profiles on?
 # ---------------------------------------------------------------------------
 say ""
-say "2. worker 프로파일"
-say "   판단 근거: worker는 살아 있는 동안 core.worker_heartbeats에 신호를 남기고,"
-say "   그것이 /metrics의 mpc_worker_seconds_since_heartbeat로 나온다."
-say "   한 번도 신호를 남기지 않은 worker는 행이 아예 없다 — 0으로 내면"
-say "   '방금 봤다'가 되므로 내지 않는다. 행이 없으면 그 프로파일은 꺼져 있다."
+say "2. Worker profiles"
+say "   Basis: while alive, a worker leaves signals in core.worker_heartbeats,"
+say "   which appear in /metrics as mpc_worker_seconds_since_heartbeat."
+say "   A worker that never signalled has no row at all — emitting 0 would mean"
+say "   'just seen', so nothing is emitted. No row means that profile is off."
 
 metrics="$("${CURL[@]}" "$BASE/metrics" || true)"
 
 if [[ -z "$metrics" ]]; then
-  dunno "/metrics를 읽지 못했다 — 보호돼 있으면 정상이다. 그때는 콘솔에서 확인한다"
+  dunno "Could not read /metrics — normal if it is protected. Check in the console then"
 else
   for kind in anchor scan outbox; do
     line="$(printf '%s\n' "$metrics" | grep -E "mpc_worker_seconds_since_heartbeat\{state=\"$kind\"\}" || true)"
     if [[ -z "$line" ]]; then
       case "$kind" in
-        anchor) bad "anchor worker 신호 없음 — chain 프로파일이 꺼져 있다. batch가 제출되지 않는다" ;;
-        scan)   bad "scan worker 신호 없음 — scan 프로파일이 꺼져 있다. 업로드가 quarantined에서 멈춘다" ;;
-        *)      bad "$kind worker 신호 없음" ;;
+        anchor) bad "No anchor worker signal — the chain profile is off. Batches are not submitted" ;;
+        scan)   bad "No scan worker signal — the scan profile is off. Uploads stall in quarantined" ;;
+        *)      bad "No $kind worker signal" ;;
       esac
     else
       seconds="${line##* }"
-      # 신호가 오래됐으면 켜져 있다가 죽은 것이다. 꺼진 것과 구분해서 말한다.
+      # A stale signal means it was on and then died. Report it separately from off.
       if (( ${seconds%.*} > 120 )); then
-        bad "$kind worker 신호가 ${seconds}초 전 — 떠 있었으나 지금은 멈췄다"
+        bad "$kind worker signal ${seconds}s ago — it was up but has stopped"
       else
-        ok "$kind worker 살아 있음 (${seconds}초 전)"
+        ok "$kind worker alive (${seconds}s ago)"
       fi
     fi
   done
 
-  # `# TYPE mpc_uploads_quarantined gauge` 주석 줄을 빼지 않으면 값 대신
-  # "gauge"가 잡힌다. Prometheus 텍스트 형식에서 주석은 `#`로 시작한다.
+  # Unless the `# TYPE mpc_uploads_quarantined gauge` comment line is excluded, "gauge" is
+  # captured instead of the value. In the Prometheus text format comments start with `#`.
   quarantined="$(printf '%s\n' "$metrics" \
     | grep -E '^mpc_uploads_quarantined' | awk '{print $NF}' || true)"
-  [[ -n "$quarantined" ]] && say "   참고: quarantined 업로드 $quarantined 건"
+  [[ -n "$quarantined" ]] && say "   Note: $quarantined quarantined uploads"
 fi
 
 # ---------------------------------------------------------------------------
-# 3. 공개 API 앞단
+# 3. Public API front end
 # ---------------------------------------------------------------------------
 say ""
-say "3. 공개 API 앞단"
+say "3. Public API front end"
 
 headers="$("${CURL[@]}" -D - -o /dev/null "$BASE/api/v1/public/disclosures?limit=1" || true)"
 
 if printf '%s\n' "$headers" | grep -qiE '^cache-control:.*max-age'; then
-  ok "공개 응답에 cache-control이 있다"
+  ok "Public responses carry cache-control"
 else
-  bad "공개 응답에 cache-control이 없다 — 앞단 캐시가 붙어도 효과가 없다"
+  bad "Public responses lack cache-control — a front-end cache would have no effect"
 fi
 
-# 앞단이 있는지는 헤더로만 추정한다. 단정하지 않는다.
+# Whether a front end exists is only inferred from headers. Not asserted.
 if printf '%s\n' "$headers" | grep -qiE '^(server|via|x-served-by|cf-ray|x-vercel-id):'; then
-  say "   앞단으로 보이는 헤더:"
+  say "   Headers suggesting a front end:"
   printf '%s\n' "$headers" | grep -iE '^(server|via|x-served-by|cf-ray|x-vercel-id):' | sed 's/^/     /'
-  dunno "헤더만으로는 그것이 WAF인지 단순 reverse proxy인지 알 수 없다 — 콘솔 확인 필요"
+  dunno "Headers alone cannot tell a WAF from a plain reverse proxy — check the console"
 else
-  dunno "앞단을 가리키는 헤더가 없다 — 프록시가 없거나 헤더를 지운다"
+  dunno "No headers point to a front end — either no proxy, or it strips headers"
 fi
 
-# 위조 X-Forwarded-For. 앱이 이것을 그대로 믿으면 IP 기준 제한이 무의미해진다.
-# 밖에서는 신뢰 여부를 직접 볼 수 없다. 요청이 거절되지 않는다는 것만 확인하고
-# 실제 판정은 로그 대조로 넘긴다 — 추정을 확인으로 바꾸지 않는다.
+# Forged X-Forwarded-For. If the app trusts it as is, IP-based limits become meaningless.
+# Trust cannot be observed directly from outside. Only check that the request is not refused
+# and leave the real verdict to log comparison — an inference is not turned into a confirmation.
 forged="$("${CURL[@]}" -o /dev/null -w '%{http_code}' \
   -H 'X-Forwarded-For: 203.0.113.9' \
   "$BASE/api/v1/public/disclosures?limit=1" || true)"
-say "   위조 X-Forwarded-For 요청 → HTTP $forged"
-dunno "앱이 그 값을 client IP로 채택했는지는 로그에서 본다. 203.0.113.9로 기록됐다면 TRUSTED_PROXY_HOPS가 실제 proxy 수보다 크다"
+say "   Forged X-Forwarded-For request → HTTP $forged"
+dunno "Check the logs for whether the app took that value as the client IP. If 203.0.113.9 was recorded, TRUSTED_PROXY_HOPS exceeds the real proxy count"
 
 if [[ "$LOAD_PROBE" == "1" ]]; then
   say ""
-  say "   rate limit 탐침 — $LOAD_COUNT회 연속 요청"
+  say "   Rate limit probe — $LOAD_COUNT consecutive requests"
   limited=0
   for _ in $(seq 1 "$LOAD_COUNT"); do
     code="$("${CURL[@]}" -o /dev/null -w '%{http_code}' "$BASE/api/v1/public/disclosures?limit=1" || true)"
     if [[ "$code" == "429" ]]; then limited=1; break; fi
   done
   if (( limited == 1 )); then
-    ok "429가 나왔다 — 제한이 걸려 있다"
-    say "     주의: 앱 제한은 프로세스 로컬이다. 복제본이 여럿이면 총 허용량은"
-    say "     복제본 수만큼 늘어난다. 이 탐침은 그 구분을 하지 못한다"
+    ok "Got 429 — a limit is in place"
+    say "     Caution: the app limit is process-local. With multiple replicas the total allowance"
+    say "     grows by the replica count. This probe cannot tell the difference"
   else
-    dunno "$LOAD_COUNT회로는 429가 나오지 않았다 — 한도가 그보다 높거나 제한이 없다"
+    dunno "No 429 within $LOAD_COUNT requests — the limit is higher than that or absent"
   fi
 else
-  say "   rate limit 탐침 생략 (LOAD_PROBE=1로 켠다)"
+  say "   Rate limit probe skipped (enable with LOAD_PROBE=1)"
 fi
 
 # ---------------------------------------------------------------------------
-# 4. 밖에서 못 보는 것
+# 4. What cannot be seen from outside
 # ---------------------------------------------------------------------------
 say ""
-say "4. 콘솔에서만 볼 수 있는 것"
+say "4. Visible only in the console"
 cat <<'NOTE'
-   - COMPOSE_PROFILES 실제 값과 기동 컨테이너 목록 (위 2번은 결과만 본다)
-   - Traefik/WAF가 /api/*를 public API로 분류하는가
-   - 복제본 수. 앱 rate limit은 프로세스 로컬이라 이 수가 총 허용량을 정한다
-   - 실제 proxy hop 수와 TRUSTED_PROXY_HOPS의 일치
-   - 429 비율·SIWE 실패율·request IP 쏠림 알림이 실제로 걸려 있는가
+   - The actual COMPOSE_PROFILES value and the list of running containers (step 2 above sees only the effect)
+   - Whether Traefik/WAF classifies /api/* as the public API
+   - Replica count. The app rate limit is process-local, so this number sets the total allowance
+   - Whether the real proxy hop count matches TRUSTED_PROXY_HOPS
+   - Whether alerts on 429 share, SIWE failure rate, and request IP concentration are actually set
 NOTE
 
 say ""
-say "확인 $pass · 문제 $fail · 모름 $unknown"
+say "ok $pass · problem $fail · unknown $unknown"
 say ""
-say "이 결과를 배포 기록에 날짜와 함께 남긴다. 남기지 않으면 다음에"
-say "같은 것을 다시 조사하게 된다."
+say "Record this result in the deployment log with the date. Otherwise the same thing"
+say "gets investigated again next time."
 
-# 모름은 실패가 아니다. 밖에서 알 수 없는 것을 실패로 세면 아무도 이 스크립트를
-# 게이트로 쓰지 않는다.
+# Unknown is not failure. Counting what cannot be known from outside as failure would mean
+# nobody uses this script as a gate.
 (( fail == 0 ))

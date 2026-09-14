@@ -33,8 +33,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
       .catch(setError)
       .finally(() => setLoading(false));
 
-    // 자산·청약이 왜 없는지 화면이 답할 수 있어야 한다. 빈 자리를 두면
-    // "여기 뭔가 있어야 하는데"로 읽힌다.
+    // The screen must explain why assets and offerings are absent. An empty slot
+    // reads as "something should be here".
     getOfferingGate(token, id).then(setOffering).catch(() => setOffering(null));
   }, [token, id, sessionLoading]);
 
@@ -84,8 +84,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
                 {project.referenceStatus === "official_reference" ? (
                   <>
                     official_reference
-                    {/* Reference 배지가 다른 필드를 자동 confirmed로 보이게 하지
-                        않는다(§11.5, 불변조건 10). */}
+                    {/* A Reference badge must not make other fields look automatically
+                        confirmed (§11.5, invariant 10). */}
                     <div className="meta">
                       This standing does not confirm rights, consent, issuer, or SPV status.
                     </div>
@@ -132,8 +132,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               <Link href={`/w/projects/${project.id}/readiness`}>
                 <button>Readiness</button>
               </Link>
-              {/* Gate Decision은 준비도와 별도 화면이다(§11.3). 같은 화면에 두면
-                  준비도가 곧 승인으로 읽힌다. */}
+              {/* Gate Decision is a separate screen from readiness (§11.3). On the same screen,
+                  readiness reads as approval. */}
               <Link href={`/w/projects/${project.id}/gates/registry_publication`}>
                 <button>Gate decision</button>
               </Link>
@@ -150,8 +150,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           {offering ? (
             <div className="panel" data-testid="offering-gate">
               <h2>Assets and offering</h2>
-              {/* 비활성 버튼을 두지 않는다 — "곧 생긴다"로 읽힌다. 미승인 규제
-                  기능은 flag 뒤에 있어도 오활성화 위험을 만든다(OD-07). */}
+              {/* No disabled buttons — they read as "coming soon". Unapproved regulated
+                  features create a mis-enable risk even behind a flag (OD-07). */}
               <p className="sub" style={{ marginTop: 0 }}>
                 {offering.absenceNotice}
               </p>
@@ -182,7 +182,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               {offering.unsupported.length > 0 ? (
                 <div className="notice" style={{ color: "var(--destructive-text)", marginTop: 12 }}>
                   <div className="title">Marked as met without a basis</div>
-                  {/* 빠진 것보다 위험하다 — 확인됐다고 믿게 만든다. */}
+                  {/* Worse than missing — it makes people believe it was confirmed. */}
                   {offering.unsupported.join(", ")}
                 </div>
               ) : null}

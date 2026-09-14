@@ -15,13 +15,13 @@ import { REQUIRED_BOUNDARY_COPY } from "@mpc/ui";
 /**
  * Claim Detail — spec 11 §11.3.
  *
- * claim은 Data Room의 표 한 줄로만 존재했다. 그러면 **claim 하나를 가리킬 주소가
- * 없다** — 이의를 제기하거나 검토를 요청할 때 "Data Room에 가서 이 줄을 봐라"고
- * 말해야 하고, 그 줄은 목록이 길어지면 찾기 어렵다.
+ * A claim used to exist only as a row in the Data Room table. That left **no address
+ * for a single claim** — raising a dispute or requesting review meant saying "go to the Data Room
+ * and look at this row", and the row gets hard to find as the list grows.
  *
- * **grade와 verification state를 같이 보인다.** grade는 증빙의 등급이고
- * verification state는 사람이 검토했는지다. 하나만 보이면 "등급이 높으니
- * 검토됐다"로 읽힌다.
+ * **Grade and verification state are shown together.** Grade is the evidence grade;
+ * verification state is whether a person reviewed it. Showing one alone reads as
+ * "high grade, so it was reviewed".
  */
 export default function ClaimDetailPage({
   params,
@@ -77,7 +77,7 @@ export default function ClaimDetailPage({
       {loaded && !claim ? (
         <div className="panel">
           <p className="sub" style={{ margin: 0 }}>
-            {/* 없는 것과 권한이 없는 것을 구분한다(§11.7). */}
+            {/* Distinguish not found from no permission (§11.7). */}
             No claim with this id exists in this project. If you expected one, it may belong to a
             different project — this is not a permission problem.
           </p>
@@ -143,7 +143,7 @@ export default function ClaimDetailPage({
                       <tr key={receipt.id}>
                         <td className="mono">
                           {receipt.result}
-                          {/* 성공이 곧 검증이 아니라는 것을 결과 옆에 둔다. */}
+                          {/* State next to the result that success is not verification. */}
                           {receipt.permitsCanonicalAcceptance ? null : (
                             <div className="meta" style={{ color: "var(--alert)" }}>
                               cannot be accepted as canonical

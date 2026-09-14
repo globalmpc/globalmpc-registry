@@ -2,29 +2,29 @@ import type postgres from "postgres";
 import type { Session } from "./plugins/session.js";
 
 /**
- * 감사 기록 — 02 §2.7.
+ * Audit record — 02 §2.7.
  *
- * 모든 mutation은 actor, effective role, tenant/project, command,
- * before/after version, reason, correlation ID, timestamp를 남긴다. 이 테이블은
- * append-only이며 application admin도 삭제할 수 없다(0003_guards.sql).
+ * Every mutation records actor, effective role, tenant/project, command,
+ * before/after version, reason, correlation ID, and timestamp. This table is
+ * append-only; not even the application admin can delete from it (0003_guards.sql).
  */
 /**
- * 역할 정책이 아니라 **배정과 서명자 대조**로 허용된 경로 — 04 불변조건 13.
+ * Path allowed by **assignment and signer matching**, not role policy — 04 invariant 13.
  *
- * attestation 서명 요청·제출은 `ACTION_POLICIES`를 지나지 않는다. 허용 근거가
- * "이 사람이 어떤 역할인가"가 아니라 "복구된 서명자가 이 case에 배정된
- * 검토자인가"이기 때문이다. 그 경로에 임의의 역할 이름을 적으면 감사 기록이
- * 하지 않은 권한 판정을 한 것처럼 보인다.
+ * Attestation signing requests and submissions do not go through `ACTION_POLICIES`. The basis
+ * for allowing them is not "what role is this person" but "is the recovered signer the reviewer
+ * assigned to this case". Writing an arbitrary role name on that path would make the audit
+ * record look like an authorization decision that was never made.
  */
 export const ROLE_ASSIGNMENT_BOUND = "assignment_bound";
 
 /**
- * 세션 없이 배포 환경에서 실행된 경로.
+ * Path run in the deployment environment without a session.
  *
- * 실행한 사람은 배포 환경에 접근할 수 있는 운영자이고 앱은 그를 식별하지 않는다.
- * `actor_subject_id`를 비우면서 역할만 `mpc_operator`로 적으면, 하지 않은 권한
- * 판정을 한 것처럼 보인다 — 없는 신원을 지어내지 않는 것과 같은 이유로 없는
- * 권한 판정도 지어내지 않는다.
+ * The runner is an operator with deployment environment access; the app does not identify them.
+ * Leaving `actor_subject_id` empty while writing only the role as `mpc_operator` would look like
+ * an authorization decision that was never made — for the same reason no identity is invented,
+ * no authorization decision is invented either.
  */
 export const ROLE_DEPLOY_BOUND = "deploy_bound";
 
@@ -33,10 +33,10 @@ export interface AuditEntry {
   readonly projectId?: string;
   readonly session: Session;
   /**
-   * 이 행위를 **허용한** 역할. `assertAuthorized`의 반환값을 그대로 넣는다.
+   * The role that **allowed** this action. Pass the return value of `assertAuthorized` as is.
    *
-   * 선택 항목이 아니다. 기본값을 두면 호출자가 생각 없이 지나가고, 그 순간
-   * 감사 기록은 "누가 무슨 자격으로 했는가"가 아니라 "누가 했는가"만 남긴다.
+   * Not optional. A default lets callers pass through without thinking, and at that moment the
+   * audit record keeps only "who did it", not "who did it in what capacity".
    */
   readonly effectiveRole: string;
   readonly command: string;

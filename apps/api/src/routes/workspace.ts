@@ -12,14 +12,14 @@ import { requireMutationContext, requireReadContext } from "./shared.js";
 import { notFound } from "../errors.js";
 
 /**
- * 워크스페이스 집계 — spec 11 §11.2.
+ * Workspace aggregates — spec 11 §11.2.
  *
- * 두 화면이 없던 이유는 데이터가 없어서가 아니라 **프로젝트 하나를 열어야만 보이는
- * 구조**였기 때문이다. "이 tenant에서 무엇이 게시됐나"와 "내가 지금 무엇을
- * 해야 하나"는 프로젝트를 하나씩 열어서 답할 질문이 아니다.
+ * These two screens were missing not for lack of data but because **the structure only showed
+ * things once a single project was opened**. "What was published in this tenant" and "what
+ * do I need to do now" are not questions to answer by opening projects one by one.
  *
- * 여기 있는 것은 전부 읽기다. 상태를 바꾸는 경로는 각 도메인 route가 갖는다 —
- * 집계 화면이 mutation을 갖기 시작하면 권한 판정이 두 곳으로 갈린다.
+ * Everything here is a read. State-changing paths belong to each domain route — once an
+ * aggregate screen gains mutations, authorization checks split into two places.
  */
 
 export async function registerWorkspaceRoutes(
@@ -35,7 +35,7 @@ export async function registerWorkspaceRoutes(
       sessionFacts(session),
     );
 
-    // 볼 수 있는 프로젝트의 기록만 싣는다. 프로젝트 목록과 같은 이유다.
+    // Only records from projects the caller can see. Same reason as the project list.
     const visible = visibleProjectScope(session, "registry.read");
 
     const { requestId, asOf } = request.context;
@@ -61,8 +61,8 @@ export async function registerWorkspaceRoutes(
              v.status,
              v.published_at,
              v.revoked_at,
-             -- 게시와 anchor는 다른 사건이다. 한 칸에 합치면 "게시됐으니
-             -- 체인에 있다"로 읽힌다.
+             -- Publishing and anchoring are different events. Merged into one column, it reads as
+             -- "published, so it is on chain".
              EXISTS (
                SELECT 1 FROM chain.anchor_batch_leaves l WHERE l.entry_version_id = v.id
              ) AS anchored
@@ -106,10 +106,10 @@ export async function registerWorkspaceRoutes(
 
     return withTenant(sql, { tenantId }, async (tx) => {
       /**
-       * 나에게 배정된 검토.
+       * Reviews assigned to me.
        *
-       * `revoked_at IS NULL`인 배정만 본다 — 회수된 배정이 목록에 남아 있으면
-       * 하지 않아도 되는 일을 계속 보게 된다.
+       * Only assignments with `revoked_at IS NULL` — if withdrawn assignments stay in the list,
+       * people keep seeing work they no longer need to do.
        */
       const assigned = subjectId
         ? await tx<
@@ -130,14 +130,14 @@ export async function registerWorkspaceRoutes(
             WHERE a.tenant_id = ${tenantId}
               AND a.subject_id = ${subjectId}
               AND a.revoked_at IS NULL
-              -- 끝난 case는 할 일이 아니다. registered·declined·cancelled·
-              -- superseded·revoked는 더 이상 검토자가 움직일 것이 없다.
+              -- A finished case is not a to-do. registered/declined/cancelled/
+              -- superseded/revoked leave nothing for the reviewer to act on.
               AND c.state IN ('draft', 'assigned', 'in_review', 'changes_requested', 'signed')
             ORDER BY a.assigned_at
           `
         : [];
 
-      /** 내가 시작했고 다른 사람의 결정을 기다리는 것. 내가 할 일은 없다. */
+      /** Started by me and waiting on someone else's decision. Nothing for me to do. */
       const waiting = subjectId
         ? await tx<{ id: string; role: string; subject_name: string; requested_at: Date }[]>`
             SELECT g.id, g.role, s.display_name AS subject_name, g.requested_at
@@ -151,10 +151,10 @@ export async function registerWorkspaceRoutes(
         : [];
 
       /**
-       * 아무에게도 배정되지 않았지만 열려 있는 것.
+       * Open items assigned to no one.
        *
-       * 이것을 따로 내는 이유: 배정된 일만 보이면 **아무도 맡지 않은 일**이
-       * 영원히 보이지 않는다. 방치가 조용히 일어나는 자리다.
+       * Why this is listed separately: if only assigned work is visible, **work nobody has taken**
+       * stays invisible forever. This is where neglect happens silently.
        */
       const staleSignals = await tx<
         { id: string; project_id: string | null; reason: string; detected_at: Date }[]
@@ -167,8 +167,8 @@ export async function registerWorkspaceRoutes(
         LIMIT 50
       `;
 
-      // 내가 제안하지 않은 pending 제안 = 내가 결정할 수 있는 것.
-      // 결정 역할이 없으면 결정할 수 있는 것이 아니다 — 누가 어떤 역할을 받는지만 샌다.
+      // Pending proposals I did not make = what I can decide.
+      // Without a deciding role they are not decidable by me — listing them would only leak who receives which role.
       const decisions = !holdsActionRole(session, "admin.role.approve") ? [] : await tx<
         { id: string; role: string; subject_name: string; requested_at: Date }[]
       >`
@@ -193,7 +193,7 @@ export async function registerWorkspaceRoutes(
         waitingOnOthers: waiting.map((row) => ({
           kind: "role_grant" as const,
           id: row.id,
-          summary: `${row.subject_name}에게 ${row.role}을 주자는 제안 — 다른 사람의 결정을 기다린다`,
+          summary: `Proposal to grant ${row.role} to ${row.subject_name} — awaiting someone else's decision`,
           since: row.requested_at.toISOString(),
         })),
         unassigned: [
@@ -208,7 +208,7 @@ export async function registerWorkspaceRoutes(
             kind: "role_grant_decision" as const,
             id: row.id,
             projectId: null,
-            summary: `${row.subject_name}에게 ${row.role}을 주자는 제안 — 결정이 필요하다`,
+            summary: `Proposal to grant ${row.role} to ${row.subject_name} — decision required`,
             since: row.requested_at.toISOString(),
           })),
         ],
@@ -219,14 +219,14 @@ export async function registerWorkspaceRoutes(
   });
 
   /**
-   * 알림.
+   * Notifications.
    *
-   * 나에게 온 것과 **내가 가진 역할에게 온 것**을 함께 낸다. 후자가 없으면
-   * stale 신호나 철회처럼 아무에게도 배정되지 않은 사건이 아무에게도 도달하지
-   * 않는다.
+   * Returns both those sent to me and **those sent to a role I hold**. Without the latter,
+   * events assigned to no one, such as stale signals or revocations, reach no one
+   * at all.
    *
-   * 발신 수단(메일·webhook)은 정해진 바 없다. 앱 안에서 읽는 경로를
-   * 먼저 연다 — 그것이 없으면 어느 수단을 고르든 보낼 내용이 없다.
+   * No delivery channel (email, webhook) has been decided. The in-app read path opens
+   * first — without it, there is nothing to send whichever channel is chosen.
    */
   app.get("/api/v1/notifications", async (request) => {
     const { session, tenantId } = requireReadContext(request);
@@ -240,8 +240,8 @@ export async function registerWorkspaceRoutes(
     const { requestId, asOf } = request.context;
     const subjectId = session.subjectId;
     const roles = session.roleBindings.map((binding) => binding.role);
-    // 역할에게 온 알림도 볼 수 있는 프로젝트의 것만. 역할 이름만 맞으면
-    // 다른 회사 프로젝트의 stale 사유와 링크가 그대로 실린다.
+    // Role notifications too, only for projects the caller can see. Matching on role name alone
+    // would carry another company's project stale reasons and links as is.
     const visible = visibleProjectScope(session, "project.read");
 
     const rows = await withTenant(sql, { tenantId }, (tx) => tx<
@@ -326,13 +326,13 @@ export async function registerWorkspaceRoutes(
           FROM core.notifications
           WHERE tenant_id = ${tenantId} AND id = ${request.params.notificationId}
         `;
-        if (!found) throw notFound("알림을 찾을 수 없다");
+        if (!found) throw notFound("Notification not found");
 
         /**
-         * 읽음은 **나에 대해서만** 기록된다.
+         * Read status is recorded **only for me**.
          *
-         * 역할로 간 알림을 내가 읽었다고 남에게서 지우면, 내가 처리하지 않았을 때
-         * 아무도 다시 보지 않는다.
+         * If my reading a role notification cleared it for others, no one would look again
+         * when I did not handle it.
          */
         await tx`
           INSERT INTO core.notification_reads (notification_id, subject_id, tenant_id)

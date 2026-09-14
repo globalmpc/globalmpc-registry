@@ -3,11 +3,11 @@ import type { AppConfig } from "./config.js";
 import type { GovernanceChain } from "./routes/governance.js";
 
 /**
- * 거버넌스 투표 무게용 체인 접근 — 04 §4.5.
+ * Chain access for governance vote weight — 04 §4.5.
  *
- * ERC-20 `balanceOf`를 **과거 블록에서** 읽는다. 아카이브 노드가 필요하며,
- * 없으면 조회가 실패한다 — 그 실패를 잔고 0으로 읽지 않는 것이 중요하다.
- * 0은 "토큰이 없다"는 사실이고 실패는 "모른다"다.
+ * Reads ERC-20 `balanceOf` **at a past block**. Requires an archive node; without one the
+ * lookup fails — it is essential not to read that failure as a zero balance.
+ * 0 is the fact "holds no tokens"; failure is "unknown".
  */
 
 const BALANCE_OF_ABI = [
@@ -21,10 +21,10 @@ const BALANCE_OF_ABI = [
 ] as const;
 
 /**
- * 정족수의 분모.
+ * Quorum denominator.
  *
- * 던진 표의 합이 아니라 **투표할 수 있었던 전체**다. 같은 스냅숏 블록에서
- * 읽어야 무게와 분모의 기준 시점이 어긋나지 않는다.
+ * Not the sum of cast votes but **the total that could have voted**. It must be read at the
+ * same snapshot block so weight and denominator share the same reference point.
  */
 const TOTAL_SUPPLY_ABI = [
   {
@@ -37,10 +37,10 @@ const TOTAL_SUPPLY_ABI = [
 ] as const;
 
 /**
- * 설정이 갖춰졌을 때만 만든다.
+ * Built only when config is complete.
  *
- * 토큰 주소가 없으면 `undefined`를 반환하고, governance route는 수동 무게로
- * 떨어진다. 빈 클라이언트를 만들어 두면 "연동됐는데 값이 0"으로 보인다.
+ * Without a token address it returns `undefined`, and governance routes fall back to manual
+ * weight. Building an empty client would look like "connected, but the value is 0".
  */
 export function createGovernanceChain(config: AppConfig): GovernanceChain | undefined {
   if (!config.governanceTokenAddress || !config.chainRpcUrl) return undefined;
@@ -65,8 +65,8 @@ export function createGovernanceChain(config: AppConfig): GovernanceChain | unde
     },
 
     async readBalance({ tokenAddress, walletAddress, blockNumber }) {
-      // `blockNumber`를 지정하면 아카이브 조회다. 노드가 지원하지 않으면
-      // 예외가 나고, 호출부가 그것을 "모른다"로 기록한다.
+      // Specifying `blockNumber` makes it an archive lookup. If the node does not support it,
+      // it throws, and the caller records that as "unknown".
       return client.readContract({
         address: tokenAddress as Hex,
         abi: BALANCE_OF_ABI,
@@ -77,7 +77,7 @@ export function createGovernanceChain(config: AppConfig): GovernanceChain | unde
     },
 
     async readTotalSupply({ tokenAddress, blockNumber }) {
-      // 실패를 0으로 읽으면 정족수가 무조건 통과한다. 잔고와 같은 원칙이다.
+      // Reading failure as 0 makes quorum pass unconditionally. Same principle as balances.
       return client.readContract({
         address: tokenAddress as Hex,
         abi: TOTAL_SUPPLY_ABI,

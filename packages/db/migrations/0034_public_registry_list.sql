@@ -1,30 +1,30 @@
--- 무인증 공개 **목록·검색** — spec 11 §11.2·§11.3.
+-- Unauthenticated public **list·search** — spec 11 §11.2·§11.3.
 --
--- 번호가 뒤로 밀린 이유: 처음 `0026`으로 썼는데 같은 번호를 다른 작업이
--- 먼저 가져갔다(`0026_role_binding_order.sql`). 이미 공유된 쪽이 번호를 갖고
--- 아직 밀지 않은 쪽이 옮긴다. 이 파일은 앞의 어느 것에도 기대지 않으므로
--- 뒤로 가도 순서가 깨지지 않는다.
+-- Why the number moved back: first written as `0026`, but another change took that number
+-- first (`0026_role_binding_order.sql`). The already-shared one keeps the number; the one
+-- not yet pushed moves. This file depends on none of the preceding ones, so
+-- moving it later does not break ordering.
 --
--- **왜 필요한가:** 0009가 만든 공개 조회는 `(registry_type, public_key)`를 이미
--- 알고 있어야 한다. 즉 공개 Explorer가 "무엇이 있는지"를 물을 방법이 없다.
--- 화면만 만들면 붙일 데이터가 없다.
+-- **Why it is needed:** the public lookup from 0009 requires already knowing
+-- `(registry_type, public_key)`. So the public Explorer has no way to ask "what exists".
+-- A UI alone would have no data to show.
 --
--- 경계는 0009와 같다. 다른 것은 **여러 entry를 훑는다**는 점뿐이므로 그 훑는
--- 과정에서 경계가 새지 않게 하는 것이 이 함수의 일이다.
+-- The boundary is the same as 0009. The only difference is that it **scans many entries**, so
+-- this function's job is to keep the boundary from leaking during that scan.
 --
--- 1. `status IN ('published','revoked','superseded')`만 본다. draft는 나가지 않는다.
--- 2. `public_projection` 컬럼만 반환한다.
--- 3. tenant_id를 반환하지 않는다 — 여러 tenant의 기록이 한 목록에 섞여 나오지만
---    어느 것이 어느 tenant인지 알 수 없다. 이것이 공개 Registry의 의도다.
--- 4. `search_path`를 고정한다.
+-- 1. Only `status IN ('published','revoked','superseded')`. Drafts are never exposed.
+-- 2. Returns only the `public_projection` column.
+-- 3. Does not return tenant_id — records from many tenants appear in one list, but
+--    which tenant owns which cannot be told. That is the intent of the public Registry.
+-- 4. Pins `search_path`.
 --
--- **entry마다 최신 version 하나만** 낸다. 이력은 상세 조회(0009)가 갖는다.
--- 목록에 모든 version을 내면 같은 프로젝트가 여러 줄로 보인다.
+-- **Only the latest version per entry.** History belongs to the detail lookup (0009).
+-- Listing every version would show the same project on multiple rows.
 --
--- **정렬과 페이지네이션은 keyset이다.** OFFSET은 앞쪽에 행이 추가되면 같은
--- 페이지를 두 번 주거나 건너뛴다. 공개 목록은 계속 늘어나므로 그 드리프트가
--- 실제로 일어난다. 정렬 키는 `(published_at, entry_id)`이고 둘 다 반환해
--- 클라이언트가 다음 cursor를 만들 수 있게 한다.
+-- **Ordering and pagination are keyset.** OFFSET returns the same page twice or skips one
+-- when rows are added at the front. The public list keeps growing, so that drift
+-- actually happens. The sort key is `(published_at, entry_id)`, and both are returned so
+-- the client can build the next cursor.
 
 CREATE FUNCTION core.public_registry_list(
   p_registry_type      TEXT,
@@ -42,9 +42,9 @@ RETURNS TABLE (
   status            core.registry_entry_status,
   public_projection JSONB,
   published_at      TIMESTAMPTZ,
-  -- keyset cursor가 쓰는 정렬 키. `published_at`과 같지 않을 수 있으므로
-  -- (NULL 방어) 별도로 낸다 — 호출자가 published_at으로 cursor를 만들면
-  -- 그 페이지가 어긋난다.
+  -- Sort key used by the keyset cursor. It may differ from `published_at`, so
+  -- (NULL guard) it is returned separately — a caller building the cursor from published_at
+  -- would get misaligned pages.
   sort_at           TIMESTAMPTZ,
   revoked_at        TIMESTAMPTZ,
   superseded_by_id  UUID
@@ -62,8 +62,8 @@ AS $$
            v.version,
            v.status,
            v.public_projection,
-           -- published_at은 게시 시점에 채워지지만 정렬 키가 NULL이면 keyset이
-           -- 성립하지 않는다. 방어적으로 created_at으로 떨어뜨린다.
+           -- published_at is filled at publish time, but a NULL sort key breaks the
+           -- keyset. Defensively fall back to created_at.
            COALESCE(v.published_at, v.created_at) AS sort_at,
            v.published_at,
            v.revoked_at,
@@ -75,8 +75,8 @@ AS $$
       AND v.public_projection IS NOT NULL
     ORDER BY e.id, v.version DESC
   ),
-  -- 사용자 입력의 `%`·`_`는 와일드카드가 아니라 글자다. 이스케이프하지 않으면
-  -- `%`만 넣어도 전체가 걸리고, 그것은 검색이 아니라 우회다.
+  -- User-supplied `%`·`_` are literal characters, not wildcards. Unescaped,
+  -- a bare `%` matches everything, which is a bypass rather than a search.
   needle AS (
     SELECT CASE
              WHEN p_query IS NULL OR btrim(p_query) = '' THEN NULL
@@ -111,7 +111,7 @@ AS $$
            WHERE m.value ILIKE needle.pattern
          )
     )
-    -- keyset. 정렬이 내림차순이므로 "cursor보다 뒤"는 더 작은 값이다.
+    -- keyset. Ordering is descending, so "after the cursor" means a smaller value.
     AND (
       p_after_published_at IS NULL
       OR latest.sort_at < p_after_published_at
@@ -121,7 +121,7 @@ AS $$
   LIMIT LEAST(GREATEST(COALESCE(p_limit, 20), 1), 100)
 $$;
 
--- 목록은 정렬 키로 훑는다. entry마다 최신 version을 고르는 것도 같은 인덱스가 돕는다.
+-- The list scans by sort key. The same index helps pick the latest version per entry.
 CREATE INDEX registry_entry_versions_public_list_idx
   ON core.registry_entry_versions (entry_id, version DESC)
   WHERE status IN ('published', 'revoked', 'superseded');

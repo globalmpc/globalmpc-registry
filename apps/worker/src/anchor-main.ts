@@ -6,13 +6,13 @@ import { createViemChainClient, signerAddress } from "./viem-chain-client.js";
 import { createSafeClient } from "./safe-client.js";
 
 /**
- * anchor 제출 루프.
+ * Anchor submission loop.
  *
- * 한 번에 트랜잭션 하나씩 전진시킨다. 배치로 묶으면 하나의 RPC 실패가 나머지의
- * 진행을 되돌린다.
+ * Advances one transaction at a time. Batching them lets one RPC failure roll back the progress
+ * of the rest.
  *
- * 이 프로세스는 **여러 tenant를 가로질러** 동작하므로 `mpc_worker` role로 붙는다
- * (0012). superuser로 붙이면 필요 이상의 권한을 갖게 된다.
+ * This process works **across tenants**, so it connects as the `mpc_worker` role (0012).
+ * Connecting as superuser grants more privilege than needed.
  */
 
 function emit(record: Record<string, unknown>): void {
@@ -27,9 +27,9 @@ try {
   process.exit(1);
 }
 
-// prepared statement를 쓰지 않는다. worker는 오래 붙어 있는 프로세스라 그 사이에
-// migration이 돌면 캐시된 계획의 결과 형식이 어긋나 루프가 죽는다. anchor 제출은
-// 초당 수천 건이 아니므로 준비된 계획의 이득보다 중단 위험이 크다.
+// No prepared statements. The worker is long-lived; if a migration runs meanwhile, the cached
+// plan's result shape drifts and the loop dies. Anchor submission is nowhere near thousands per
+// second, so the outage risk outweighs the gain from prepared plans.
 const sql = postgres(config.databaseUrl, { onnotice: () => {}, prepare: false });
 const chain = createViemChainClient({
   rpcUrl: config.rpcUrl,
@@ -39,10 +39,10 @@ const chain = createViemChainClient({
 });
 
 /**
- * Safe 연동.
+ * Safe integration.
  *
- * 주소만 있고 서비스 URL이 없으면 제안을 DB에만 남긴다 — 그러면 아무도 서명할
- * 수 없으므로, 그 구성은 "제안 경로가 준비되지 않았다"는 표시로 남는다.
+ * With an address but no service URL, proposals are kept in the DB only — nobody can sign them,
+ * so that configuration stands as a marker that "the proposal path is not ready".
  */
 const safe =
   config.safeAddress && process.env["SAFE_SERVICE_URL"]
@@ -67,10 +67,10 @@ emit({
   msg: "anchor.worker.started",
   chainId: config.chainId,
   contractAddress: config.contractAddress,
-  // 주소는 공개 정보다. 개인키는 어디에도 찍지 않는다.
+  // The address is public. The private key is never printed anywhere.
   signer: signerAddress(config.signerPrivateKey),
   confirmationDepth: config.confirmationDepth,
-  // 이 체인에서 EOA로 직접 올릴 수 있는지. 아니면 Safe 제안만 만든다.
+  // Whether this chain allows direct EOA submission. Otherwise only Safe proposals are created.
   submissionMode: config.eoaAllowedChainIds.includes(config.chainId)
     ? "eoa"
     : config.safeAddress
@@ -86,15 +86,15 @@ while (running) {
   try {
     const result = await stepOnce(sql, chain, config, emit, safe);
 
-    // 큐가 비어 있어도 신호를 남긴다 — 제출할 것이 없는 것과 worker가 죽은
-    // 것을 구분하는 것이 이 신호의 목적이다.
+    // Emit the signal even when the queue is empty — its purpose is to tell "nothing to submit"
+    // apart from "worker is dead".
     await heartbeat({ handled: result.handled });
 
     if (!result.handled) {
       const backlog = await chainBacklog(sql, config.chainId);
       if (backlog.needsAttention > 0) {
-        // 사람이 봐야 하는 것을 조용히 두지 않는다. reverted·dropped·재조정
-        // 필요는 자동으로 풀리지 않는다.
+        // Do not stay silent on what needs a human. reverted, dropped, and
+        // reconciliation-required do not resolve on their own.
         emit({ level: "warn", msg: "anchor.needs_attention", ...backlog });
       }
       await sleep(config.pollIntervalMs);

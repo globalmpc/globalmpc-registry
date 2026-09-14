@@ -8,37 +8,37 @@ import {
 } from "./anchor-state.js";
 
 /**
- * anchor batch 체인 제출 — spec 06 §6.8, 08 §8.9.
+ * Anchor batch chain submission — spec 06 §6.8, 08 §8.9.
  *
- * API는 batch를 만들고 `chain.transactions`에 `created` 행을 남긴다. 실제 제출은
- * 여기서 한다. 요청 처리 중에 체인에 쓰면 응답 시간이 체인 상태에 묶이고,
- * 재시도할 때 같은 root를 두 번 올릴 위험이 생긴다.
+ * The API creates the batch and leaves a `created` row in `chain.transactions`. Actual submission
+ * happens here. Writing to the chain during request handling ties response time to chain state
+ * and risks anchoring the same root twice on retry.
  *
- * 이 모듈이 지키는 것:
+ * What this module guarantees:
  *
- * - **한 batch는 한 번만 제출된다.** `intent_key`가 UNIQUE이고, 행을 잠글 때
- *   `FOR UPDATE SKIP LOCKED`를 써서 worker를 여러 개 띄워도 중복되지 않는다.
- * - **제출과 확정은 다른 단계다.** 제출 성공은 `submitted`일 뿐이며 확정 깊이를
- *   채워야 `confirmed`가 된다.
- * - **상태를 앞으로만 밀지 않는다.** reorg는 확정을 되돌리고 그 사건을 남긴다.
- * - **서명 키는 이 프로세스 밖으로 나가지 않는다.** 로그에도 찍지 않는다.
+ * - **A batch is submitted only once.** `intent_key` is UNIQUE, and rows are locked with
+ *   `FOR UPDATE SKIP LOCKED`, so multiple workers never duplicate.
+ * - **Submission and confirmation are separate steps.** A successful submission is only
+ *   `submitted`; it becomes `confirmed` once the confirmation depth is met.
+ * - **State is not only pushed forward.** A reorg reverses confirmation and is recorded.
+ * - **The signing key never leaves this process.** It is never logged either.
  */
 
 export interface ChainClient {
-  /** 현재 head 블록 번호. */
+  /** Current head block number. */
   headBlockNumber(): Promise<number>;
-  /** 예상 가스 요금. 상한 검사에 쓴다. */
+  /** Estimated gas fee. Used for the cap check. */
   estimateMaxFeePerGas(): Promise<bigint>;
-  /** `submitRoot` 호출. 반환값은 트랜잭션 해시다. */
+  /** Calls `submitRoot`. Returns the transaction hash. */
   submitRoot(input: SubmitRootInput): Promise<string>;
   /**
-   * `submitRoot` calldata를 만든다. Safe에 제안할 때 쓴다.
+   * Builds `submitRoot` calldata. Used when proposing to Safe.
    *
-   * 제출과 분리한 이유: 제안은 실행이 아니다. 같은 함수로 묶으면 "제안했으니
-   * 올라갔다"고 착각할 여지가 생긴다.
+   * Kept separate from submission because a proposal is not an execution. A single function
+   * would invite the mistake "proposed, so it's on chain".
    */
   encodeSubmitRoot(input: SubmitRootInput): { calldata: string; calldataHash: string };
-  /** 영수증 조회. 없으면 `unknown`, 아직 mempool이면 `pending`. */
+  /** Receipt lookup. `unknown` if absent, `pending` if still in the mempool. */
   observe(txHash: string): Promise<Observation>;
 }
 
@@ -58,26 +58,26 @@ export interface SubmitterConfig {
   readonly maxAttempts: number;
   readonly dropTimeoutMs: number;
   /**
-   * 하루에 태울 수 있는 가스 총액(wei).
+   * Total gas (wei) that may be burned per day.
    *
-   * per-tx 상한(`feeCapWei`)과 재시도 상한(`maxAttempts`)을 다 지켜도 batch가
-   * 계속 생기면 지갑은 빈다. O1이 요구하는 손실 상한은 이 하루 총액이다.
+   * Even with the per-tx cap (`feeCapWei`) and retry cap (`maxAttempts`) honored, a steady
+   * stream of batches drains the wallet. The loss cap O1 requires is this daily total.
    */
   readonly dailySpendCapWei: bigint;
   readonly eoaAllowedChainIds: readonly number[];
-  /** Safe multisig 주소. EOA 제출이 막힌 체인에서 제안 대상이 된다. */
+  /** Safe multisig address. Receives proposals on chains where EOA submission is blocked. */
   readonly safeAddress: string | null;
-  /** 확정 후 reorg를 감시하는 기간. 지나면 감시 대상에서 뺀다. */
+  /** How long to watch for reorgs after confirmation. Past it, the row leaves the watch set. */
   readonly reorgWatchMs: number;
-  /** 같은 트랜잭션을 다시 확인하기까지의 최소 간격. */
+  /** Minimum interval before rechecking the same transaction. */
   readonly recheckIntervalMs: number;
 }
 
 /**
- * Safe 제안 인터페이스.
+ * Safe proposal interface.
  *
- * worker는 제안을 올리고 실행 결과를 되읽기만 한다. 실행은 Safe owner들이 한다 —
- * 그 분리가 "MPC 자신도 단독으로 바꿀 수 없다"의 근거다.
+ * The worker only uploads proposals and reads back execution results. Safe owners execute —
+ * that separation is the basis for "not even MPC can change it alone".
  */
 export interface SafeProposer {
   nextNonce(safeAddress: string): Promise<number>;
@@ -115,18 +115,18 @@ interface PendingRow {
 }
 
 /**
- * 처리할 트랜잭션 하나를 잠근다.
+ * Locks one transaction to process.
  *
- * `SKIP LOCKED`로 다른 worker가 잡은 행을 건너뛴다. 잠금 없이 처리하면 두 worker가
- * 같은 batch를 제출해 가스를 두 번 쓴다.
+ * `SKIP LOCKED` skips rows another worker holds. Without locking, two workers submit the same
+ * batch and spend gas twice.
  *
- * **확정된 것이 대기 중인 것을 굶기지 않게 한다.** `confirmed`도 reorg 감시
- * 대상이지만, 오래된 순으로만 집으면 확정된 행을 계속 다시 집어 뒤의 `created`가
- * 영원히 제출되지 않는다. 진행이 필요한 것을 먼저 보고, 확정된 것은 감시 주기가
- * 지난 것만 본다.
+ * **Confirmed rows must not starve pending ones.** `confirmed` is also watched for reorgs, but
+ * picking strictly oldest-first keeps re-picking confirmed rows and later `created` rows never
+ * get submitted. Rows needing progress come first; confirmed rows are taken only once their
+ * recheck interval has passed.
  *
- * 감시도 영원히 하지 않는다. 확정 후 일정 시간이 지나면 reorg 가능성이 사실상
- * 사라지므로 대상에서 뺀다 — 그러지 않으면 확정 행이 쌓일수록 루프가 느려진다.
+ * Watching is not forever either. Some time after confirmation the chance of a reorg is
+ * effectively gone, so the row leaves the set — otherwise the loop slows as confirmed rows pile up.
  */
 async function claimPending(
   tx: postgres.TransactionSql,
@@ -141,10 +141,10 @@ async function claimPending(
            b.schema_version, b.record_count
     FROM chain.transactions t
     LEFT JOIN chain.anchor_batches b ON b.id = t.batch_id
-    -- 자기 체인의 트랜잭션만 집는다. 필터가 없으면 testnet worker가 mainnet
-    -- 트랜잭션을 자기 RPC로 조회해 "존재하지 않음"으로 판정한다.
-    -- proposed는 집지 않는다. Safe에서 실행되기 전에는 체인에 트랜잭션이 없고,
-    -- 조회하면 "존재하지 않음"으로 판정해 dropped로 잘못 표시한다.
+    -- Pick only this chain's transactions. Without the filter a testnet worker looks up
+    -- mainnet transactions on its own RPC and judges them "not found".
+    -- proposed is not picked. Until Safe executes it there is no transaction on chain, and a
+    -- lookup would judge it "not found" and wrongly mark it dropped.
     WHERE t.chain_id = ${chainId}
       AND (
         t.state IN ('created', 'submitted', 'included')
@@ -154,7 +154,7 @@ async function claimPending(
           AND t.updated_at < now() - ${`${Math.round(recheckIntervalMs / 1000)} seconds`}::interval
         )
       )
-    -- 진행이 필요한 것이 먼저다. 확정된 것의 재확인은 그다음이다.
+    -- Rows needing progress first. Rechecks of confirmed rows come after.
     ORDER BY (t.state = 'confirmed'), t.created_at
     FOR UPDATE OF t SKIP LOCKED
     LIMIT 1
@@ -171,10 +171,10 @@ export interface StepResult {
 }
 
 /**
- * 한 트랜잭션을 한 단계 전진시킨다.
+ * Advances one transaction by one step.
  *
- * 한 번에 하나만 처리하고 각각을 자기 DB 트랜잭션에 담는다. 여러 개를 한
- * 트랜잭션에 묶으면 하나의 RPC 실패가 나머지의 진행까지 되돌린다.
+ * Handles one at a time, each in its own DB transaction. Bundling several into one transaction
+ * lets one RPC failure roll back the progress of the rest.
  */
 export async function stepOnce(
   sql: postgres.Sql,
@@ -183,8 +183,8 @@ export async function stepOnce(
   log: Log,
   safe?: SafeProposer,
 ): Promise<StepResult> {
-  // 제안 상태 확인은 DB 트랜잭션 밖에서 한다. 외부 서비스 호출을 트랜잭션에
-  // 묶으면 그 지연만큼 행이 잠긴다.
+  // Proposal status is checked outside the DB transaction. Wrapping an external service call in
+  // a transaction keeps rows locked for its full latency.
   const proposalResult = safe ? await trackProposals(sql, config, safe, log) : null;
   if (proposalResult?.handled) return proposalResult;
 
@@ -206,10 +206,11 @@ export async function stepOnce(
 }
 
 /**
- * 올라간 제안의 실행 여부를 확인한다.
+ * Checks whether an uploaded proposal has been executed.
  *
- * Safe owner들이 서명하고 실행하면 그 결과가 체인 트랜잭션으로 나온다. 그때부터
- * 일반 트랜잭션과 같은 추적 경로를 탄다 — 확정 깊이·reorg 감시가 똑같이 걸린다.
+ * Once Safe owners sign and execute, the result appears as a chain transaction. From then on it
+ * follows the same tracking path as any transaction — confirmation depth and reorg watch apply
+ * equally.
  */
 async function trackProposals(
   sql: postgres.Sql,
@@ -240,8 +241,8 @@ async function trackProposals(
         SET state = 'executed', resolved_at = now()
         WHERE id = ${proposal.id}
       `;
-      // 이제부터 일반 트랜잭션과 같은 추적 경로를 탄다. 확정 깊이·reorg 감시가
-      // 똑같이 걸린다 — Safe로 실행됐다고 확정이 면제되지 않는다.
+      // From here it follows the regular tracking path. Confirmation depth and reorg watch apply
+      // equally — execution via Safe does not exempt it from confirmation.
       await tx`
         UPDATE chain.transactions
         SET state = 'submitted', tx_hash = ${status.transactionHash},
@@ -270,8 +271,8 @@ async function trackProposals(
       SET state = 'rejected', resolved_at = now()
       WHERE id = ${proposal.id}
     `;
-    // 트랜잭션은 created로 되돌리지 않는다. 왜 거절됐는지 확인하지 않은 채
-    // 다시 올리면 같은 이유로 또 거절된다.
+    // The transaction does not go back to created. Re-uploading without checking why it was
+    // rejected gets it rejected again for the same reason.
     await sql`
       UPDATE chain.transactions
       SET state = 'failed', last_error = 'safe_proposal_rejected', updated_at = now()
@@ -281,21 +282,21 @@ async function trackProposals(
     return { handled: true, transactionId: proposal.transaction_id, from: "proposed", to: "failed" };
   }
 
-  // pending·unknown은 그대로 둔다. 서명이 모이는 중이거나 서비스가 아직
-  // 전파하지 못한 것이며, 둘 다 우리가 할 일이 없다.
+  // pending and unknown are left as is. Signatures are still being collected or the service has
+  // not propagated yet; either way there is nothing for us to do.
   return { handled: false };
 }
 
 /**
- * 오늘(UTC) 이 체인에서 태운 가스 총액.
+ * Total gas burned on this chain today (UTC).
  *
- * **영수증이 도착한 것만 센다.** 제출했지만 아직 블록에 들어가지 않은 건은 실제
- * 비용을 모른다 — 그 구간의 노출은 `feeCapWei` × `maxAttempts`가 막는다.
+ * **Counts only transactions with a receipt.** A submitted transaction not yet in a block has no
+ * known cost — exposure in that window is bounded by `feeCapWei` × `maxAttempts`.
  *
- * tenant를 가로질러 센다. 지갑은 tenant별로 나뉘어 있지 않고 하나다.
+ * Counts across tenants. The wallet is one, not split per tenant.
  *
- * 하루 경계는 UTC다. 서버 timezone을 따르면 배포 위치가 바뀔 때 상한이 열리는
- * 시각이 조용히 이동한다.
+ * The day boundary is UTC. Following the server timezone would silently shift when the cap
+ * reopens whenever the deployment location changes.
  */
 export async function spentTodayWei(
   sql: postgres.Sql | postgres.TransactionSql,
@@ -321,7 +322,7 @@ async function submitPending(
   safe?: SafeProposer,
 ): Promise<StepResult> {
   if (!row.external_batch_id || !row.merkle_root || !row.manifest_hash || !row.record_count) {
-    // batch 없는 트랜잭션은 제출할 대상이 없다. 조용히 재시도하면 영원히 돈다.
+    // A transaction without a batch has nothing to submit. Silent retries would loop forever.
     await fail(tx, row.id, "BATCH_MISSING");
     return { handled: true, transactionId: row.id, from: row.state, to: "failed" };
   }
@@ -343,8 +344,8 @@ async function submitPending(
   });
 
   if (!guard.allow) {
-    // 막힌 이유를 남기고 상태는 그대로 둔다. 조건이 바뀌면 다음 루프에서 진행된다.
-    // 단 시도 상한에 닿은 것은 조건이 바뀌지 않으므로 failed로 끝낸다.
+    // Record why it is blocked and keep the state. It proceeds on a later loop once conditions
+    // change. Hitting the attempt cap never changes, though, so that ends as failed.
     if (guard.reason === "MAX_ATTEMPTS_REACHED") {
       await fail(tx, row.id, guard.reason);
       return { handled: true, transactionId: row.id, from: row.state, to: "failed" };
@@ -363,9 +364,9 @@ async function submitPending(
     return proposeToSafe(tx, chain, config, log, row, safe);
   }
 
-  // 시도 횟수를 **제출 전에** 올린다. 제출 후 크래시가 나면 이 값이 남아 무한
-  // 재시도를 막는다. 성공한 제출을 실패로 오인하는 것보다 한 번 덜 시도하는 편이
-  // 안전하다 — 같은 root의 중복 제출은 가스를 태운다.
+  // Increment attempts **before** submitting. If the process crashes after submission, the count
+  // survives and prevents endless retries. One attempt too few is safer than mistaking a
+  // successful submission for a failure — a duplicate submission of the same root burns gas.
   await tx`
     UPDATE chain.transactions
     SET attempts = attempts + 1, updated_at = now()
@@ -392,7 +393,7 @@ async function submitPending(
     log({ level: "info", msg: "anchor.submitted", transactionId: row.id, txHash });
     return { handled: true, transactionId: row.id, from: "created", to: "submitted" };
   } catch (error) {
-    // 제출 실패는 재시도 대상이다. 상태는 created로 남는다.
+    // A submission failure is retried. The state stays created.
     const message = String(error).slice(0, 500);
     await tx`
       UPDATE chain.transactions
@@ -405,11 +406,11 @@ async function submitPending(
 }
 
 /**
- * Safe에 제안만 만든다.
+ * Creates a Safe proposal only.
  *
- * **실행하지 않는다.** 서명 수집과 실행은 Safe 쪽에서 사람이 한다. 상태를
- * `submitted`가 아니라 `proposed`로 두는 것이 그 사실을 지킨다 — submitted로
- * 표시하면 있지도 않은 트랜잭션의 영수증을 영원히 기다린다.
+ * **Does not execute.** Humans collect signatures and execute on the Safe side. Keeping the
+ * state at `proposed` rather than `submitted` preserves that fact — marking it submitted would
+ * wait forever for the receipt of a transaction that does not exist.
  */
 async function proposeToSafe(
   tx: postgres.TransactionSql,
@@ -427,8 +428,8 @@ async function proposeToSafe(
     recordCount: row.record_count!,
   });
 
-  // 활성 제안은 하나뿐이다(0014의 부분 UNIQUE). 두 개면 서명자들이 어느 것을
-  // 실행할지 모르고, 둘 다 실행되면 같은 root가 두 번 올라간다.
+  // Only one active proposal exists (partial UNIQUE in 0014). With two, signers would not know
+  // which to execute, and executing both anchors the same root twice.
   const [existing] = await tx<{ id: string }[]>`
     SELECT id FROM chain.anchor_proposals
     WHERE transaction_id = ${row.id} AND state = 'proposed'
@@ -438,8 +439,8 @@ async function proposeToSafe(
     return { handled: true, transactionId: row.id, from: row.state, to: "proposed", reason: "already_proposed" };
   }
 
-  // Safe 서비스에 실제로 올린다. 실패하면 DB에도 남기지 않는다 — 올라가지
-  // 않은 제안을 `proposed`로 표시하면 서명을 기다리는 것처럼 보인다.
+  // Actually upload to the Safe service. On failure nothing is written to the DB either — a
+  // proposal marked `proposed` that never got uploaded would look like it awaits signatures.
   let safeTxHash: string | null = null;
   if (safe) {
     try {
@@ -489,7 +490,7 @@ async function proposeToSafe(
     transactionId: row.id,
     proposalId,
     safeAddress: config.safeAddress,
-    // 서명자가 Safe UI에서 본 것과 대조할 값이다.
+    // Value signers compare against what they see in the Safe UI.
     calldataHash,
     safeTxHash,
   });
@@ -515,12 +516,12 @@ async function trackPending(
   ]);
 
   if (observation.kind === "receipt") {
-    // 상태가 바뀌지 않는 관측에서도 비용은 남긴다. 아래에 "바뀐 것이 없으면
-    // 시각만 찍고 끝낸다"는 분기가 있어, 거기 걸리면 영수증이 왔는데도 비용이
-    // 기록되지 않는다. 그러면 일일 상한이 0을 보고 영원히 열려 있게 된다.
+    // Record the cost even when the observation does not change the state. A branch below
+    // ("nothing changed: stamp the time and return") would otherwise skip recording the cost
+    // despite a receipt, and the daily cap would see 0 and stay open forever.
     //
-    // 재제출로 새 영수증이 오면 마지막 값이 남는다 — 뒤집힌 시도에서 태운
-    // 가스는 이 합계에 들어가지 않는다. 그 구간의 상한은 재시도 상한이다.
+    // When a resubmission yields a new receipt, the last value wins — gas burned by an
+    // overturned attempt is not in this sum. That window is bounded by the retry cap.
     await tx`
       UPDATE chain.transactions
       SET gas_used = ${observation.gasUsed.toString()},
@@ -541,8 +542,8 @@ async function trackPending(
   });
 
   if (result.reorged && row.block_number && row.block_hash) {
-    // 확정이 뒤집힌 사건은 지우지 않고 남긴다. 재제출로 결과가 같아지더라도
-    // 한 번 뒤집혔다는 사실 자체가 신뢰도 판단의 근거다.
+    // An overturned confirmation is kept, never deleted. Even if resubmission restores the same
+    // result, the fact that it flipped once is itself evidence for judging reliability.
     await tx`
       INSERT INTO chain.reorg_events (
         id, tenant_id, transaction_id, previous_block_number,
@@ -562,8 +563,8 @@ async function trackPending(
   }
 
   if (result.nextState === row.state && result.blockHash === row.block_hash) {
-    // 바뀐 것이 없어도 확인 시각은 남긴다. 그러지 않으면 같은 행을 즉시 다시
-    // 집어 뒤의 대기 건이 진행되지 않는다.
+    // Stamp the check time even when nothing changed. Otherwise the same row is re-picked
+    // immediately and pending rows behind it never progress.
     await tx`UPDATE chain.transactions SET updated_at = now() WHERE id = ${row.id}`;
     return { handled: true, transactionId: row.id, from: row.state, to: row.state, reason: result.reason };
   }
@@ -610,13 +611,13 @@ async function fail(
   `;
 }
 
-/** 진행 중인 트랜잭션 통계. 관측용이며 판정에 쓰지 않는다. */
+/** Stats on in-flight transactions. For observability only; never used for decisions. */
 export async function chainBacklog(
   sql: postgres.Sql,
   chainId: number,
 ): Promise<{
   readonly pending: number;
-  /** Safe에 제안만 된 것. 제출된 것이 아니다. */
+  /** Only proposed to Safe. Not submitted. */
   readonly proposed: number;
   readonly submitted: number;
   readonly confirmed: number;

@@ -9,11 +9,11 @@ import {
 import type { Grade, ReadinessStatus, SourceResult } from "@mpc/domain";
 
 /**
- * 상태 배지.
+ * Status badge.
  *
- * 라벨·아이콘·색을 `@mpc/ui`의 매핑에서 가져온다. 컴포넌트가 문구를
- * 하드코딩하지 않는 것이 핵심이다 — 12개 source result가 화면마다 다르게
- * 번역되면 사용자는 같은 상태를 다른 상태로 읽는다(§7.3).
+ * Label, icon, and color come from the `@mpc/ui` mapping. The key point is that the component
+ * does not hardcode copy — if the 12 source results are rendered differently
+ * per screen, users read the same status as different statuses (§7.3).
  */
 
 const GLYPH: Record<StatusDisplay["icon"], string> = {
@@ -28,7 +28,7 @@ const GLYPH: Record<StatusDisplay["icon"], string> = {
 function Badge({ display, title }: { display: StatusDisplay; title?: string }) {
   return (
     <span className="badge" style={{ color: `var(${display.token})` }} title={title}>
-      {/* 색만으로 구분하지 않는다(§11.8). 글리프는 장식이므로 읽히지 않게 한다. */}
+      {/* Never distinguish by color alone (§11.8). The glyph is decorative, so it is hidden from screen readers. */}
       <span className="glyph" aria-hidden="true">
         {GLYPH[display.icon]}
       </span>
@@ -53,8 +53,8 @@ export function SourceResultBadge({ result }: { result: SourceResult }) {
 }
 
 /**
- * lifecycle 상태는 아직 @mpc/ui 매핑 대상이 아니다(R2에서 추가).
- * 임시로 중립 표기하되 색만으로 의미를 전달하지 않는 규칙은 지킨다.
+ * Lifecycle status is not yet covered by the @mpc/ui mapping (added in R2).
+ * It is shown neutrally for now, still keeping the rule that color alone carries no meaning.
  */
 export function LifecycleBadge({ state }: { state: string }) {
   return (

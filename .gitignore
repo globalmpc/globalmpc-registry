@@ -11,7 +11,7 @@ dist/
 *.tsbuildinfo
 coverage/
 
-# Next.js 빌드 산출물과 Playwright 실행 흔적
+# Next.js build output and Playwright run artifacts
 .next/
 playwright-report/
 test-results/
@@ -20,13 +20,13 @@ contracts/out/
 contracts/cache/
 contracts/broadcast/
 
-# 환경 파일. 예시만 커밋한다.
+# Environment files. Only the example is committed.
 .env
 .env.*
 !.env.example
 
-# 실제 시크릿은 저장소에 들어가지 않는다. deploy/local-secrets/는 anvil·MinIO
-# 기본값뿐이라 예외이며, 그 사실이 같은 디렉터리의 README에 적혀 있다.
+# Real secrets never enter the repository. deploy/local-secrets/ is an exception because it
+# holds only anvil and MinIO defaults, as stated in the README in that directory.
 deploy/secrets/
 *.pem
 *.key
@@ -36,6 +36,6 @@ credentials.json
 service-account*.json
 !deploy/local-secrets/*
 
-# design-system/dist는 커밋된 산출물이다. `@mpc/design`의 exports가 가리키므로
-# 빠지면 웹 빌드가 `@mpc/design/tokens.css`를 찾지 못한다.
+# design-system/dist is a committed artifact. The exports of `@mpc/design` point to it, so
+# without it the web build cannot find `@mpc/design/tokens.css`.
 !design-system/dist/

@@ -12,10 +12,10 @@ import {
 } from "../plugins/session-token.js";
 
 /**
- * 로그인 경로의 상한 — 06 §6.9.
+ * Rate cap for the login routes — 06 §6.9.
  *
- * 전역 상한보다 훨씬 좁다. 이 두 경로는 **인증 없이** 행을 만들거나 서명을
- * 검증한다. 정상적인 사람은 1분에 10번 로그인하지 않는다.
+ * Much tighter than the global cap. These two routes create rows or verify signatures
+ * **without authentication**. A legitimate user does not log in 10 times a minute.
  */
 export async function registerAuthRoutes(
   app: FastifyInstance,
@@ -29,12 +29,12 @@ export async function registerAuthRoutes(
   app.post("/api/v1/auth/siwe/nonce", { config: authRateLimit }, async (request) => {
     const parsed = siweNonceRequest.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
     }
 
-    // 서명할 체인은 서버 설정이 정한다. 요청의 값은 쓰지 않는다.
+    // Server config decides the chain to sign for. The request value is not used.
     const { nonce, expiresAt } = await issueNonce(
       sql,
       parsed.data.walletAddress,
@@ -56,7 +56,7 @@ export async function registerAuthRoutes(
   app.post("/api/v1/auth/siwe/verify", { config: authRateLimit }, async (request) => {
     const parsed = siweVerifyRequest.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다");
+      throw badRequest("REQUEST_INVALID", "Request format is invalid");
     }
 
     const session = await verifySiwe(
@@ -66,8 +66,8 @@ export async function registerAuthRoutes(
       parsed.data.signature as `0x${string}`,
     );
 
-    // SIWE 서명을 검증한 뒤에만 토큰을 발급한다. 토큰 원문은 여기서 한 번만
-    // 클라이언트에 전달되며 서버는 해시만 저장한다.
+    // A token is issued only after the SIWE signature is verified. The raw token reaches the
+    // client only here, once; the server stores only its hash.
     const issued = await issueSessionToken(sql, session.walletAddress, session.chainId);
 
     return {
@@ -94,7 +94,7 @@ export async function registerAuthRoutes(
       return { authenticated: false, requestId: request.context.requestId };
     }
     const fresh = await resolveSession(sql, request.session.walletAddress, config.chainId);
-    // 조직별 프로젝트 목록은 인가 내부 값이다. 화면에는 action 목록만 준다.
+    // Per-organization project lists are authorization internals. Screens get only the action list.
     const { organizationProjectIds: _internal, ...visible } = fresh;
     return {
       authenticated: true,

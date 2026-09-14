@@ -1,20 +1,20 @@
--- 세션 토큰 저장 — R1 Task 8.
+-- Session token storage — R1 Task 8.
 --
--- **이것이 개발용 wallet 헤더 인증을 대체한다.** 그 경로는 서명 검증 없이
--- Authorization 헤더의 주소를 믿었으므로 인증 우회에 해당했다.
+-- **This replaces the dev wallet-header auth.** That path trusted the address in the
+-- Authorization header without verifying a signature, which amounted to an auth bypass.
 --
--- 설계:
+-- Design:
 --
--- - 토큰은 opaque random 32바이트다. JWT를 쓰지 않는 이유는 즉시 폐기가
---   필요하기 때문이다 — key 분실·역할 변경·incident에서 세션을 끊을 수 있어야
---   한다(AC-27).
--- - 저장하는 것은 토큰의 **해시**다. DB가 유출돼도 세션을 탈취할 수 없다.
--- - tenant에 속하지 않는다. 로그인 시점에는 아직 tenant를 모르기 때문이며,
---   조회는 SECURITY DEFINER 함수로만 한다.
+-- - Tokens are opaque random 32 bytes. JWT is not used because immediate revocation
+--   is required — sessions must be cut on key loss, role change, or incident
+--   (AC-27).
+-- - Only the token **hash** is stored. A DB leak does not allow session hijacking.
+-- - Not tenant-scoped, because the tenant is not yet known at login;
+--   lookups go only through SECURITY DEFINER functions.
 
 CREATE TABLE core.sessions (
   id             UUID PRIMARY KEY,
-  -- 원문 토큰은 저장하지 않는다. 클라이언트만 갖고 있다.
+  -- The raw token is not stored. Only the client has it.
   token_hash     TEXT NOT NULL UNIQUE CHECK (token_hash ~ '^0x[0-9a-f]{64}$'),
   wallet_address TEXT NOT NULL CHECK (wallet_address ~ '^0x[0-9a-f]{40}$'),
   chain_id       INTEGER NOT NULL,
@@ -33,10 +33,10 @@ CREATE INDEX sessions_wallet_idx ON core.sessions (wallet_address)
 GRANT SELECT, INSERT, UPDATE ON core.sessions TO mpc_app;
 
 /**
- * 토큰 해시로 활성 세션을 찾는다.
+ * Finds an active session by token hash.
  *
- * 로그인 해석과 같은 이유로 SECURITY DEFINER다 — 세션을 찾기 전에는 tenant를
- * 모른다. 만료·폐기된 세션은 반환하지 않는다.
+ * SECURITY DEFINER for the same reason as login resolution — the tenant is unknown until
+ * the session is found. Expired or revoked sessions are not returned.
  */
 CREATE FUNCTION core.resolve_session_token(p_token_hash TEXT)
 RETURNS TABLE (wallet_address TEXT, chain_id INTEGER, session_id UUID)

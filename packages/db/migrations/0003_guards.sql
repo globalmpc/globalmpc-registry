@@ -1,13 +1,13 @@
--- 불변조건을 DB 레벨에서 강제한다.
+-- Enforces invariants at the DB level.
 --
--- 애플리케이션 코드만으로 막으면 마이그레이션 스크립트, 운영 콘솔, 잘못된 배포가
--- 우회할 수 있다. 여기 있는 것들은 "실수로도 뚫리면 안 되는" 항목이다.
+-- Guards in application code alone can be bypassed by migration scripts, ops consoles, or a bad
+-- deploy. Everything here must never be breached, even by mistake.
 
 -- ---------------------------------------------------------------------------
--- audit는 append-only다 (02 §2.7)
+-- audit is append-only (02 §2.7)
 --
--- 권한 회수만으로는 부족하다. 권한을 다시 부여하는 실수가 가능하기 때문에
--- 트리거로 한 번 더 막는다.
+-- Revoking privileges is not enough: privileges can be re-granted by mistake, so a
+-- trigger blocks it as well.
 -- ---------------------------------------------------------------------------
 
 REVOKE UPDATE, DELETE, TRUNCATE ON audit.events FROM PUBLIC;
@@ -30,10 +30,10 @@ CREATE TRIGGER audit_events_no_delete
   FOR EACH ROW EXECUTE FUNCTION audit.reject_mutation();
 
 -- ---------------------------------------------------------------------------
--- 서명된 attestation은 immutable이다 (04 §4.2, 불변조건 4)
+-- A signed attestation is immutable (04 §4.2, invariant 4)
 --
--- 정정은 새 attestation의 supersedes 참조로 한다. state 전이와 revoke/supersede
--- 연결만 허용한다.
+-- Corrections go through a new attestation's supersedes reference. Only state transitions and
+-- revoke/supersede links are allowed.
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION core.protect_signed_attestation() RETURNS TRIGGER
@@ -80,10 +80,10 @@ CREATE TRIGGER attestation_no_delete
   FOR EACH ROW EXECUTE FUNCTION core.reject_delete();
 
 -- ---------------------------------------------------------------------------
--- readiness 결과는 override할 수 없다 (REQ-DAPP-017, D-30)
+-- A readiness result cannot be overridden (REQ-DAPP-017, D-30)
 --
--- 07 §7.2에 PATCH endpoint가 없는 것으로 1차 차단하고, 여기서 DB로 2차 차단한다.
--- 재계산은 새 행이며 기존 행을 고치는 경로는 없다.
+-- First line of defense: 07 §7.2 has no PATCH endpoint. Second line: the DB blocks it here.
+-- A recalculation is a new row; there is no path to modify an existing row.
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION core.reject_assessment_mutation() RETURNS TRIGGER
@@ -103,7 +103,7 @@ CREATE TRIGGER assessment_no_delete
   BEFORE DELETE ON core.compliance_assessments
   FOR EACH ROW EXECUTE FUNCTION core.reject_assessment_mutation();
 
--- gate decision도 마찬가지다. 결정을 바꾸려면 새 결정을 기록한다.
+-- Same for gate decisions. To change a decision, record a new one.
 CREATE TRIGGER gate_decision_no_update
   BEFORE UPDATE ON core.gate_decisions
   FOR EACH ROW EXECUTE FUNCTION core.reject_assessment_mutation();
@@ -113,10 +113,10 @@ CREATE TRIGGER gate_decision_no_delete
   FOR EACH ROW EXECUTE FUNCTION core.reject_delete();
 
 -- ---------------------------------------------------------------------------
--- 공개된 Registry version은 덮어쓸 수 없다 (불변조건 4, 08 §8.11)
+-- A published Registry version cannot be overwritten (invariant 4, 08 §8.11)
 --
--- published 이후에는 상태 전이(revoke/supersede)와 그 연결 필드만 바꿀 수 있다.
--- projection과 hash가 바뀌면 이미 anchor된 root와 어긋난다.
+-- After publication, only state transitions (revoke/supersede) and their link fields may change.
+-- Changing the projection or hash would diverge from the already anchored root.
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION core.protect_published_registry_version() RETURNS TRIGGER
@@ -153,7 +153,7 @@ CREATE TRIGGER registry_version_no_delete
   FOR EACH ROW EXECUTE FUNCTION core.reject_delete();
 
 -- ---------------------------------------------------------------------------
--- anchor batch의 root는 수정·삭제할 수 없다 (08 §8.4, 13 §13.5)
+-- An anchor batch root cannot be updated or deleted (08 §8.4, 13 §13.5)
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION core.reject_anchor_mutation() RETURNS TRIGGER
@@ -173,7 +173,7 @@ CREATE TRIGGER anchor_batch_no_delete
   FOR EACH ROW EXECUTE FUNCTION core.reject_anchor_mutation();
 
 -- ---------------------------------------------------------------------------
--- source receipt도 immutable이다 (05 §5.12)
+-- Source receipts are immutable too (05 §5.12)
 -- ---------------------------------------------------------------------------
 
 CREATE TRIGGER source_receipt_no_update

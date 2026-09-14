@@ -1,12 +1,11 @@
 /**
- * 규칙 predicate — 제한된 AST.
+ * Rule predicate — a restricted AST.
  *
- * 규칙은 데이터여야 한다. 임의 코드나 표현식 문자열을 평가하면 규칙 version을
- * 저장해도 그때의 판단을 재현할 수 없고, 규칙 변경이 감사 대상이 되지 않는다
- * (05 §5.4, OD-15).
+ * Rules must be data. Evaluating arbitrary code or expression strings means a stored rule version
+ * cannot reproduce the judgment made at the time, and rule changes escape audit (05 §5.4, OD-15).
  *
- * 허용 연산자는 여기 정의된 9개뿐이다. 값은 전부 문자열이며 수치 비교는 정수
- * decimal string으로만 한다(ADR-T07의 number 금지를 규칙 계층까지 유지한다).
+ * Only the 9 operators defined here are allowed. All values are strings; numeric comparison uses
+ * integer decimal strings only (ADR-T07's ban on number extends to the rule layer).
  */
 
 export type Predicate =
@@ -21,7 +20,7 @@ export type Predicate =
   | { readonly op: "gte"; readonly path: string; readonly value: string }
   | { readonly op: "lte"; readonly path: string; readonly value: string };
 
-/** 평가 사실. 값은 문자열 또는 문자열 배열이며 undefined는 "없음"이다. */
+/** Evaluation facts. Values are strings or string arrays; undefined means "absent". */
 export type Facts = Readonly<Record<string, string | readonly string[] | undefined>>;
 
 export class PredicateError extends Error {
@@ -37,7 +36,7 @@ const INTEGER = /^-?(0|[1-9][0-9]*)$/;
 function toBigInt(value: string, context: string): bigint {
   if (!INTEGER.test(value)) {
     throw new PredicateError(
-      `${context}: 수치 비교는 정수 decimal string만 허용한다 (받은 값: ${value})`,
+      `${context}: numeric comparison accepts only integer decimal strings (got: ${value})`,
     );
   }
   return BigInt(value);
@@ -47,14 +46,14 @@ function readScalar(facts: Facts, path: string): string | undefined {
   const value = facts[path];
   if (value === undefined) return undefined;
   if (Array.isArray(value)) {
-    throw new PredicateError(`${path}는 배열이다. 스칼라 비교에 사용할 수 없다`);
+    throw new PredicateError(`${path} is an array. It cannot be used in a scalar comparison`);
   }
   return value as string;
 }
 
 /**
- * 순수 평가. 현재 시각·난수·외부 조회를 사용하지 않는다.
- * 같은 (predicate, facts)는 항상 같은 결과를 만든다(AC-11).
+ * Pure evaluation. Uses no clock, randomness, or external lookup.
+ * The same (predicate, facts) always yields the same result (AC-11).
  */
 export function evaluatePredicate(predicate: Predicate, facts: Facts): boolean {
   switch (predicate.op) {
@@ -99,18 +98,18 @@ export function evaluatePredicate(predicate: Predicate, facts: Facts): boolean {
     case "gte": {
       const raw = readScalar(facts, predicate.path);
       if (raw === undefined) return false;
-      return toBigInt(raw, predicate.path) >= toBigInt(predicate.value, `${predicate.path} 기준값`);
+      return toBigInt(raw, predicate.path) >= toBigInt(predicate.value, `${predicate.path} threshold`);
     }
 
     case "lte": {
       const raw = readScalar(facts, predicate.path);
       if (raw === undefined) return false;
-      return toBigInt(raw, predicate.path) <= toBigInt(predicate.value, `${predicate.path} 기준값`);
+      return toBigInt(raw, predicate.path) <= toBigInt(predicate.value, `${predicate.path} threshold`);
     }
   }
 }
 
-/** predicate가 참조하는 fact 경로 전체. 규칙이 요구하는 입력을 정적으로 알 수 있다. */
+/** All fact paths a predicate references. Lets the inputs a rule needs be known statically. */
 export function collectPredicatePaths(predicate: Predicate, out: Set<string> = new Set()): Set<string> {
   switch (predicate.op) {
     case "always":

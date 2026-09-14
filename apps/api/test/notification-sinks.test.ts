@@ -8,16 +8,16 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 알림 수신처.
+ * Notification sinks.
  *
- * 지키는 것 셋.
+ * Three things are enforced.
  *
- * 1. **비밀이 응답으로 나가지 않는다** — 참조조차도. 경로가 배포 구조를 드러낸다.
- * 2. **등록돼 있다와 실제로 가고 있다를 구분한다** — 설정해 두고 아무것도 못
- *    보내는 상태가 가장 나쁘다.
- * 3. **멈추되 지우지 않는다** — 지우면 왜 끊겼는지가 남지 않는다.
+ * 1. **Secrets never leave in responses** — not even references. Paths reveal the deployment layout.
+ * 2. **Registered is distinguished from actually delivering** — being configured but
+ *    sending nothing is the worst state.
+ * 3. **Pause, do not delete** — deleting loses why delivery stopped.
  */
-describeDb("알림 수신처", () => {
+describeDb("notification sinks", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operatorToken: string;
@@ -52,7 +52,7 @@ describeDb("알림 수신처", () => {
     });
   }
 
-  it("수신처를 등록한다", async () => {
+  it("registers a sink", async () => {
     const response = await create(operatorToken, {
       url: `https://hooks.example.test/${randomUUID().slice(0, 8)}`,
       secretReference: "env:NOTIFY_TEST_SECRET",
@@ -63,20 +63,20 @@ describeDb("알림 수신처", () => {
     expect(response.json().hasSecret).toBe(true);
   });
 
-  it("비밀 참조를 응답에 담지 않는다", async () => {
+  it("keeps the secret reference out of the response", async () => {
     await create(operatorToken, {
       url: `https://hooks.example.test/${randomUUID().slice(0, 8)}`,
       secretReference: "file:/run/secrets/notify_hmac",
     });
 
     const listed = await list(operatorToken);
-    // 참조가 배포 구조를 드러낸다. 설정돼 있는지만 낸다.
+    // The reference reveals the deployment layout. Only whether it is set is returned.
     expect(listed.body).not.toContain("/run/secrets/notify_hmac");
     expect(listed.body).not.toContain("secretReference");
   });
 
-  it("https가 아니면 거절한다", async () => {
-    // 알림 본문에 프로젝트 식별자가 들어간다. 평문으로 보내지 않는다.
+  it("rejects non-https", async () => {
+    // Notification bodies carry project identifiers. They are not sent in plaintext.
     const response = await create(operatorToken, {
       url: "http://hooks.example.test/plain",
       secretReference: "env:NOTIFY_TEST_SECRET",
@@ -85,7 +85,7 @@ describeDb("알림 수신처", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("같은 주소를 두 번 등록하지 않는다", async () => {
+  it("does not register the same address twice", async () => {
     const url = `https://hooks.example.test/${randomUUID().slice(0, 8)}`;
     expect((await create(operatorToken, { url, secretReference: "env:A" })).statusCode).toBe(200);
 
@@ -94,22 +94,22 @@ describeDb("알림 수신처", () => {
     expect(second.json().code).toBe("SINK_ALREADY_REGISTERED");
   });
 
-  it("admin 권한이 없으면 거절한다", async () => {
+  it("rejects callers without admin rights", async () => {
     const response = await create(stewardToken, {
       url: "https://hooks.example.test/nope",
       secretReference: "env:A",
     });
 
-    // 수신처를 바꾸면 알림이 다른 곳으로 간다. 조용히 바꿔 두면 원래 받던 쪽은
-    // 알림이 끊긴 것을 모른다.
+    // Changing a sink redirects notifications. A silent change leaves the original
+    // recipient unaware that notices stopped.
     expect(response.statusCode).toBe(403);
   });
 
-  it("등록된 수신처에 알림이 배달 대기로 걸린다", async () => {
+  it("queues deliveries for a registered sink", async () => {
     const url = `https://hooks.example.test/${randomUUID().slice(0, 8)}`;
     const sink = (await create(operatorToken, { url, secretReference: "env:A" })).json();
 
-    // 알림 생성 자리는 넷이다. 트리거가 그 전부를 덮는지 본다.
+    // Notifications are created in four places. Checks the trigger covers all of them.
     const reason = `deliver-${randomUUID().slice(0, 8)}`;
     await fx.sql`
       INSERT INTO core.evidence_stale_signals (
@@ -125,7 +125,7 @@ describeDb("알림 수신처", () => {
     expect(mine.delivery.pending).toBeGreaterThan(0);
   });
 
-  it("멈춘 수신처에는 새 배달이 걸리지 않는다", async () => {
+  it("queues no new deliveries for a paused sink", async () => {
     const url = `https://hooks.example.test/${randomUUID().slice(0, 8)}`;
     const sink = (await create(operatorToken, { url, secretReference: "env:A" })).json();
 
@@ -155,12 +155,12 @@ describeDb("알림 수신처", () => {
     const after = (await list(operatorToken)).json().items.find(
       (item: { id: string }) => item.id === sink.id,
     );
-    // 멈춘 것은 지운 것이 아니다. 이력은 남고 새 배달만 걸리지 않는다.
+    // Paused is not deleted. History stays; only new deliveries stop.
     expect(after.delivery.pending).toBe(before);
     expect(after.state).toBe("paused");
   });
 
-  it("다른 tenant의 수신처는 보이지 않는다", async () => {
+  it("another tenant's sinks are not visible", async () => {
     const operatorB = await signIn(app, fx.operatorB);
     const mine = (await list(operatorToken)).json().items as { id: string }[];
     const theirs = (await list(operatorB)).json().items as { id: string }[];

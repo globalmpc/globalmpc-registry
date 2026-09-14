@@ -5,16 +5,15 @@ import { deliverOnce, deliveryBacklog } from "./notification-delivery.js";
 import { backlogStats, publishBatch, type OutboxRow } from "./outbox-publisher.js";
 
 /**
- * Outbox 발행 루프.
+ * Outbox publishing loop.
  *
- * R0에서는 발행 대상이 로그다. 실제 broker(pg-boss)는 consumer가 생기는 R1에서
- * 연결한다 — consumer 없는 큐를 먼저 붙이면 어디로 가는지 알 수 없는 이벤트가
- * 쌓인다.
+ * In R0 the publish target is the log. The real broker (pg-boss) is wired in R1, when a consumer
+ * exists — attaching a queue with no consumer first piles up events with no known destination.
  */
 
 const databaseUrl = process.env["DATABASE_URL"];
 if (!databaseUrl) {
-  process.stderr.write("DATABASE_URL이 필요하다\n");
+  process.stderr.write("DATABASE_URL is required\n");
   process.exit(1);
 }
 
@@ -22,14 +21,14 @@ const POLL_INTERVAL_MS = Number(process.env["OUTBOX_POLL_MS"] ?? "1000");
 const BACKOFF_MS = Number(process.env["OUTBOX_BACKOFF_MS"] ?? "5000");
 
 /**
- * 알림 webhook 배달.
+ * Notification webhook delivery.
  *
- * 네 번째 프로세스를 만들지 않고 이 루프에 얹는다. 배달은 outbox 발행과 같은
- * 모양의 일이고(대기 행을 집어 밖으로 보낸다), 프로세스가 늘면 그만큼 죽어 있을
- * 수 있는 자리가 는다.
+ * Rides on this loop instead of a fourth process. Delivery has the same shape as outbox
+ * publishing (claim a pending row, send it out), and each extra process is one more place that
+ * can be dead.
  *
- * **수신처가 없으면 아무 일도 하지 않는다.** 조회는 매 주기 돌지만 대기 행이
- * 없으므로 즉시 돌아온다 — sink를 만들지 않은 배포에 부담을 주지 않는다.
+ * **With no receivers it does nothing.** The query runs every cycle but returns immediately with
+ * no pending rows — no load on deployments that never created a sink.
  */
 const NOTIFY_MAX_ATTEMPTS = Number(process.env["NOTIFY_MAX_ATTEMPTS"] ?? "5");
 const NOTIFY_BACKOFF_MS = Number(process.env["NOTIFY_BACKOFF_MS"] ?? "30000");
@@ -42,8 +41,8 @@ function emit(record: Record<string, unknown>): void {
 }
 
 const publish = async (event: OutboxRow): Promise<void> => {
-  // payload를 그대로 찍지 않는다. 이벤트 payload에 PII를 넣지 않기로 했지만,
-  // 로그는 그 약속이 깨졌을 때 최초 유출 경로가 된다.
+  // Never print the payload as is. Event payloads are agreed to carry no PII, but if that
+  // promise breaks, the log becomes the first leak path.
   emit({
     level: "info",
     msg: "outbox.published",
@@ -73,7 +72,7 @@ while (running) {
   try {
     const result = await publishBatch(sql, publish);
 
-    // 알림 배달도 같은 주기에 한 건씩 처리한다.
+    // Notification delivery also handles one item per cycle.
     const delivery = await deliverOnce(
       sql,
       {
@@ -85,11 +84,11 @@ while (running) {
       emit,
     );
 
-    // 발행할 것이 없어도 신호를 남긴다.
+    // Emit the signal even when there is nothing to publish.
     await heartbeat({ published: result.published, delivered: delivery.delivered });
 
     if (delivery.failed > 0) {
-      // 굳어 버린 배달을 조용히 두면 아무도 보내지 못하고 있는 것을 모른다.
+      // Left silent, stuck deliveries hide the fact that nothing is getting through.
       emit({ level: "warn", msg: "notification.delivery.backlog", ...(await deliveryBacklog(sql)) });
     }
 
@@ -107,13 +106,13 @@ while (running) {
       continue;
     }
 
-    // 둘 다 할 일이 없을 때만 쉰다. 하나라도 처리했으면 밀린 것이 더 있을 수
-    // 있고, 그때 쉬면 배달이 폴링 간격만큼씩 늦어진다.
+    // Sleep only when both are idle. If either handled something, more may be queued, and
+    // sleeping then delays delivery by a polling interval each time.
     if (result.published === 0 && !delivery.handled) {
       await sleep(POLL_INTERVAL_MS);
     }
   } catch (error) {
-    // 발행 실패는 재시도한다. published_at을 찍지 않았으므로 이벤트는 남아 있다.
+    // Publish failures are retried. published_at was not stamped, so the event remains.
     emit({ level: "error", msg: "outbox.loop.failed", error: String(error) });
     await sleep(BACKOFF_MS);
   }

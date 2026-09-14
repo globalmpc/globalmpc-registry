@@ -2,20 +2,20 @@ import Link from "next/link";
 import { REQUIRED_BOUNDARY_COPY } from "@mpc/ui";
 
 /**
- * 약관·데이터 처리·지원 — spec 12 §12.10 Legal track.
+ * Terms, data handling, support — spec 12 §12.10 Legal track.
  *
- * **정식 약관과 개인정보처리방침을 여기에 쓰지 않는다.** 둘 다 법무 검토를 거쳐야
- * 성립하는 문서이며(12 §12.10), 검토받지 않은 문장을 그 제목으로 올리면 읽는
- * 사람은 그것을 약속으로 받는다. 지키지 못할 약속을 하는 것이 없는 것보다 나쁘다.
+ * **The formal terms and privacy policy are not written here.** Both are documents that only hold
+ * after legal review (12 §12.10); posting unreviewed text under those titles makes readers
+ * take it as a promise. Making a promise that cannot be kept is worse than having none.
  *
- * 대신 여기 적는 것은 **시스템이 실제로 하는 일**이다. 아래 항목은 전부 코드나
- * DB 제약으로 강제되며 확인할 수 있다 — 그래서 법무 검토 전에도 사실로 적을 수
- * 있다. 정식 문서는 그 위에 올라간다.
+ * What is written here instead is **what the system actually does**. Every item below is enforced
+ * by code or DB constraints and can be checked — so it can be stated as fact even before legal
+ * review. The formal documents sit on top of it.
  *
- * 서버 컴포넌트다. 조회할 것이 없다.
+ * Server component. Nothing to fetch.
  */
 
-/** 시스템이 강제하는 것. 각 항목은 확인 가능한 자리를 함께 적는다. */
+/** What the system enforces. Each item names where it can be checked. */
 const ENFORCED = [
   {
     what: "Confidential, personal, and whistleblower-grade uploads are refused",
@@ -59,8 +59,8 @@ export default function LegalPage() {
       </div>
 
       {/*
-        가장 먼저 말해야 하는 것. 아래를 약관으로 읽고 실사용자를 붙이면
-        그 시점부터 이 문단이 없었던 것과 같아진다.
+        What must be said first. If the text below is read as terms and real users are onboarded,
+        from that point on it is as if this paragraph never existed.
       */}
       <div className="notice" style={{ color: "var(--alert)" }} data-testid="legal-status">
         <div className="title">There is no issued Terms of Service or Privacy Policy yet</div>
@@ -156,7 +156,7 @@ export default function LegalPage() {
           </dd>
         </dl>
         <p className="meta" style={{ marginBottom: 0 }}>
-          {/* 연락처를 지어내지 않는다. 없는 주소를 적으면 신고가 사라진다. */}
+          {/* Do not invent contact details. A nonexistent address makes reports vanish. */}
           Contact addresses are set per deployment and are not published in this repository. Ask the
           operator of the instance you are using.
         </p>
@@ -165,7 +165,7 @@ export default function LegalPage() {
       <div className="panel">
         <h2>Boundaries this service states everywhere</h2>
         <ul style={{ margin: 0, paddingLeft: 18, color: "var(--muted-foreground)" }}>
-          {/* 경계 문구는 `@mpc/ui`가 원본이다. 여기서 다시 쓰지 않는다. */}
+          {/* Boundary copy originates in `@mpc/ui`. It is not rewritten here. */}
           <li>{REQUIRED_BOUNDARY_COPY.verification.en}</li>
           <li>{REQUIRED_BOUNDARY_COPY.readiness.en}</li>
           <li>{REQUIRED_BOUNDARY_COPY.sourceStatus.en}</li>

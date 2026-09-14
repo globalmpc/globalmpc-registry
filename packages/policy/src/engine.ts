@@ -10,38 +10,37 @@ import { evaluatePredicate, type Facts } from "./predicate.js";
 import type { Requirement, RuleSet } from "./rule-schema.js";
 
 /**
- * Compliance Policy Engine — 결정적 평가.
+ * Compliance Policy Engine — deterministic evaluation.
  *
- * spec 13 AC-11: 동일 input snapshot hash와 rule version이면 여러 worker에서
- * 평가해도 byte-equivalent canonical result hash가 나온다.
+ * spec 13 AC-11: the same input snapshot hash and rule version yield a byte-equivalent canonical
+ * result hash on every worker that evaluates them.
  *
- * 그래서 이 모듈은 순수 함수다 — 현재 시각을 읽지 않고, 난수를 쓰지 않고, 외부를
- * 조회하지 않는다. 시간 기준은 입력 snapshot의 `evaluatedAsOf`이며 경과일도
- * 호출자가 계산해 넣는다.
+ * So this module is pure — it reads no clock, uses no randomness, and queries nothing external.
+ * The time basis is the input snapshot's `evaluatedAsOf`; the caller computes elapsed days too.
  *
- * 사용자 표시명은 "데이터·증빙 준비도 평가"다. 법률 컴플라이언스 승인이나 인가
- * 판정이 아니다(11 §11.13).
+ * The user-facing name is "data and evidence readiness assessment". It is not a legal compliance
+ * approval or an authorization decision (11 §11.13).
  */
 
 export interface RequirementFacts {
-  /** 이 requirement를 위해 존재하는 claim type. */
+  /** Claim types present for this requirement. */
   readonly presentClaimTypes: readonly string[];
-  /** 근거 claim들의 weakest link grade. 근거가 없으면 null. */
+  /** Weakest-link grade across evidence claims. null when there is no evidence. */
   readonly grade: Grade | null;
   readonly presentAttestations: readonly AttestationType[];
-  /** 근거의 경과일. 정수 decimal string. 알 수 없으면 null. */
+  /** Evidence age in days, as an integer decimal string. null when unknown. */
   readonly evidenceAgeDays: string | null;
   readonly unresolvedConflictTypes: readonly string[];
-  /** appliesWhen·notEvaluableWhen·watchWhen이 참조하는 추가 사실. */
+  /** Additional facts referenced by appliesWhen, notEvaluableWhen, and watchWhen. */
   readonly context: Facts;
 }
 
 export interface AssessmentInput {
   readonly subjectId: string;
   readonly gateId: string;
-  /** 평가 입력 전체의 커밋먼트. 이 값이 같으면 결과도 같아야 한다. */
+  /** Commitment over the whole evaluation input. Equal values must yield equal results. */
   readonly inputSnapshotHash: string;
-  /** 평가 기준 시각. 현재 시각이 아니라 snapshot에 고정된 값이다. */
+  /** Evaluation reference time. Fixed in the snapshot, not the current time. */
   readonly evaluatedAsOf: string;
   readonly requirementFacts: Readonly<Record<string, RequirementFacts>>;
 }
@@ -61,10 +60,10 @@ export type RequirementReasonCode =
 export interface RequirementResult {
   readonly requirementId: string;
   readonly status: ReadinessStatus;
-  /** false면 집계에서 제외된다. */
+  /** When false, excluded from aggregation. */
   readonly applicable: boolean;
   readonly reasonCode: RequirementReasonCode;
-  /** 무엇이 부족한지 — UI가 다음 행동을 안내하는 데 쓴다. */
+  /** What is missing — the UI uses this to guide the next action. */
   readonly missing: readonly string[];
 }
 
@@ -86,7 +85,7 @@ export function evaluateRequirement(
   const base = { requirementId: requirement.requirementId } as const;
 
   if (facts === undefined) {
-    // 사실이 공급되지 않았다. 통과로 처리하지 않는다.
+    // No facts were supplied. Do not treat this as a pass.
     return {
       ...base,
       status: "not_evaluable",
@@ -106,7 +105,7 @@ export function evaluateRequirement(
     };
   }
 
-  // 판단 기준 자체가 없는 경우가 근거 결여보다 먼저다.
+  // Having no evaluation basis at all takes precedence over missing evidence.
   if (evaluatePredicate(requirement.notEvaluableWhen, facts.context)) {
     return {
       ...base,
@@ -155,7 +154,7 @@ export function evaluateRequirement(
 
   if (requirement.freshnessThresholdDays !== null) {
     if (facts.evidenceAgeDays === null) {
-      // 경과일을 모르면 최신성을 판단할 수 없다. 통과시키지 않는다.
+      // Without the age, freshness cannot be judged. Do not pass it.
       return {
         ...base,
         status: "not_evaluable",
@@ -229,11 +228,10 @@ export function evaluateAssessment(ruleSet: RuleSet, input: AssessmentInput): As
 }
 
 /**
- * assessment의 canonical 커밋먼트.
+ * Canonical commitment of an assessment.
  *
- * 같은 `(inputSnapshotHash, ruleSetVersion)`은 항상 같은 값을 만든다. 이 해시가
- * GateDecision의 입력으로 기록되므로, 나중에 "그때 무엇을 보고 결정했는가"를
- * 재현할 수 있다.
+ * The same `(inputSnapshotHash, ruleSetVersion)` always yields the same value. This hash is
+ * recorded as a GateDecision input, so "what was the decision based on" can be reproduced later.
  */
 export function assessmentHash(assessment: Assessment): Hex {
   return keccak256(canonicalBytes(toCanonical(assessment)));
@@ -248,7 +246,7 @@ function toCanonical(assessment: Assessment) {
     inputSnapshotHash: assessment.inputSnapshotHash,
     evaluatedAsOf: assessment.evaluatedAsOf,
     status: assessment.status,
-    // requirementId로 정렬해 배열 순서에 대한 의존을 없앤다.
+    // Sort by requirementId to remove any dependence on array order.
     requirementResults: [...assessment.requirementResults]
       .sort((a, b) => (a.requirementId < b.requirementId ? -1 : a.requirementId > b.requirementId ? 1 : 0))
       .map((result) => ({

@@ -13,20 +13,20 @@ import {
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
- * 독립 Proof Verifier — spec 11 §11.3 / AC-23.
+ * Independent Proof Verifier — spec 11 §11.3 / AC-23.
  *
- * Explorer 안에서 증명 결과를 **보여주기만** 하던 것과 다른 화면이다. 서버가
- * `merkleVerified: true`를 보내면 그 화면은 그대로 옮겨 적었다. 그것은 검증이
- * 아니라 인용이다.
+ * A different screen from the one inside Explorer that only **displayed** proof results. When the server
+ * sent `merkleVerified: true`, that screen copied it verbatim. That is quotation,
+ * not verification.
  *
- * 여기서는 **브라우저가 Merkle 경로를 다시 계산한다.** 서버가 보낸 판정 플래그를
- * 쓰지 않는다 — 서버를 믿지 않아도 되는 것이 증명의 목적이다.
+ * Here **the browser recomputes the Merkle path.** It does not use the verdict flag
+ * the server sent — the point of a proof is not having to trust the server.
  *
- * **여기서 확인되지 않는 것을 함께 적는다.** leaf는 공개 projection의
- * content hash 외에 `subjectId`·`policyVersion`·`schemaVersion`을 함께 묶는데
- * 그 셋은 공개 projection에 없다(05 §5.7 allowlist). 따라서 공개 데이터만으로
- * leaf 해시를 처음부터 다시 만들 수는 없다. 그 한계를 화면이 말한다 —
- * 말하지 않으면 사용자가 "전부 스스로 확인했다"고 믿는다.
+ * **It also states what is not confirmed here.** Besides the public projection content hash,
+ * the leaf binds `subjectId`, `policyVersion`, and `schemaVersion`, and
+ * those three are not in the public projection (05 §5.7 allowlist). So public data alone
+ * cannot rebuild the leaf hash from scratch. The screen states that limitation —
+ * otherwise users believe they "verified everything themselves".
  */
 
 type Outcome =
@@ -57,8 +57,8 @@ export default function ProofVerifierPage() {
     setError(null);
     setOutcome({ kind: "idle" });
     try {
-      // 키로 들어오면 기록을 먼저 읽는다. 철회 여부는 증명이 아니라 기록이
-      // 갖는 사실이고, 둘을 합쳐야 "포함됐으나 철회됐다"를 말할 수 있다.
+      // When entered by key, read the record first. Revocation is a fact held by the record, not the
+      // proof, and both are needed to say "included but revoked".
       const record =
         mode === "key" ? await getPublicRegistryEntry(registryType, publicKey.trim()) : null;
       const target = record ? record.entryVersionId : versionId.trim();
@@ -67,8 +67,8 @@ export default function ProofVerifierPage() {
       try {
         proof = await getInclusionProof(target);
       } catch (caught) {
-        // 아직 anchor되지 않은 것은 오류가 아니라 상태다. 둘을 같은 빨간
-        // 상자로 그리면 "증명 실패"로 읽힌다.
+        // Not yet anchored is a state, not an error. Drawing both in the same red
+        // box reads as "proof failed".
         setOutcome({
           kind: "not-anchored",
           detail:
@@ -79,7 +79,7 @@ export default function ProofVerifierPage() {
         return;
       }
 
-      // 서버의 `merkleVerified`를 쓰지 않는다. 같은 입력으로 여기서 다시 센다.
+      // Do not use the server `merkleVerified`. Recompute here from the same input.
       const recomputed = verifyMerkleProof(
         proof.leafHash as Hex,
         proof.proof as Hex[],
@@ -106,8 +106,8 @@ export default function ProofVerifierPage() {
     setFileHash(null);
     try {
       const parsed: unknown = JSON.parse(await file.text());
-      // 정규화는 @mpc/canonical이 한다. 화면이 키를 정렬하면 서버와 다른
-      // 바이트를 해싱하고, 그 불일치는 "위조"처럼 보인다.
+      // @mpc/canonical does the normalization. If the screen sorts keys, it hashes bytes
+      // different from the server, and that mismatch looks like "forgery".
       setFileHash({ name: file.name, hash: hashProjection(parsed as never) });
     } catch {
       setFileError("This file is not JSON we can canonicalise. Upload the published record JSON.");
@@ -239,8 +239,8 @@ export default function ProofVerifierPage() {
           </dl>
         ) : null}
         {/*
-          여기서 확인되는 것과 아닌 것을 붙여 둔다. content hash가 leaf 해시가
-          아니라는 것을 말하지 않으면 "일치했다"가 포함 증명으로 읽힌다.
+          Keep what is and is not confirmed here side by side. Unless it says the content hash is not
+          the leaf hash, "matched" reads as proof of inclusion.
         */}
         <p className="meta" style={{ marginBottom: 0 }}>
           A content hash is one input to the anchored leaf, not the leaf itself. The remaining
@@ -265,8 +265,8 @@ export default function ProofVerifierPage() {
         <>
           {outcome.record?.revokedAt ? (
             /*
-              철회는 증명의 실패가 아니다. 바이트는 그대로 포함돼 있고 그 기록이
-              더 이상 유효하지 않을 뿐이다. 둘을 한 상자에 넣으면 구분이 사라진다.
+              Revocation is not a proof failure. The bytes are still included; the record
+              is simply no longer valid. Putting both in one box erases the distinction.
             */
             <div
               className="notice"

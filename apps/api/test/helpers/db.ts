@@ -6,16 +6,16 @@ import { createSiweMessage } from "viem/siwe";
 import { runMigrations } from "@mpc/db";
 
 /**
- * 테스트 DB 헬퍼.
+ * Test DB helpers.
  *
- * `packages/db`의 헬퍼와 달리 스키마를 드롭하지 않는다. 이 계층의 테스트는
- * 스키마 lifecycle이 아니라 그 위의 동작을 검증하므로, **매 파일이 고유 tenant를
- * 만들어 격리**한다. 드롭을 하면 같은 인스턴스를 쓰는 다른 테스트가 깨진다.
+ * Unlike the `packages/db` helpers, these do not drop the schema. Tests at this layer verify
+ * behavior on top of the schema, not its lifecycle, so **each file isolates itself with its
+ * own tenant**. Dropping would break other tests sharing the same instance.
  */
 export interface TestFixture {
-  /** superuser 연결. seed에 쓴다. */
+  /** Superuser connection. Used for seeding. */
   readonly sql: postgres.Sql;
-  /** 애플리케이션 role 연결. RLS가 적용된다. */
+  /** Application role connection. RLS applies. */
   readonly appSql: postgres.Sql;
   readonly tenantA: string;
   readonly tenantB: string;
@@ -25,55 +25,55 @@ export interface TestFixture {
   readonly operatorA: TestAccount;
   /** tenant B · mpc_operator · high_assurance */
   readonly operatorB: TestAccount;
-  /** tenant A · 역할 없음 · wallet_only */
+  /** tenant A · no role · wallet_only */
   readonly readerA: TestAccount;
-  /** 어느 tenant에도 등록되지 않은 주소 */
+  /** Address not registered in any tenant */
   readonly unknownWallet: TestAccount;
   /** tenant A · reviewer_cp_qp · high_assurance */
   readonly reviewerA: TestAccount;
   /** tenant A · gate_approver · high_assurance */
   readonly approverA: TestAccount;
-  /** tenant A · data_steward · identity_bound. evidence·claim을 다룬다(02 §2.3) */
+  /** tenant A · data_steward · identity_bound. handles evidence and claims (02 §2.3) */
   readonly stewardA: TestAccount;
   /**
-   * tenant A · data_steward · **projectA에만 묶인 바인딩**.
+   * tenant A · data_steward · **binding scoped to projectA only**.
    *
-   * 조직 수준 바인딩과 프로젝트 수준 바인딩의 차이를 시험하려면 둘 다 필요하다.
-   * 이 계정은 `projectA`에서는 steward지만 `otherProjectA`에서는 아무것도 아니다.
+   * Both are needed to test organization-level versus project-level bindings.
+   * This account is a steward in `projectA` but nothing in `otherProjectA`.
    */
   readonly scopedStewardA: TestAccount;
-  /** tenant A · scan_service. 검사 결과만 만들 수 있는 시스템 identity */
+  /** tenant A · scan_service. System identity that can only produce scan results */
   readonly scanServiceA: TestAccount;
-  /** tenant A · protocol_proposer. 거버넌스 제안을 만든다 */
+  /** tenant A · protocol_proposer. Creates governance proposals */
   readonly proposerA: TestAccount;
-  /** tenant A · protocol_voter. 투표만 한다 */
+  /** tenant A · protocol_voter. Only votes */
   readonly voterA: TestAccount;
-  /** tenant A · auditor. authority 승인을 판정한다(02 §2.8) */
+  /** tenant A · auditor. Decides authority approval (02 §2.8) */
   readonly auditorA: TestAccount;
-  /** operatorA의 subject id. 등록자와 승인자가 같은지 보는 데 쓴다 */
+  /** operatorA's subject id. Used to check whether registrant and approver are the same */
   readonly operatorSubjectA: string;
-  /** tenant A에 미리 만들어 둔 프로젝트 */
+  /** Pre-created project in tenant A */
   readonly projectA: string;
-  /** 같은 tenant의 다른 프로젝트. project scope 밖을 시험한다 */
+  /** Another project in the same tenant. Tests access outside project scope */
   readonly otherProjectA: string;
-  /** tenant A의 accepted authority */
+  /** Accepted authority of tenant A */
   readonly authorityA: string;
-  /** tenant A의 active source connection */
+  /** Active source connection of tenant A */
   readonly connectionA: string;
-  /** tenant A의 active attestation schema */
+  /** Active attestation schema of tenant A */
   readonly schemaA: string;
-  /** reviewerA의 유효한 credential */
+  /** Valid credential of reviewerA */
   readonly credentialA: string;
-  /** reviewerA의 subject id */
+  /** Subject id of reviewerA */
   readonly reviewerSubjectA: string;
   close(): Promise<void>;
 }
 
 /**
- * 계정을 private key와 함께 만든다.
+ * Creates an account together with its private key.
  *
- * R1부터 인증은 SIWE 서명 → 세션 토큰이다. 테스트가 로그인하려면 서명할 키가
- * 있어야 하므로 주소만 만들 수 없다.
+ * From R1, authentication is SIWE signature → session token. Tests need a signing key to
+ * log in, so an address alone is not enough.
  */
 export interface TestAccount {
   readonly address: `0x${string}`;
@@ -86,10 +86,10 @@ export function newAccount(): TestAccount {
 }
 
 /**
- * SIWE 로그인을 수행해 세션 토큰을 얻는다.
+ * Performs a SIWE login and obtains a session token.
  *
- * 개발용 wallet 헤더 경로가 제거됐으므로 모든 인증 테스트가 이 경로를 지난다.
- * 즉 테스트가 도는 것 자체가 "실제 인증 흐름이 동작한다"는 증거다.
+ * The dev wallet-header path is removed, so every authenticated test goes through here.
+ * Tests running at all is evidence that "the real auth flow works".
  */
 export async function signIn(app: FastifyInstance, account: TestAccount): Promise<string> {
   const nonceResponse = await app.inject({
@@ -122,7 +122,7 @@ export async function signIn(app: FastifyInstance, account: TestAccount): Promis
   });
 
   const token = (verified.json() as { sessionToken: string | null }).sessionToken;
-  if (!token) throw new Error("세션 토큰을 받지 못했다");
+  if (!token) throw new Error("did not receive a session token");
   return token;
 }
 
@@ -132,7 +132,7 @@ export function bearer(token: string): Record<string, string> {
 
 export async function setupFixture(): Promise<TestFixture> {
   const url = process.env["DATABASE_URL"];
-  if (!url) throw new Error("DATABASE_URL이 필요하다");
+  if (!url) throw new Error("DATABASE_URL is required");
 
   const sql = postgres(url, { onnotice: () => {} });
   await runMigrations(sql);
@@ -193,8 +193,8 @@ export async function setupFixture(): Promise<TestFixture> {
     `;
   }
 
-  // tenant A에 속하지만 역할이 없는 주체. 401(미등록)과 403(권한 부족)을
-  // 구분해 검증하기 위해 필요하다.
+  // Subject in tenant A with no role. Needed to tell 401 (unregistered) apart from
+  // 403 (insufficient permission).
   const readerSubject = randomUUID();
   await sql`
     INSERT INTO core.subjects (id, tenant_id, kind, display_name)
@@ -208,20 +208,20 @@ export async function setupFixture(): Promise<TestFixture> {
     )
   `;
 
-  // reviewer와 gate approver. 권한 분리(02 §2.4)를 검증하려면 서로 다른 주체가
-  // 필요하다 — 같은 사람이 검토하고 승인하면 분리 규칙을 시험할 수 없다.
+  // reviewer and gate approver. Separation of duties (02 §2.4) needs distinct subjects —
+  // if one person reviews and approves, the separation rule cannot be tested.
   const reviewerA = newAccount();
   const approverA = newAccount();
   const stewardA = newAccount();
-  // 검사 서비스. 파일을 올린 사람이 자기 파일을 통과시킬 수 없게 분리한다.
+  // Scan service. Separated so an uploader cannot pass their own file.
   const scanServiceA = newAccount();
-  // 제안자와 투표자를 나눈다. 같은 사람이면 권한 분리를 시험할 수 없다.
+  // Separate proposer and voter. With one person, separation of duties cannot be tested.
   const proposerA = newAccount();
   const voterA = newAccount();
-  // 등록한 사람은 승인할 수 없다(02 §2.8). 승인자를 따로 둬야 시험할 수 있다.
+  // A registrant cannot approve (02 §2.8). A separate approver is needed to test it.
   const auditorA = newAccount();
-  // 프로젝트 하나에만 묶인 steward. 조직 수준 바인딩과 구분해야 project scope를
-  // 시험할 수 있다.
+  // Steward bound to a single project. Must differ from an organization-level binding to
+  // test project scope.
   const scopedStewardA = newAccount();
   const scopedStewardSubject = randomUUID();
   const reviewerSubjectA = randomUUID();
@@ -236,13 +236,13 @@ export async function setupFixture(): Promise<TestFixture> {
   for (const [subject, wallet, label, role, assurance] of [
     [reviewerSubjectA, reviewerA, "Reviewer A", "reviewer_cp_qp", "high_assurance"],
     [approverSubject, approverA, "Approver A", "gate_approver", "high_assurance"],
-    // 02 §2.3: source·claim을 다루는 것은 steward다. mpc_operator는 metadata만 읽는다.
+    // 02 §2.3: stewards handle sources and claims. mpc_operator only reads metadata.
     [stewardSubject, stewardA, "Steward A", "data_steward", "identity_bound"],
     [scanServiceSubject, scanServiceA, "Scan Service", "scan_service", "high_assurance"],
     [proposerSubject, proposerA, "Proposer A", "protocol_proposer", "identity_bound"],
-    // 투표권은 보유에서 나오지 신원에서 나오지 않는다(02 §2.3).
+    // Voting power comes from holdings, not identity (02 §2.3).
     [voterSubject, voterA, "Voter A", "protocol_voter", "wallet_only"],
-    // 기관을 신뢰하기로 하는 것은 운영 작업이 아니라 검토 결과다(02 §2.8).
+    // Trusting an authority is a review outcome, not an operations task (02 §2.8).
     [auditorSubject, auditorA, "Auditor A", "auditor", "high_assurance"],
   ] as const) {
     await sql`
@@ -294,7 +294,7 @@ export async function setupFixture(): Promise<TestFixture> {
     )
   `;
 
-  // 프로젝트 수준 바인딩. `project_id`가 채워지면 그 프로젝트 밖에서는 통하지 않는다.
+  // Project-level binding. With `project_id` set, it has no effect outside that project.
   await sql`
     INSERT INTO core.subjects (id, tenant_id, kind, display_name)
     VALUES (${scopedStewardSubject}, ${tenantA}, 'person', 'Scoped Steward A')
@@ -339,11 +339,11 @@ export async function setupFixture(): Promise<TestFixture> {
     ) VALUES (
       ${connectionA}, ${tenantA}, ${authorityA}, ${`conn-${connectionA.slice(0, 8)}`},
       'authenticated_api', 'data sharing agreement 2026-01', 'vault://mn/registry', 'active',
-      -- .test는 예약 TLD라 해석되지 않는다. 시험용 주소가 실제 기관 주소로
-      -- 오해되지 않게 한다. 테스트는 fetch를 주입하므로 나가지 않는다.
+      -- .test is a reserved TLD and never resolves, so a test address is not mistaken for a real
+      -- authority address. Tests inject fetch, so no request goes out.
       'https://registry.example.test/mineral/licenses', 'none', 'test', 'test',
-      -- 응답 profile — 2026-09-10 실사 A7. 선언이 없으면 확정되지 않으므로
-      -- 정상 경로 시험에는 선언이 있어야 한다.
+      -- Response profile — 2026-09-10 audit A7. Without a declaration nothing is confirmed, so
+      -- happy-path tests need one.
       ARRAY['licenseId'], 'found', 'false', 'error'
     )
   `;
@@ -395,7 +395,7 @@ export async function setupFixture(): Promise<TestFixture> {
   };
 }
 
-/** 테스트용 환경변수. dev auth를 켠 development 설정이다. */
+/** Test environment variables. Development config with dev auth enabled. */
 export function testEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -405,11 +405,11 @@ export function testEnv(overrides: Record<string, string> = {}): NodeJS.ProcessE
     SESSION_SECRET: "test-session-secret-at-least-32-chars",
     NODE_ENV: "test",
     /**
-     * 요청 상한을 넉넉히 둔다.
+     * Generous request cap.
      *
-     * 한 테스트 파일이 같은 IP로 수백 번 요청하므로 운영 기본값이면 상한에
-     * 걸린다. 상한 자체는 `rate-limit.test.ts`가 낮은 값으로 서버를 세워
-     * 따로 시험한다 — 여기서 끄면 그 동작이 어디서도 검증되지 않는다.
+     * One test file sends hundreds of requests from the same IP and would hit the production
+     * default. `rate-limit.test.ts` tests the cap separately with a low value — disabling it
+     * here would leave that behavior unverified anywhere.
      */
     RATE_LIMIT_MAX: "100000",
     AUTH_RATE_LIMIT_MAX: "100000",

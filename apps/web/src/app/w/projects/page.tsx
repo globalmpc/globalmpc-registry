@@ -44,8 +44,8 @@ export default function ProjectListPage() {
         <div>
           <h1>Projects</h1>
           <p className="sub">
-            {/* tenant 격리는 화면이 아니라 서버 RLS가 강제한다. 다른 tenant의
-                프로젝트는 목록에도 상세에도 나타나지 않는다. */}
+            {/* Tenant isolation is enforced by server RLS, not by the screen. Another tenant's
+                projects appear in neither the list nor the detail view. */}
             Only projects in the current tenant are listed. Isolation is decided by the server.
           </p>
         </div>
@@ -91,7 +91,7 @@ export default function ProjectListPage() {
                       {project.readinessSummary ? (
                         <ReadinessBadge status={project.readinessSummary as ReadinessStatus} />
                       ) : (
-                        // 평가가 아직 없는 것과 통과한 것을 같게 보이지 않게 한다.
+                        // Keep "not yet evaluated" from looking the same as "passed".
                         <span className="meta">Not assessed</span>
                       )}
                     </td>
@@ -105,8 +105,8 @@ export default function ProjectListPage() {
       ) : projects ? (
         <div className="panel">
           <p className="sub" style={{ margin: 0 }}>
-            {/* Empty와 권한 없음을 구분한다(§11.7). 권한 문제였다면 위에
-                ErrorNotice가 떴을 것이다. */}
+            {/* Distinguish Empty from no permission (§11.7). A permission problem would have
+                shown an ErrorNotice above. */}
             No projects are registered in this tenant. There is no data here; this is not a
             permission problem.
           </p>

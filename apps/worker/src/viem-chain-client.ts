@@ -13,14 +13,13 @@ import type { ChainClient, SubmitRootInput } from "./anchor-submitter.js";
 import type { Observation } from "./anchor-state.js";
 
 /**
- * viem으로 구현한 ChainClient.
+ * ChainClient implemented with viem.
  *
- * ABI는 `RegistryAnchorV1.submitRoot`의 시그니처만 갖는다. 전체 ABI를 들고 오면
- * 컨트랙트가 바뀔 때 이 파일도 따라 바뀌어야 하고, worker가 호출하지 않는 함수까지
- * 노출된다.
+ * The ABI holds only the `RegistryAnchorV1.submitRoot` signature. Importing the full ABI would
+ * force this file to change with every contract change and expose functions the worker never
+ * calls.
  *
- * **개인키는 이 모듈 밖으로 나가지 않는다.** 반환값·로그·오류 메시지 어디에도
- * 넣지 않는다.
+ * **The private key never leaves this module.** Not in return values, logs, or error messages.
  */
 
 export const SUBMIT_ROOT_ABI = [
@@ -50,8 +49,8 @@ export function createViemChainClient(options: ViemChainClientOptions): ChainCli
   const account = privateKeyToAccount(options.signerPrivateKey);
   const transport = http(options.rpcUrl);
 
-  // chain 객체를 직접 만든다. viem의 프리셋 체인 목록에 로컬 노드가 없고,
-  // 프리셋을 쓰면 RPC URL이 조용히 공개 엔드포인트로 바뀔 수 있다.
+  // Build the chain object by hand. viem's preset chain list has no local node, and a preset can
+  // silently swap the RPC URL for a public endpoint.
   const chain = {
     id: options.chainId,
     name: `chain-${options.chainId}`,
@@ -72,7 +71,7 @@ export function createViemChainClient(options: ViemChainClientOptions): ChainCli
         const fees = await publicClient.estimateFeesPerGas();
         return fees.maxFeePerGas ?? (await publicClient.getGasPrice());
       } catch {
-        // EIP-1559를 지원하지 않는 노드가 있다. legacy gas price로 떨어진다.
+        // Some nodes lack EIP-1559 support. Fall back to the legacy gas price.
         return publicClient.getGasPrice();
       }
     },
@@ -90,14 +89,14 @@ export function createViemChainClient(options: ViemChainClientOptions): ChainCli
         ],
       });
 
-      // 서명자가 Safe UI에서 본 것과 우리가 만든 것이 같은지 대조할 값이다.
-      // calldata 전체를 눈으로 비교하는 것은 실질적으로 불가능하다.
+      // Lets signers check that what they see in the Safe UI matches what we built. Comparing
+      // full calldata by eye is not practical.
       return { calldata, calldataHash: keccak256(calldata) };
     },
 
     async submitRoot(input: SubmitRootInput) {
-      // 시뮬레이션을 먼저 돌린다. 컨트랙트가 거절할 호출이면 가스를 쓰기 전에
-      // 알 수 있다 — revert 사유가 여기서 그대로 나온다.
+      // Simulate first. A call the contract would reject is caught before spending gas — the
+      // revert reason surfaces here as is.
       const { request } = await publicClient.simulateContract({
         address: options.contractAddress,
         abi: SUBMIT_ROOT_ABI,
@@ -123,14 +122,14 @@ export function createViemChainClient(options: ViemChainClientOptions): ChainCli
           status: receipt.status === "success" ? "success" : "reverted",
           blockNumber: Number(receipt.blockNumber),
           blockHash: receipt.blockHash.toLowerCase(),
-          // 일일 상한이 이 둘의 곱을 합산한다. bigint 그대로 넘긴다 —
-          // number로 좁히면 wei 단위에서 정밀도가 깨진다.
+          // The daily spend cap sums the product of these two. Passed as bigint — narrowing to
+          // number loses precision at wei scale.
           gasUsed: receipt.gasUsed,
           effectiveGasPrice: receipt.effectiveGasPrice,
         };
       } catch {
-        // 영수증이 없다 — 아직 mempool이거나 노드가 모른다. 두 경우를 여기서
-        // 구분하려면 트랜잭션 자체를 다시 조회해야 한다.
+        // No receipt — still in the mempool, or unknown to the node. Telling the two apart
+        // requires looking up the transaction itself.
         try {
           await publicClient.getTransaction({ hash: txHash as Hex });
           return { kind: "pending" };

@@ -16,11 +16,11 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 /**
  * Governance — spec 04 §4.5, 11 §11.3, OD-06.
  *
- * **투표 결과가 법적 승인이 아니다.** 이 화면이 가장 조심해야 하는 것은 통과한
- * 제안을 "승인됐다"로 읽게 만드는 것이다. 그래서 각 제안의 `limitations`를
- * 목록에서부터 함께 보여준다.
+ * **A vote result is not legal approval.** The main risk on this screen is making a passed
+ * proposal read as "approved". So each proposal's `limitations` are shown
+ * alongside it, starting in the list.
  *
- * 정족수 미달과 부결을 다른 문구로 표시한다 — 다음에 할 일이 다르다.
+ * No quorum and defeated get different wording — the next step differs.
  */
 export default function GovernancePage() {
   const { token, loading: sessionLoading, session } = useSession();
@@ -32,10 +32,10 @@ export default function GovernancePage() {
   const [rationale, setRationale] = useState("");
   const [weight, setWeight] = useState("100");
   /**
-   * 정족수의 분모 — 09 §9.6.
+   * Quorum denominator — 09 §9.6.
    *
-   * 토큰이 연결되지 않은 제안은 이 값 없이 투표를 열 수 없다. 던진 표의 합을
-   * 분모로 쓰면 정족수가 항상 통과하고 `no_quorum`이 나올 수 없다.
+   * A proposal with no linked token cannot open voting without this value. Using the sum of
+   * votes cast as the denominator always meets quorum, so `no_quorum` could never occur.
    */
   const [eligibleWeight, setEligibleWeight] = useState("");
   const [reason, setReason] = useState("");
@@ -97,7 +97,7 @@ export default function GovernancePage() {
 
       <div className="notice" style={{ color: "var(--alert)" }} data-testid="governance-boundary">
         <div className="title">What this decision does not create</div>
-        {/* 통과한 제안을 "승인됐다"로 읽는 것이 가장 위험한 오해다. */}
+        {/* Reading a passed proposal as "approved" is the most dangerous misreading. */}
         A vote creates no legal fact, no permit, and no contractual effect. Even when a proposal
         passes, execution is a separate act and does not happen automatically. It changes neither
         a reviewer’s standing nor the outcome of a review.
@@ -129,10 +129,10 @@ export default function GovernancePage() {
               placeholder="Total weight entitled to vote"
             />
             {/*
-              정족수의 분모 — 09 §9.6.
+              Quorum denominator — 09 §9.6.
 
-              던진 표의 합을 분모로 쓰면 정족수가 항상 통과한다. 토큰이
-              연결되면 스냅숏 블록의 총공급이 이 값을 대신한다.
+              Using the sum of votes cast as the denominator always meets quorum. Once a token
+              is linked, total supply at the snapshot block replaces this value.
             */}
             <p className="meta">
               The denominator for quorum, not the sum of votes cast. Once a governance token is
@@ -168,7 +168,7 @@ export default function GovernancePage() {
             Propose
           </button>
           <p className="meta" style={{ marginTop: 10 }}>
-            {/* 법적 사실·개인 자격·검토 결과는 투표로 만들어지지 않는다. */}
+            {/* Legal facts, individual credentials, and review results are not created by vote. */}
             Overriding readiness, approving legal issuance, and altering review content are not
             proposable. The server refuses them.
           </p>
@@ -213,15 +213,15 @@ export default function GovernancePage() {
                       abstain{" "}
                       {proposal.tally.abstainWeight}
                       <div className="meta">
-                        {/* 정족수 미달과 부결은 다음에 할 일이 다르다. */}
+                        {/* No quorum and defeated call for different next steps. */}
                         {proposal.tally.reason}
                       </div>
                     </td>
                     {/*
-                      무게가 어디서 왔는가 — 04 §4.5.
+                      Where the weight came from — 04 §4.5.
 
-                      수동 무게로 집계된 결과를 온체인 근거로 읽으면 안 된다.
-                      집계 옆에 두어 숫자와 함께 읽히게 한다.
+                      A tally from manual weights must not read as on-chain evidence.
+                      Placed next to the tally so it is read with the numbers.
                     */}
                     <td className="meta" data-testid={`weight-source-${proposal.id}`}>
                       {proposal.weightSource === "onchain_snapshot" ? (
@@ -237,11 +237,11 @@ export default function GovernancePage() {
                       )}
                     </td>
                     {/*
-                      정족수 — 09 §9.6.
+                      Quorum — 09 §9.6.
 
-                      비율만 보이면 무엇의 비율인지 알 수 없다. 분모와 그
-                      출처를 같이 둔다 — 사람이 넣은 분모로 계산된 정족수를
-                      온체인 근거로 읽으면 안 된다.
+                      A bare ratio does not say what it is a ratio of. Show the denominator
+                      and its source — a quorum computed from a person-entered denominator
+                      must not read as on-chain evidence.
                     */}
                     <td className="mono meta" data-testid={`quorum-${proposal.id}`}>
                       {proposal.quorum.numerator}/{proposal.quorum.denominator}
@@ -313,9 +313,9 @@ export default function GovernancePage() {
         )}
 
         {/*
-          스냅숏이 있는 제안이 하나라도 있으면 입력값이 그 제안에는 쓰이지
-          않는다. 서버가 무시하는 값을 편집 가능한 채로 두면 자기 무게를 정할 수
-          있다고 읽힌다.
+          If any proposal has a snapshot, the entered value is not used for
+          it. Leaving a value the server ignores editable reads as if you could set
+          your own weight.
         */}
         {canVote ? (
           <div className="field" style={{ marginTop: 14 }}>
@@ -327,7 +327,7 @@ export default function GovernancePage() {
               onChange={(event) => setWeight(event.target.value)}
             />
             <div className="meta">
-              {/* 토큰 무게는 18 decimals다. 문자열로 다뤄 정밀도를 지킨다. */}
+              {/* Token weight has 18 decimals. Handle it as a string to keep precision. */}
               An integer string. It is not used on proposals that have a snapshot — there the
               weight is the on-chain balance at the start of voting, and the server ignores this
               input.
@@ -351,11 +351,11 @@ export default function GovernancePage() {
 }
 
 /**
- * 다음에 갈 수 있는 상태.
+ * States reachable next.
  *
- * 마감(`succeeded`·`defeated`·`no_quorum`)은 **집계가 말하는 하나만** 보여준다.
- * 셋을 다 보여주면 표를 무시하고 고르는 것처럼 읽힌다 — 서버가 거절하지만
- * 화면이 그런 선택지를 제시할 이유가 없다.
+ * For closing (`succeeded`/`defeated`/`no_quorum`), show **only the one the tally indicates**.
+ * Showing all three reads as picking regardless of the votes — the server rejects that, but
+ * the screen has no reason to offer the choice.
  */
 function nextStates(proposal: GovernanceProposal): string[] {
   switch (proposal.state) {

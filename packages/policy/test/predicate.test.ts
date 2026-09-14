@@ -21,28 +21,28 @@ describe("evaluatePredicate", () => {
     expect(evaluatePredicate({ op: "never" }, FACTS)).toBe(false);
   });
 
-  it("eq는 스칼라를 비교한다", () => {
+  it("eq compares scalars", () => {
     expect(evaluatePredicate({ op: "eq", path: "stage", value: "exploration" }, FACTS)).toBe(true);
     expect(evaluatePredicate({ op: "eq", path: "stage", value: "production" }, FACTS)).toBe(false);
   });
 
-  it("eq는 배열이면 포함 여부를 본다", () => {
+  it("eq checks membership for arrays", () => {
     expect(evaluatePredicate({ op: "eq", path: "minerals", value: "gold" }, FACTS)).toBe(true);
     expect(evaluatePredicate({ op: "eq", path: "minerals", value: "silver" }, FACTS)).toBe(false);
   });
 
-  it("없는 경로는 false다 — 조용히 true가 되지 않는다", () => {
+  it("a missing path is false — never silently true", () => {
     expect(evaluatePredicate({ op: "eq", path: "missing", value: "x" }, FACTS)).toBe(false);
     expect(evaluatePredicate({ op: "exists", path: "missing" }, FACTS)).toBe(false);
     expect(evaluatePredicate({ op: "gte", path: "missing", value: "0" }, FACTS)).toBe(false);
   });
 
-  it("빈 배열은 exists가 아니다", () => {
+  it("an empty array does not satisfy exists", () => {
     expect(evaluatePredicate({ op: "exists", path: "emptyList" }, FACTS)).toBe(false);
     expect(evaluatePredicate({ op: "exists", path: "minerals" }, FACTS)).toBe(true);
   });
 
-  it("in은 교집합을 본다", () => {
+  it("in checks for intersection", () => {
     expect(
       evaluatePredicate({ op: "in", path: "minerals", values: ["silver", "gold"] }, FACTS),
     ).toBe(true);
@@ -54,14 +54,14 @@ describe("evaluatePredicate", () => {
     ).toBe(true);
   });
 
-  it("gte / lte는 정수 비교다", () => {
+  it("gte / lte compare integers", () => {
     expect(evaluatePredicate({ op: "gte", path: "ageDays", value: "180" }, FACTS)).toBe(true);
     expect(evaluatePredicate({ op: "gte", path: "ageDays", value: "181" }, FACTS)).toBe(false);
     expect(evaluatePredicate({ op: "lte", path: "ageDays", value: "180" }, FACTS)).toBe(true);
     expect(evaluatePredicate({ op: "lte", path: "ageDays", value: "179" }, FACTS)).toBe(false);
   });
 
-  it("큰 정수도 정확히 비교한다 — 배정밀도로 깨지지 않는다", () => {
+  it("compares large integers exactly — no double-precision loss", () => {
     const big: Facts = { supply: "10000000000000000000000000000" };
     expect(
       evaluatePredicate(
@@ -77,16 +77,16 @@ describe("evaluatePredicate", () => {
     ).toBe(false);
   });
 
-  it("정수가 아닌 값을 비교하면 거절한다", () => {
+  it("rejects comparison of non-integer values", () => {
     expect(() =>
       evaluatePredicate({ op: "gte", path: "stage", value: "0" }, FACTS),
     ).toThrowError(PredicateError);
   });
 
-  it("배열을 스칼라로 비교하면 거절한다", () => {
+  it("rejects scalar comparison of an array", () => {
     expect(() =>
       evaluatePredicate({ op: "gte", path: "minerals", value: "0" }, FACTS),
-    ).toThrowError(/배열이다/);
+    ).toThrowError(/is an array/);
   });
 
   it("and / or / not", () => {
@@ -121,7 +121,7 @@ describe("evaluatePredicate", () => {
 });
 
 describe("collectPredicatePaths", () => {
-  it("중첩 predicate의 모든 경로를 모은다", () => {
+  it("collects every path in a nested predicate", () => {
     const paths = collectPredicatePaths({
       op: "and",
       operands: [
@@ -134,23 +134,23 @@ describe("collectPredicatePaths", () => {
   });
 });
 
-describe("rule schema 검증", () => {
-  it("예시 rule set이 스키마를 통과한다", () => {
+describe("rule schema validation", () => {
+  it("the example rule set passes the schema", () => {
     const result = safeParseRuleSet(rulesFixture);
     expect(result.success).toBe(true);
   });
 
-  it("semver가 아닌 version을 거절한다", () => {
+  it("rejects a non-semver version", () => {
     const result = safeParseRuleSet({ ...rulesFixture, version: "1.0" });
     expect(result.success).toBe(false);
   });
 
-  it("requirement가 없는 rule set을 거절한다", () => {
+  it("rejects a rule set with no requirements", () => {
     const result = safeParseRuleSet({ ...rulesFixture, requirements: [] });
     expect(result.success).toBe(false);
   });
 
-  it("requirementId 중복을 거절한다", () => {
+  it("rejects duplicate requirementIds", () => {
     const duplicated = {
       ...rulesFixture,
       requirements: [rulesFixture.requirements[0], rulesFixture.requirements[0]],
@@ -159,7 +159,7 @@ describe("rule schema 검증", () => {
     expect(result.success).toBe(false);
   });
 
-  it("알 수 없는 predicate 연산자를 거절한다", () => {
+  it("rejects an unknown predicate operator", () => {
     const bad = {
       ...rulesFixture,
       requirements: [
@@ -172,7 +172,7 @@ describe("rule schema 검증", () => {
     expect(safeParseRuleSet(bad).success).toBe(false);
   });
 
-  it("정수가 아닌 freshness threshold를 거절한다", () => {
+  it("rejects a non-integer freshness threshold", () => {
     const bad = {
       ...rulesFixture,
       requirements: [{ ...rulesFixture.requirements[0], freshnessThresholdDays: "30.5" }],
@@ -180,7 +180,7 @@ describe("rule schema 검증", () => {
     expect(safeParseRuleSet(bad).success).toBe(false);
   });
 
-  it("알 수 없는 attestation type을 거절한다", () => {
+  it("rejects an unknown attestation type", () => {
     const bad = {
       ...rulesFixture,
       requirements: [

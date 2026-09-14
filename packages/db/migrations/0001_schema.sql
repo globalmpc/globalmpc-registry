@@ -1,12 +1,12 @@
--- MPC dApp — 초기 스키마
+-- MPC dApp — initial schema
 --
--- 설계 근거: spec 04(도메인·상태), 05(데이터·Registry), 02(권한).
--- ADR-T03: PostgreSQL 단일 데이터 플레인. ADR-T04: Drizzle(SQL-first).
+-- Design basis: spec 04 (domain, state), 05 (data, Registry), 02 (authorization).
+-- ADR-T03: single PostgreSQL data plane. ADR-T04: Drizzle (SQL-first).
 --
--- 스키마 분리:
---   core  — 도메인 엔터티. app role이 읽고 쓴다.
---   chain — anchor batch·트랜잭션·inclusion proof.
---   audit — mutation 이력. app role은 INSERT만 할 수 있다(0003에서 강제).
+-- Schema split:
+--   core  — domain entities. The app role reads and writes.
+--   chain — anchor batches, transactions, inclusion proofs.
+--   audit — mutation history. The app role can only INSERT (enforced in 0003).
 
 CREATE SCHEMA IF NOT EXISTS core;
 CREATE SCHEMA IF NOT EXISTS chain;
@@ -15,9 +15,9 @@ CREATE SCHEMA IF NOT EXISTS audit;
 -- ---------------------------------------------------------------------------
 -- Enum
 --
--- 13 §13.13: canonical source result enum은 정확히 12개이며 API·event·UI·fixture가
--- 임의로 합치거나 별칭을 만들 수 없다. CHECK 제약이나 text가 아니라 DB enum으로
--- 고정해 애플리케이션 밖에서도 위반이 불가능하게 한다.
+-- 13 §13.13: the canonical source result enum has exactly 12 values; API, events, UI, and
+-- fixtures cannot merge them or add aliases. Fixed as a DB enum, not a CHECK constraint or
+-- text, so violations are impossible even outside the application.
 -- ---------------------------------------------------------------------------
 
 CREATE TYPE core.source_result AS ENUM (
@@ -171,8 +171,8 @@ CREATE TYPE chain.transaction_state AS ENUM (
 -- Identity & Tenancy
 --
 -- 02 §2.9: authentication / identity binding / credential / role binding /
--- assignment / authorization은 서로 다른 record다. user 행에 role 컬럼을 두지
--- 않는다.
+-- Assignment and authorization are separate records. The user row has no role
+-- column.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE core.tenants (
@@ -201,8 +201,8 @@ CREATE TABLE core.subjects (
   version     INTEGER NOT NULL DEFAULT 1
 );
 
--- wallet은 로그인 수단이다. 이것만으로 부여되는 권한은 public read와 governance
--- 참여뿐이다(OD-04).
+-- A wallet is a login method. On its own it grants only public read and governance
+-- participation (OD-04).
 CREATE TABLE core.wallet_identities (
   id              UUID PRIMARY KEY,
   tenant_id       UUID NOT NULL REFERENCES core.tenants(id),
@@ -217,8 +217,8 @@ CREATE TABLE core.wallet_identities (
   UNIQUE (wallet_address, chain_id)
 );
 
--- key 분실 복구(AC-27): 기존 key를 disable하고 새 key를 binding한다.
--- 과거 서명은 wallet 상태와 무관하게 보존된다.
+-- Lost-key recovery (AC-27): disable the old key and bind a new one.
+-- Past signatures are preserved regardless of wallet state.
 CREATE INDEX wallet_identities_subject_idx ON core.wallet_identities (subject_id)
   WHERE disabled_at IS NULL;
 
@@ -266,7 +266,7 @@ CREATE TABLE core.projects (
   reference_status      TEXT NOT NULL DEFAULT 'none'
                           CHECK (reference_status IN ('none','official_reference')),
   lifecycle_state       core.at_lifecycle_state NOT NULL DEFAULT 'draft',
-  -- suspension 복귀 대상(§4.3). suspended가 아니면 NULL이다.
+  -- State to return to after suspension (§4.3). NULL unless suspended.
   prior_lifecycle_state core.at_lifecycle_state,
   owner_organization_id UUID NOT NULL REFERENCES core.organizations(id),
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -278,8 +278,8 @@ CREATE TABLE core.projects (
   )
 );
 
--- 04 §4.2: 미확인 필드는 nullable text가 아니라 confirmed/pending/rejected/
--- not_applicable + evidence reference로 관리한다.
+-- 04 §4.2: unconfirmed fields are tracked as confirmed/pending/rejected/
+-- not_applicable + evidence reference, not as nullable text.
 CREATE TABLE core.project_facts (
   id            UUID PRIMARY KEY,
   tenant_id     UUID NOT NULL REFERENCES core.tenants(id),
@@ -302,7 +302,7 @@ CREATE TABLE core.authorities (
   tenant_id              UUID NOT NULL REFERENCES core.tenants(id),
   name                   TEXT NOT NULL,
   jurisdiction           TEXT NOT NULL,
-  -- 05 §5.11: 각 AuthoritySource는 proves / does_not_prove를 함께 가진다.
+  -- 05 §5.11: every AuthoritySource carries both proves and does_not_prove.
   proves                 TEXT[] NOT NULL,
   does_not_prove         TEXT[] NOT NULL,
   recognized_scope       TEXT[] NOT NULL,
@@ -329,7 +329,7 @@ CREATE TABLE core.source_connections (
   connection_key    TEXT NOT NULL,
   collection_method core.collection_method NOT NULL,
   access_basis      TEXT NOT NULL,
-  -- API secret·token·private key는 저장하지 않는다. reference만 둔다(05 §5.12).
+  -- API secrets, tokens, and private keys are never stored. Only references (05 §5.12).
   secret_reference  TEXT,
   state             core.source_connection_state NOT NULL DEFAULT 'planned',
   last_success_at   TIMESTAMPTZ,
@@ -379,8 +379,8 @@ CREATE TABLE core.artifacts (
   tenant_id       UUID NOT NULL REFERENCES core.tenants(id),
   project_id      UUID NOT NULL REFERENCES core.projects(id),
   kind            core.artifact_kind NOT NULL,
-  -- 불변조건 17: raw source, normalized fact, interpretation은 서로 다른
-  -- immutable version이다. 같은 행을 덮어쓰지 않는다.
+  -- Invariant 17: raw source, normalized fact, and interpretation are separate
+  -- immutable versions. Rows are never overwritten.
   content_hash    TEXT NOT NULL CHECK (content_hash ~ '^0x[0-9a-f]{64}$'),
   object_key      TEXT,
   source_receipt_id UUID REFERENCES core.source_receipts(id),
@@ -398,7 +398,7 @@ CREATE TABLE core.claims (
   tenant_id         UUID NOT NULL REFERENCES core.tenants(id),
   project_id        UUID NOT NULL REFERENCES core.projects(id),
   claim_type        TEXT NOT NULL,
-  -- 수치는 decimal string + 단위 + 기준일로 저장한다(ADR-T07, 05 §5.9).
+  -- Numbers are stored as decimal string + unit + as-of date (ADR-T07, 05 §5.9).
   value_text        TEXT NOT NULL,
   unit              TEXT,
   as_of             DATE,
@@ -413,7 +413,7 @@ CREATE TABLE core.claims (
 
 CREATE INDEX claims_project_type_idx ON core.claims (project_id, claim_type);
 
--- 05 §5.5: lineage는 adjacency edge + recursive CTE로 시작한다(ADR-T03).
+-- 05 §5.5: lineage starts as adjacency edges + recursive CTE (ADR-T03).
 CREATE TABLE core.lineage_edges (
   id            UUID PRIMARY KEY,
   tenant_id     UUID NOT NULL REFERENCES core.tenants(id),
@@ -476,8 +476,8 @@ CREATE TABLE core.assignments (
   case_id           UUID NOT NULL REFERENCES core.verification_cases(id),
   subject_id        UUID NOT NULL REFERENCES core.subjects(id),
   credential_id     UUID NOT NULL REFERENCES core.credentials(id),
-  -- 02 §2.4 규칙 1·2: 제출자는 같은 evidence의 independent assurer가 될 수 없고,
-  -- operator와 assigned reviewer는 동일 조직·지배 관계가 될 수 없다.
+  -- 02 §2.4 rules 1·2: a submitter cannot be an independent assurer of the same evidence,
+  -- and the operator and assigned reviewer cannot share an organization or control relationship.
   independence_reviewed BOOLEAN NOT NULL DEFAULT false,
   conflict_status   TEXT NOT NULL DEFAULT 'none'
                       CHECK (conflict_status IN ('none','disclosed_resolved','unresolved')),
@@ -497,11 +497,11 @@ CREATE TABLE core.verification_attestations (
   evidence_snapshot_hash    TEXT NOT NULL CHECK (evidence_snapshot_hash ~ '^0x[0-9a-f]{64}$'),
   findings                  JSONB NOT NULL DEFAULT '[]'::jsonb,
   citations                 JSONB NOT NULL DEFAULT '[]'::jsonb,
-  -- AC-01: limitations는 빈 문자열을 허용하지 않는다. 애플리케이션 검증에만
-  -- 의존하지 않고 DB 제약으로 고정한다.
+  -- AC-01: limitations cannot be an empty string. Enforced by a DB constraint, not
+  -- only by application validation.
   limitations               TEXT NOT NULL CHECK (btrim(limitations) <> ''),
-  -- AC-17: 서명 당시 credential 상태를 보존한다. 현재 상태가 바뀌어도 이 값은
-  -- 변하지 않는다.
+  -- AC-17: preserves the credential state at signing time. This value does not change
+  -- when the current state changes.
   credential_status_snapshot JSONB NOT NULL,
   method_version            TEXT NOT NULL,
   policy_version            TEXT NOT NULL,
@@ -541,8 +541,8 @@ CREATE TABLE core.compliance_policy_sets (
   UNIQUE (tenant_id, rule_set_id, rule_set_version)
 );
 
--- 07 §7.2: readiness 결과를 PATCH하는 경로가 없다. UPDATE 트리거로도 막는다
--- (0003_guards.sql). 재계산은 새 행이다.
+-- 07 §7.2: there is no path to PATCH a readiness result. An UPDATE trigger also blocks it
+-- (0003_guards.sql). A recalculation is a new row.
 CREATE TABLE core.compliance_assessments (
   id                   UUID PRIMARY KEY,
   tenant_id            UUID NOT NULL REFERENCES core.tenants(id),
@@ -553,7 +553,7 @@ CREATE TABLE core.compliance_assessments (
   evaluated_as_of      TIMESTAMPTZ NOT NULL,
   status               core.readiness_status NOT NULL,
   requirement_results  JSONB NOT NULL,
-  -- AC-11: 같은 (input_snapshot_hash, policy_set_id)는 같은 결과 해시를 만든다.
+  -- AC-11: the same (input_snapshot_hash, policy_set_id) yields the same result hash.
   canonical_result_hash TEXT NOT NULL CHECK (canonical_result_hash ~ '^0x[0-9a-f]{64}$'),
   generated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -566,7 +566,7 @@ CREATE TABLE core.gate_decisions (
   project_id             UUID NOT NULL REFERENCES core.projects(id),
   gate_id                TEXT NOT NULL,
   decision               core.gate_decision_value NOT NULL,
-  -- 사람의 결정은 반드시 평가를 입력으로 가진다(§4.2).
+  -- A human decision always takes an assessment as input (§4.2).
   input_assessment_id    UUID NOT NULL REFERENCES core.compliance_assessments(id),
   evidence_snapshot_hash TEXT NOT NULL CHECK (evidence_snapshot_hash ~ '^0x[0-9a-f]{64}$'),
   decision_authority     TEXT NOT NULL,
@@ -599,7 +599,7 @@ CREATE TABLE core.registry_entry_versions (
   entry_id             UUID NOT NULL REFERENCES core.registry_entries(id),
   version              INTEGER NOT NULL,
   status               core.registry_entry_status NOT NULL DEFAULT 'draft',
-  -- disclosure allowlist를 통과한 projection만 들어간다(05 §5.7).
+  -- Only projections that pass the disclosure allowlist go here (05 §5.7).
   public_projection    JSONB,
   content_hash         TEXT CHECK (content_hash ~ '^0x[0-9a-f]{64}$'),
   source_snapshot_hash TEXT NOT NULL CHECK (source_snapshot_hash ~ '^0x[0-9a-f]{64}$'),
@@ -672,13 +672,13 @@ CREATE TABLE chain.transactions (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   version           INTEGER NOT NULL DEFAULT 1,
-  -- 같은 논리 intent는 하나의 활성 트랜잭션만 갖는다(§7.7).
+  -- One logical intent has at most one active transaction (§7.7).
   UNIQUE (intent_key, chain_id)
 );
 
 -- ---------------------------------------------------------------------------
 -- Outbox / Inbox / Idempotency
--- 07 §7.5: 도메인 transaction과 outbox insert를 같은 transaction에서 처리한다.
+-- 07 §7.5: the domain transaction and the outbox insert run in the same transaction.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE core.outbox (
@@ -717,8 +717,8 @@ CREATE TABLE core.idempotency_keys (
 
 -- ---------------------------------------------------------------------------
 -- Audit
--- 02 §2.7: 모든 mutation은 actor·effective role·before/after version·reason·
--- correlation ID를 남긴다. append-only이며 application admin도 삭제할 수 없다.
+-- 02 §2.7: every mutation records actor, effective role, before/after version, reason, and
+-- correlation ID. Append-only; not even an application admin can delete.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE audit.events (

@@ -79,10 +79,11 @@ import {
 } from "./auth.js";
 
 /**
- * Route 정의 — spec 07 §7.2.
+ * Route definitions — spec 07 §7.2.
  *
- * 여기 없는 경로는 존재하지 않는다. 특히 readiness 결과를 수정하는 경로가
- * 없는 것이 통제다(REQ-DAPP-017) — 권한으로 막는 것이 아니라 만들지 않는다.
+ * A path not listed here does not exist. In particular, the absence of any path
+ * that modifies a readiness result is the control (REQ-DAPP-017) — it is not
+ * blocked by permissions; it is never built.
  */
 
 export interface RouteDefinition {
@@ -90,42 +91,44 @@ export interface RouteDefinition {
   readonly path: string;
   readonly summary: string;
   readonly operationId: string;
-  /** 무인증 공개 route인가(§7.1). */
+  /** Whether this is an unauthenticated public route (§7.1). */
   readonly public: boolean;
-  /** mutation이면 Idempotency-Key가 필수다. */
+  /** Mutations require Idempotency-Key. */
   readonly mutation: boolean;
-  /** versioned resource mutation이면 If-Match가 필수다. */
+  /** Versioned resource mutations require If-Match. */
   readonly requiresIfMatch: boolean;
   readonly action: string | null;
   /**
-   * 이 route가 실제로 구현됐는가.
+   * Whether this route is actually implemented.
    *
-   * 계약은 목표 API를 담고 구현은 그것을 따라간다. 두 상태를 구분하지 않으면
-   * "계약에 있으니 있겠지"라고 믿게 되고, 반대로 구현만 있고 계약에 없는
-   * route가 조용히 늘어난다. `apps/api`의 parity 테스트가 이 플래그를 기준으로
-   * 양방향 드리프트를 잡는다.
+   * The contract holds the target API and the implementation follows it. Without
+   * distinguishing the two, people assume "it's in the contract, so it exists",
+   * and conversely routes that are implemented but not in the contract quietly
+   * accumulate. The parity test in `apps/api` uses this flag to catch drift in
+   * both directions.
    */
   readonly implemented: boolean;
-  /** 구현 예정 release. `implemented: false`일 때만 의미가 있다. */
+  /** Planned release. Meaningful only when `implemented: false`. */
   readonly plannedRelease?: "R1" | "R2" | "R3" | "R6";
   readonly requestSchema?: z.ZodTypeAny;
   /**
-   * query string 계약.
+   * Query string contract.
    *
-   * 페이지네이션·정렬·필터는 body가 없는 GET에 붙으므로 `requestSchema`로는
-   * 표현되지 않는다. 계약에 두지 않으면 OpenAPI에도 나타나지 않고, 그러면
-   * 클라이언트가 무엇을 보낼 수 있는지 코드를 읽어야 안다.
+   * Pagination, sorting, and filters attach to body-less GETs, so `requestSchema`
+   * cannot express them. Left out of the contract, they would not appear in
+   * OpenAPI either, and clients would have to read code to learn what they can
+   * send.
    */
   readonly querySchema?: z.ZodTypeAny;
   readonly responseSchema: z.ZodTypeAny;
 }
 
 export const ROUTES: readonly RouteDefinition[] = [
-  // --- 인증 ---------------------------------------------------------------
+  // --- Auth ---------------------------------------------------------------
   {
     method: "post",
     path: "/api/v1/auth/siwe/nonce",
-    summary: "SIWE 로그인 challenge nonce 발급",
+    summary: "Issue a SIWE login challenge nonce",
     operationId: "createSiweNonce",
     public: true,
     mutation: false,
@@ -138,7 +141,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/auth/siwe/verify",
-    summary: "SIWE 서명 검증 후 세션 발급",
+    summary: "Verify a SIWE signature and issue a session",
     operationId: "verifySiweSignature",
     public: true,
     mutation: false,
@@ -151,7 +154,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/auth/logout",
-    summary: "세션 토큰 폐기 — 즉시 무효가 된다",
+    summary: "Revoke the session token — invalid immediately",
     operationId: "logout",
     public: false,
     mutation: false,
@@ -163,7 +166,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/auth/session",
-    summary: "현재 identity·role·assurance level 조회",
+    summary: "Get the current identity, roles, and assurance level",
     operationId: "getSession",
     public: false,
     mutation: false,
@@ -177,7 +180,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/projects",
-    summary: "프로젝트 등록",
+    summary: "Register a project",
     operationId: "createProject",
     public: false,
     mutation: true,
@@ -190,7 +193,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/projects",
-    summary: "현재 tenant의 프로젝트 목록",
+    summary: "List projects in the current tenant",
     operationId: "listProjects",
     public: false,
     mutation: false,
@@ -202,7 +205,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/projects/{projectId}",
-    summary: "프로젝트 조회",
+    summary: "Get a project",
     operationId: "getProject",
     public: false,
     mutation: false,
@@ -216,7 +219,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/projects/{projectId}/source-receipts",
-    summary: "Source Receipt 목록",
+    summary: "List Source Receipts",
     operationId: "listSourceReceipts",
     public: false,
     mutation: false,
@@ -228,7 +231,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/projects/{projectId}/claims",
-    summary: "claim 목록",
+    summary: "List claims",
     operationId: "listClaims",
     public: false,
     mutation: false,
@@ -241,7 +244,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/projects/{projectId}/source-receipts",
-    summary: "Source Receipt 등록 — API·문서·수동 확인이 같은 envelope를 쓴다",
+    summary: "Register a Source Receipt — API, document, and manual check share one envelope",
     operationId: "createSourceReceipt",
     public: false,
     mutation: true,
@@ -253,7 +256,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/projects/{projectId}/claims",
-    summary: "claim 등록 — grade는 도메인 규칙이 계산한다",
+    summary: "Register a claim — domain rules compute the grade",
     operationId: "createClaim",
     public: false,
     mutation: true,
@@ -265,37 +268,37 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/claims/{claimId}/conflicts",
-    summary: "claim conflict 기록 — grade를 즉시 재계산한다",
+    summary: "Record a claim conflict — recomputes the grade immediately",
     operationId: "createClaimConflict",
     public: false,
     mutation: true,
-    // grade 재계산이 claim version을 올린다. 동시 기록에서 한쪽 판단이 조용히
-    // 덮이지 않게 어느 버전을 보고 기록하는지 밝혀야 한다.
+    // Grade recomputation bumps the claim version. The caller must state which
+    // version it saw so concurrent writes cannot silently overwrite a judgment.
     requiresIfMatch: true,
     action: "claim.curate",
     implemented: true,
     responseSchema: claim,
   },
 
-  // --- 업로드 --------------------------------------------------------------
+  // --- Uploads --------------------------------------------------------------
   {
     method: "get",
     path: "/api/v1/projects/{projectId}/uploads",
-    summary: "업로드 목록 — 검사기가 살아 있는지도 함께 말한다",
+    summary: "List uploads — also reports whether the scanner is alive",
     operationId: "listUploads",
     public: false,
     mutation: false,
     requiresIfMatch: false,
     action: null,
     implemented: true,
-    // `items`와 `scanner`를 함께 낸다. 목록만 보면 "대기"와 "검사할 사람이
-    // 없음"이 같아 보인다.
+    // Returns `items` and `scanner` together. From the list alone, "waiting" and
+    // "nobody to scan" look the same.
     responseSchema: z.object({ items: objectUpload.array(), scanner: scannerStatus }),
   },
   {
     method: "post",
     path: "/api/v1/projects/{projectId}/uploads",
-    summary: "파일 업로드 — quarantine으로 먼저 들어간다",
+    summary: "Upload a file — lands in quarantine first",
     operationId: "createUpload",
     public: false,
     mutation: true,
@@ -307,7 +310,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/projects/{projectId}/uploads/stream",
-    summary: "파일 업로드 (multipart) — 대용량을 메모리에 올리지 않는다",
+    summary: "Upload a file (multipart) — large files are not buffered in memory",
     operationId: "createUploadStream",
     public: false,
     mutation: true,
@@ -319,12 +322,12 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/uploads/{uploadId}/scan-result",
-    summary: "검사 결과 기록 — 검사 서비스가 호출한다. 감염 판정은 되돌릴 수 없다",
+    summary: "Record a scan result — called by the scan service; an infected verdict is irreversible",
     operationId: "recordScanResult",
     public: false,
     mutation: true,
     requiresIfMatch: true,
-    // 올린 사람이 자기 파일을 통과시킬 수 없게 별도 action을 쓴다.
+    // Uses a separate action so uploaders cannot pass their own files.
     action: "upload.scan_result",
     implemented: true,
     responseSchema: objectUpload,
@@ -332,7 +335,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/uploads/{uploadId}/promote",
-    summary: "evidence 승격 — 검사를 통과한 것만 간다",
+    summary: "Promote to evidence — only scanned-clean uploads qualify",
     operationId: "promoteUpload",
     public: false,
     mutation: true,
@@ -344,7 +347,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/uploads/{uploadId}/download-link",
-    summary: "단기 다운로드 링크 — 영구 URL을 만들지 않는다",
+    summary: "Short-lived download link — no permanent URL is created",
     operationId: "createUploadDownloadLink",
     public: false,
     mutation: true,
@@ -358,7 +361,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/projects/{projectId}/verification-cases",
-    summary: "검토 case 목록 — 배정된 검토자가 자기 case를 찾는 경로",
+    summary: "List review cases — how assigned reviewers find their cases",
     operationId: "listVerificationCases",
     public: false,
     mutation: false,
@@ -370,12 +373,12 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/verification-cases/{caseId}/transitions",
-    summary: "검토 case 상태 전이 — 보완 요청·반려·취소를 기록한다",
+    summary: "Transition a review case — records change requests, declines, and cancellations",
     operationId: "transitionVerificationCase",
     public: false,
     mutation: true,
-    // 상태는 case의 version이 아니라 state 자체가 바뀐다. 같은 case에 두 사람이
-    // 동시에 다른 결정을 기록하면 하나가 조용히 사라진다.
+    // The state itself changes, not just the case version. If two people record
+    // different decisions on one case concurrently, one silently disappears.
     requiresIfMatch: true,
     action: "claim.curate",
     implemented: true,
@@ -385,7 +388,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/attestations/{attestationId}/disputes",
-    summary: "서명된 attestation에 이의 제기 — 서명을 지우지 않고 상태를 추가한다",
+    summary: "Dispute a signed attestation — adds a state without erasing the signature",
     operationId: "disputeAttestation",
     public: false,
     mutation: true,
@@ -398,7 +401,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/attestations/{attestationId}/disputes",
-    summary: "이의 목록 — 해소된 것도 함께 보인다",
+    summary: "List disputes — resolved ones included",
     operationId: "listDisputes",
     public: false,
     mutation: false,
@@ -410,7 +413,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/disputes/{disputeId}/resolution",
-    summary: "이의 해소 — 기록을 지우지 않고 결과를 덧붙인다",
+    summary: "Resolve a dispute — appends the outcome without erasing the record",
     operationId: "resolveDispute",
     public: false,
     mutation: true,
@@ -423,7 +426,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/verification-cases/{caseId}/attestations",
-    summary: "attestation 초안 생성 (서명 전)",
+    summary: "Create an attestation draft (before signing)",
     operationId: "createAttestation",
     public: false,
     mutation: true,
@@ -436,7 +439,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/attestations/{attestationId}/signature-requests",
-    summary: "EIP-712 서명 요청 생성 — 서버는 대리 서명하지 않는다",
+    summary: "Create an EIP-712 signature request — the server never signs on your behalf",
     operationId: "createSignatureRequest",
     public: false,
     mutation: true,
@@ -448,7 +451,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/attestations/{attestationId}/signatures",
-    summary: "사용자 key로 만든 서명 제출 — 서버는 재계산·검증만 한다",
+    summary: "Submit a signature made with the user's key — the server only recomputes and verifies",
     operationId: "submitAttestationSignature",
     public: false,
     mutation: true,
@@ -462,7 +465,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/verification-cases",
-    summary: "Verification Case 생성 — evidence snapshot을 고정한다",
+    summary: "Create a Verification Case — freezes the evidence snapshot",
     operationId: "createVerificationCase",
     public: false,
     mutation: true,
@@ -474,11 +477,11 @@ export const ROUTES: readonly RouteDefinition[] = [
 
   // --- Readiness / Decision -----------------------------------------------
   //
-  // readiness를 PATCH하는 경로는 존재하지 않는다. 재계산만 가능하다(§7.2).
+  // No path PATCHes readiness. Only recomputation is possible (§7.2).
   {
     method: "post",
     path: "/api/v1/projects/{projectId}/readiness-assessments",
-    summary: "readiness 재계산 — 기존 결과를 수정하지 않고 새 assessment를 만든다",
+    summary: "Recompute readiness — creates a new assessment without modifying existing results",
     operationId: "createReadinessAssessment",
     public: false,
     mutation: true,
@@ -490,7 +493,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/readiness-assessments/{assessmentId}",
-    summary: "readiness 조회",
+    summary: "Get a readiness assessment",
     operationId: "getReadinessAssessment",
     public: false,
     mutation: false,
@@ -502,7 +505,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/projects/{projectId}/gate-decisions",
-    summary: "사람의 gate 결정 기록",
+    summary: "Record a human gate decision",
     operationId: "createGateDecision",
     public: false,
     mutation: true,
@@ -517,7 +520,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/registry-entries",
-    summary: "공개 승인된 version 게시 — allowlist 밖 필드를 거절한다",
+    summary: "Publish a version approved for disclosure — rejects fields outside the allowlist",
     operationId: "publishRegistryVersion",
     public: false,
     mutation: true,
@@ -529,11 +532,11 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/registry-entries/{entryId}/revoke",
-    summary: "게시 철회 — 기존 version을 삭제하지 않고 새 상태를 추가한다",
+    summary: "Revoke a publication — adds a new state without deleting existing versions",
     operationId: "revokeRegistryVersion",
     public: false,
     mutation: true,
-    // 조회 이후 새 version이 게시됐을 수 있다. 의도한 version을 밝힌다.
+    // A new version may have been published since the read. State the intended version.
     requiresIfMatch: true,
     action: "registry.revoke",
     implemented: true,
@@ -543,7 +546,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/anchor-batches",
-    summary: "anchor batch 체인 상태 — included와 confirmed를 구분해 보여준다",
+    summary: "Anchor batch chain status — shows included and confirmed separately",
     operationId: "listAnchorBatches",
     public: false,
     mutation: false,
@@ -555,7 +558,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/anchor-batches",
-    summary: "Merkle batch 생성 — 게시된 version만 포함한다",
+    summary: "Create a Merkle batch — includes only published versions",
     operationId: "createAnchorBatch",
     public: false,
     mutation: true,
@@ -568,7 +571,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/anchor-batches/{batchId}/resubmit",
-    summary: "멈춘 anchor batch 재제출 — 자동이 아니라 사람이 판단한다",
+    summary: "Resubmit a stuck anchor batch — a human decides, not automation",
     operationId: "resubmitAnchorBatch",
     public: false,
     mutation: true,
@@ -581,7 +584,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/source-receipts/{receiptId}/second-review",
-    summary: "수동 확인의 두 번째 검토 — 처음 확인한 사람은 할 수 없다",
+    summary: "Second review of a manual check — not by the person who did the first check",
     operationId: "recordSecondReview",
     public: false,
     mutation: true,
@@ -595,7 +598,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/projects/{projectId}/stale-signals",
-    summary: "근거가 흔들린 산출물 — 열린 신호와 처리된 신호를 함께 본다",
+    summary: "Outputs with shaken evidence — open and resolved signals together",
     operationId: "listStaleSignals",
     public: false,
     mutation: false,
@@ -607,7 +610,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/stale-signals/{signalId}/resolve",
-    summary: "신호 종결 — 공개 기록을 내리는 판정은 자동화하지 않는다",
+    summary: "Resolve a signal — taking down a public record is never automated",
     operationId: "resolveStaleSignal",
     public: false,
     mutation: true,
@@ -620,12 +623,13 @@ export const ROUTES: readonly RouteDefinition[] = [
 
   // --- Asset/Offering gate (R6, OD-07) --------------------------------------
   //
-  // 거래 route가 없다. 조건 판정만 있다 — 미승인 규제 기능은 flag 뒤에 있어도
-  // 코드·보안·운영 책임과 오활성화 위험을 만든다.
+  // There are no trading routes, only condition checks — an unapproved regulated
+  // feature, even behind a flag, creates code, security, and operational
+  // liability and a risk of accidental activation.
   {
     method: "get",
     path: "/api/v1/projects/{projectId}/lifecycle",
-    summary: "lifecycle 상태와 지나온 경로 — 멈췄다 돌아온 것과 멈춘 적 없는 것은 다르다",
+    summary: "Lifecycle state and history — resumed-after-suspension differs from never suspended",
     operationId: "getProjectLifecycle",
     public: false,
     mutation: false,
@@ -637,13 +641,13 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/projects/{projectId}/lifecycle-transitions",
-    summary: "lifecycle 전이 — suspend는 1인, 복귀는 멈춘 사람이 못 한다",
+    summary: "Lifecycle transition — suspend needs one person; the suspender cannot resume",
     operationId: "transitionProjectLifecycle",
     public: false,
     mutation: true,
     requiresIfMatch: true,
-    // 실제 판정은 두 action으로 갈린다. 계약에는 더 넓은 쪽을 적고 route가
-    // `toState`를 보고 고른다 — 04 §4.3의 비대칭이 여기 있다.
+    // The actual check splits into two actions. The contract lists the broader
+    // one and the route picks by `toState` — the asymmetry of 04 §4.3 lives here.
     action: "project.lifecycle.advance",
     implemented: true,
     requestSchema: projectLifecycleTransitionRequest,
@@ -652,7 +656,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/projects/{projectId}/offering-gate",
-    summary: "자산·청약 활성화 조건 — 남은 것과 담당을 반환한다",
+    summary: "Asset/offering activation conditions — returns what remains and who owns it",
     operationId: "getOfferingGate",
     public: false,
     mutation: false,
@@ -666,7 +670,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/authorities",
-    summary: "Authority 목록 — 확인하지 않는 것과 연동 상태를 함께 반환한다",
+    summary: "List authorities — includes what each does not prove and its connection status",
     operationId: "listAuthorities",
     public: false,
     mutation: false,
@@ -675,12 +679,13 @@ export const ROUTES: readonly RouteDefinition[] = [
     implemented: true,
     responseSchema: authorityEntry.array(),
   },
-  // 등록과 승인이 다른 action이다 — 02 §2.8은 운영자 단독 `accepted` 전환을
-  // 금지한다. 같은 route에 넣으면 그 분리를 권한으로 표현할 수 없다.
+  // Registration and approval are separate actions — 02 §2.8 forbids
+  // operator-only `accepted` transitions. One route could not express that
+  // separation as a permission.
   {
     method: "post",
     path: "/api/v1/authorities",
-    summary: "Authority 후보 등록 — 항상 proposed에서 시작한다",
+    summary: "Register an authority candidate — always starts at proposed",
     operationId: "registerAuthority",
     public: false,
     mutation: true,
@@ -693,7 +698,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "patch",
     path: "/api/v1/authorities/{authorityId}",
-    summary: "Authority 갱신 — 변경마다 이력이 남는다",
+    summary: "Update an authority — every change is recorded in history",
     operationId: "updateAuthority",
     public: false,
     mutation: true,
@@ -706,7 +711,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/authorities/{authorityId}/state",
-    summary: "Authority 상태 전환 — 등록한 사람은 승인할 수 없다",
+    summary: "Transition authority state — the registrant cannot approve",
     operationId: "decideAuthorityState",
     public: false,
     mutation: true,
@@ -719,7 +724,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/authorities/{authorityId}/versions",
-    summary: "Authority 이력 — 그때 무엇을 확인해 준다고 했는지",
+    summary: "Authority history — what it claimed to prove at each point",
     operationId: "listAuthorityVersions",
     public: false,
     mutation: false,
@@ -731,7 +736,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/authorities/{authorityId}/connections",
-    summary: "연동 목록 — 자격증명 값은 반환하지 않는다",
+    summary: "List connections — credential values are never returned",
     operationId: "listSourceConnections",
     public: false,
     mutation: false,
@@ -743,7 +748,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/authorities/{authorityId}/connections",
-    summary: "연동 구성 — 승인되지 않은 기관은 활성이 될 수 없다",
+    summary: "Configure a connection — an unapproved authority cannot become active",
     operationId: "createSourceConnection",
     public: false,
     mutation: true,
@@ -756,7 +761,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "patch",
     path: "/api/v1/source-connections/{connectionId}",
-    summary: "연동 갱신 — endpoint·상태·이용조건을 바꾼다",
+    summary: "Update a connection — changes endpoint, state, and terms of use",
     operationId: "updateSourceConnection",
     public: false,
     mutation: true,
@@ -769,7 +774,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/jurisdictions/{jurisdiction}/profile",
-    summary: "관할별 연동 현황 — 미확인 통합을 과장하지 않는다",
+    summary: "Connection status per jurisdiction — does not overstate unconfirmed integrations",
     operationId: "getJurisdictionProfile",
     public: false,
     mutation: false,
@@ -782,7 +787,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/source-connections/{connectionId}/collect",
-    summary: "공식 출처 조회 — 실패도 Source Receipt로 남긴다",
+    summary: "Official source lookup — failures are recorded as Source Receipts too",
     operationId: "collectFromSource",
     public: false,
     mutation: true,
@@ -797,7 +802,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/governance/proposals",
-    summary: "제안 목록 — protocol과 project space를 함께 본다",
+    summary: "List proposals — protocol and project spaces together",
     operationId: "listProposals",
     public: false,
     mutation: false,
@@ -809,7 +814,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/governance/proposals/{proposalId}",
-    summary: "제안 조회 — 집계와 지나온 경로를 함께 반환한다",
+    summary: "Get a proposal — includes the tally and transition history",
     operationId: "getProposal",
     public: false,
     mutation: false,
@@ -821,7 +826,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/governance/proposals",
-    summary: "제안 생성 — space 밖의 대상은 거절한다",
+    summary: "Create a proposal — rejects targets outside the space",
     operationId: "createProposal",
     public: false,
     mutation: true,
@@ -834,7 +839,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/governance/proposals/{proposalId}/transitions",
-    summary: "제안 상태 전이 — 집계 결과를 함께 굳힌다",
+    summary: "Transition a proposal — freezes the tally with it",
     operationId: "transitionProposal",
     public: false,
     mutation: true,
@@ -847,7 +852,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/governance/proposals/{proposalId}/votes",
-    summary: "투표 — 투표 기간에만 받는다",
+    summary: "Cast a vote — accepted only during the voting period",
     operationId: "castVote",
     public: false,
     mutation: true,
@@ -858,11 +863,11 @@ export const ROUTES: readonly RouteDefinition[] = [
     responseSchema: governanceProposal,
   },
 
-  // --- 워크스페이스 집계 ------------------------------------
+  // --- Workspace aggregates ------------------------------------
   {
     method: "get",
     path: "/api/v1/my-work",
-    summary: "내가 해야 하는 것과 내가 기다리는 것 — 섞지 않고 갈라 낸다",
+    summary: "What I must do versus what I am waiting on — kept separate",
     operationId: "getMyWork",
     public: false,
     mutation: false,
@@ -874,7 +879,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/me/activity",
-    summary: "내가 한 일의 기록 — 이 지갑의 주체가 남긴 감사 기록, 본인만",
+    summary: "My activity — audit records left by this wallet's subject, visible only to them",
     operationId: "getMyActivity",
     public: false,
     mutation: false,
@@ -887,7 +892,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/registry-entries",
-    summary: "세 registry의 게시 상태 — 프로젝트를 열지 않고 본다",
+    summary: "Publication status across the three registries — without opening each project",
     operationId: "listRegistryEntries",
     public: false,
     mutation: false,
@@ -900,7 +905,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/notifications",
-    summary: "내게 온 것과 내 역할에게 온 것 — 읽음은 사람마다 다르다",
+    summary: "Notifications to me and to my roles — read state is per person",
     operationId: "listNotifications",
     public: false,
     mutation: false,
@@ -912,7 +917,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/notifications/{notificationId}/read",
-    summary: "읽음 표시 — 나에 대해서만이다. 역할 알림은 남에게 남는다",
+    summary: "Mark as read — for me only; role notifications stay unread for others",
     operationId: "markNotificationRead",
     public: false,
     mutation: true,
@@ -922,13 +927,13 @@ export const ROUTES: readonly RouteDefinition[] = [
     responseSchema: notification,
   },
 
-  // --- 플랫폼 관리 -----------------------------------------
+  // --- Platform administration -----------------------------------------
   //
-  // tenant 생성은 여기 없다. 이유는 `apps/api/src/routes/admin.ts` 머리말.
+  // Tenant creation is not here. See the header of `apps/api/src/routes/admin.ts` for why.
   {
     method: "get",
     path: "/api/v1/admin/subjects",
-    summary: "주체·지갑·역할을 한 번에 — 로그인 불가 계정이 흩어져 보이지 않게",
+    summary: "Subjects, wallets, and roles at once — so locked-out accounts are not scattered across views",
     operationId: "listAdminSubjects",
     public: false,
     mutation: false,
@@ -940,7 +945,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/admin/subjects",
-    summary: "주체 등록 — bootstrap CLI 없이 사람을 추가한다",
+    summary: "Register a subject — adds people without the bootstrap CLI",
     operationId: "createAdminSubject",
     public: false,
     mutation: true,
@@ -953,7 +958,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/admin/subjects/{subjectId}/wallets",
-    summary: "지갑 바인딩 — 분실 키를 끊은 뒤 새 키를 붙이는 경로이기도 하다",
+    summary: "Bind a wallet — also the path for attaching a new key after cutting off a lost one",
     operationId: "bindAdminWallet",
     public: false,
     mutation: true,
@@ -966,7 +971,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/admin/wallets/{walletId}/disable",
-    summary: "지갑 비활성 — 사유 코드를 남긴다(AC-27)",
+    summary: "Disable a wallet — records a reason code (AC-27)",
     operationId: "disableAdminWallet",
     public: false,
     mutation: true,
@@ -979,7 +984,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/admin/notification-sinks",
-    summary: "알림 수신처와 그 배달 상태 — 보내지 못하고 있는 것을 함께 낸다",
+    summary: "Notification sinks and delivery status — includes what is failing to send",
     operationId: "listNotificationSinks",
     public: false,
     mutation: false,
@@ -991,7 +996,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/admin/notification-sinks",
-    summary: "알림 수신처 등록 — 비밀은 참조로만 받는다",
+    summary: "Register a notification sink — secrets accepted only by reference",
     operationId: "createNotificationSink",
     public: false,
     mutation: true,
@@ -1004,7 +1009,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/admin/notification-sinks/{sinkId}/state",
-    summary: "수신처 일시정지·재개 — 지우지 않는다. 지우면 왜 끊겼는지가 남지 않는다",
+    summary: "Pause or resume a sink — never deleted, since deletion loses why it stopped",
     operationId: "updateNotificationSinkState",
     public: false,
     mutation: true,
@@ -1017,7 +1022,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/admin/role-grants",
-    summary: "역할 부여 제안 목록 — 누가 무엇을 기다리는지",
+    summary: "List role grant proposals — who is waiting on what",
     operationId: "listRoleGrants",
     public: false,
     mutation: false,
@@ -1029,7 +1034,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/admin/role-grants",
-    summary: "역할 부여 제안 — 승인은 다른 사람이 한다(02 §2.8)",
+    summary: "Propose a role grant — approved by someone else (02 §2.8)",
     operationId: "createRoleGrant",
     public: false,
     mutation: true,
@@ -1042,7 +1047,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/admin/role-grants/{grantId}/decision",
-    summary: "역할 부여 승인·반려 — 제안자 자신은 할 수 없다",
+    summary: "Approve or reject a role grant — not by the proposer",
     operationId: "decideRoleGrant",
     public: false,
     mutation: true,
@@ -1053,11 +1058,11 @@ export const ROUTES: readonly RouteDefinition[] = [
     responseSchema: roleGrantRequest,
   },
 
-  // --- 관측 ---------------------------------------------------------------
+  // --- Observability ---------------------------------------------------------------
   {
     method: "get",
     path: "/api/v1/audit-events",
-    summary: "감사 로그 조회 — append-only 기록을 읽는 유일한 경로",
+    summary: "Read the audit log — the only read path for append-only records",
     operationId: "listAuditEvents",
     public: false,
     mutation: false,
@@ -1069,7 +1074,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/outbox-backlog",
-    summary: "이벤트 발행 지연 — 사라진 것이 아니라 늦어진 것을 구분한다",
+    summary: "Event publication backlog — distinguishes delayed from lost",
     operationId: "getOutboxBacklog",
     public: false,
     mutation: false,
@@ -1079,11 +1084,11 @@ export const ROUTES: readonly RouteDefinition[] = [
     responseSchema: outboxBacklog,
   },
 
-  // --- Public (무인증) -----------------------------------------------------
+  // --- Public (unauthenticated) -----------------------------------------------------
   {
     method: "get",
     path: "/api/v1/public/registries/{registryType}",
-    summary: "공개 Registry 목록·검색 — 식별자를 몰라도 무엇이 있는지 볼 수 있다",
+    summary: "List and search the public registry — browse without knowing identifiers",
     operationId: "listPublicRegistryEntries",
     public: true,
     mutation: false,
@@ -1096,7 +1101,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/public/registries/{registryType}/{publicKey}",
-    summary: "공개 Registry projection 조회",
+    summary: "Get a public registry projection",
     operationId: "getPublicRegistryEntry",
     public: true,
     mutation: false,
@@ -1108,7 +1113,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/public/projection-fields",
-    summary: "공개 projection이 노출할 수 있는 필드 목록",
+    summary: "Fields a public projection may expose",
     operationId: "getPublicProjectionFields",
     public: true,
     mutation: false,
@@ -1120,7 +1125,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/public/search",
-    summary: "공개 통합 검색 — registry key, transaction hash, Merkle root, leaf hash",
+    summary: "Unified public search — registry key, transaction hash, Merkle root, leaf hash",
     operationId: "searchPublicRecords",
     public: true,
     mutation: false,
@@ -1133,7 +1138,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/public/proofs/{entryVersionId}",
-    summary: "inclusion proof 조회 — 무결성 포함만 확인한다",
+    summary: "Get an inclusion proof — confirms integrity and inclusion only",
     operationId: "getInclusionProof",
     public: true,
     mutation: false,
@@ -1145,7 +1150,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/public/governance/proposals",
-    summary: "공개 protocol 제안 목록 — project space와 draft는 내지 않는다",
+    summary: "List public protocol proposals — excludes project space and drafts",
     operationId: "listPublicProposals",
     public: true,
     mutation: false,
@@ -1158,7 +1163,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/public/governance/proposals/{proposalId}",
-    summary: "공개 protocol 제안 하나 — 집계와 지나온 경로를 함께 낸다",
+    summary: "Get a public protocol proposal — includes the tally and transition history",
     operationId: "getPublicProposal",
     public: true,
     mutation: false,
@@ -1170,7 +1175,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/public/disclosures",
-    summary: "공개 정정·철회 시계열 — 덮지 않는 사건 종류를 응답이 밝힌다",
+    summary: "Public correction and revocation timeline — the response states which event kinds it does not cover",
     operationId: "listPublicDisclosures",
     public: true,
     mutation: false,
@@ -1182,24 +1187,24 @@ export const ROUTES: readonly RouteDefinition[] = [
   },
 ];
 
-/** mutation route는 전부 action이 있어야 한다. 없으면 authorization 대상이 누락된 것이다. */
+/** Every mutation route must have an action. A missing one means authorization was skipped. */
 export function findRoutesWithoutAction(): RouteDefinition[] {
   return ROUTES.filter((route) => route.mutation && route.action === null);
 }
 
-/** 구현이 끝난 route. parity 테스트가 이 목록과 실제 등록 라우트를 대조한다. */
+/** Implemented routes. The parity test compares this list with the actually registered routes. */
 export function implementedRoutes(): RouteDefinition[] {
   return ROUTES.filter((route) => route.implemented);
 }
 
-/** 계약에만 있고 아직 구현되지 않은 route. release별로 남은 작업을 보여준다. */
+/** Routes in the contract but not yet implemented. Shows remaining work per release. */
 export function plannedRoutes(): RouteDefinition[] {
   return ROUTES.filter((route) => !route.implemented);
 }
 
 /**
- * OpenAPI 경로(`{id}`)를 Fastify 경로(`:id`)로 바꾼다.
- * 두 표기가 다르기 때문에 자동 대조에는 정규화가 필요하다.
+ * Converts an OpenAPI path (`{id}`) to a Fastify path (`:id`).
+ * The notations differ, so automated comparison needs normalization.
  */
 export function toFastifyPath(openApiPath: string): string {
   return openApiPath.replace(/\{([^}]+)\}/g, ":$1");

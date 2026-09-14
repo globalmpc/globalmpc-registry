@@ -2,18 +2,18 @@ import { encodeAbiParameters, keccak256, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 /**
- * Safe Transaction Service 연동 — spec 08 §8.9.
+ * Safe Transaction Service integration — spec 08 §8.9.
  *
- * 컨트랙트의 `ANCHOR_SUBMITTER_ROLE`은 Safe multisig가 보유한다. worker는 EOA로
- * 직접 올릴 수 없고 **제안만 만든다** — 서명 수집과 실행은 Safe 쪽에서 사람이
- * 한다.
+ * The contract's `ANCHOR_SUBMITTER_ROLE` is held by a Safe multisig. The worker cannot submit
+ * directly from an EOA and **only creates proposals** — people collect signatures and execute
+ * on the Safe side.
  *
- * 제안을 올리려면 proposer가 Safe의 owner여야 하고 제안 자체에 서명해야 한다.
- * 그 서명은 실행 권한이 아니라 "이 제안을 내가 올렸다"는 표시다 — 실행에는
- * threshold만큼의 owner 서명이 따로 필요하다.
+ * To post a proposal the proposer must be a Safe owner and must sign the proposal itself. That
+ * signature is not execution authority but a mark of "I posted this proposal" — execution
+ * separately needs threshold-many owner signatures.
  *
- * **제안이 올라간 것은 실행된 것이 아니다.** 두 상태를 구분하지 않으면 "올렸다"고
- * 믿는 사이 체인에 아무것도 없는 상태가 된다.
+ * **A posted proposal is not an executed one.** Without separating the two states, the chain
+ * can hold nothing while we believe it was "submitted".
  */
 
 export interface SafeTransactionInput {
@@ -29,11 +29,11 @@ export interface SafeProposal {
 }
 
 export interface SafeClient {
-  /** Safe의 다음 nonce. 제안마다 달라야 한다. */
+  /** The Safe's next nonce. Must differ per proposal. */
   nextNonce(safeAddress: string): Promise<number>;
-  /** 제안을 올린다. 반환값은 Safe 측 식별자다. */
+  /** Posts a proposal. Returns the Safe-side identifier. */
   propose(input: SafeTransactionInput): Promise<SafeProposal>;
-  /** 제안 상태 조회. 실행됐으면 트랜잭션 해시가 온다. */
+  /** Proposal status lookup. Includes the transaction hash once executed. */
   status(safeTxHash: string): Promise<SafeProposalStatus>;
 }
 
@@ -44,10 +44,10 @@ export type SafeProposalStatus =
   | { readonly kind: "unknown" };
 
 /**
- * Safe 트랜잭션 해시 계산 — EIP-712.
+ * Safe transaction hash — EIP-712.
  *
- * 서비스가 돌려주는 값을 그대로 믿지 않고 우리도 계산해 대조한다. 서비스가
- * 다른 calldata의 해시를 돌려주면 우리는 엉뚱한 것에 서명하게 된다.
+ * We do not trust the service's value; we compute it ourselves and compare. If the service
+ * returned the hash of different calldata, we would sign the wrong thing.
  */
 const SAFE_TX_TYPEHASH =
   "0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8" as const;
@@ -87,10 +87,10 @@ export function computeSafeTxHash(input: {
       [
         SAFE_TX_TYPEHASH,
         input.to,
-        // anchor 제출에 이더를 보내지 않는다. value가 0이 아니면 자금 이동이다.
+        // Anchor submission sends no ether. A nonzero value is a fund movement.
         0n,
         keccak256(input.data),
-        // CALL(0). DELEGATECALL(1)은 Safe의 저장소를 바꿀 수 있어 쓰지 않는다.
+        // CALL(0). DELEGATECALL(1) can rewrite the Safe's storage, so it is not used.
         0,
         0n,
         0n,
@@ -107,10 +107,10 @@ export function computeSafeTxHash(input: {
 }
 
 export interface SafeServiceOptions {
-  /** Safe Transaction Service 기본 URL. 체인마다 다르다. */
+  /** Safe Transaction Service base URL. Differs per chain. */
   readonly serviceUrl: string;
   readonly chainId: number;
-  /** 제안자 키. Safe의 owner여야 한다. 실행 권한과는 다르다. */
+  /** Proposer key. Must be a Safe owner. Distinct from execution authority. */
   readonly proposerPrivateKey: Hex;
 }
 
@@ -128,7 +128,7 @@ export function createSafeClient(options: SafeServiceOptions): SafeClient {
       throw new Error(`Safe service ${response.status}: ${body.slice(0, 300)}`);
     }
 
-    // 204는 본문이 없다. 제안 생성이 그렇다.
+    // 204 has no body. Proposal creation returns it.
     return response.status === 204 ? null : response.json();
   }
 
@@ -147,7 +147,7 @@ export function createSafeClient(options: SafeServiceOptions): SafeClient {
         nonce: input.nonce,
       });
 
-      // 제안자 서명. 실행 권한이 아니라 "이 제안을 내가 올렸다"는 표시다.
+      // Proposer signature. Not execution authority — a mark of "I posted this proposal".
       const signature = await proposer.sign({ hash: safeTxHash });
 
       await request(`/api/v1/safes/${input.safeAddress}/multisig-transactions/`, {
@@ -183,7 +183,7 @@ export function createSafeClient(options: SafeServiceOptions): SafeClient {
         };
 
         if (tx.isExecuted && tx.transactionHash) {
-          // 실행됐다고 성공한 것은 아니다. 실패한 실행도 executed다.
+          // Executed does not mean succeeded. A failed execution is also executed.
           return tx.isSuccessful === false
             ? { kind: "rejected" }
             : { kind: "executed", transactionHash: tx.transactionHash.toLowerCase() };
@@ -195,8 +195,8 @@ export function createSafeClient(options: SafeServiceOptions): SafeClient {
           threshold: tx.confirmationsRequired,
         };
       } catch {
-        // 서비스가 모르는 해시다. 아직 전파되지 않았거나 제안이 사라졌다 —
-        // 둘을 여기서 구분할 수 없으므로 자동으로 정리하지 않는다.
+        // The service does not know this hash. Either not yet propagated or the proposal is
+        // gone — the two are indistinguishable here, so nothing is cleaned up automatically.
         return { kind: "unknown" };
       }
     },

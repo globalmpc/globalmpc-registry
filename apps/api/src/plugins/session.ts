@@ -20,10 +20,10 @@ export interface Session {
   }[];
   readonly projectIds: readonly string[];
   /**
-   * 조직 ID → 그 조직이 소유한 프로젝트 ID.
+   * Organization ID → project IDs owned by that organization.
    *
-   * 프로젝트 당사자 역할의 조직 수준 바인딩이 어디까지 닿는지를 정한다. 없으면
-   * 아무 프로젝트에도 닿지 않는 것으로 본다(넓히지 않고 좁힌다).
+   * Determines how far a party role's organization-level binding reaches. If absent,
+   * it reaches no project (narrowed, not widened).
    */
   readonly organizationProjectIds?: Readonly<Record<string, readonly string[]>>;
 }
@@ -31,14 +31,14 @@ export interface Session {
 const NONCE_TTL_MS = 10 * 60 * 1000;
 
 export const SIWE_STATEMENT =
-  "MPC Registry에 로그인합니다. 이 서명은 자산 이동이나 승인을 발생시키지 않습니다.";
+  "Sign in to MPC Registry. This signature does not move assets or grant any approval.";
 
 export async function issueNonce(
   sql: postgres.Sql,
   walletAddress: string,
   chainId: number,
 ): Promise<{ nonce: string; expiresAt: string }> {
-  // SIWE nonce는 알파뉴메릭 8자 이상이어야 한다(EIP-4361).
+  // A SIWE nonce must be at least 8 alphanumeric characters (EIP-4361).
   const nonce = randomBytes(12).toString("hex");
   const expiresAt = new Date(Date.now() + NONCE_TTL_MS).toISOString();
 
@@ -51,14 +51,14 @@ export async function issueNonce(
 }
 
 /**
- * SIWE 검증 — ADR-T06.
+ * SIWE verification — ADR-T06.
  *
- * 확인하는 것: 서명 유효성, domain 일치, chainId 일치, nonce 미사용, 만료.
- * 확인하지 않는 것: 이 주소가 누구인가. identity binding은 별도 record다(02 §2.9).
+ * Checks: signature validity, domain match, chainId match, unused nonce, expiry.
+ * Does not check: who this address is. Identity binding is a separate record (02 §2.9).
  *
- * EOA 서명만 지원한다. `recoverMessageAddress`는 RPC 없이 로컬에서 주소를
- * 복구하므로 로그인 경로가 외부 노드 가용성에 묶이지 않는다. 스마트 컨트랙트
- * 지갑(EIP-1271)은 RPC가 필요하므로 별도 결정으로 미룬다.
+ * Only EOA signatures are supported. `recoverMessageAddress` recovers the address locally
+ * without RPC, so the login path does not depend on external node availability. Smart contract
+ * wallets (EIP-1271) need RPC and are deferred to a separate decision.
  */
 export async function verifySiwe(
   sql: postgres.Sql,
@@ -68,40 +68,40 @@ export async function verifySiwe(
 ): Promise<Session> {
   const parsed = parseSiweMessage(message);
   if (!parsed.address || !parsed.nonce) {
-    throw unauthorized("SIWE_MESSAGE_INVALID", "SIWE 메시지를 해석할 수 없다");
+    throw unauthorized("SIWE_MESSAGE_INVALID", "Cannot parse the SIWE message");
   }
 
   if (parsed.domain !== config.siweDomain) {
-    throw unauthorized("SIWE_DOMAIN_MISMATCH", "메시지의 domain이 이 서비스와 다르다");
+    throw unauthorized("SIWE_DOMAIN_MISMATCH", "The message domain does not match this service");
   }
   if (parsed.chainId !== config.chainId) {
-    throw unauthorized("SIWE_CHAIN_MISMATCH", "메시지의 chain ID가 이 서비스와 다르다");
+    throw unauthorized("SIWE_CHAIN_MISMATCH", "The message chain ID does not match this service");
   }
   if (parsed.expirationTime && parsed.expirationTime.getTime() < Date.now()) {
-    throw unauthorized("SIWE_MESSAGE_EXPIRED", "메시지가 만료됐다");
+    throw unauthorized("SIWE_MESSAGE_EXPIRED", "The message has expired");
   }
   /**
-   * `notBefore`는 서명자가 "이 시점 전에는 쓰지 말라"고 밝힌 것이다.
+   * `notBefore` is the signer stating "do not use before this time".
    *
-   * 보지 않으면 그 선언이 아무 효과가 없고, 미리 서명해 둔 메시지를 서명자가
-   * 의도한 시점 밖에서 쓸 수 있다. EIP-4361이 이 필드를 정의한 이유다.
+   * Ignoring it makes that declaration meaningless and lets a pre-signed message be used outside
+   * the time the signer intended. That is why EIP-4361 defines the field.
    */
   if (parsed.notBefore && parsed.notBefore.getTime() > Date.now()) {
-    throw unauthorized("SIWE_MESSAGE_NOT_YET_VALID", "아직 사용할 수 없는 메시지다");
+    throw unauthorized("SIWE_MESSAGE_NOT_YET_VALID", "The message is not valid yet");
   }
   /**
-   * `uri`도 대조한다 — 07 §7.1.
+   * `uri` is compared too — 07 §7.1.
    *
-   * domain만 보면 같은 호스트의 다른 출처로 유도된 서명이 통과한다. 지갑이
-   * 사용자에게 보여 준 대상과 서버가 인정하는 대상이 같아야 한다.
+   * Checking only the domain lets a signature lured from another origin on the same host pass.
+   * What the wallet showed the user and what the server accepts must be the same.
    */
   if (parsed.uri !== config.siweUri) {
-    throw unauthorized("SIWE_URI_MISMATCH", "메시지의 uri가 이 서비스와 다르다");
+    throw unauthorized("SIWE_URI_MISMATCH", "The message uri does not match this service");
   }
 
   const address = parsed.address.toLowerCase() as `0x${string}`;
 
-  // nonce를 원자적으로 소비한다. 두 요청이 동시에 와도 하나만 성공한다.
+  // Consume the nonce atomically. If two requests arrive together, only one succeeds.
   const [consumed] = await sql<{ nonce: string }[]>`
     UPDATE core.siwe_nonces
     SET consumed_at = now()
@@ -113,38 +113,38 @@ export async function verifySiwe(
   `;
 
   if (!consumed) {
-    throw unauthorized("SIWE_NONCE_ALREADY_USED", "이 nonce는 이미 사용됐거나 만료됐다");
+    throw unauthorized("SIWE_NONCE_ALREADY_USED", "This nonce has already been used or has expired");
   }
 
   let recovered: string;
   try {
     recovered = (await recoverMessageAddress({ message, signature })).toLowerCase();
   } catch {
-    throw unauthorized("SIWE_SIGNATURE_INVALID", "서명을 검증할 수 없다");
+    throw unauthorized("SIWE_SIGNATURE_INVALID", "Cannot verify the signature");
   }
 
   if (recovered !== address) {
-    throw unauthorized("SIWE_SIGNATURE_INVALID", "서명자가 메시지의 주소와 다르다");
+    throw unauthorized("SIWE_SIGNATURE_INVALID", "The signer does not match the message address");
   }
 
   return resolveSession(sql, address, config.chainId);
 }
 
 /**
- * wallet → identity·role 해석.
+ * wallet → identity and role resolution.
  *
- * 02 §2.9: wallet은 인증 수단이고 identity binding·credential·role binding·
- * assignment는 각각 별도 record다. 연결이 없으면 `wallet_only`이며 이 상태로는
- * public read와 governance 참여만 가능하다(OD-04).
+ * 02 §2.9: the wallet is an authentication method; identity binding, credential, role binding,
+ * and assignment are each separate records. Without a link the state is `wallet_only`, which
+ * allows only public read and governance participation (OD-04).
  */
 export async function resolveSession(
   sql: postgres.Sql,
   walletAddress: `0x${string}`,
   chainId: number,
 ): Promise<Session> {
-  // 로그인 시점에는 아직 tenant를 모르므로 RLS 정책을 만족시킬 수 없다.
-  // 인증 경로만 SECURITY DEFINER 함수로 분리한다(0005_session_resolver.sql).
-  // 이 두 함수 외에는 어떤 경로로도 RLS를 우회하지 않는다.
+  // At login the tenant is not yet known, so RLS policies cannot be satisfied.
+  // Only the auth path is split into SECURITY DEFINER functions (0005_session_resolver.sql).
+  // No path other than these two functions bypasses RLS.
   const [identity] = await sql<
     { subject_id: string | null; tenant_id: string; assurance_level: AssuranceLevel }[]
   >`
@@ -188,10 +188,10 @@ export async function resolveSession(
 }
 
 /**
- * 소유 조직으로 좁혀지는 조직 수준 바인딩의 프로젝트 목록.
+ * Project list for organization-level bindings, narrowed to the owning organization.
  *
- * 세션은 요청마다 다시 해석되므로(server.ts) 조직이 새 프로젝트를 만들면 다음
- * 요청부터 닿는다. tenant가 정해진 뒤이므로 RLS 경로(`withTenant`)로 읽는다.
+ * Sessions are re-resolved per request (server.ts), so a new project an organization creates
+ * is reachable from the next request. The tenant is known by then, so it reads via RLS (`withTenant`).
  */
 async function resolveOrganizationProjects(
   sql: postgres.Sql,

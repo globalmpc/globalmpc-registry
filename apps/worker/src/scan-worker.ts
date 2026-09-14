@@ -2,42 +2,42 @@ import type postgres from "postgres";
 import type { ScanVerdict } from "./scanner.js";
 
 /**
- * quarantine 업로드 검사 루프 — 05 §5.2.
+ * Quarantine upload scan loop — 05 §5.2.
  *
- * `quarantined` 상태의 업로드를 하나씩 집어 스캐너에 넘기고 **결과를 API로**
- * 보고한다.
+ * Claims `quarantined` uploads one at a time, hands them to the scanner, and reports **the
+ * result through the API**.
  *
- * 상태를 DB에 직접 쓰지 않는 이유: 같은 전이에 쓰기 경로가 둘이면 한쪽만
- * 느슨해진다. API에는 상태기계 검사·감사 기록·If-Match가 걸려 있고, worker가
- * 그것을 우회하면 그 보장이 "API를 통해 들어온 것에 한해서"가 된다.
+ * Why state is not written to the DB directly: two write paths for one transition let one of
+ * them go lax. The API enforces state machine checks, audit records, and If-Match; a worker
+ * bypassing it would narrow those guarantees to "only what came through the API".
  *
- * **DB 트랜잭션을 쥔 채 API를 부르지 않는다.** `FOR UPDATE`로 잠근 행을 API가
- * 다시 잠그려 하면 교착한다. 대신 lease를 걸고 트랜잭션을 닫은 뒤 검사한다.
+ * **Never call the API while holding a DB transaction.** The API would try to re-lock the row
+ * held by `FOR UPDATE` and deadlock. Instead, take a lease, close the transaction, then scan.
  *
- * **오류를 감염으로 기록하지 않는다.** 감염 판정은 되돌릴 수 없으므로
- * (`scanned_infected → promoted` 경로가 상태기계에 없다), 스캐너 장애로 그 상태를
- * 만들면 정상 파일이 영구히 막힌다. 오류는 상태를 그대로 두고 다시 시도한다.
+ * **Never record an error as infected.** An infected verdict is irreversible (the state
+ * machine has no `scanned_infected → promoted` path), so producing it from a scanner outage
+ * blocks clean files permanently. On error, leave the state as is and retry.
  */
 
 export interface ScanStore {
-  /** quarantine 객체를 읽는다. 없으면 null. */
+  /** Reads a quarantine object. null if absent. */
   get(key: string): Promise<Uint8Array | null>;
 }
 
 /**
- * 검사 함수.
+ * Scan function.
  *
- * 주입하는 이유: 감염·타임아웃·연결 실패 세 갈래가 이 코드의 핵심인데, 실제
- * 데몬으로는 그것들을 재현하기 어렵다. 재현할 수 없는 경우가 정확히 이 코드가
- * 다뤄야 하는 경우다.
+ * Injected because the three branches — infected, timeout, connection failure — are the core
+ * of this code, and a real daemon makes them hard to reproduce. The cases that cannot be
+ * reproduced are exactly the ones this code must handle.
  */
 export type Scan = (bytes: Uint8Array) => Promise<ScanVerdict>;
 
 /**
- * 검사 결과 보고.
+ * Scan result report.
  *
- * API의 `scan-result` route를 부른다. 실패하면 상태는 그대로 남고 다음 루프에서
- * 다시 시도된다 — 보고하지 못한 것을 검사하지 않은 것과 같게 다룬다.
+ * Calls the API `scan-result` route. On failure the state stays and the next loop retries —
+ * an unreported scan is treated the same as no scan.
  */
 export type ReportResult = (input: {
   readonly uploadId: string;
@@ -50,7 +50,7 @@ export type Log = (record: Record<string, unknown>) => void;
 
 export interface ScanOptions {
   readonly maxAttempts: number;
-  /** lease 유지 시간. 검사 + 보고에 걸리는 시간보다 넉넉해야 한다. */
+  /** Lease duration. Must comfortably exceed scan + report time. */
   readonly leaseMs: number;
 }
 
@@ -69,12 +69,11 @@ interface LeasedUpload {
 }
 
 /**
- * 한 건에 lease를 건다.
+ * Leases one row.
  *
- * `FOR UPDATE SKIP LOCKED`는 이 짧은 트랜잭션 안에서만 유지된다. 트랜잭션이
- * 닫힌 뒤의 중복은 `scan_leased_until`이 막는다 — 만료 전까지 다른 worker가
- * 같은 행을 집지 않고, 만료되면 가져갈 수 있어 죽은 worker의 파일이 영원히
- * 남지 않는다.
+ * `FOR UPDATE SKIP LOCKED` holds only within this short transaction. After it closes,
+ * `scan_leased_until` prevents duplicates — no other worker claims the row before expiry, and
+ * after expiry it can be taken, so a dead worker's file is not stranded forever.
  */
 async function leaseOne(
   sql: postgres.Sql,
@@ -94,8 +93,8 @@ async function leaseOne(
 
     if (!row) return [];
 
-    // 시도 횟수를 검사 **전에** 올린다. 스캐너가 특정 파일에서 죽어도 그 파일이
-    // 큐를 영원히 막지 않는다.
+    // Increment the attempt count **before** scanning. If the scanner dies on a particular file,
+    // that file does not block the queue forever.
     await tx`
       UPDATE core.object_uploads
       SET scan_attempts = scan_attempts + 1,
@@ -109,7 +108,7 @@ async function leaseOne(
   return rows[0];
 }
 
-/** 실패를 기록하고 lease를 즉시 푼다. 다음 루프에서 바로 다시 시도된다. */
+/** Records the failure and releases the lease at once. The next loop retries immediately. */
 async function recordFailure(
   sql: postgres.Sql,
   uploadId: string,
@@ -135,8 +134,8 @@ export async function scanOnce(
 
   const bytes = await store.get(row.object_key);
   if (!bytes) {
-    // 객체가 없는데 DB에는 있다. 자동으로 정리하지 않는다 — 저장소 장애와
-    // 실제 유실을 여기서 구분할 수 없다.
+    // The DB has the row but the object is missing. No automatic cleanup — a storage outage and
+    // an actual loss are indistinguishable here.
     await recordFailure(sql, row.id, "scan_error: object missing");
     log({ level: "error", msg: "scan.object_missing", uploadId: row.id });
     return { handled: true, uploadId: row.id, verdict: "error" };
@@ -158,8 +157,8 @@ export async function scanOnce(
       ...(verdict.kind === "infected" ? { detail: verdict.signature } : {}),
     });
   } catch (error) {
-    // 보고에 실패한 것은 검사하지 않은 것과 같다. 상태를 그대로 두고 다시
-    // 시도한다 — 여기서 DB를 직접 고치면 우회 경로를 만드는 셈이다.
+    // A failed report equals no scan. Leave the state and retry — patching the DB directly here
+    // would create a bypass path.
     await recordFailure(sql, row.id, `report_error: ${String(error)}`);
     log({ level: "error", msg: "scan.report_failed", uploadId: row.id, error: String(error) });
     return { handled: true, uploadId: row.id, verdict: "error" };
@@ -169,7 +168,7 @@ export async function scanOnce(
     level: verdict.kind === "infected" ? "warn" : "info",
     msg: `scan.${verdict.kind}`,
     uploadId: row.id,
-    // 파일명은 남기지 않는다. 로그가 restricted 정보의 통로가 된다.
+    // No file names. The log would become a channel for restricted information.
     ...(verdict.kind === "infected" ? { signature: verdict.signature } : {}),
   });
 
@@ -181,7 +180,7 @@ export async function scanOnce(
   };
 }
 
-/** 검사 대기 통계. 시도 상한에 닿은 것은 사람이 봐야 한다. */
+/** Scan queue stats. Uploads at the attempt cap need a person to look at them. */
 export async function scanBacklog(sql: postgres.Sql, maxAttempts: number): Promise<{
   readonly pending: number;
   readonly stuck: number;

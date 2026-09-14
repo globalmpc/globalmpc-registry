@@ -7,24 +7,24 @@ import { useSession } from "@/lib/session";
 import { Address } from "@/components/Address";
 
 /**
- * 워크스페이스에 들어오기 전의 세 상태를 화면 하나가 먼저 가른다.
+ * One screen first separates the three states before entering the workspace.
  *
- * 1. 세션을 읽는 중 — 아무것도 부르지 않는다.
- * 2. 로그인하지 않았다 — 연결 안내.
- * 3. 로그인했지만 지갑이 조직(tenant)에 묶이지 않았다 — 연결 대기 안내.
+ * 1. Reading the session — calls nothing.
+ * 2. Not signed in — connect guidance.
+ * 3. Signed in, but the wallet is not bound to an organization (tenant) — waiting-for-link guidance.
  *
- * 예전에는 3번에서도 각 화면이 API를 불렀고, 화면마다 `401 UNAUTHENTICATED`가
- * 떴다. 방금 서명한 사람에게 "인증이 필요하다"는 틀린 말이고, 다시 서명해도 같다.
- * 3번은 오류가 아니라 **아직 자리가 없는 상태**이므로 오류 상자가 아니라 안내로 둔다.
+ * Previously each screen called the API even in state 3, and every screen showed
+ * `401 UNAUTHENTICATED`. "Authentication required" is wrong for someone who just signed, and re-signing gives the same.
+ * State 3 is not an error but **a state with no seat yet**, so it is guidance, not an error box.
  *
- * 역할이 없거나 프로젝트 밖인 경우(403)는 여기서 막지 않는다. 그것은 화면마다
- * 무엇이 부족한지 다르고, `ErrorNotice`가 필요한 역할과 요청 경로를 보여 준다.
+ * No role or outside the project (403) is not blocked here. What is missing differs
+ * per screen, and `ErrorNotice` shows the required role and the request path.
  */
 /**
- * 막힌 사람이 도착하는 화면 — 11 §11.7.
+ * The screen blocked people land on — 11 §11.7.
  *
- * 로그인하지 않았거나 지갑이 묶이지 않았어도 무엇이 부족한지 읽을 수 있어야 한다.
- * 게이트가 이 화면까지 가리면 거절 안내를 따라온 사람이 또 다른 안내를 만난다.
+ * Even when not signed in or the wallet is unbound, it must be possible to read what is missing.
+ * If the gate also covers this screen, someone following a rejection notice meets yet another notice.
  */
 function isAccessRequestPath(pathname: string): boolean {
   return (
@@ -66,7 +66,7 @@ export function WorkspaceGate({ children }: { readonly children: React.ReactNode
   return <>{children}</>;
 }
 
-/** 지갑은 연결됐지만 조직에 묶이지 않은 상태. */
+/** Wallet connected but not bound to an organization. */
 export function EnrollmentPanel({ walletAddress }: { readonly walletAddress: string }) {
   return (
     <>

@@ -10,16 +10,16 @@ import {
 } from "../src/lib/wallet.js";
 
 /**
- * 지갑마다 다른 응답.
+ * Responses differ by wallet.
  *
- * 체인이 없을 때 지갑이 주는 응답이 제각각이다. 데스크톱 MetaMask는 4902,
- * MetaMask 모바일은 `-32603` 안에 싼 4902 또는 아예 코드 없음. 최상위 코드만 보던
- * 예전 코드는 모바일 사용자를 체인 추가 제안 없이 "전환 실패"에서 멈추게 했다.
+ * Wallets respond differently when the chain is missing. Desktop MetaMask returns 4902;
+ * MetaMask mobile returns 4902 wrapped in `-32603`, or no code at all. The old code, which read only
+ * the top-level code, left mobile users stuck at "switch failed" with no offer to add the chain.
  */
 
 type Failure = { code?: number; data?: unknown; message: string };
 
-/** 체인 목록을 갖는 가짜 지갑. `switchFailure`는 모르는 체인일 때 던지는 것이다. */
+/** A fake wallet with a chain list. `switchFailure` is what it throws for an unknown chain. */
 function fakeWallet(options: {
   start: number;
   known?: number[];
@@ -49,7 +49,7 @@ function fakeWallet(options: {
         case "wallet_addEthereumChain": {
           const next = target();
           known.add(next);
-          // 추가만 하고 전환하지 않는 지갑이 있다.
+          // Some wallets only add and do not switch.
           if (options.addSwitches !== false) chain = next;
           return null;
         }
@@ -63,7 +63,7 @@ function fakeWallet(options: {
 }
 
 beforeEach(() => {
-  // wallet.ts는 `window`가 있을 때만 provider를 돌려준다.
+  // wallet.ts returns a provider only when `window` exists.
   vi.stubGlobal("window", {});
 });
 
@@ -77,27 +77,27 @@ function use(provider: Eip1193Provider): void {
 }
 
 describe("rpcErrorCode", () => {
-  it("최상위 코드를 읽는다", () => {
+  it("reads the top-level code", () => {
     expect(rpcErrorCode({ code: 4902 })).toBe(4902);
     expect(rpcErrorCode({ code: 4001 })).toBe(4001);
   });
 
-  it("MetaMask 모바일이 -32603 안에 싼 코드를 읽는다", () => {
+  it("reads the code MetaMask mobile wraps inside -32603", () => {
     expect(rpcErrorCode({ code: -32603, data: { originalError: { code: 4902 } } })).toBe(4902);
   });
 
-  it("싼 코드가 없으면 최상위를 그대로 준다", () => {
+  it("returns the top level as-is when no wrapped code exists", () => {
     expect(rpcErrorCode({ code: -32603 })).toBe(-32603);
   });
 
-  it("코드가 없으면 undefined다", () => {
+  it("is undefined when there is no code", () => {
     expect(rpcErrorCode(new Error("no code"))).toBeUndefined();
     expect(rpcErrorCode(null)).toBeUndefined();
   });
 });
 
-describe("switchChain — 체인이 없는 지갑", () => {
-  it("데스크톱 MetaMask(4902) — 추가를 제안하고 그 체인으로 간다", async () => {
+describe("switchChain — wallet without the chain", () => {
+  it("desktop MetaMask (4902) — offers to add and moves to that chain", async () => {
     const wallet = fakeWallet({ start: 1 });
     use(wallet.provider);
 
@@ -107,7 +107,7 @@ describe("switchChain — 체인이 없는 지갑", () => {
     expect(wallet.chain()).toBe(97);
   });
 
-  it("MetaMask 모바일(-32603 안의 4902) — 추가를 제안한다", async () => {
+  it("MetaMask mobile (4902 inside -32603) — offers to add", async () => {
     const wallet = fakeWallet({
       start: 1,
       switchFailure: () => ({
@@ -124,7 +124,7 @@ describe("switchChain — 체인이 없는 지갑", () => {
     expect(wallet.chain()).toBe(56);
   });
 
-  it("코드 없이 실패하는 지갑 — 그래도 추가를 제안한다", async () => {
+  it("wallet failing with no code — still offers to add", async () => {
     const wallet = fakeWallet({ start: 1, switchFailure: () => ({ message: "Unrecognized chain ID" }) });
     use(wallet.provider);
 
@@ -134,7 +134,7 @@ describe("switchChain — 체인이 없는 지갑", () => {
     expect(wallet.chain()).toBe(56);
   });
 
-  it("사용자가 거부하면 추가를 띄우지 않는다 — 거부는 선택이다", async () => {
+  it("does not prompt to add when the user rejects — rejection is a choice", async () => {
     const wallet = fakeWallet({ start: 1, switchFailure: () => ({ code: 4001, message: "User rejected" }) });
     use(wallet.provider);
 
@@ -142,13 +142,13 @@ describe("switchChain — 체인이 없는 지갑", () => {
 
     expect(failure).toBeInstanceOf(WalletError);
     expect((failure as WalletError).rejectedByUser).toBe(true);
-    // 감싸도 원래 코드가 남는다. 연결 기록이 이 값을 쓴다.
+    // The original code survives wrapping. The connection log uses this value.
     expect((failure as WalletError).code).toBe(4001);
     expect(rpcErrorCode(failure)).toBe(4001);
     expect(wallet.calls).not.toContain("wallet_addEthereumChain");
   });
 
-  it("추가만 하고 전환하지 않는 지갑 — 한 번 더 전환한다", async () => {
+  it("wallet that adds but does not switch — switches once more", async () => {
     const wallet = fakeWallet({ start: 1, addSwitches: false });
     use(wallet.provider);
 
@@ -160,7 +160,7 @@ describe("switchChain — 체인이 없는 지갑", () => {
 });
 
 describe("ensureChain", () => {
-  it("이미 맞으면 전환을 요청하지 않는다", async () => {
+  it("does not request a switch when already aligned", async () => {
     const wallet = fakeWallet({ start: 97 });
     use(wallet.provider);
 
@@ -168,7 +168,7 @@ describe("ensureChain", () => {
     expect(wallet.calls).not.toContain("wallet_switchEthereumChain");
   });
 
-  it("다르면 전환하고 이전 체인을 알려 준다", async () => {
+  it("switches when different and reports the previous chain", async () => {
     const wallet = fakeWallet({ start: 1, known: [1, 56] });
     use(wallet.provider);
 
@@ -177,7 +177,7 @@ describe("ensureChain", () => {
 });
 
 describe("walletFlags", () => {
-  it("지갑이 켠 표시만 모은다 — 기록용이다", () => {
+  it("collects only the flags the wallet sets — for logging", () => {
     const provider = { request: async () => null, isMetaMask: true, isBraveWallet: true, isTrust: false };
     expect(walletFlags(provider as unknown as Eip1193Provider)).toEqual(["isMetaMask", "isBraveWallet"]);
     expect(walletFlags(null)).toEqual([]);

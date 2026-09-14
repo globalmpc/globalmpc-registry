@@ -9,12 +9,12 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 /**
  * Authority Registry — spec 05 §5.11, OD-42·OD-43.
  *
- * **연동되지 않은 기관을 목록에서 빼지 않는다.** 빼면 "왜 이 기관은 없나"를 알
- * 수 없고, 활성으로 두면 있지도 않은 연동을 약속한다. R5 gate가 요구하는
- * "미확인 integration 과장 0"이 이 화면의 판정 기준이다.
+ * **Authorities without an integration stay in the list.** Removing them hides "why is this
+ * authority missing"; marking them active promises an integration that does not exist. The R5 gate
+ * criterion "zero overstated unverified integrations" is this screen's pass condition.
  *
- * 각 기관이 **확인하지 않는 것**을 확인해 주는 것과 나란히 놓는다. 한쪽만
- * 보여주면 읽는 쪽이 전체 확인으로 오해한다.
+ * Each authority's **what it does not confirm** sits beside what it confirms. Showing only
+ * one side makes readers assume full confirmation.
  */
 export default function AuthoritiesPage() {
   const { token, loading: sessionLoading } = useSession();
@@ -93,7 +93,7 @@ export default function AuthoritiesPage() {
               <dt>Manual check</dt>
               <dd className="mono" style={{ color: "var(--alert)" }}>
                 {profile.manualCount}
-                {/* 수동은 장애가 아니다. 사람이 조회한다. */}
+                {/* Manual is not an outage. A person performs the lookup. */}
                 <div className="meta">Not an outage — a path where a person performs the lookup</div>
               </dd>
               <dt>Pending or blocked</dt>
@@ -124,7 +124,7 @@ export default function AuthoritiesPage() {
                       </td>
                       <td className="meta">{authority.proves.join(", ")}</td>
                       <td className="meta" style={{ color: "var(--alert)" }}>
-                        {/* 한쪽만 보여주면 전체 확인으로 오해한다(05 §5.11). */}
+                        {/* Showing one side only is misread as full confirmation (05 §5.11). */}
                         {authority.doesNotProve.join(", ")}
                       </td>
                       <td>

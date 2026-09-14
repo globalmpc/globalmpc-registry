@@ -6,15 +6,15 @@ import { useSession } from "@/lib/session";
 import { Address } from "@/components/Address";
 
 /**
- * 권한이 막혔을 때 도착하는 화면.
+ * The screen people land on when permission is blocked.
  *
- * `authorize()`가 거절하면서 `accessRequestPath`를 돌려주고, `ErrorNotice`가 그것을
- * 링크로 건다(11 §11.7 "Permission: 필요한 role과 access request 경로"). 그 경로에
- * 화면이 없으면 사용자는 "권한을 요청하라"는 안내를 따라가 404를 만난다.
+ * `authorize()` returns `accessRequestPath` when it rejects, and `ErrorNotice` renders it
+ * as a link (11 §11.7 "Permission: the required role and the access request path"). Without a screen
+ * at that path, a user following "request access" hits a 404.
  *
- * **이 화면은 요청을 접수하지 않는다.** 접수 API가 없기 때문이다. 없는 것을 있는
- * 것처럼 보이는 버튼을 두면, 누른 사람은 요청이 접수됐다고 믿고 기다린다. 그래서
- * 지금 무엇이 부족하고 누가 그것을 줄 수 있는지만 적는다.
+ * **This screen does not accept requests.** There is no intake API. A button that makes a missing
+ * feature look present leads people to believe their request was filed and to wait. So
+ * it only states what is missing now and who can grant it.
  */
 
 export type AccessRequestKind = "assurance" | "role" | "project";

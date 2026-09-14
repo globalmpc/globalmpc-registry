@@ -3,13 +3,13 @@ import { privateKeyToAccount } from "viem/accounts";
 import { runMigrations } from "@mpc/db";
 
 /**
- * E2E용 고정 seed.
+ * Fixed seed for E2E.
  *
- * 웹의 `DEMO_ACCOUNTS`가 고정 주소를 쓰므로 seed도 같은 값을 만든다. 랜덤을
- * 쓰면 화면의 계정 카드와 DB가 어긋난다.
+ * The web's `DEMO_ACCOUNTS` use fixed addresses, so the seed produces the same values.
+ * Random values would make the account cards on screen diverge from the DB.
  *
- * 매 실행마다 스키마를 다시 만든다 — E2E는 이전 실행의 잔여 데이터에 의존하면
- * 안 된다.
+ * The schema is recreated on every run — E2E must not depend on leftover data from a
+ * previous run.
  */
 
 export const E2E_TENANT_A = "e0000000-0000-4000-8000-00000000000a";
@@ -20,15 +20,16 @@ export const E2E_ORG_B = "bbbbbbbb-0000-0000-0000-000000000001";
 export const E2E_ORG_C = "cccccccc-1000-0000-0000-000000000001";
 
 /**
- * 데모 계정 주소는 실행 시점에 주어진 키에서 유도한다.
+ * Demo account addresses are derived from keys supplied at run time.
  *
- * **키를 저장소에 두지 않는다.** 두면 그것을 아는 누구나 배포된 주소에서 그
- * 역할로 로그인한다. `playwright.config.ts`가 실행마다 새로 만들어
- * `E2E_DEMO_ACCOUNT_KEYS`로 넘기고, 같은 값이 웹의 `NEXT_PUBLIC_DEMO_ACCOUNT_KEYS`로도
- * 간다 — 화면의 계정 카드와 여기 seed가 같은 키를 보게 하는 것이 목적이다.
+ * **Keys are not kept in the repository.** If they were, anyone who knows them could
+ * sign in with that role on a deployed address. `playwright.config.ts` generates them
+ * fresh on every run and passes them as `E2E_DEMO_ACCOUNT_KEYS`; the same value also goes
+ * to the web as `NEXT_PUBLIC_DEMO_ACCOUNT_KEYS` — so the account cards on screen and this
+ * seed see the same keys.
  *
- * 주소를 하드코딩하지 않는 이유도 같다. 키와 어긋나면 화면에서 로그인은 되는데
- * 역할이 없는 상태가 된다 — 원인을 찾기 어려운 종류의 불일치다.
+ * Addresses are not hardcoded for the same reason. If they diverge from the keys, sign-in
+ * succeeds on screen but no role is attached — a mismatch whose cause is hard to find.
  */
 const DEMO_KEYS: Readonly<Record<string, string>> = JSON.parse(
   process.env["E2E_DEMO_ACCOUNT_KEYS"] ?? "{}",
@@ -37,10 +38,10 @@ const DEMO_KEYS: Readonly<Record<string, string>> = JSON.parse(
 function addressOfLabel(label: string): string {
   const privateKey = DEMO_KEYS[label];
   if (!privateKey) {
-    // 조용히 넘어가면 role_bindings가 엉뚱한 주소에 붙고, 스펙은 "권한 없음"으로
-    // 실패한다. 원인이 seed에 있다는 것이 그 실패에서는 보이지 않는다.
+    // Passing silently would attach role_bindings to the wrong address, and specs would
+    // fail with "no permission". That failure does not reveal that the cause is the seed.
     throw new Error(
-      `E2E_DEMO_ACCOUNT_KEYS에 "${label}"이 없다. playwright.config.ts를 거쳐 실행한다.`,
+      `E2E_DEMO_ACCOUNT_KEYS has no "${label}". Run through playwright.config.ts.`,
     );
   }
   return privateKeyToAccount(privateKey as `0x${string}`).address.toLowerCase();
@@ -53,17 +54,17 @@ export const OPERATOR_C = addressOfLabel("Operator C");
 export const STEWARD_A = addressOfLabel("Steward A");
 export const APPROVER_A = addressOfLabel("Approver A");
 export const REVIEWER_A = addressOfLabel("Reviewer A");
-/** 검사 서비스. 사람이 아니라 시스템 identity다. */
+/** Scan service. A system identity, not a person. */
 export const SCAN_SERVICE = addressOfLabel("Scan Service");
 export const PROPOSER_A = addressOfLabel("Proposer A");
 export const VOTER_A = addressOfLabel("Voter A");
 
-/** 검토자 subject·credential·schema. Verification Workbench가 이 id들을 쓴다. */
+/** Reviewer subject, credential and schema. The Verification Workbench uses these ids. */
 export const E2E_REVIEWER_SUBJECT = "aaaaaaaa-0000-0000-0000-000000000006";
 export const E2E_CREDENTIAL_ID = "eeeeeeee-0000-0000-0000-000000000001";
 export const E2E_ATTESTATION_SCHEMA_ID = "eeeeeeee-0000-0000-0000-000000000002";
 
-/** 준비도 화면이 쓰는 규칙 세트. packages/policy의 fixture와 같은 내용이다. */
+/** Rule set used by the readiness screen. Same content as the fixture in packages/policy. */
 const RULE_SET = {
   ruleSetId: "registry-publication-gate",
   version: "1.0.0",
@@ -75,7 +76,7 @@ const RULE_SET = {
   requirements: [
     {
       requirementId: "project-identity",
-      label: "프로젝트 식별 정보와 책임 주체",
+      label: "Project identity and responsible party",
       appliesWhen: { op: "always" },
       requiredClaimTypes: ["project_identity"],
       minimumGrade: "self_reported",
@@ -87,7 +88,7 @@ const RULE_SET = {
     },
     {
       requirementId: "mining-right",
-      label: "광업권 존재와 유효기간",
+      label: "Mining right existence and validity period",
       appliesWhen: { op: "always" },
       requiredClaimTypes: ["mining_right_registration"],
       minimumGrade: "partially_verified",
@@ -143,8 +144,8 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
         assurance: "high_assurance",
         role: "mpc_operator",
       },
-      // 권한은 있는데 데이터가 없는 계정. "빈 목록"과 "권한 없음"을 화면이
-      // 구분하는지 확인하려면 이 상태가 다른 테스트의 영향을 받지 않아야 한다.
+      // An account with permission but no data. To check that the screen distinguishes
+      // "empty list" from "no permission", this state must not be affected by other tests.
       {
         tenant: E2E_TENANT_C,
         slug: "tenant-c",
@@ -186,8 +187,8 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       `;
     }
 
-    // tenant A 소속이지만 역할이 없는 계정. 401(미등록)과 403(권한 부족)을
-    // 화면에서 구분해 보여주는지 검증하는 데 쓴다.
+    // An account in tenant A without a role. Used to verify that the screen distinguishes
+    // 401 (not registered) from 403 (insufficient permission).
     const readerSubject = "aaaaaaaa-0000-0000-0000-000000000003";
     await sql`
       INSERT INTO core.subjects (id, tenant_id, kind, display_name)
@@ -201,7 +202,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       )
     `;
 
-    // Data Room·준비도 화면이 쓰는 데모 authority·connection·규칙 세트.
+    // Demo authority, connection and rule set used by the Data Room and readiness screens.
     await sql`
       INSERT INTO core.authorities (
         id, tenant_id, name, jurisdiction, proves, does_not_prove,
@@ -223,8 +224,8 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
         'cccccccc-0000-0000-0000-000000000002', ${E2E_TENANT_A},
         'cccccccc-0000-0000-0000-000000000001', 'mn-mineral-registry',
         'authenticated_api', 'data sharing agreement 2026-01', 'vault://mn/registry', 'active',
-        -- .test는 예약 TLD라 해석되지 않는다. 시험용 고정값이 실제 기관 주소로
-        -- 오해되지 않게 한다 — 실제 endpoint는 OD-42 협의 뒤에 설정으로 들어온다.
+        -- .test is a reserved TLD and does not resolve. This keeps the test fixture from
+        -- being mistaken for a real agency address — the real endpoint arrives via config after the OD-42 agreement.
         'https://registry.example.test/mineral/licenses', 'none', 'e2e', 'e2e'
       )
     `;
@@ -239,17 +240,17 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       )
     `;
 
-    // steward·gate approver·reviewer. 역할 분리를 화면에서 확인하려면 별도 계정이
-    // 필요하다. 특히 검토자는 gate 결정권자와 같은 사람이면 안 된다(02 §2.4).
+    // steward, gate approver, reviewer. Checking role separation on screen needs separate
+    // accounts. In particular, the reviewer must not be the same person as the gate decider (02 §2.4).
     for (const extra of [
       { subject: "aaaaaaaa-0000-0000-0000-000000000004", wallet: STEWARD_A, label: "Steward A", role: "data_steward", assurance: "identity_bound" },
       { subject: "aaaaaaaa-0000-0000-0000-000000000005", wallet: APPROVER_A, label: "Approver A", role: "gate_approver", assurance: "high_assurance" },
       { subject: E2E_REVIEWER_SUBJECT, wallet: REVIEWER_A, label: "Reviewer A", role: "reviewer_cp_qp", assurance: "high_assurance" },
-      // 검사 서비스. `upload.scan_result`만 갖는다 — 파일을 올린 사람이 자기
-      // 파일을 통과시킬 수 없게 사람 역할과 분리한다.
+      // Scan service. Holds only `upload.scan_result` — kept separate from human roles so
+      // the person who uploads a file cannot pass their own file.
       { subject: "aaaaaaaa-0000-0000-0000-000000000007", wallet: SCAN_SERVICE, label: "Scan Service", role: "scan_service", assurance: "high_assurance" },
       { subject: "aaaaaaaa-0000-0000-0000-000000000008", wallet: PROPOSER_A, label: "Proposer A", role: "protocol_proposer", assurance: "identity_bound" },
-      // 투표권은 보유에서 나오지 신원에서 나오지 않는다(02 §2.3).
+      // Voting rights come from holdings, not from identity (02 §2.3).
       { subject: "aaaaaaaa-0000-0000-0000-000000000009", wallet: VOTER_A, label: "Voter A", role: "protocol_voter", assurance: "wallet_only" },
     ]) {
       await sql`
@@ -270,8 +271,8 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       `;
     }
 
-    // 연동되지 않은 기관과 계획 단계 기관. 목록에서 빼면 "왜 이 기관은 없나"를
-    // 알 수 없고, 활성으로 두면 있지도 않은 연동을 약속한다(R5 gate).
+    // An unintegrated authority and a planned-stage authority. Leaving them out of the list
+    // hides "why is this authority missing"; marking them active promises an integration that does not exist (R5 gate).
     await sql`
       INSERT INTO core.authorities (
         id, tenant_id, name, jurisdiction, proves, does_not_prove,
@@ -303,11 +304,11 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       ) VALUES (
         'cccccccc-0000-0000-0000-000000000005', ${E2E_TENANT_A},
         'cccccccc-0000-0000-0000-000000000004', 'mn-environmental',
-        'authenticated_api', '접근 협의 예정', 'planned'
+        'authenticated_api', 'Access agreement planned', 'planned'
       )
     `;
 
-    // 검토자의 자격과 그 자격이 덮는 범위. attestation은 이것 없이 만들 수 없다.
+    // The reviewer's credential and the scope it covers. An attestation cannot be created without it.
     await sql`
       INSERT INTO core.credentials (
         id, tenant_id, subject_id, organization_id, issuer_reference,
@@ -328,18 +329,17 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       ) VALUES (
         ${E2E_ATTESTATION_SCHEMA_ID}, ${E2E_TENANT_A}, 'mining-right-signoff', '1',
         'professional_signoff', ARRAY['mining_right_registration'],
-        ARRAY['government_registry'], ARRAY['현장 실사를 포함하지 않는다'],
+        ARRAY['government_registry'], ARRAY['Does not include site due diligence'],
         'MNG', 'active'
       )
     `;
 
-    // tenant B에 프로젝트를 하나 만들어 둔다. tenant A 화면에 이것이 보이면
-    // 격리가 깨진 것이다.
+    // Create one project in tenant B. If it shows up on tenant A's screens, isolation is broken.
     await sql`
       INSERT INTO core.projects (
         id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        gen_random_uuid(), ${E2E_TENANT_B}, 'TENANT-B-ONLY', 'Tenant B 전용 프로젝트',
+        gen_random_uuid(), ${E2E_TENANT_B}, 'TENANT-B-ONLY', 'Tenant B only project',
         'MNG', ARRAY['gold'], ${E2E_ORG_B}
       )
     `;
@@ -348,5 +348,5 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
   }
 }
 
-// CLI 진입점은 `seed-cli.ts`에 있다. Playwright가 이 모듈을 CJS로 로드하므로
-// 여기서 `import.meta`를 쓰면 globalSetup이 깨진다.
+// The CLI entry point is in `seed-cli.ts`. Playwright loads this module as CJS, so using
+// `import.meta` here breaks globalSetup.

@@ -9,12 +9,12 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 /**
  * Integrations — spec 11 §11.2.
  *
- * `/w/authorities`가 기관 등록·승인만 덮었다. 그러면 "이 시스템이 지금 무엇에
- * 연결돼 있나"에 답할 자리가 없다 — 기관은 있는데 연동이 꺼져 있거나, 연동은
- * 활성인데 기관이 아직 승인 전인 상태가 보이지 않는다.
+ * `/w/authorities` covered only authority registration and approval. That left no place to answer
+ * "what is this system connected to right now" — an authority with its integration off, or an active
+ * integration whose authority is not yet approved, stays invisible.
  *
- * **연결 성공이 검증이 아니다**(REQUIRED_BOUNDARY_COPY.sourceStatus). 이 화면은
- * 연결 상태만 말하며 그 출처가 옳다는 뜻이 아니다.
+ * **A successful connection is not verification** (REQUIRED_BOUNDARY_COPY.sourceStatus). This screen
+ * reports connection state only; it does not mean the source is correct.
  */
 export default function IntegrationsPage() {
   const { token, session, loading: sessionLoading } = useSession();
@@ -40,8 +40,8 @@ export default function IntegrationsPage() {
     return <p className="sub">No account is connected.</p>;
   }
 
-  // 부를 수 있는가로 가른다. `accepted`인데 adapter가 없으면 여전히 못 부른다 —
-  // 상태 이름이 아니라 그 사실로 갈라야 화면이 거짓말을 하지 않는다.
+  // Split on whether it can be called. `accepted` without an adapter still cannot be called —
+  // splitting on that fact, not the state name, keeps the screen from lying.
   const callable = authorities.filter((entry) => entry.callable);
   const blocked = authorities.filter((entry) => !entry.callable);
 
@@ -128,7 +128,7 @@ export default function IntegrationsPage() {
                     <td className="mono">{entry.state}</td>
                     <td className="mono">{entry.adapterState}</td>
                     <td style={{ color: "var(--muted-foreground)" }}>
-                      {/* 서버가 사유와 다음 행동을 함께 준다. 화면이 추측하지 않는다. */}
+                      {/* The server supplies the reason and next action. The screen does not guess. */}
                       {entry.adapterStateReason ?? "—"}
                       {entry.nextAction ? <div className="meta">{entry.nextAction}</div> : null}
                     </td>

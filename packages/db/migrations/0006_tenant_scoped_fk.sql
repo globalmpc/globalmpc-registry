@@ -1,18 +1,18 @@
--- tenant 경계를 넘는 참조를 DB가 막는다.
+-- The DB blocks references that cross the tenant boundary.
 --
--- **발견된 결함:** PostgreSQL의 외래키 검사는 **RLS를 우회한다.** 참조 대상 행이
--- 다른 tenant의 것이어도 존재하기만 하면 FK가 통과한다. 그래서 tenant A의
--- operator가 `owner_organization_id`에 tenant B의 조직 ID를 넣어 프로젝트를 만들 수
--- 있었다. RLS는 "보이는 행"을 제한할 뿐 "참조 가능한 행"을 제한하지 않는다.
+-- **Defect found:** PostgreSQL foreign key checks **bypass RLS.** If the referenced row
+-- exists, the FK passes even if it belongs to another tenant. So an operator in tenant A
+-- could create a project with tenant B's organization ID in `owner_organization_id`.
+-- RLS limits "visible rows", not "referenceable rows".
 --
--- **해결:** 부모 테이블에 `UNIQUE (tenant_id, id)`를 두고, 자식의 FK를
--- `(tenant_id, parent_id)` 복합키로 바꾼다. 그러면 tenant가 다른 행을 참조하는
--- 순간 FK 자체가 실패한다. 애플리케이션 검증에 의존하지 않는다.
+-- **Fix:** add `UNIQUE (tenant_id, id)` on parent tables and change child FKs to
+-- composite `(tenant_id, parent_id)` keys. Referencing a row of another tenant then
+-- fails the FK itself. No reliance on application validation.
 --
--- 02 §2.5의 tenant isolation을 RLS + composite FK 두 겹으로 만든다.
+-- Makes 02 §2.5 tenant isolation two-layered: RLS + composite FK.
 
 -- ---------------------------------------------------------------------------
--- 1. 부모 테이블에 (tenant_id, id) 유니크 제약
+-- 1. (tenant_id, id) unique constraint on parent tables
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE core.organizations          ADD CONSTRAINT organizations_tenant_scope_key          UNIQUE (tenant_id, id);
@@ -33,11 +33,11 @@ ALTER TABLE core.compliance_assessments ADD CONSTRAINT assessments_tenant_scope_
 ALTER TABLE core.registry_entries       ADD CONSTRAINT registry_entries_tenant_scope_key       UNIQUE (tenant_id, id);
 ALTER TABLE core.registry_entry_versions ADD CONSTRAINT registry_versions_tenant_scope_key     UNIQUE (tenant_id, id);
 ALTER TABLE chain.anchor_batches        ADD CONSTRAINT anchor_batches_tenant_scope_key         UNIQUE (tenant_id, id);
--- self-reference(replaced_by_id)도 tenant 경계를 지켜야 하므로 자신도 부모가 된다.
+-- The self-reference (replaced_by_id) must also respect the tenant boundary, so the table is its own parent.
 ALTER TABLE chain.transactions          ADD CONSTRAINT transactions_tenant_scope_key           UNIQUE (tenant_id, id);
 
 -- ---------------------------------------------------------------------------
--- 2. 단일 컬럼 FK를 tenant 포함 복합 FK로 교체
+-- 2. Replace single-column FKs with tenant-inclusive composite FKs
 -- ---------------------------------------------------------------------------
 
 -- Identity
@@ -62,7 +62,7 @@ ALTER TABLE core.role_bindings
   ADD CONSTRAINT role_bindings_org_same_tenant
     FOREIGN KEY (tenant_id, organization_id) REFERENCES core.organizations (tenant_id, id);
 
--- Project — 이 결함이 처음 발견된 지점이다.
+-- Project — where this defect was first found.
 ALTER TABLE core.projects
   DROP CONSTRAINT projects_owner_organization_id_fkey,
   ADD CONSTRAINT projects_owner_org_same_tenant
@@ -203,6 +203,6 @@ ALTER TABLE chain.transactions
   ADD CONSTRAINT transactions_replacement_same_tenant
     FOREIGN KEY (tenant_id, replaced_by_id) REFERENCES chain.transactions (tenant_id, id);
 
--- chain.anchor_batch_leaves는 tenant_id 컬럼이 없다. 상위 batch를 통해서만
--- 접근되므로 batch의 tenant 경계를 상속한다. R1에서 leaf 조회 경로가 생기면
--- tenant_id를 추가하고 같은 규칙을 적용한다.
+-- chain.anchor_batch_leaves has no tenant_id column. It is reachable only through its
+-- parent batch and inherits the batch's tenant boundary. When R1 adds a leaf lookup path,
+-- add tenant_id and apply the same rule.

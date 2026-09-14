@@ -1,15 +1,15 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
 
-  // 솔루션 파일이다. 자기 소스는 없고 하위 프로젝트만 모은다.
+  // Solution file. It has no sources of its own and only gathers the sub-projects.
   //
-  // `tsc --build`가 여기를 진입점으로 삼는다. 이 파일이 없으면 루트의
-  // `pnpm typecheck`가 tsconfig.json을 못 찾아 실패한다 — 패키지별로 따로 돌리는
-  // 방법은 있었지만 그 목록이 CI에만 있어서 루트 스크립트와 갈렸다.
+  // `tsc --build` uses this as its entry point. Without this file, the root
+  // `pnpm typecheck` fails to find tsconfig.json — running per package was possible,
+  // but that list lived only in CI and diverged from the root script.
   //
-  // `apps/web`은 여기 없다. Next의 생성 타입(`next typegen`)이 있어야 검사가
-  // 성립하므로 `@mpc/web`의 자체 typecheck 스크립트가 맡는다. 루트 스크립트가
-  // 둘을 이어 부른다.
+  // `apps/web` is not here. Its check needs Next's generated types (`next typegen`),
+  // so `@mpc/web`'s own typecheck script handles it. The root script chains
+  // the two.
   "files": [],
   "references": [
     { "path": "./packages/canonical" },

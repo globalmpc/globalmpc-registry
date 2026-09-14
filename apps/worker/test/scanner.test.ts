@@ -9,42 +9,42 @@ import type { ScanVerdict } from "../src/scanner.js";
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 바이러스 검사 — 05 §5.2.
+  * Virus scanning — 05 §5.2.
  *
- * 이 파일의 중심은 **오류와 감염을 구분한다**는 것이다. 감염 판정은 되돌릴 수
- * 없으므로(상태기계에 `scanned_infected → promoted` 경로가 없다) 스캐너 장애로
- * 그 상태를 만들면 정상 파일이 영구히 막힌다.
+  * The core of this file is **distinguishing errors from infections**. An infected verdict is
+  * irreversible (the state machine has no `scanned_infected → promoted` path), so producing that
+  * state from a scanner fault would block a clean file permanently.
  */
 
-describe("ClamAV 응답 해석", () => {
-  it("정상 응답을 clean으로 읽는다", () => {
+describe("ClamAV response parsing", () => {
+  it("reads a clean response as clean", () => {
     expect(parseClamResponse("stream: OK\0")).toEqual({ kind: "clean" });
   });
 
-  it("감염 응답에서 서명명을 뽑는다", () => {
-    // 무엇으로 판정했는지가 있어야 오탐을 확인할 수 있다.
+  it("extracts the signature name from an infected response", () => {
+    // False positives can only be checked if we know what triggered the verdict.
     expect(parseClamResponse("stream: Eicar-Test-Signature FOUND\0")).toEqual({
       kind: "infected",
       signature: "Eicar-Test-Signature",
     });
   });
 
-  it("ERROR 응답을 감염으로 읽지 않는다", () => {
+  it("does not read an ERROR response as infected", () => {
     const verdict = parseClamResponse("INSTREAM size limit exceeded. ERROR\0");
     expect(verdict.kind).toBe("error");
   });
 
-  it("빈 응답도 오류다", () => {
-    // 판정하지 못한 것을 정상으로 넘기면 검사가 없는 것과 같아진다.
+  it("an empty response is also an error", () => {
+    // Passing an undetermined result as clean is the same as having no scan.
     expect(parseClamResponse("").kind).toBe("error");
   });
 
-  it("모르는 형식을 정상으로 넘기지 않는다", () => {
+  it("does not pass an unknown format as clean", () => {
     expect(parseClamResponse("something unexpected").kind).toBe("error");
   });
 });
 
-describeDb("검사 worker", () => {
+describeDb("scan worker", () => {
   let sql: postgres.Sql;
   let tenantId: string;
   let projectId: string;
@@ -55,16 +55,16 @@ describeDb("검사 worker", () => {
     logs.push(record);
   };
 
-  /** 스캐너 대역. 실제 데몬으로는 타임아웃·연결 실패를 재현하기 어렵다. */
+  /** Scanner double. A real daemon makes timeouts and connection failures hard to reproduce. */
   let verdict: ScanVerdict = { kind: "clean" };
   const scan = async () => verdict;
   const options = { maxAttempts: 3, leaseMs: 60_000 };
 
   /**
-   * 보고 대역.
+    * Report double.
    *
-   * 실제로는 API가 상태를 바꾸므로 여기서 DB를 대신 갱신한다. 이 테스트가 보는
-   * 것은 "언제 보고하고 언제 하지 않는가"다.
+    * In reality the API changes the state, so this updates the DB instead. What this test checks is
+    * "when it reports and when it does not".
    */
   let reportError: Error | null = null;
   const reported: { uploadId: string; result: string }[] = [];
@@ -109,8 +109,8 @@ describeDb("검사 worker", () => {
     reportError = null;
     verdict = { kind: "clean" };
 
-    // 다른 케이스의 대기 업로드가 먼저 집히면 무엇을 검증했는지 알 수 없다.
-    // 지울 수는 없다 — object_uploads는 append-only다(0007). 대기 목록에서만 뺀다.
+    // If another case's pending upload is picked first, there is no telling what was verified.
+    // Rows cannot be deleted — object_uploads is append-only (0007). Only remove them from the queue.
     await sql`
       UPDATE core.object_uploads
       SET scan_attempts = 999
@@ -167,7 +167,7 @@ describeDb("검사 worker", () => {
     return row!;
   }
 
-  it("정상 판정이면 scanned_clean으로 옮기고 버전을 올린다", async () => {
+  it("moves a clean verdict to scanned_clean and bumps the version", async () => {
     const before = await stateOf();
     const result = await step();
 
@@ -177,30 +177,30 @@ describeDb("검사 worker", () => {
     expect(after.version).toBe(before.version + 1);
   });
 
-  it("감염 판정이면 서명명을 남긴다", async () => {
+  it("records the signature name for an infected verdict", async () => {
     verdict = { kind: "infected", signature: "Eicar-Test-Signature" };
     const result = await step();
 
     expect(result.verdict).toBe("infected");
     const after = await stateOf();
     expect(after.state).toBe("scanned_infected");
-    // 무엇으로 판정했는지가 없으면 오탐을 확인할 수 없다.
+    // Without knowing what triggered the verdict, false positives cannot be checked.
     expect(after.rejection_reason).toBe("Eicar-Test-Signature");
   });
 
-  it("검사 실패를 감염으로 기록하지 않는다", async () => {
+  it("does not record a scan failure as infected", async () => {
     verdict = { kind: "error", reason: "scan timeout" };
     const result = await step();
 
     expect(result.verdict).toBe("error");
     const after = await stateOf();
-    // 감염 판정은 되돌릴 수 없다. 스캐너 장애로 그 상태를 만들면 정상 파일이
-    // 영구히 막힌다.
+    // An infected verdict is irreversible. Producing it from a scanner fault would block a clean
+    // file permanently.
     expect(after.state).toBe("quarantined");
     expect(after.rejection_reason).toContain("scan_error");
   });
 
-  it("실패 뒤 스캐너가 돌아오면 이어서 진행한다", async () => {
+  it("resumes once the scanner comes back after a failure", async () => {
     verdict = { kind: "error", reason: "connection refused" };
     await step();
 
@@ -209,37 +209,37 @@ describeDb("검사 worker", () => {
     expect((await stateOf()).state).toBe("scanned_clean");
   });
 
-  it("보고에 실패하면 상태를 바꾸지 않는다", async () => {
+  it("does not change state when reporting fails", async () => {
     reportError = new Error("503 UNAVAILABLE");
     const result = await step();
 
     expect(result.verdict).toBe("error");
     const after = await stateOf();
-    // 보고하지 못한 것은 검사하지 않은 것과 같다. DB를 직접 고치면 API의
-    // 상태기계 검사를 우회하는 경로가 생긴다.
+    // Not reported is the same as not scanned. Fixing the DB directly would create a path that
+    // bypasses the API's state machine checks.
     expect(after.state).toBe("quarantined");
     expect(after.rejection_reason).toContain("report_error");
   });
 
-  it("객체가 없으면 상태를 바꾸지 않는다", async () => {
+  it("does not change state when the object is missing", async () => {
     objects.clear();
     const result = await step();
 
     expect(result.verdict).toBe("error");
-    // 저장소 장애와 실제 유실을 여기서 구분할 수 없다. 자동으로 정리하지 않는다.
+    // Store outage and actual loss cannot be told apart here. No automatic cleanup.
     expect((await stateOf()).state).toBe("quarantined");
   });
 
-  it("시도 횟수를 읽기 전에 올린다", async () => {
+  it("increments the attempt count before reading", async () => {
     verdict = { kind: "error", reason: "boom" };
     await step();
-    // 스캐너가 특정 파일에서 죽어도 그 파일이 큐를 영원히 막지 않는다.
+    // Even if the scanner dies on a particular file, that file does not block the queue forever.
     expect((await stateOf()).scan_attempts).toBe(1);
   });
 
-  it("lease가 유효한 동안 다른 worker가 집지 않는다", async () => {
-    // 검사가 오래 걸리는 사이 두 번째 worker가 같은 파일을 읽으면 낭비이고,
-    // 두 결과가 엇갈리면 어느 것이 맞는지 알 수 없다.
+  it("another worker does not pick it up while the lease is valid", async () => {
+    // A second worker reading the same file during a long scan is wasteful, and if the two results
+    // disagree there is no telling which is right.
     const leaseOnly = { maxAttempts: 3, leaseMs: 60_000 };
     const slowScan = () => new Promise<ScanVerdict>(() => {});
 
@@ -250,7 +250,7 @@ describeDb("검사 worker", () => {
     expect(second.handled).toBe(false);
   });
 
-  it("시도 상한에 닿으면 더 집지 않는다", async () => {
+  it("stops picking up once the attempt cap is reached", async () => {
     verdict = { kind: "error", reason: "boom" };
     await step();
     await step();
@@ -259,30 +259,30 @@ describeDb("검사 worker", () => {
     const next = await step();
     expect(next.handled).toBe(false);
 
-    // 감염으로 표시하지 않는다. 상태는 quarantined에 남고 시도만 멈춘다.
+    // Not marked infected. The state stays quarantined; only attempts stop.
     expect((await stateOf()).state).toBe("quarantined");
   });
 
-  it("backlog가 막힌 것을 따로 센다", async () => {
+  it("backlog counts stuck items separately", async () => {
     verdict = { kind: "error", reason: "boom" };
     await step();
     await step();
     await step();
 
     const backlog = await scanBacklog(sql, options.maxAttempts);
-    // 앞 케이스가 남긴 행도 함께 세므로 최소값으로 확인한다. 여기서 보려는 것은
-    // "대기와 막힌 것을 분리해서 센다"이지 절대 수치가 아니다.
+    // Rows left by earlier cases are counted too, so check a minimum. The point here is
+    // "pending and stuck are counted separately", not the absolute number.
     expect(backlog.pending).toBe(0);
     expect(backlog.stuck).toBeGreaterThanOrEqual(1);
   });
 
-  it("대기 중인 업로드가 없으면 아무것도 하지 않는다", async () => {
-    // `promoted`는 artifact를 요구한다(DB CHECK). 대기 목록에서 빼는 것이
-    // 목적이므로 `rejected`를 쓴다.
-    // 반려에는 사유가 필수다(DB CHECK) — 이유 없는 반려는 저장되지 않는다.
+  it("does nothing when no uploads are pending", async () => {
+    // `promoted` requires an artifact (DB CHECK). The goal is to remove it from the queue, so
+    // `rejected` is used.
+    // A rejection requires a reason (DB CHECK) — a rejection without a reason is not stored.
     await sql`
       UPDATE core.object_uploads
-      SET state = 'rejected', rejection_reason = '테스트 정리'
+      SET state = 'rejected', rejection_reason = 'test cleanup'
       WHERE id = ${uploadId}
     `;
     expect((await step()).handled).toBe(false);

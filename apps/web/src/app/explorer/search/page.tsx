@@ -7,7 +7,7 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 import { GlobalSearchForm } from "@/components/GlobalSearchForm";
 import { TxLink } from "@/components/TxLink";
 
-/** 지갑 주소 모양. 공개 기록에는 제출자 주소가 없어서 이것으로는 찾을 수 없다. */
+/** Wallet address shape. Public records carry no submitter address, so it cannot be found this way. */
 const ADDRESS_SHAPE = /^0x[0-9a-fA-F]{40}$/;
 
 const MATCHED_ON_LABEL: Readonly<Record<PublicSearchMatch["matchedOn"], string>> = {
@@ -26,11 +26,11 @@ function recordHref(match: PublicSearchMatch): string {
 }
 
 /**
- * 공개 통합 검색 결과.
+ * Public unified search results.
  *
- * 방문자가 가진 단서가 무엇이든(registry key, BscScan의 transaction hash, 증명서의
- * Merkle root·leaf hash) 게시된 기록으로 잇는다. `?q=`를 받으므로 결과를 링크로
- * 보낼 수 있다.
+ * Whatever clue a visitor holds (registry key, a transaction hash from BscScan, the certificate's
+ * Merkle root or leaf hash), link it to the published record. Accepts `?q=`, so results can be
+ * shared as a link.
  */
 export default function PublicSearchPage() {
   const [query, setQuery] = useState<string | null>(null);

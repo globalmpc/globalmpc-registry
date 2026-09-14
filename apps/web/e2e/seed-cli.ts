@@ -1,23 +1,23 @@
 import { seedE2eDatabase } from "./seed";
 
 /**
- * seed 실행 진입점.
+ * Entry point for running the seed.
  *
- * top-level await를 쓰지 않는다. `apps/web`은 Next.js 앱이라 package.json에
- * `type: module`이 없고, tsx가 이 파일을 CJS로 변환하기 때문이다.
+ * Does not use top-level await. `apps/web` is a Next.js app, so its package.json
+ * has no `type: module`, and tsx transpiles this file to CJS.
  */
 const url = process.env["DATABASE_URL"];
 
 if (!url) {
-  process.stderr.write("DATABASE_URL이 필요하다\n");
+  process.stderr.write("DATABASE_URL is required\n");
   process.exit(1);
 }
 
 seedE2eDatabase(url)
   .then(() => {
-    process.stdout.write("E2E seed 완료\n");
+    process.stdout.write("E2E seed done\n");
   })
   .catch((error: unknown) => {
-    process.stderr.write(`E2E seed 실패: ${String(error)}\n`);
+    process.stderr.write(`E2E seed failed: ${String(error)}\n`);
     process.exit(1);
   });

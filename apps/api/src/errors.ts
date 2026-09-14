@@ -1,11 +1,11 @@
 import type { ErrorEnvelope } from "@mpc/api-contract";
 
 /**
- * 07 §7.1의 error envelope.
+ * Error envelope from 07 §7.1.
  *
- * `retryable`이 필수인 이유: 07 §7.11이 `source_returned_no_record`와 timeout을
- * 같은 code로 반환하지 못하게 한다. 클라이언트가 재시도 여부를 추측하면
- * "기록 없음"을 장애로 오인한다.
+ * Why `retryable` is required: 07 §7.11 forbids returning `source_returned_no_record` and a
+ * timeout under the same code. If the client guesses whether to retry, it mistakes
+ * "no record" for an outage.
  */
 export class AppError extends Error {
   constructor(
@@ -35,10 +35,10 @@ export const conflict = (code: string, message: string, details?: Record<string,
   new AppError(code, message, 409, false, details);
 
 /**
- * 412 — If-Match가 현재 version과 다르다.
+ * 412 — If-Match differs from the current version.
  *
- * 클라이언트가 본 상태와 서버의 현재 상태가 다르다는 뜻이다. 재시도해도 같으므로
- * `retryable`은 false다. 다시 읽고 판단하는 것은 재시도가 아니다.
+ * The state the client saw differs from the server's current state. Retrying gives the same
+ * result, so `retryable` is false. Re-reading and deciding again is not a retry.
  */
 export const preconditionFailed = (
   code: string,
@@ -47,10 +47,10 @@ export const preconditionFailed = (
 ) => new AppError(code, message, 412, false, details);
 
 /**
- * 428 — versioned resource를 바꾸려는데 If-Match가 없다.
+ * 428 — Changing a versioned resource without If-Match.
  *
- * 412로 응답하면 "버전이 틀렸다"로 읽혀 클라이언트가 헤더를 안 보냈다는 사실이
- * 가려진다. 무엇이 빠졌는지 그대로 말한다.
+ * Answering 412 reads as "wrong version" and hides the fact that the client did not send the
+ * header. Say exactly what is missing.
  */
 export const preconditionRequired = (
   code: string,
@@ -62,10 +62,10 @@ export const unprocessable = (code: string, message: string, details?: Record<st
   new AppError(code, message, 422, false, details);
 
 /**
- * 429 — 요청 상한 초과.
+ * 429 — Request cap exceeded.
  *
- * `retryable`이 true다. 상한은 시간이 지나면 풀리므로 재시도 불가로 표시하면
- * 사용자가 포기한다 — 07 §7.11이 구분하라고 한 바로 그 차이다.
+ * `retryable` is true. The cap lifts over time; marking it non-retryable makes users give
+ * up — exactly the distinction 07 §7.11 requires.
  */
 export const tooManyRequests = (
   code: string,
@@ -87,10 +87,10 @@ export function toErrorEnvelope(error: unknown, correlationId: string): ErrorEnv
     };
   }
 
-  // 알 수 없는 오류의 내부 메시지를 밖으로 내보내지 않는다. 상세는 서버 로그에만 남는다.
+  // Do not expose internal messages of unknown errors. Details stay only in server logs.
   return {
     code: "INTERNAL_ERROR",
-    message: "요청을 처리하지 못했다",
+    message: "The request could not be processed",
     retryable: true,
     correlationId,
   };

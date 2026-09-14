@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react";
 
 /**
- * 공개 통합 검색 입력.
+ * Public unified search input.
  *
- * 결과는 `/explorer/search?q=`로 간다. 전체 페이지 이동으로 두는 이유는 결과 URL을
- * 그대로 남에게 보낼 수 있어야 해서다. 라벨에 "Search"를 쓰지 않는다 — Explorer
- * 목록 검색과 이름이 겹치면 둘이 같은 일을 한다고 읽힌다.
+ * Results go to `/explorer/search?q=`. It is a full page navigation so the result URL
+ * can be sent to others as-is. The label does not use "Search" — if it shares a name with Explorer
+ * list search, the two read as doing the same thing.
  */
 export function GlobalSearchForm({ initial = "" }: { readonly initial?: string }) {
   const [value, setValue] = useState(initial);

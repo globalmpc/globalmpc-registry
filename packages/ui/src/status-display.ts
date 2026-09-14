@@ -8,24 +8,24 @@ import {
 } from "@mpc/domain";
 
 /**
- * 상태 → 표시 매핑.
+ * Status → display mapping.
  *
- * spec 11 §11.4·§11.8·§11.11 / ADR-T11.
+ * spec 11 §11.4, §11.8, §11.11 / ADR-T11.
  *
- * 두 가지 규칙이 이 파일의 전부다.
+ * This file is two rules.
  *
- * 1. **색만으로 상태를 표현하지 않는다**(§11.8). 모든 항목이 토큰과 함께
- *    라벨·아이콘을 가진다. 색각 이상, 흑백 출력, 저대비 환경에서도 상태가
- *    읽혀야 한다.
- * 2. **문구를 컴포넌트에 하드코딩하지 않는다**(§7.3). API가 상태를 주면 UI가
- *    이 표를 조회한다. 그래야 12개 source result가 화면마다 다르게 번역되지 않는다.
+ * 1. **Never convey status by color alone** (§11.8). Every entry has a label and icon alongside
+ *    its token. Status must stay readable with color-vision deficiency, grayscale printing, and
+ *    low contrast.
+ * 2. **Never hardcode copy in components** (§7.3). The API supplies a status and the UI looks it
+ *    up in this table, so the 12 source results are not phrased differently per screen.
  *
- * 국문 문구는 spec §11.11 표의 원문이므로 남긴다. **화면에 나가는 것은
- * 영문이다**(OD-30) — 두 언어가 서로 다른 사실을 주장하지 않도록 같은 항목의
- * 두 문구는 한 자리에서 함께 고친다.
+ * The Korean copy is kept because it is the original text of the spec §11.11 table. **The screen
+ * shows English** (OD-30) — edit both strings of an entry together in one place so the two
+ * languages never assert different facts.
  */
 
-/** @mpc/design 토큰 이름. 리터럴 색상값을 쓰지 않는다. */
+/** @mpc/design token names. No literal color values. */
 export type DesignToken =
   | "--positive"
   | "--alert"
@@ -36,27 +36,27 @@ export type DesignToken =
 
 export interface StatusDisplay {
   readonly token: DesignToken;
-  /** 색과 독립적으로 상태를 전달하는 표식. */
+  /** Marker that conveys status independently of color. */
   readonly icon: "check" | "clock" | "cross" | "dash" | "question" | "warning";
   readonly labelKo: string;
   readonly labelEn: string;
-  /** 화면에서 사용자가 취할 다음 행동. */
+  /** The next action the user can take on screen. */
   readonly nextActionKo: string;
   readonly nextActionEn: string;
 }
 
-/** grade·readiness는 "이 상태가 뜻하지 않는 것"을 함께 갖는다(§11.6). */
+/** grade and readiness also carry "what this status does not mean" (§11.6). */
 export interface NotMeaning {
   readonly notMeaningKo: string;
   readonly notMeaningEn: string;
 }
 
 /**
- * 12개 source result — §11.11 표 그대로.
+ * The 12 source results — exactly as in the §11.11 table.
  *
- * `source_returned_no_record`(기록 없음)와 `source_unavailable`(확인 불가)이
- * 서로 다른 색·아이콘·문구·다음 행동을 갖는 것이 이 표의 핵심이다. 둘을 같은
- * "오류"로 보여주면 사용자는 존재하지 않는 기록을 계속 재시도한다.
+ * The point of this table is that `source_returned_no_record` (no record) and `source_unavailable`
+ * (cannot check) have different colors, icons, copy, and next actions. Showing both as the same
+ * "error" makes users keep retrying a record that does not exist.
  */
 export const SOURCE_RESULT_DISPLAY: Readonly<Record<SourceResult, StatusDisplay>> = {
   confirmed_from_source: {
@@ -158,9 +158,9 @@ export const SOURCE_RESULT_DISPLAY: Readonly<Record<SourceResult, StatusDisplay>
 };
 
 /**
- * grade — §11.4 상태 언어.
+ * grade — §11.4 status language.
  *
- * 각 라벨 옆의 "금지 해석"은 disclaimer로 근접 배치한다(§11.6).
+ * The "prohibited interpretation" next to each label is placed nearby as a disclaimer (§11.6).
  */
 export const GRADE_DISPLAY: Readonly<Record<Grade, StatusDisplay & NotMeaning>> = {
   verified: {
@@ -218,8 +218,8 @@ export const GRADE_DISPLAY: Readonly<Record<Grade, StatusDisplay & NotMeaning>> 
 /**
  * readiness — §11.4.
  *
- * `gap`과 `not_evaluable`은 둘 다 go-blocking이지만 원인이 다르다. 색이 아니라
- * 텍스트로 구분한다(ADR-T11).
+ * `gap` and `not_evaluable` both block go but have different causes. They are distinguished by
+ * text, not color (ADR-T11).
  */
 export const READINESS_DISPLAY: Readonly<Record<ReadinessStatus, StatusDisplay & NotMeaning>> = {
   ok: {
@@ -264,15 +264,15 @@ export const READINESS_DISPLAY: Readonly<Record<ReadinessStatus, StatusDisplay &
   },
 };
 
-/** 매핑 누락을 컴파일 타임과 테스트에서 모두 잡는다. */
+/** Catches missing mappings at both compile time and test time. */
 export function assertDisplayCoverage(): void {
   for (const result of SOURCE_RESULTS) {
-    if (!SOURCE_RESULT_DISPLAY[result]) throw new Error(`source result 표시 누락: ${result}`);
+    if (!SOURCE_RESULT_DISPLAY[result]) throw new Error(`missing source result display: ${result}`);
   }
   for (const grade of GRADES) {
-    if (!GRADE_DISPLAY[grade]) throw new Error(`grade 표시 누락: ${grade}`);
+    if (!GRADE_DISPLAY[grade]) throw new Error(`missing grade display: ${grade}`);
   }
   for (const status of READINESS_STATUSES) {
-    if (!READINESS_DISPLAY[status]) throw new Error(`readiness 표시 누락: ${status}`);
+    if (!READINESS_DISPLAY[status]) throw new Error(`missing readiness display: ${status}`);
   }
 }

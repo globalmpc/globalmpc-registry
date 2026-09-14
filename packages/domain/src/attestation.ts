@@ -1,10 +1,10 @@
 import type { AttestationType } from "./provenance.js";
 
 /**
- * Verification Attestation 서명 전 검사 — spec 04 §4.2 / 13 AC-01·AC-17.
+ * Verification Attestation pre-signature checks — spec 04 §4.2 / 13 AC-01·AC-17.
  *
- * 이 모듈은 "서명해도 되는가"만 판정한다. 서명 자체는 사용자의 key로 이루어지며
- * 서버는 private key를 보관하거나 대리 서명하지 않는다(07 §7.2, 02 §2.8).
+ * This module only decides "may this be signed". Signing itself uses the user's key; the
+ * server never holds a private key or signs on anyone's behalf (07 §7.2, 02 §2.8).
  */
 
 export type ConflictStatus = "none" | "disclosed_resolved" | "unresolved";
@@ -23,10 +23,10 @@ export interface AttestationSignRequest {
   readonly attestationType: AttestationType;
   readonly claimScope: readonly string[];
   /**
-   * 검토의 범위와 한계. 빈 문자열을 허용하지 않는다(05 §5.3, AC-01).
+   * Scope and limitations of the review. Empty strings are not allowed (05 §5.3, AC-01).
    *
-   * "한계 없음"은 존재하지 않는 검토 결과다. 모든 전문 검토는 범위 밖 사실을
-   * 보증하지 않는다.
+   * "No limitations" is a review result that does not exist. No professional review vouches for
+   * facts outside its scope.
    */
   readonly limitations: string;
   readonly conflictStatus: ConflictStatus;
@@ -35,8 +35,8 @@ export interface AttestationSignRequest {
   readonly hasActiveAssignment: boolean;
   readonly schemaState: "draft" | "approved" | "active" | "superseded" | "retired";
   /**
-   * 서명자가 이 evidence의 제출자인가.
-   * `independent_assurance`는 제출자 본인이 할 수 없다(02 §2.4 규칙 1).
+   * Is the signer the submitter of this evidence?
+   * The submitter cannot give `independent_assurance` (02 §2.4 rule 1).
    */
   readonly signerSubmittedEvidence: boolean;
 }
@@ -76,21 +76,21 @@ export function checkAttestationSignable(
 }
 
 /**
- * credential 시점 평가 — AC-12·AC-17.
+ * Point-in-time credential evaluation — AC-12·AC-17.
  *
- * 서명 당시 유효했던 credential이 현재 만료·철회됐다면 **과거 서명 사실은 그대로
- * 보존**하고 앞으로의 적용 가능성만 재평가한다. 과거를 소급해 무효로 만들면
- * 그때 내려진 결정의 근거를 재현할 수 없다.
+ * If a credential valid at signing time is now expired or revoked, **the past signature is
+ * preserved as is** and only future applicability is re-evaluated. Retroactively voiding the past
+ * would make the basis of decisions made at that time unreproducible.
  */
 export type CredentialCurrentStatus = "valid" | "expired" | "revoked" | "suspended" | "unknown";
 
 export type OngoingApplicability = "applicable" | "needs_review" | "not_applicable";
 
 export interface CredentialApplicability {
-  /** 서명 시점의 유효성. 현재 상태로 바뀌지 않는다. */
+  /** Validity at signing time. Does not change with the current state. */
   readonly pastSignatureRemainsValid: boolean;
   readonly ongoingApplicability: OngoingApplicability;
-  /** 하류 grade·readiness 재평가가 필요한가. */
+  /** Is downstream grade/readiness re-evaluation needed? */
   readonly triggersDownstreamReassessment: boolean;
 }
 
@@ -99,7 +99,7 @@ export function evaluateCredentialApplicability(input: {
   readonly currentStatus: CredentialCurrentStatus;
 }): CredentialApplicability {
   if (!input.validAtAttestationTime) {
-    // 서명 당시에도 유효하지 않았다면 그 서명은 애초에 근거가 될 수 없다.
+    // If it was not valid even at signing time, that signature could never be evidence.
     return {
       pastSignatureRemainsValid: false,
       ongoingApplicability: "not_applicable",
@@ -123,8 +123,8 @@ export function evaluateCredentialApplicability(input: {
         triggersDownstreamReassessment: true,
       };
     case "revoked":
-      // 철회는 issuer가 자격 자체를 무효로 만든 것이다. 과거 서명 사실은 남지만
-      // 앞으로의 근거로 쓸 수 없다.
+      // Revocation means the issuer voided the credential itself. The past signature remains,
+      // but it cannot serve as evidence going forward.
       return {
         pastSignatureRemainsValid: true,
         ongoingApplicability: "not_applicable",
@@ -134,9 +134,9 @@ export function evaluateCredentialApplicability(input: {
 }
 
 /**
- * 서명 유효성과 authority 수용은 다른 상태다 — 불변조건 13·14, AC-15·AC-16.
+ * Signature validity and authority acceptance are distinct states — invariants 13·14, AC-15·AC-16.
  *
- * 이 함수가 존재하는 이유는 네 가지를 한 boolean으로 합치려는 시도를 막기 위해서다.
+ * This function exists to block attempts to collapse the four into one boolean.
  */
 export interface AcceptanceFacts {
   readonly signatureValid: boolean;
@@ -153,7 +153,7 @@ export type AcceptanceBlocker =
   | "NOT_ASSIGNED"
   | "CLAIM_OUTSIDE_AUTHORITY_SCOPE";
 
-/** canonical claim으로 받아들이기 전 확인할 blocker 전체를 반환한다. */
+/** Returns every blocker to check before accepting as a canonical claim. */
 export function canonicalAcceptanceBlockers(facts: AcceptanceFacts): AcceptanceBlocker[] {
   const blockers: AcceptanceBlocker[] = [];
   if (!facts.signatureValid) blockers.push("SIGNATURE_INVALID");

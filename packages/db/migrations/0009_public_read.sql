@@ -1,20 +1,20 @@
--- 무인증 공개 조회 — spec 07 §7.1, OD-02.
+-- Unauthenticated public read — spec 07 §7.1, OD-02.
 --
--- **왜 필요한가:** Public Explorer는 tenant를 모른다. 로그인하지 않은 독자가
--- 조회하기 때문이다. 그런데 `registry_entry_versions`에는 RLS가 걸려 있고 정책이
--- `tenant_id = core.current_tenant()`를 요구하므로, 공개 조회는 항상 0행을 받는다.
+-- **Why:** the Public Explorer does not know the tenant, because readers are not
+-- logged in. But `registry_entry_versions` has RLS and the policy requires
+-- `tenant_id = core.current_tenant()`, so public reads always get 0 rows.
 --
--- 세션 해석과 같은 문제이고 같은 해법을 쓴다 — 공개 경로만 SECURITY DEFINER
--- 함수로 분리한다.
+-- Same problem as session resolution, same fix — only the public path is split into
+-- SECURITY DEFINER functions.
 --
--- **보안 경계:**
+-- **Security boundary:**
 --
--- 1. `status IN ('published','revoked','superseded')`만 반환한다. draft는 절대
---    나가지 않는다.
--- 2. `public_projection` 컬럼만 반환한다. `source_snapshot_hash` 같은 내부
---    필드는 노출하지 않는다.
--- 3. tenant_id를 반환하지 않는다. 어느 tenant의 기록인지 알 수 없다.
--- 4. `search_path`를 고정해 함수 하이재킹을 막는다.
+-- 1. Returns only `status IN ('published','revoked','superseded')`. Drafts never
+--    leave.
+-- 2. Returns only the `public_projection` column. Internal fields such as
+--    `source_snapshot_hash` are not exposed.
+-- 3. Does not return tenant_id. The owning tenant cannot be determined.
+-- 4. `search_path` is pinned to prevent function hijacking.
 
 CREATE FUNCTION core.public_registry_versions(p_registry_type TEXT, p_public_key TEXT)
 RETURNS TABLE (
@@ -42,7 +42,7 @@ AS $$
   ORDER BY v.version DESC
 $$;
 
--- inclusion proof도 무인증 조회 대상이다(OD-02: proof는 무로그인 read-only).
+-- Inclusion proofs are also readable without auth (OD-02: proofs are login-free read-only).
 CREATE FUNCTION core.public_inclusion_proof(p_entry_version_id UUID)
 RETURNS TABLE (
   leaf_hash          TEXT,
@@ -68,7 +68,7 @@ AS $$
     WHERE batch_id = b.id ORDER BY created_at DESC LIMIT 1
   ) t ON true
   WHERE l.entry_version_id = p_entry_version_id
-    -- 게시되지 않은 version의 proof는 제공하지 않는다.
+    -- No proof is served for an unpublished version.
     AND v.status IN ('published', 'revoked', 'superseded')
 $$;
 

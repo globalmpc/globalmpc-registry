@@ -11,9 +11,9 @@ import {
 /**
  * Source Adapter — 05 §5.12, OD-42.
  *
- * 핵심은 **응답을 12개 결과 중 하나로 정확히 나누는 것**이다. 상태 코드를
- * 그대로 성공/실패로 나누면 "기록 없음"과 "출처 장애"가 같아지고, 사용자는
- * 존재하지 않는 기록을 계속 재시도한다.
+ * The point is **classifying each response into exactly one of 12 outcomes**. Mapping status
+ * codes straight to success/failure conflates "no record" with "source outage", and users keep
+ * retrying records that do not exist.
  */
 
 const descriptor: AdapterDescriptor = {
@@ -41,110 +41,110 @@ const config = {
   responseProfile: profile,
 };
 
-describe("HTTP 응답 분류", () => {
+describe("HTTP response classification", () => {
   const base = { signatureValid: null, body: "match" } as const;
 
-  it("404는 장애가 아니라 기록 없음이다", () => {
-    // 둘을 섞으면 사용자는 존재하지 않는 기록을 계속 재시도한다.
+  it("treats 404 as no record, not an outage", () => {
+    // Mixing them makes users keep retrying records that do not exist.
     expect(classifyHttpResponse({ ...base, status: 404 })).toBe("source_returned_no_record");
   });
 
-  it("5xx와 429는 출처 장애다", () => {
+  it("treats 5xx and 429 as a source outage", () => {
     expect(classifyHttpResponse({ ...base, status: 503 })).toBe("source_unavailable");
     expect(classifyHttpResponse({ ...base, status: 429 })).toBe("source_unavailable");
   });
 
-  it("인증 실패와 권한 없음을 구분한다", () => {
-    // 전자는 우리 설정 문제고 후자는 협의 문제다 — 다음에 할 일이 다르다.
+  it("distinguishes authentication failure from lack of permission", () => {
+    // The former is our config problem, the latter an agreement problem — next steps differ.
     expect(classifyHttpResponse({ ...base, status: 401 })).toBe("authentication_failed");
     expect(classifyHttpResponse({ ...base, status: 403 })).toBe("access_not_authorized");
   });
 
-  it("서명이 깨진 응답을 성공으로 읽지 않는다", () => {
+  it("does not read a response with a broken signature as success", () => {
     const result = classifyHttpResponse({ ...base, status: 200, signatureValid: false });
     expect(result).toBe("signature_invalid");
   });
 
-  it("스키마가 바뀌면 값을 추측하지 않는다", () => {
-    // 파싱은 되지만 우리가 아는 형식이 아니다. 추측해 넣으면 틀린 사실이 남는다.
+  it("does not guess values when the schema changes", () => {
+    // It parses but is not a format we know. Guessing would record false facts.
     expect(classifyHttpResponse({ ...base, status: 200, body: "drift" })).toBe("schema_changed");
     expect(classifyHttpResponse({ ...base, status: 200, body: "unparsable" })).toBe(
       "schema_changed",
     );
   });
 
-  it("200인데 본문이 비면 사람이 본다", () => {
-    // 기록 없음과 구분되지 않는다.
+  it("routes a 200 with an empty body to a person", () => {
+    // Indistinguishable from no record.
     const result = classifyHttpResponse({ ...base, status: 200, body: "empty" });
     expect(result).toBe("manual_review_required");
   });
 
   /**
-   * 2026-09-10 실사 A7.
+   * 2026-09-10 audit A7.
    *
-   * 이전에는 200 + 파싱 성공이면 확정이었다. `{}`도 `{"error":"unavailable"}`도
-   * "출처가 확인해 줬다"가 됐다.
+   * Previously 200 + successful parse meant confirmed. Both `{}` and `{"error":"unavailable"}`
+   * became "confirmed by the source".
    */
-  it("응답 형식이 선언되지 않았으면 확정하지 않는다", () => {
+  it("does not confirm when the response format is undeclared", () => {
     expect(classifyHttpResponse({ ...base, status: 200, body: "unprofiled" })).toBe(
       "manual_review_required",
     );
   });
 
-  it("200 본문의 업무 오류를 확인으로 읽지 않는다", () => {
+  it("does not read a business error in a 200 body as confirmation", () => {
     expect(classifyHttpResponse({ ...base, status: 200, body: "business_error" })).toBe(
       "manual_review_required",
     );
   });
 
-  it("200 본문의 '기록 없음'을 확인으로 읽지 않는다", () => {
+  it("does not read 'no record' in a 200 body as confirmation", () => {
     expect(classifyHttpResponse({ ...base, status: 200, body: "no_record" })).toBe(
       "source_returned_no_record",
     );
   });
 
-  it("모르는 상태를 성공으로 넘기지 않는다", () => {
+  it("does not pass an unknown status as success", () => {
     expect(classifyHttpResponse({ ...base, status: 302 })).toBe("manual_review_required");
   });
 });
 
 /**
- * 이름 해석 stub.
+ * Name resolution stub.
  *
- * 테스트는 실제 DNS를 쓰지 않는다. 출처 endpoint가 사설 주소로 해석되지 않는지
- * 보는 검사(SSRF)를 지나려면 공개 주소를 돌려주는 함수가 필요하다.
+ * Tests do not use real DNS. Passing the SSRF check that source endpoints do not resolve to
+ * private addresses requires a function returning a public address.
  */
 const publicResolver = async () => ["203.0.113.10"];
 
 /**
- * 응답 본문 판정 — 2026-09-10 실사 A7.
+ * Response body classification — 2026-09-10 audit A7.
  *
- * **파싱 성공은 스키마 일치가 아니다.** 이전에는 그 둘이 같았고, 그래서 출처가
- * "답할 수 없다"고 말한 응답이 `confirmed_from_source`가 됐다.
+ * **A successful parse is not a schema match.** They used to be the same, so a response in
+ * which the source said "cannot answer" became `confirmed_from_source`.
  */
 describe("evaluateResponseBody", () => {
-  it("선언된 필드가 다 있으면 일치다", () => {
+  it("matches when all declared fields are present", () => {
     const result = evaluateResponseBody(JSON.stringify({ licenseNumber: "MV-1" }), profile);
     expect(result.verdict).toBe("match");
   });
 
-  it("빈 객체를 일치로 읽지 않는다", () => {
+  it("does not read an empty object as a match", () => {
     expect(evaluateResponseBody("{}", profile).verdict).toBe("drift");
   });
 
-  it("업무 오류를 확인으로 읽지 않는다", () => {
+  it("does not read a business error as confirmation", () => {
     const result = evaluateResponseBody(JSON.stringify({ error: "unavailable" }), profile);
     expect(result.verdict).toBe("business_error");
     expect(result.detail).toBe("unavailable");
   });
 
-  it("출처가 밝힌 기록 없음을 스키마 변경으로 읽지 않는다", () => {
-    // 정상 응답의 필드를 갖지 않는다. 필드 대조를 먼저 하면 전부 drift가 된다.
+  it("does not read a source-stated no-record as a schema change", () => {
+    // It lacks the normal response fields. Matching fields first would make it all drift.
     const result = evaluateResponseBody(JSON.stringify({ found: false }), profile);
     expect(result.verdict).toBe("no_record");
   });
 
-  it("선언이 없으면 확정하지 않는다", () => {
+  it("does not confirm without a declaration", () => {
     const bare = {
       requiredFields: [],
       recordAbsentField: null,
@@ -154,27 +154,27 @@ describe("evaluateResponseBody", () => {
     expect(evaluateResponseBody(JSON.stringify({ anything: 1 }), bare).verdict).toBe("unprofiled");
   });
 
-  it("null과 배열을 객체로 읽지 않는다", () => {
+  it("does not read null or arrays as objects", () => {
     expect(evaluateResponseBody("null", profile).verdict).toBe("drift");
     expect(evaluateResponseBody("[]", profile).verdict).toBe("drift");
   });
 
-  it("JSON이 아니면 스키마 변경이다", () => {
+  it("treats non-JSON as a schema change", () => {
     expect(evaluateResponseBody("<html>maintenance</html>", profile).verdict).toBe("unparsable");
   });
 
-  it("빈 본문은 비었다고 말한다", () => {
+  it("reports an empty body as empty", () => {
     expect(evaluateResponseBody("   ", profile).verdict).toBe("empty");
   });
 });
 
-describe("adapter 호출", () => {
-  it("접근이 승인되지 않은 출처를 부르지 않는다", async () => {
-    // 부르면 401을 받아 "인증 실패"로 기록하게 된다 — 실제로는 협의가 안 된 것이다.
+describe("adapter calls", () => {
+  it("does not call a source whose access is not approved", async () => {
+    // Calling would get a 401 recorded as "auth failure" — when no agreement exists yet.
     let called = false;
     const result = await invokeHttpAdapter(
       {
-        descriptor: { ...descriptor, state: "pending_access", stateReason: "협의 중" },
+        descriptor: { ...descriptor, state: "pending_access", stateReason: "under negotiation" },
         config,
         queryBasis: {},
       },
@@ -190,10 +190,10 @@ describe("adapter 호출", () => {
     if (result.kind === "failed") expect(result.result).toBe("access_not_authorized");
   });
 
-  it("수동 수집 출처는 검토 필요로 표시한다", async () => {
+  it("marks a manually collected source as needing review", async () => {
     const result = await invokeHttpAdapter(
       {
-        descriptor: { ...descriptor, state: "manual", stateReason: "API 없음" },
+        descriptor: { ...descriptor, state: "manual", stateReason: "no API" },
         config,
         queryBasis: {},
       },
@@ -204,7 +204,7 @@ describe("adapter 호출", () => {
     if (result.kind === "failed") expect(result.result).toBe("manual_review_required");
   });
 
-  it("정상 응답에서 원문 해시와 기준일을 뽑는다", async () => {
+  it("extracts the raw hash and as-of date from a normal response", async () => {
     const body = JSON.stringify({ licenseNumber: "MV-1", asOfDate: "2026-08-01T00:00:00Z" });
     const result = await invokeHttpAdapter(
       { descriptor, config, queryBasis: { licenseNumber: "MV-1" } },
@@ -215,12 +215,12 @@ describe("adapter 호출", () => {
     expect(result.kind).toBe("outcome");
     if (result.kind === "outcome") {
       expect(result.outcome.rawHash).toBe(hashRawResponse(body));
-      // 조회 시각과 다르다. 같게 두면 자료가 실제보다 최신으로 보인다.
+      // Differs from the lookup time. Equating them makes data look fresher than it is.
       expect(result.outcome.effectiveAt).toBe("2026-08-01T00:00:00.000Z");
     }
   });
 
-  it("타임아웃을 기록 없음으로 읽지 않는다", async () => {
+  it("does not read a timeout as no record", async () => {
     const result = await invokeHttpAdapter(
       { descriptor, config, queryBasis: {} },
       (async () => {
@@ -232,8 +232,8 @@ describe("adapter 호출", () => {
     if (result.kind === "failed") expect(result.result).toBe("source_unavailable");
   });
 
-  it("선언되지 않은 형식의 200을 확정하지 않는다", async () => {
-    // A7 부정 테스트. 이전에는 이 응답이 confirmed_from_source였다.
+  it("does not confirm a 200 in an undeclared format", async () => {
+    // A7 negative test. Previously this response was confirmed_from_source.
     const result = await invokeHttpAdapter(
       {
         descriptor,
@@ -257,7 +257,7 @@ describe("adapter 호출", () => {
     if (result.kind === "failed") expect(result.result).toBe("manual_review_required");
   });
 
-  it("JSON이 아닌 응답을 스키마 변경으로 본다", async () => {
+  it("treats a non-JSON response as a schema change", async () => {
     const result = await invokeHttpAdapter(
       { descriptor, config, queryBasis: {} },
       (async () => new Response("<html>maintenance</html>", { status: 200 })) as typeof fetch,
@@ -268,7 +268,7 @@ describe("adapter 호출", () => {
   });
 });
 
-describe("receipt 본문", () => {
+describe("receipt body", () => {
   const extra = {
     connectionId: "c1",
     authorityId: "a1",
@@ -282,7 +282,7 @@ describe("receipt 본문", () => {
     disclosurePermission: "restricted",
   };
 
-  it("authority의 한계가 반드시 들어간다", () => {
+  it("always includes the authority's limitations", () => {
     const body = buildReceiptBody(
       descriptor,
       {
@@ -301,14 +301,14 @@ describe("receipt 본문", () => {
     expect(body["limitations"]).toContain("economic_viability");
   });
 
-  it("실패한 조회에 가짜 해시를 만들지 않는다", () => {
+  it("does not fabricate a hash for a failed lookup", () => {
     const body = buildReceiptBody(
       descriptor,
       { kind: "failed", result: "source_unavailable", detail: "timeout" },
       extra,
     );
 
-    // 원문이 없다. 0으로 채워 "해시가 있다"고 보이게 하지 않는다.
+    // There is no raw body. Do not fill with zeros to fake "a hash exists".
     expect(body["rawHash"]).toBe(`0x${"0".repeat(64)}`);
     expect(body["freshnessStatus"]).toBe("unknown");
   });

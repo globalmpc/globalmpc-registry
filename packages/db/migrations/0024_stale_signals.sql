@@ -1,19 +1,19 @@
--- 전파의 마지막 구간 — AC-21, spec 10 §175.
+-- Last hop of propagation — AC-21, spec 10 §175.
 --
--- 0023이 `connection → claim → attestation`까지 이었다. 남은 것은
--- `attestation → assessment → Registry version`인데, **앞 구간과 같은 방법을 쓸 수
--- 없다.**
+-- 0023 connected `connection → claim → attestation`. What remains is
+-- `attestation → assessment → Registry version`, and **the earlier method cannot be
+-- used.**
 --
---   - `compliance_assessments`는 append-only다(`assessment_no_update`).
---   - `registry_entry_versions`는 게시 뒤 내용이 불변이다
+--   - `compliance_assessments` is append-only (`assessment_no_update`).
+--   - `registry_entry_versions` content is immutable after publication
 --     (`registry_version_immutable_after_publish`).
 --
--- 둘 다 의도된 제약이다. 평가 결과와 공개 기록은 나중에 고쳐 쓸 수 없어야 한다.
--- 그래서 **상태를 바꾸는 대신 신호를 남긴다.**
+-- Both constraints are intentional. Assessment results and public records must not be rewritable later.
+-- So **leave a signal instead of changing state.**
 --
--- **자동으로 revoke하지 않는 이유:** 공개된 Registry 기록을 내리는 것은 세상이
--- 보는 것을 바꾸는 행위다. 연동 하나가 끊겼다고 공개 기록이 자동으로 사라지면,
--- 출처 장애가 곧 기록 삭제가 된다. 판정은 사람이 한다(`registry.revoke`).
+-- **Why no automatic revoke:** taking down a public Registry record changes what the world
+-- sees. If a public record disappeared automatically whenever one connection dropped,
+-- a source outage would become record deletion. A human decides (`registry.revoke`).
 
 CREATE TYPE core.stale_signal_target AS ENUM (
   'compliance_assessment',
@@ -21,24 +21,24 @@ CREATE TYPE core.stale_signal_target AS ENUM (
 );
 
 CREATE TYPE core.stale_signal_resolution AS ENUM (
-  -- 아직 사람이 보지 않았다.
+  -- Not yet reviewed by a human.
   'open',
-  -- 새 version으로 정정했다.
+  -- Corrected with a new version.
   'superseded',
-  -- 공개 기록을 내렸다.
+  -- Public record taken down.
   'revoked',
-  -- 확인했고 영향 없다고 판정했다. 이유가 함께 남는다.
+  -- Checked and judged to have no impact. A reason is kept with it.
   'dismissed'
 );
 
 /**
- * 근거가 흔들렸다는 신호 — AC-21.
+ * Signal that evidence went stale — AC-21.
  *
- * 대상 자체를 바꾸지 않고 **"이 산출물이 딛고 있던 근거가 흔들렸다"는 사실**만
- * 기록한다. append-only이며, 처리 결과는 같은 행의 resolution으로 닫는다.
+ * Records only **the fact that "the evidence this output rested on went stale"**, without
+ * changing the target. Append-only; the outcome closes it via the same row's resolution.
  *
- * 신호가 열려 있다는 것은 **재검토가 필요하다**는 뜻이지 그 기록이 틀렸다는
- * 뜻이 아니다. 그 구분이 없으면 출처 장애가 곧 기록 부정이 된다.
+ * An open signal means **re-review is needed**, not that the record is
+ * wrong. Without that distinction a source outage becomes a denial of the record.
  */
 CREATE TABLE core.evidence_stale_signals (
   id            UUID PRIMARY KEY,
@@ -46,7 +46,7 @@ CREATE TABLE core.evidence_stale_signals (
   project_id    UUID REFERENCES core.projects(id),
   target_type   core.stale_signal_target NOT NULL,
   target_id     UUID NOT NULL,
-  /** 어디서 시작됐는가. 사슬을 거슬러 올라갈 수 있어야 한다. */
+  /** Where it started. The chain must be traceable backward. */
   origin_attestation_id UUID,
   origin_claim_id       UUID,
   reason        TEXT NOT NULL CHECK (length(btrim(reason)) > 0),
@@ -55,11 +55,11 @@ CREATE TABLE core.evidence_stale_signals (
   resolution    core.stale_signal_resolution NOT NULL DEFAULT 'open',
   resolved_at   TIMESTAMPTZ,
   resolved_by   UUID REFERENCES core.subjects(id),
-  /** 왜 그렇게 판정했는가. `dismissed`에 특히 필요하다. */
+  /** Why it was judged so. Needed especially for `dismissed`. */
   resolution_note TEXT,
 
-  -- 같은 대상에 같은 원인으로 신호가 겹치지 않게 한다. 열린 신호가 쌓이면
-  -- 무엇을 봐야 하는지 알 수 없다.
+  -- Prevent duplicate signals for the same target and cause. Piled-up open signals
+  -- obscure what needs attention.
   UNIQUE (target_type, target_id, origin_attestation_id),
 
   CONSTRAINT stale_signal_resolution_needs_note CHECK (
@@ -81,7 +81,7 @@ CREATE POLICY tenant_isolation ON core.evidence_stale_signals
   USING (tenant_id = core.current_tenant())
   WITH CHECK (tenant_id = core.current_tenant());
 
--- 신호는 지워지지 않는다. 닫을 수만 있다.
+-- Signals are never deleted. They can only be closed.
 GRANT SELECT, INSERT, UPDATE ON core.evidence_stale_signals TO mpc_app;
 
 CREATE OR REPLACE FUNCTION core.reject_stale_signal_delete() RETURNS TRIGGER
@@ -96,10 +96,10 @@ CREATE TRIGGER evidence_stale_signals_no_delete
   FOR EACH ROW EXECUTE FUNCTION core.reject_stale_signal_delete();
 
 /**
- * 닫힌 신호를 다시 열거나 원인을 바꿀 수 없다.
+ * A closed signal cannot be reopened, nor can its cause change.
  *
- * 판정을 되돌릴 수 있으면 "언제 무엇을 알았고 어떻게 판단했나"가 사라진다.
- * 다시 봐야 하면 새 신호가 생긴다.
+ * If a decision could be reverted, "what was known when, and how it was judged" is lost.
+ * If it needs another look, a new signal is created.
  */
 CREATE OR REPLACE FUNCTION core.protect_stale_signal() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -126,15 +126,15 @@ CREATE TRIGGER evidence_stale_signals_protect
   FOR EACH ROW EXECUTE FUNCTION core.protect_stale_signal();
 
 /**
- * attestation → assessment · Registry version 전파.
+ * attestation → assessment · Registry version propagation.
  *
- * attestation이 `stale_candidate`가 되면 그 프로젝트의 **활성 평가**와
- * **공개된 Registry version**에 신호를 남긴다.
+ * When an attestation becomes `stale_candidate`, leave signals on that project's **active
+ * assessment** and **published Registry versions**.
  *
- * 왜 프로젝트 단위인가: `compliance_assessments`는 attestation을 직접 가리키지
- * 않는다(`requirement_results`는 JSON이고 링크가 아니다). 정확한 사슬이 없으므로
- * **넓게 잡는다** — 관련 없는 것에 신호가 붙는 편이, 관련 있는 것을 놓치는 것보다
- * 낫다. 사람이 `dismissed`로 닫으면 그 판단도 기록에 남는다.
+ * Why per project: `compliance_assessments` does not point to attestations directly
+ * (`requirement_results` is JSON, not a link). With no exact chain, **cast
+ * wide** — a signal on something unrelated is better than missing something
+ * related. When a human closes it as `dismissed`, that judgment is recorded too.
  */
 CREATE OR REPLACE FUNCTION core.propagate_attestation_to_signals() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -152,8 +152,8 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- 가장 최근 평가에만 신호를 단다. 과거 평가는 그 시점의 판정이며 지금 다시
-  -- 볼 대상이 아니다.
+  -- Signal only the latest assessment. Past assessments are judgments of their time and
+  -- are not up for review now.
   INSERT INTO core.evidence_stale_signals (
     id, tenant_id, project_id, target_type, target_id,
     origin_attestation_id, reason
@@ -167,8 +167,8 @@ BEGIN
   LIMIT 1
   ON CONFLICT DO NOTHING;
 
-  -- 공개된 Registry version. **자동으로 내리지 않는다** — 신호만 남기고
-  -- supersede·revoke는 `registry.revoke` 권한을 가진 사람이 판정한다.
+  -- Published Registry version. **Never taken down automatically** — leave a signal only;
+  -- a human with the `registry.revoke` permission decides supersede·revoke.
   INSERT INTO core.evidence_stale_signals (
     id, tenant_id, project_id, target_type, target_id,
     origin_attestation_id, reason

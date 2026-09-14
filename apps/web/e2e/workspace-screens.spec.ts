@@ -1,10 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * 워크스페이스 집계 화면.
+ * Workspace aggregate screens.
  *
- * 넷 다 데이터가 없어서가 아니라 **프로젝트 하나를 열어야만 보이는 구조** 때문에
- * 없던 화면이다. 여기서 보는 것은 그 구조가 실제로 풀렸는가다.
+ * All four were missing not for lack of data but because of **a structure where things
+ * were visible only after opening a single project**. This checks that the structure is actually undone.
  */
 
 async function connectAs(page: Page, label: string): Promise<void> {
@@ -17,8 +17,8 @@ async function connectAs(page: Page, label: string): Promise<void> {
   await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
 }
 
-test.describe("워크스페이스 navigation", () => {
-  test("스펙의 전역 항목이 전부 링크로 있다", async ({ page }) => {
+test.describe("workspace navigation", () => {
+  test("every global item in the spec is present as a link", async ({ page }) => {
     await connectAs(page, "Operator A");
     const nav = page.getByRole("banner").getByRole("navigation");
 
@@ -37,7 +37,7 @@ test.describe("워크스페이스 navigation", () => {
     }
   });
 
-  test("역할에 없는 메뉴는 보이지 않는다", async ({ page }) => {
+  test("menus outside the role are not shown", async ({ page }) => {
     await connectAs(page, "Steward A");
     const nav = page.getByRole("banner").getByRole("navigation");
 
@@ -47,7 +47,7 @@ test.describe("워크스페이스 navigation", () => {
     await expect(nav.getByRole("link", { name: "Admin", exact: true })).toHaveCount(0);
   });
 
-  test("로그인해도 공개 메뉴에 갈 수 있다", async ({ page }) => {
+  test("public menus are reachable while signed in", async ({ page }) => {
     await connectAs(page, "Steward A");
     const nav = page.getByRole("banner").getByRole("navigation");
 
@@ -57,8 +57,8 @@ test.describe("워크스페이스 navigation", () => {
   });
 });
 
-test.describe("지갑 주소는 전체로 보이고 복사된다", () => {
-  test("상단 바와 관리 화면이 42자 주소를 그대로 보이고 복사 버튼이 동작한다", async ({ page, context }) => {
+test.describe("wallet addresses are shown in full and copyable", () => {
+  test("the top bar and admin screen show the full 42-character address and the copy button works", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await connectAs(page, "Operator A");
 
@@ -78,12 +78,12 @@ test.describe("지갑 주소는 전체로 보이고 복사된다", () => {
 });
 
 test.describe("My Activity", () => {
-  test("내가 한 일만 본인에게 보인다", async ({ page }) => {
+  test("only your own actions are shown to you", async ({ page }) => {
     await connectAs(page, "Operator A");
     await page.goto("/w/activity");
 
     await expect(page.getByRole("heading", { name: "My Activity" })).toBeVisible();
-    // seed가 Operator A로 게시·생성을 했으므로 표가 있어야 한다. 비었으면 안내가 나온다.
+    // The seed published and created as Operator A, so a table is expected. If empty, a notice appears.
     await expect(
       page.getByTestId("my-activity").locator("table, [data-testid=my-activity-empty]"),
     ).not.toHaveCount(0);
@@ -91,11 +91,11 @@ test.describe("My Activity", () => {
 });
 
 test.describe("My Work", () => {
-  test("할 일과 기다리는 것을 다른 자리에 둔다", async ({ page }) => {
+  test("separates work to do from work waiting on others", async ({ page }) => {
     await connectAs(page, "Operator A");
     await page.goto("/w/work");
 
-    // 셋을 한 목록에 섞으면 다음 행동이 정반대인 것들이 같아 보인다.
+    // Mixing the three in one list makes items with opposite next actions look alike.
     await expect(page.getByTestId("work-assigned")).toBeVisible();
     await expect(page.getByTestId("work-waiting")).toBeVisible();
     await expect(page.getByTestId("work-unassigned")).toBeVisible();
@@ -104,35 +104,35 @@ test.describe("My Work", () => {
 });
 
 test.describe("Registries", () => {
-  test("프로젝트를 열지 않고 게시 상태를 본다", async ({ page }) => {
+  test("shows publication state without opening a project", async ({ page }) => {
     await connectAs(page, "Operator A");
     await page.goto("/w/registries");
 
     await expect(page.getByRole("heading", { name: "Registries" })).toBeVisible();
-    // 게시와 anchor를 한 칸에 합치면 "게시됐으니 체인에 있다"로 읽힌다.
+    // Merging publication and anchor into one cell reads as "published, so it is on chain".
     await expect(page.getByText(/Publishing and anchoring are separate events/)).toBeVisible();
   });
 });
 
 test.describe("Integrations", () => {
-  test("부를 수 있는 것과 없는 것을 사유와 함께 가른다", async ({ page }) => {
+  test("separates callable from non-callable sources with reasons", async ({ page }) => {
     await connectAs(page, "Operator A");
     await page.goto("/w/integrations");
 
     await expect(page.getByTestId("integrations-accepted")).toBeVisible();
     await expect(page.getByTestId("integrations-pending")).toBeVisible();
-    // 연결 성공이 검증이 아니다.
+    // A successful connection is not verification.
     await expect(page.getByText(/it means the source answered, not that the answer is right/)).toBeVisible();
-    // 실제 정부 출처가 아직 없다는 것을 화면이 말한다(OD-42).
+    // The screen states that no real government source exists yet (OD-42).
     await expect(page.getByText(/No real government source is connected yet/)).toBeVisible();
   });
 });
 
 test.describe("Claim Detail", () => {
-  test("claim 하나가 자기 주소를 갖는다", async ({ page }) => {
-    // 등록은 mpc_operator, claim은 data_steward다 — 역할이 다르다(02 §2.3).
-    // claim이 없는 실행에서 skip하면 이 테스트는 아무것도 지키지 않으므로
-    // 필요한 것을 여기서 만든다.
+  test("a single claim has its own URL", async ({ page }) => {
+    // Registration is mpc_operator, claims are data_steward — different roles (02 §2.3).
+    // Skipping on runs without a claim would make this test guard nothing, so it creates
+    // what it needs here.
     const projectKey = `CLAIM-${Date.now()}`;
     await connectAs(page, "Operator A");
     await page.goto("/w/projects/new");
@@ -152,40 +152,40 @@ test.describe("Claim Detail", () => {
 
     await expect(page).toHaveURL(/\/w\/projects\/[^/]+\/claims\/[^/]+$/);
     await expect(page.getByTestId("claim-detail")).toBeVisible();
-    // grade와 review는 다른 사실이다.
+    // Grade and review are different facts.
     await expect(page.getByText("Grade is not review")).toBeVisible();
   });
 });
 
-test.describe("알림", () => {
-  test("보내는 경로가 없다는 것을 화면이 숨기지 않는다", async ({ page }) => {
+test.describe("notifications", () => {
+  test("the screen does not hide that there is no delivery path", async ({ page }) => {
     await connectAs(page, "Operator A");
     await page.goto("/w/notifications");
 
-    // 앱을 열지 않으면 여전히 모른다. 그것을 감추면 알림이 있다고 믿게 된다.
+    // Without opening the app you still do not know. Hiding that makes people believe they are notified.
     await expect(page.getByTestId("notifications-limits")).toContainText(
       /Nothing is sent anywhere yet/,
     );
-    // 역할 알림은 한 사람이 읽어도 남에게 남는다.
+    // A role notification read by one person stays unread for the others.
     await expect(page.getByTestId("notifications-limits")).toContainText(
       /stays unread for everyone else/,
     );
   });
 });
 
-test.describe("알림 수신처", () => {
-  test("메일이 아니라 webhook인 이유를 화면이 말한다", async ({ page }) => {
+test.describe("notification sinks", () => {
+  test("the screen explains why it is a webhook and not email", async ({ page }) => {
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
     const sinks = page.getByTestId("admin-sinks");
-    // 주소를 저장하는 순간 지금 422로 거절하는 등급을 보관하게 된다(OD-18).
+    // Storing an address would mean retaining a data class that is rejected with 422 today (OD-18).
     await expect(sinks).toContainText(/Email is deliberately not offered/);
-    // 값을 붙여넣게 하면 그것이 DB에 남는다.
+    // Letting users paste the value would leave it in the DB.
     await expect(sinks).toContainText(/A reference, not the secret itself/);
   });
 
-  test("수신처를 등록하면 배달 상태와 함께 보인다", async ({ page }) => {
+  test("a registered sink is shown with its delivery state", async ({ page }) => {
     const url = `https://hooks.example.test/${Date.now()}`;
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
@@ -198,24 +198,24 @@ test.describe("알림 수신처", () => {
 
     const row = page.getByTestId("admin-sinks").locator("tr", { hasText: url });
     await expect(row).toBeVisible();
-    // 등록돼 있다와 실제로 가고 있다를 구분해 보인다.
+    // Distinguishes being registered from actually delivering.
     await expect(row).toContainText("active");
     await expect(row.getByRole("button", { name: "Pause" })).toBeVisible();
   });
 });
 
-test.describe("약관·데이터 처리", () => {
-  test("정식 약관이 아직 없다는 것을 가장 먼저 말한다", async ({ page }) => {
+test.describe("terms and data handling", () => {
+  test("states first that no formal terms exist yet", async ({ page }) => {
     await page.goto("/legal");
 
     await expect(page.getByTestId("legal-status")).toContainText(
       /no issued Terms of Service or Privacy Policy yet/,
     );
-    // 지키지 못할 약속을 하는 것이 없는 것보다 나쁘다.
+    // Making a promise that cannot be kept is worse than having none.
     await expect(page.getByTestId("legal-status")).toContainText(/not open to members of the public/);
   });
 
-  test("시스템이 실제로 강제하는 것을 근거와 함께 낸다", async ({ page }) => {
+  test("lists what the system actually enforces, with evidence", async ({ page }) => {
     await page.goto("/legal");
 
     const enforced = page.getByTestId("legal-enforced");
@@ -224,7 +224,7 @@ test.describe("약관·데이터 처리", () => {
     await expect(page.getByTestId("legal-support")).toBeVisible();
   });
 
-  test("어느 화면에서든 닿는다", async ({ page }) => {
+  test("is reachable from any screen", async ({ page }) => {
     await page.goto("/explorer");
     await page.getByRole("link", { name: /Terms, data handling, and support/ }).click();
 

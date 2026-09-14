@@ -11,7 +11,7 @@ import {
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
-describeDb("outbox 발행", () => {
+describeDb("outbox publishing", () => {
   let sql: postgres.Sql;
   let tenant: string;
 
@@ -51,7 +51,7 @@ describeDb("outbox 발행", () => {
     return rows[0]?.published_at === null;
   }
 
-  it("미발행 이벤트를 발행하고 표시한다", async () => {
+  it("publishes unpublished events and marks them", async () => {
     const correlationId = `pub-${randomUUID()}`;
     await seed(correlationId);
 
@@ -67,7 +67,7 @@ describeDb("outbox 발행", () => {
     expect(await pendingFor(correlationId)).toBe(false);
   });
 
-  it("이미 발행된 이벤트를 다시 보내지 않는다", async () => {
+  it("does not resend already-published events", async () => {
     const correlationId = `once-${randomUUID()}`;
     await seed(correlationId);
 
@@ -80,7 +80,7 @@ describeDb("outbox 발행", () => {
     expect(seen).not.toContain(correlationId);
   });
 
-  it("발행이 실패하면 published_at을 남기지 않는다 — at-least-once", async () => {
+  it("leaves published_at unset when publishing fails — at-least-once", async () => {
     const correlationId = `fail-${randomUUID()}`;
     await seed(correlationId);
 
@@ -92,7 +92,7 @@ describeDb("outbox 발행", () => {
     expect(await pendingFor(correlationId)).toBe(true);
   });
 
-  it("한 이벤트의 실패가 다른 이벤트를 막지 않는다", async () => {
+  it("one event's failure does not block the others", async () => {
     const bad = `bad-${randomUUID()}`;
     const good = `good-${randomUUID()}`;
     await seed(bad);
@@ -108,7 +108,7 @@ describeDb("outbox 발행", () => {
     expect(await pendingFor(good)).toBe(false);
   });
 
-  it("실패 후 재실행하면 다시 시도한다", async () => {
+  it("retries on the next run after a failure", async () => {
     const correlationId = `retry-${randomUUID()}`;
     await seed(correlationId);
 
@@ -125,7 +125,7 @@ describeDb("outbox 발행", () => {
     expect(await pendingFor(correlationId)).toBe(false);
   });
 
-  it("occurred_at 순서로 발행한다", async () => {
+  it("publishes in occurred_at order", async () => {
     const older = `ord-a-${randomUUID()}`;
     const newer = `ord-b-${randomUUID()}`;
     await seed(newer, new Date(Date.now() + 60_000).toISOString());
@@ -139,7 +139,7 @@ describeDb("outbox 발행", () => {
     expect(order).toEqual([older, newer]);
   });
 
-  it("limit을 넘겨 한 번에 다 보내지 않는다", async () => {
+  it("does not send more than limit at once", async () => {
     for (let i = 0; i < 5; i += 1) await seed(`limit-${randomUUID()}`);
 
     const result = await publishBatch(sql, async () => {}, 2);
@@ -147,7 +147,7 @@ describeDb("outbox 발행", () => {
   });
 });
 
-describeDb("consumer 중복 제거", () => {
+describeDb("consumer deduplication", () => {
   let sql: postgres.Sql;
 
   beforeAll(async () => {
@@ -158,20 +158,20 @@ describeDb("consumer 중복 제거", () => {
     await sql.end();
   });
 
-  it("같은 이벤트를 한 handler가 두 번 처리하지 않는다", async () => {
+  it("one handler does not process the same event twice", async () => {
     const eventId = randomUUID();
     expect(await claimEvent(sql, eventId, "v1")).toBe(true);
     expect(await claimEvent(sql, eventId, "v1")).toBe(false);
   });
 
-  it("handler version이 다르면 다시 처리한다", async () => {
+  it("reprocesses when the handler version differs", async () => {
     const eventId = randomUUID();
     expect(await claimEvent(sql, eventId, "v1")).toBe(true);
     expect(await claimEvent(sql, eventId, "v2")).toBe(true);
   });
 });
 
-describeDb("backlog 관측", () => {
+describeDb("backlog observation", () => {
   let sql: postgres.Sql;
   let tenant: string;
 
@@ -188,7 +188,7 @@ describeDb("backlog 관측", () => {
     await sql.end();
   });
 
-  it("미발행 개수와 가장 오래된 시각을 보고한다", async () => {
+  it("reports the unpublished count and the oldest timestamp", async () => {
     await publishBatch(sql, async () => {});
     const before = await backlogStats(sql);
     expect(before.pending).toBe(0);

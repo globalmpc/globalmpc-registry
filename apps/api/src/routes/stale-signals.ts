@@ -14,21 +14,21 @@ import { enqueueEvent } from "../outbox.js";
 import { requireMutationContext, requireReadContext } from "./shared.js";
 
 /**
- * 근거 신호 — spec 10 §175, AC-21.
+ * Evidence signals — spec 10 §175, AC-21.
  *
- * 전파의 마지막 구간이다. `attestation → assessment → Registry version`은 앞
- * 구간과 같은 방법을 쓸 수 없다:
+ * The last leg of propagation. `attestation → assessment → Registry version` cannot use the
+ * same method as the earlier legs:
  *
- * - `compliance_assessments`는 append-only다.
- * - `registry_entry_versions`는 게시 뒤 내용이 불변이다.
+ * - `compliance_assessments` is append-only.
+ * - `registry_entry_versions` content is immutable after publishing.
  *
- * 그래서 대상을 바꾸는 대신 **신호를 남긴다.** 신호가 열려 있다는 것은 재검토가
- * 필요하다는 뜻이지 그 기록이 틀렸다는 뜻이 아니다 — 그 구분이 없으면 출처
- * 장애가 곧 기록 부정이 된다.
+ * So instead of changing the target, **a signal is left.** An open signal means a re-review is
+ * needed, not that the record is wrong — without that distinction, a source outage
+ * becomes a denial of the record.
  *
- * **자동으로 revoke하지 않는다.** 공개된 Registry 기록을 내리는 것은 세상이 보는
- * 것을 바꾸는 행위이고, 연동 하나가 끊겼다고 공개 기록이 사라지면 출처 장애가
- * 곧 기록 삭제가 된다.
+ * **Nothing is revoked automatically.** Taking down a public Registry record changes what
+ * the world sees, and if a public record disappeared because one connection broke, a source
+ * outage would become record deletion.
  */
 
 const resolveSchema = z.object({
@@ -50,23 +50,23 @@ interface SignalRow {
 }
 
 /**
- * 이 신호로 할 수 있는 것.
+ * What can be done with this signal.
  *
- * 화면이 상태 문자열을 보고 추측하면 화면마다 다르게 읽는다. 특히 "공개 기록을
- * 내린다"는 선택지가 조용히 노출되면 안 된다.
+ * If UIs guess from the state string, each UI reads it differently. In particular, the option
+ * "take down the public record" must not be exposed silently.
  */
 function nextActions(row: SignalRow): string[] {
   if (row.resolution !== "open") return [];
 
   if (row.target_type === "registry_entry_version") {
     return [
-      "새 version으로 정정한다 (supersede)",
-      "공개 기록을 내린다 (revoke) — 세상이 보는 것이 바뀐다",
-      "영향 없음으로 판정한다 (dismiss) — 이유가 기록된다",
+      "Correct with a new version (supersede)",
+      "Take down the public record (revoke) — changes what the world sees",
+      "Mark as no impact (dismiss) — the reason is recorded",
     ];
   }
 
-  return ["재평가를 실행한다", "영향 없음으로 판정한다 (dismiss) — 이유가 기록된다"];
+  return ["Run a reassessment", "Mark as no impact (dismiss) — the reason is recorded"];
 }
 
 function toView(row: SignalRow) {
@@ -112,8 +112,8 @@ export async function registerStaleSignalRoutes(
                  resolution::text AS resolution, resolved_at, resolution_note
           FROM core.evidence_stale_signals
           WHERE project_id = ${request.params.projectId}
-          -- 열린 것을 먼저 보여준다. 처리된 것도 남긴다 — 무엇을 어떻게
-          -- 판단했는지가 다음 판단의 근거다.
+          -- Open ones are shown first. Resolved ones are kept too — what was decided and how
+          -- is evidence for the next decision.
           ORDER BY (resolution = 'open') DESC, detected_at DESC
         `,
       );
@@ -134,17 +134,17 @@ export async function registerStaleSignalRoutes(
 
       const parsed = resolveSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
 
       /**
-       * `registry.revoke` 권한을 요구한다.
+       * Requires the `registry.revoke` permission.
        *
-       * 신호를 닫는 것은 "이 공개 기록을 어떻게 할지 정했다"는 선언이다.
-       * `dismissed`도 마찬가지다 — 아무것도 하지 않기로 한 판단이며, 그것도
-       * 공개 기록의 운명을 정한다.
+       * Closing a signal declares "it has been decided what to do with this public record".
+       * `dismissed` is the same — it is a decision to do nothing, and that too
+       * decides the fate of the public record.
        */
       const effectiveRole = assertAuthorized(
         session,
@@ -164,10 +164,10 @@ export async function registerStaleSignalRoutes(
           WHERE id = ${request.params.signalId}
           FOR UPDATE
         `;
-        if (!current) throw notFound("신호를 찾을 수 없다");
+        if (!current) throw notFound("Signal not found");
 
         if (current.resolution !== "open") {
-          throw conflict("SIGNAL_ALREADY_RESOLVED", `이미 ${current.resolution}로 닫혔다`);
+          throw conflict("SIGNAL_ALREADY_RESOLVED", `Already closed as ${current.resolution}`);
         }
 
         const [row] = await tx<SignalRow[]>`
@@ -183,11 +183,11 @@ export async function registerStaleSignalRoutes(
         `;
 
         /**
-         * **신호를 닫는 것이 대상을 바꾸지 않는다.**
+         * **Closing a signal does not change the target.**
          *
-         * `revoked`로 닫아도 Registry version은 그대로다. 실제로 내리려면
-         * `registry-entries/{id}/revoke`를 따로 호출한다 — 한 번의 요청으로 두
-         * 가지 일이 일어나면 무엇이 실행됐는지 나중에 알 수 없다.
+         * Even closed as `revoked`, the Registry version stays as is. Actually taking it down requires
+         * a separate call to `registry-entries/{id}/revoke` — if one request did two things, it
+         * would later be impossible to tell what was executed.
          */
         await recordAudit(tx, {
           effectiveRole,
@@ -222,7 +222,7 @@ export async function registerStaleSignalRoutes(
 
         return {
           ...toView(row!),
-          // 닫았다고 대상이 바뀐 것은 아니다. 화면이 오해하지 않게 말한다.
+          // Closing does not mean the target changed. Said explicitly so the UI does not misread it.
           targetUnchanged: true,
           requestId,
           asOf,

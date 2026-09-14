@@ -8,17 +8,17 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * project lifecycle 전이.
+ * Project lifecycle transitions.
  *
- * `lifecycle_state`는 `draft`에서 움직이지 않았다. 상태기계와 단위 테스트는
- * 있었고 **그것을 호출하는 route가 없었다.**
+ * `lifecycle_state` never moved from `draft`. The state machine and its unit tests
+ * existed, but **no route called it.**
  *
- * 여기서 지키는 것은 셋이다.
+ * This file guards three things.
  *
- * 1. 상태기계 밖의 전이는 거절한다.
- * 2. suspension에서의 복귀는 **직전 상태 또는 closure로만** 간다 — 임의 상태로
- *    나오면 suspension이 상태를 세탁하는 수단이 된다.
- * 3. **멈춘 사람은 되돌릴 수 없다.**
+ * 1. Transitions outside the state machine are rejected.
+ * 2. Leaving suspension goes **only to the prior state or to closure** — exiting to an
+ *    arbitrary state would make suspension a way to launder state.
+ * 3. **Whoever suspended cannot resume.**
  */
 describeDb("project lifecycle", () => {
   let fx: TestFixture;
@@ -34,8 +34,8 @@ describeDb("project lifecycle", () => {
     operatorToken = await signIn(app, fx.operatorA);
     approverToken = await signIn(app, fx.approverA);
 
-    // issuer_officer는 fixture에 없다. lifecycle을 앞으로 미는 역할이므로
-    // 여기서 만든다 — 운영 화면이 생기면서 가능해졌다.
+    // issuer_officer is not in the fixture. It is the role that advances the lifecycle, so
+    // it is created here — possible now that the operator screens exist.
     const subject = (
       await app.inject({
         method: "POST",
@@ -103,7 +103,7 @@ describeDb("project lifecycle", () => {
     });
   }
 
-  /** draft → registered 는 Registry 게시가 한다. 여기서도 같은 경로를 쓴다. */
+  /** Registry publication performs draft → registered. This uses the same path. */
   async function register(projectId: string): Promise<number> {
     const published = await app.inject({
       method: "POST",
@@ -120,7 +120,7 @@ describeDb("project lifecycle", () => {
           asOf: "2026-08-01T00:00:00.000Z",
           sourceAge: "12",
           staleStatus: "fresh",
-          limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+          limitations: ["legal rights verification is outside the scope of this review"],
           legalEffect: "none",
           disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
         },
@@ -140,7 +140,7 @@ describeDb("project lifecycle", () => {
     return lifecycle.json().version;
   }
 
-  it("게시가 draft를 registered로 옮기고 이력에 남는다", async () => {
+  it("moves draft to registered on publication and records history", async () => {
     const project = await newProject();
     await register(project.id);
 
@@ -150,21 +150,21 @@ describeDb("project lifecycle", () => {
       headers: { authorization: `Bearer ${operatorToken}` },
     });
 
-    // 감사 로그와 별개로 **이 프로젝트가 어디를 지나왔나**가 남아야 한다.
+    // Apart from the audit log, **where this project has been** must be recorded.
     expect(lifecycle.json().transitions).toHaveLength(1);
     expect(lifecycle.json().transitions[0].fromState).toBe("draft");
     expect(lifecycle.json().transitions[0].toState).toBe("registered");
     expect(lifecycle.json().transitions[0].reason).toBeTruthy();
   });
 
-  it("상태기계 밖의 전이는 거절한다", async () => {
+  it("rejects transitions outside the state machine", async () => {
     const project = await newProject();
     const version = await register(project.id);
 
-    // registered에서 갈 수 있는 곳은 offering_open과 suspended뿐이다.
+    // From registered, only offering_open and suspended are reachable.
     const response = await transition(issuerToken, project.id, version, {
       toState: "retired",
-      reason: "건너뛰기",
+      reason: "skip ahead",
     });
 
     expect(response.statusCode).toBe(422);
@@ -172,21 +172,21 @@ describeDb("project lifecycle", () => {
     expect(response.json().details.allowed).toContain("offering_open");
   });
 
-  it("운영자 단독으로 offering을 열 수 없다", async () => {
+  it("does not let an operator open an offering alone", async () => {
     const project = await newProject();
     const version = await register(project.id);
 
     const response = await transition(operatorToken, project.id, version, {
       toState: "offering_open",
-      reason: "운영자가 직접",
+      reason: "operator acting directly",
     });
 
-    // 발행 결정은 발행 결정을 하는 손이 한다.
+    // Issuance decisions belong to whoever makes issuance decisions.
     expect(response.statusCode).toBe(403);
     expect(response.json().details.requiredRoles).toContain("issuer_officer");
   });
 
-  it("이유 없이 전이할 수 없다", async () => {
+  it("rejects a transition without a reason", async () => {
     const project = await newProject();
     const version = await register(project.id);
 
@@ -199,90 +199,90 @@ describeDb("project lifecycle", () => {
   });
 
   describe("suspension", () => {
-    it("운영자가 혼자 멈출 수 있다", async () => {
+    it("lets an operator suspend alone", async () => {
       const project = await newProject();
       const version = await register(project.id);
 
-      // 급한 일이다. 2인을 요구하면 그동안 문제가 있는 프로젝트가 계속 돈다.
+      // It is urgent. Requiring two people lets a problem project keep running meanwhile.
       const response = await transition(operatorToken, project.id, version, {
         toState: "suspended",
-        reason: "근거 attestation이 철회됐다",
+        reason: "the underlying attestation was revoked",
       });
 
       expect(response.statusCode).toBe(200);
       expect(response.json().lifecycleState).toBe("suspended");
-      // 복귀 대상을 기억한다(§4.3).
+      // Remembers the state to resume to (§4.3).
       expect(response.json().priorLifecycleState).toBe("registered");
     });
 
-    it("멈춘 사람은 되돌릴 수 없다", async () => {
+    it("does not let whoever suspended resume", async () => {
       const project = await newProject();
       const version = await register(project.id);
       const suspended = await transition(operatorToken, project.id, version, {
         toState: "suspended",
-        reason: "근거 attestation이 철회됐다",
+        reason: "the underlying attestation was revoked",
       });
 
       const response = await transition(operatorToken, project.id, suspended.json().version, {
         toState: "registered",
-        reason: "내가 멈췄고 내가 되돌린다",
+        reason: "I suspended it and I resume it",
       });
 
-      // 같은 사람이 멈추고 되돌리면 suspension은 통제가 아니라 재량이 된다.
-      // 권한 자체도 없지만(operator는 advance가 아니다) 그 앞에 이 규칙이 있다.
+      // If one person both suspends and resumes, suspension becomes discretion, not control.
+      // The permission is missing too (operator is not advance), but this rule comes first.
       expect([403]).toContain(response.statusCode);
     });
 
-    it("다른 사람이 직전 상태로 되돌린다", async () => {
+    it("lets another person resume to the prior state", async () => {
       const project = await newProject();
       const version = await register(project.id);
       const suspended = await transition(operatorToken, project.id, version, {
         toState: "suspended",
-        reason: "근거 attestation이 철회됐다",
+        reason: "the underlying attestation was revoked",
       });
 
       const response = await transition(issuerToken, project.id, suspended.json().version, {
         toState: "registered",
-        reason: "재검토 결과 문제가 없다",
+        reason: "no problem found on re-review",
       });
 
       expect(response.statusCode).toBe(200);
       expect(response.json().lifecycleState).toBe("registered");
-      // 나오면 복귀 대상을 지운다.
+      // Clears the resume target on exit.
       expect(response.json().priorLifecycleState).toBeNull();
       expect(response.json().transitions).toHaveLength(3);
     });
 
-    it("직전 상태가 아닌 곳으로 나올 수 없다", async () => {
+    it("rejects exiting to anything but the prior state", async () => {
       const project = await newProject();
       const version = await register(project.id);
       const suspended = await transition(operatorToken, project.id, version, {
         toState: "suspended",
-        reason: "근거 attestation이 철회됐다",
+        reason: "the underlying attestation was revoked",
       });
 
-      // registered에서 멈췄는데 active로 나오면 suspension이 상태를 세탁한다.
+      // Suspended from registered, exiting to active would let suspension launder state.
       const response = await transition(issuerToken, project.id, suspended.json().version, {
         toState: "active",
-        reason: "그냥 앞으로",
+        reason: "just move forward",
       });
 
       expect(response.statusCode).toBe(422);
       expect(response.json().code).toBe("LIFECYCLE_RESUME_TARGET_INVALID");
     });
 
-    it("closure로는 언제나 나올 수 있다", async () => {
+    it("always allows exiting to closure", async () => {
       const project = await newProject();
       const version = await register(project.id);
       const suspended = await transition(operatorToken, project.id, version, {
         toState: "suspended",
-        reason: "근거 attestation이 철회됐다",
+        reason: "the underlying attestation was revoked",
       });
 
-      // 멈춘 프로젝트를 닫는 것은 세탁이 아니다(§4.3).
+      // Closing a suspended project is not laundering (§4.3).
       const response = await transition(issuerToken, project.id, suspended.json().version, {
         toState: "closure",
-        reason: "사업을 접는다",
+        reason: "winding down the business",
       });
 
       expect(response.statusCode).toBe(200);
@@ -290,7 +290,7 @@ describeDb("project lifecycle", () => {
     });
   });
 
-  it("If-Match 없이 전이할 수 없다", async () => {
+  it("rejects a transition without If-Match", async () => {
     const project = await newProject();
     await register(project.id);
 
@@ -298,19 +298,19 @@ describeDb("project lifecycle", () => {
       method: "POST",
       url: `/api/v1/projects/${project.id}/lifecycle-transitions`,
       headers: { authorization: `Bearer ${issuerToken}`, "idempotency-key": idempotencyKey() },
-      payload: { toState: "offering_open", reason: "버전 없이" },
+      payload: { toState: "offering_open", reason: "without a version" },
     });
 
     expect(response.statusCode).toBe(428);
   });
 
-  it("approver도 앞으로 미는 전이를 할 수 있다", async () => {
+  it("lets an approver make forward transitions too", async () => {
     const project = await newProject();
     const version = await register(project.id);
 
     const response = await transition(approverToken, project.id, version, {
       toState: "offering_open",
-      reason: "gate 판정 결과 진행",
+      reason: "proceeding per gate verdict",
     });
 
     expect(response.statusCode).toBe(200);
@@ -318,7 +318,7 @@ describeDb("project lifecycle", () => {
   });
 });
 
-describeDb("공개 projection의 lifecycle", () => {
+describeDb("lifecycle in the public projection", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operatorToken: string;
@@ -334,7 +334,7 @@ describeDb("공개 projection의 lifecycle", () => {
     await fx.close();
   });
 
-  it("게시 직전 상태가 아니라 게시 이후 상태를 담는다", async () => {
+  it("carries the post-publication state, not the pre-publication state", async () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/v1/projects",
@@ -350,7 +350,7 @@ describeDb("공개 projection의 lifecycle", () => {
     const projectId = created.json().id;
     const publicKey = `W39-${randomUUID().slice(0, 8)}`;
 
-    // 화면은 게시 **직전** 상태를 담아 보낸다. 그것이 `draft`다.
+    // The screen sends the state **just before** publication. That is `draft`.
     const published = await app.inject({
       method: "POST",
       url: "/api/v1/registry-entries",
@@ -366,7 +366,7 @@ describeDb("공개 projection의 lifecycle", () => {
           asOf: "2026-08-01T00:00:00.000Z",
           sourceAge: "12",
           staleStatus: "fresh",
-          limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+          limitations: ["legal rights verification is outside the scope of this review"],
           legalEffect: "none",
           disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
         },
@@ -377,15 +377,15 @@ describeDb("공개 projection의 lifecycle", () => {
     });
     expect(published.statusCode).toBe(200);
 
-    // 11 §11.4의 `registered`는 "Registry 기록 존재"이고, 그 기록을 만드는 것이
-    // 바로 이 요청이다. 저장되는 순간 이미 draft가 아니다.
+    // In 11 §11.4, `registered` means "a Registry record exists", and this very request
+    // creates that record. The moment it is stored, it is no longer draft.
     const read = await app.inject({
       method: "GET",
       url: `/api/v1/public/registries/project/${publicKey}`,
     });
     expect(read.statusCode).toBe(200);
-    // 응답의 최상위 `status`는 version의 게시 상태이고, projection 안의 것이
-    // lifecycle이다.
+    // The top-level `status` in the response is the version's publication state; the one
+    // inside the projection is the lifecycle.
     const [stored] = await fx.sql<{ public_projection: { status: string } }[]>`
       SELECT public_projection FROM core.registry_entry_versions
       WHERE id = ${published.json().id}
@@ -393,7 +393,7 @@ describeDb("공개 projection의 lifecycle", () => {
     expect(stored!.public_projection.status).toBe("registered");
   });
 
-  it("draft가 아닌 상태를 게시가 앞으로 밀지 않는다", async () => {
+  it("does not advance a non-draft state on publication", async () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/v1/projects",
@@ -429,7 +429,7 @@ describeDb("공개 projection의 lifecycle", () => {
           asOf: "2026-08-01T00:00:00.000Z",
           sourceAge: "12",
           staleStatus: "fresh",
-          limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+          limitations: ["legal rights verification is outside the scope of this review"],
           legalEffect: "none",
           disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
         },
@@ -440,7 +440,7 @@ describeDb("공개 projection의 lifecycle", () => {
     });
     expect(published.statusCode).toBe(200);
 
-    // suspended를 게시로 되돌리면 incident closure 없이 복귀시키는 셈이 된다.
+    // Reverting suspended via publication would resume without incident closure.
     const [stored] = await fx.sql<{ public_projection: { status: string } }[]>`
       SELECT public_projection FROM core.registry_entry_versions
       WHERE id = ${published.json().id}

@@ -3,26 +3,26 @@ import type postgres from "postgres";
 import { conflict } from "../errors.js";
 
 /**
- * mutation 멱등성 — 07 §7.1.
+ * Mutation idempotency — 07 §7.1.
  *
- * 같은 key로 같은 요청이 오면 저장된 응답을 그대로 돌려준다. 같은 key로 **다른**
- * 요청이 오면 거절한다. 클라이언트가 key를 재사용하면서 payload를 바꾸는 것은
- * 버그이며, 조용히 실행하면 중복 부작용이 생긴다.
+ * The same request with the same key returns the stored response as is. A **different**
+ * request with the same key is rejected. A client reusing a key while changing the payload is
+ * a bug, and silently executing it causes duplicate side effects.
  */
 export function hashRequest(body: unknown): string {
   return createHash("sha256").update(JSON.stringify(body ?? null)).digest("hex");
 }
 
 /**
- * 외부 호출이 끼는 mutation을 위한 예약.
+ * Reservation for mutations that involve an external call.
  *
- * `withIdempotency`는 트랜잭션 하나 안에서 일을 끝내는 경우를 위한 것이다.
- * 출처 조회처럼 **DB 밖으로 요청이 나가는** 작업은 그 안에 넣을 수 없다 — 외부
- * 응답을 기다리는 동안 트랜잭션과 잠금을 쥐고 있게 된다.
+ * `withIdempotency` is for work finished within one transaction. Work that **sends requests
+ * outside the DB**, like source lookup, cannot go inside it — it would hold the transaction and
+ * locks while waiting for the external response.
  *
- * 그래서 셋으로 나눈다: 먼저 예약하고, 외부를 부르고, 결과로 마감한다.
- * 예약이 먼저인 이유는 **재시도가 출처를 다시 부르지 않게** 하기 위해서다.
- * 등록부 rate limit은 우리 재시도 횟수를 모른다.
+ * So it is split into three: reserve first, call out, then settle with the result.
+ * Reserving first ensures **a retry does not call the source again**.
+ * The registry's rate limit does not know our retry count.
  */
 export async function reserveIdempotency<T>(
   tx: postgres.TransactionSql,
@@ -30,8 +30,8 @@ export async function reserveIdempotency<T>(
   key: string,
   requestHash: string,
 ): Promise<{ readonly replay: T } | { readonly replay: null }> {
-  // 경쟁을 INSERT로 판정한다. 먼저 읽고 없으면 넣는 방식은 두 요청이 동시에
-  // 통과할 수 있다.
+  // Decide races with INSERT. Reading first and inserting when absent lets two concurrent
+  // requests both pass.
   const inserted = await tx`
     INSERT INTO core.idempotency_keys (key, tenant_id, request_hash)
     VALUES (${key}, ${tenantId}, ${requestHash})
@@ -47,23 +47,23 @@ export async function reserveIdempotency<T>(
     WHERE key = ${key} AND tenant_id = ${tenantId}
   `;
 
-  if (!previous) throw conflict("IDEMPOTENCY_IN_FLIGHT", "같은 요청이 처리 중이다");
+  if (!previous) throw conflict("IDEMPOTENCY_IN_FLIGHT", "The same request is in progress");
 
   if (previous.request_hash !== requestHash) {
-    throw conflict("IDEMPOTENCY_KEY_REUSE", "같은 key로 다른 요청이 왔다");
+    throw conflict("IDEMPOTENCY_KEY_REUSE", "A different request arrived with the same key");
   }
   if (previous.response_snapshot === null) {
-    throw conflict("IDEMPOTENCY_IN_FLIGHT", "같은 요청이 처리 중이다");
+    throw conflict("IDEMPOTENCY_IN_FLIGHT", "The same request is in progress");
   }
 
   return { replay: previous.response_snapshot };
 }
 
 /**
- * 예약을 되돌린다.
+ * Releases the reservation.
  *
- * 외부 호출이나 뒤이은 쓰기가 실패했을 때 부른다. 없으면 그 key는 영원히
- * `IDEMPOTENCY_IN_FLIGHT`가 되고 클라이언트는 다시 시도할 방법이 없다.
+ * Called when the external call or a subsequent write fails. Without it the key stays
+ * `IDEMPOTENCY_IN_FLIGHT` forever and the client has no way to retry.
  */
 export async function releaseIdempotency(
   sql: postgres.Sql | postgres.TransactionSql,
@@ -76,7 +76,7 @@ export async function releaseIdempotency(
   `;
 }
 
-/** 예약을 결과로 마감한다. 이후 같은 key는 이 응답을 그대로 받는다. */
+/** Settles the reservation with a result. Later calls with the same key get this response. */
 export async function completeIdempotency<T>(
   tx: postgres.TransactionSql,
   tenantId: string,
@@ -108,12 +108,12 @@ export async function withIdempotency<T>(
   const previous = existing[0];
   if (previous) {
     if (previous.request_hash !== requestHash) {
-      throw conflict("IDEMPOTENCY_KEY_REUSE", "같은 key로 다른 요청이 왔다");
+      throw conflict("IDEMPOTENCY_KEY_REUSE", "A different request arrived with the same key");
     }
     if (previous.response_snapshot !== null) {
       return previous.response_snapshot;
     }
-    throw conflict("IDEMPOTENCY_IN_FLIGHT", "같은 요청이 처리 중이다");
+    throw conflict("IDEMPOTENCY_IN_FLIGHT", "The same request is in progress");
   }
 
   await tx`

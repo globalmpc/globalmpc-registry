@@ -9,7 +9,7 @@ import {
 const SIGNABLE: AttestationSignRequest = {
   attestationType: "professional_signoff",
   claimScope: ["claim-001"],
-  limitations: "이 검토는 자원량 추정에 한정되며 법적 권리 확인을 포함하지 않는다",
+  limitations: "This review is limited to resource estimation and does not include legal title verification",
   conflictStatus: "none",
   credentialValidAtSigningTime: true,
   credentialScopeCoversClaims: true,
@@ -18,32 +18,32 @@ const SIGNABLE: AttestationSignRequest = {
   signerSubmittedEvidence: false,
 };
 
-describe("AC-01 — limitations 없이 서명할 수 없다", () => {
-  it("빈 문자열을 거절한다", () => {
+describe("AC-01 — cannot sign without limitations", () => {
+  it("rejects an empty string", () => {
     const result = checkAttestationSignable({ ...SIGNABLE, limitations: "" });
     expect(result.allowed).toBe(false);
     if (!result.allowed) expect(result.reason).toBe("ATTESTATION_LIMITATIONS_REQUIRED");
   });
 
-  it("공백만 있는 문자열도 거절한다", () => {
+  it("rejects a whitespace-only string", () => {
     const result = checkAttestationSignable({ ...SIGNABLE, limitations: "   \n\t " });
     expect(result.allowed).toBe(false);
     if (!result.allowed) expect(result.reason).toBe("ATTESTATION_LIMITATIONS_REQUIRED");
   });
 
-  it("내용이 있으면 통과한다", () => {
+  it("passes when content is present", () => {
     expect(checkAttestationSignable(SIGNABLE).allowed).toBe(true);
   });
 });
 
-describe("서명 전 검사", () => {
-  it("claim scope가 비면 거절한다", () => {
+describe("pre-signature checks", () => {
+  it("rejects an empty claim scope", () => {
     const result = checkAttestationSignable({ ...SIGNABLE, claimScope: [] });
     expect(result.allowed).toBe(false);
     if (!result.allowed) expect(result.reason).toBe("ATTESTATION_EMPTY_CLAIM_SCOPE");
   });
 
-  it("schema가 active가 아니면 거절한다", () => {
+  it("rejects a schema that is not active", () => {
     for (const state of ["draft", "approved", "superseded", "retired"] as const) {
       const result = checkAttestationSignable({ ...SIGNABLE, schemaState: state });
       expect(result.allowed).toBe(false);
@@ -51,13 +51,13 @@ describe("서명 전 검사", () => {
     }
   });
 
-  it("assignment 없이 서명할 수 없다 — self-assignment 후 self-approval 차단", () => {
+  it("cannot sign without an assignment — blocks self-assignment then self-approval", () => {
     const result = checkAttestationSignable({ ...SIGNABLE, hasActiveAssignment: false });
     expect(result.allowed).toBe(false);
     if (!result.allowed) expect(result.reason).toBe("ATTESTATION_NO_ACTIVE_ASSIGNMENT");
   });
 
-  it("서명 시점에 credential이 유효하지 않으면 거절한다", () => {
+  it("rejects a credential that is not valid at signing time", () => {
     const result = checkAttestationSignable({
       ...SIGNABLE,
       credentialValidAtSigningTime: false,
@@ -66,7 +66,7 @@ describe("서명 전 검사", () => {
     if (!result.allowed) expect(result.reason).toBe("ATTESTATION_CREDENTIAL_INVALID");
   });
 
-  it("credential scope가 claim을 덮지 않으면 거절한다", () => {
+  it("rejects when the credential scope does not cover the claim", () => {
     const result = checkAttestationSignable({
       ...SIGNABLE,
       credentialScopeCoversClaims: false,
@@ -75,19 +75,19 @@ describe("서명 전 검사", () => {
     if (!result.allowed) expect(result.reason).toBe("ATTESTATION_SCOPE_MISMATCH");
   });
 
-  it("미해결 이해상충이 있으면 거절한다", () => {
+  it("rejects an unresolved conflict of interest", () => {
     const result = checkAttestationSignable({ ...SIGNABLE, conflictStatus: "unresolved" });
     expect(result.allowed).toBe(false);
     if (!result.allowed) expect(result.reason).toBe("ATTESTATION_UNRESOLVED_CONFLICT");
   });
 
-  it("공시·해결된 이해상충은 통과한다", () => {
+  it("passes a disclosed or resolved conflict of interest", () => {
     expect(
       checkAttestationSignable({ ...SIGNABLE, conflictStatus: "disclosed_resolved" }).allowed,
     ).toBe(true);
   });
 
-  it("제출자 본인은 independent assurance를 할 수 없다", () => {
+  it("the submitter cannot give independent assurance", () => {
     const result = checkAttestationSignable({
       ...SIGNABLE,
       attestationType: "independent_assurance",
@@ -97,7 +97,7 @@ describe("서명 전 검사", () => {
     if (!result.allowed) expect(result.reason).toBe("ATTESTATION_SELF_ASSURANCE");
   });
 
-  it("제출자 본인도 professional signoff는 할 수 있다 — 독립성 요구가 다르다", () => {
+  it("the submitter can still give a professional signoff — independence requirements differ", () => {
     expect(
       checkAttestationSignable({
         ...SIGNABLE,
@@ -108,8 +108,8 @@ describe("서명 전 검사", () => {
   });
 });
 
-describe("AC-12·AC-17 — credential 시점 평가", () => {
-  it("서명 당시 유효하고 현재도 유효하면 그대로 적용된다", () => {
+describe("AC-12·AC-17 — point-in-time credential evaluation", () => {
+  it("valid at signing and still valid applies as is", () => {
     const result = evaluateCredentialApplicability({
       validAtAttestationTime: true,
       currentStatus: "valid",
@@ -121,7 +121,7 @@ describe("AC-12·AC-17 — credential 시점 평가", () => {
     });
   });
 
-  it("서명 당시 유효했고 현재 만료면 과거는 보존하고 앞으로만 재평가한다", () => {
+  it("valid at signing and now expired preserves the past and re-evaluates only going forward", () => {
     const result = evaluateCredentialApplicability({
       validAtAttestationTime: true,
       currentStatus: "expired",
@@ -131,7 +131,7 @@ describe("AC-12·AC-17 — credential 시점 평가", () => {
     expect(result.triggersDownstreamReassessment).toBe(true);
   });
 
-  it("철회된 credential은 과거 서명 사실을 남기되 앞으로의 근거가 되지 않는다", () => {
+  it("a revoked credential keeps the past signature but is no longer evidence going forward", () => {
     const result = evaluateCredentialApplicability({
       validAtAttestationTime: true,
       currentStatus: "revoked",
@@ -140,7 +140,7 @@ describe("AC-12·AC-17 — credential 시점 평가", () => {
     expect(result.ongoingApplicability).toBe("not_applicable");
   });
 
-  it("서명 당시에도 유효하지 않았다면 과거 서명이 근거가 될 수 없다", () => {
+  it("if it was not valid even at signing, the past signature cannot be evidence", () => {
     const result = evaluateCredentialApplicability({
       validAtAttestationTime: false,
       currentStatus: "valid",
@@ -149,7 +149,7 @@ describe("AC-12·AC-17 — credential 시점 평가", () => {
     expect(result.ongoingApplicability).toBe("not_applicable");
   });
 
-  it("상태를 알 수 없으면 재검토 대상이다 — 조용히 유효로 두지 않는다", () => {
+  it("an unknown state is up for re-review — not silently left valid", () => {
     const result = evaluateCredentialApplicability({
       validAtAttestationTime: true,
       currentStatus: "unknown",
@@ -159,7 +159,7 @@ describe("AC-12·AC-17 — credential 시점 평가", () => {
   });
 });
 
-describe("AC-15·AC-16 — 네 가지 사실은 서로 다르다", () => {
+describe("AC-15·AC-16 — the four facts are distinct", () => {
   const ALL_TRUE = {
     signatureValid: true,
     authorityAccepted: true,
@@ -168,29 +168,29 @@ describe("AC-15·AC-16 — 네 가지 사실은 서로 다르다", () => {
     claimWithinAuthorityScope: true,
   };
 
-  it("전부 충족되면 blocker가 없다", () => {
+  it("no blocker when everything is met", () => {
     expect(canonicalAcceptanceBlockers(ALL_TRUE)).toEqual([]);
   });
 
-  it("AC-15: 서명이 유효해도 authority scope 밖이면 차단된다", () => {
+  it("AC-15: blocked outside the authority scope even with a valid signature", () => {
     expect(
       canonicalAcceptanceBlockers({ ...ALL_TRUE, claimWithinAuthorityScope: false }),
     ).toEqual(["CLAIM_OUTSIDE_AUTHORITY_SCOPE"]);
   });
 
-  it("AC-16: 서명이 유효해도 authority가 미수용이면 차단된다", () => {
+  it("AC-16: blocked when the authority has not accepted, even with a valid signature", () => {
     expect(canonicalAcceptanceBlockers({ ...ALL_TRUE, authorityAccepted: false })).toEqual([
       "AUTHORITY_NOT_ACCEPTED",
     ]);
   });
 
-  it("credential이 유효해도 assignment가 없으면 차단된다", () => {
+  it("blocked without an assignment even with a valid credential", () => {
     expect(canonicalAcceptanceBlockers({ ...ALL_TRUE, assignedToThisCase: false })).toEqual([
       "NOT_ASSIGNED",
     ]);
   });
 
-  it("여러 blocker를 모두 반환한다 — 하나만 고치면 되는 것처럼 보이면 안 된다", () => {
+  it("returns every blocker — it must not look like fixing one is enough", () => {
     expect(
       canonicalAcceptanceBlockers({
         signatureValid: false,

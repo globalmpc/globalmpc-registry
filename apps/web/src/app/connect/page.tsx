@@ -5,10 +5,10 @@ import { DEMO_ACCOUNTS, demoAddress, useSession } from "@/lib/session";
 import { REQUIRED_BOUNDARY_COPY } from "@mpc/ui";
 
 /**
- * 계정 연결 — 이 화면은 `/`가 아니라 `/connect`에 있다.
+ * Account connect — this screen lives at `/connect`, not `/`.
  *
- * `/`가 로그인 화면이던 동안 제품이 무엇인지 설명하는 공개 진입점이 없었다.
- * 로그인은 공개 표면의 한 갈래이지 그 입구가 아니다.
+ * While `/` was the sign-in screen, there was no public entry point explaining the product.
+ * Sign-in is one branch of the public surface, not its entrance.
  */
 export default function SignInPage() {
   const {
@@ -24,8 +24,8 @@ export default function SignInPage() {
   } = useSession();
   const router = useRouter();
 
-  // 데모 계정은 빌드 플래그로만 들어온다(`lib/session`). 꺼진 빌드에서는 이 화면에
-  // 지갑 연결만 남아야 한다 — 빈 목록을 그대로 그리면 설명 없는 빈 자리가 된다.
+  // Demo accounts come in only via a build flag (`lib/session`). In builds without it, this screen
+  // must show only wallet connect — rendering an empty list leaves an unexplained blank.
   const demoAvailable = DEMO_ACCOUNTS.length > 0;
 
   return (
@@ -60,15 +60,15 @@ export default function SignInPage() {
       <div className="panel" data-testid="wallet-connect">
         <h2>Connect with a browser wallet</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          {/* 개인키가 우리에게 오지 않는다는 것을 로그인 전에 밝힌다. */}
+          {/* State before sign-in that private keys never come to us. */}
           Your wallet signs; we only receive the result. Your private key never reaches this site.
         </p>
         {/*
-          설치된 지갑을 사용자가 고른다.
+          The user picks an installed wallet.
 
-          `window.ethereum`은 자리가 하나뿐이라 확장을 둘 이상 깔면 먼저 잡은 쪽이
-          응답한다. 사용자가 의도한 지갑이 아닌 쪽이 거절하면 "연결이 안 된다"로만
-          보이고 어느 지갑이 거절했는지는 드러나지 않는다.
+          `window.ethereum` has only one slot, so with two or more extensions installed, whichever grabbed it first
+          responds. If a wallet the user did not intend rejects, it only looks like "cannot connect",
+          and which wallet rejected is not revealed.
         */}
         {wallets.length > 0 ? (
           <div className="wallet-choices" data-testid="wallet-choices">
@@ -83,7 +83,7 @@ export default function SignInPage() {
                 }}
               >
                 {wallet.icon ? (
-                  // 지갑이 보낸 data URI다. 외부에서 받아오지 않는다.
+                  // A data URI sent by the wallet. Nothing is fetched externally.
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={wallet.icon} alt="" width={18} height={18} aria-hidden />
                 ) : null}
@@ -97,8 +97,8 @@ export default function SignInPage() {
             data-testid="connect-wallet"
             disabled={signingIn}
             onClick={async () => {
-              // 성공했을 때만 넘어간다. 실패해도 넘어가면 위의 오류 안내가
-              // 그려지기 전에 화면이 사라진다.
+              // Navigate only on success. Navigating on failure removes the screen before the error
+              // notice above is drawn.
               if (await signInWithWallet()) router.push("/w/projects");
             }}
           >
@@ -113,11 +113,11 @@ export default function SignInPage() {
       </div>
 
       {/*
-        마지막 연결 시도의 단계 — 2026-09-11.
+        Steps of the last connect attempt — 2026-09-11.
 
-        연결은 이 브라우저 안에서 일어나고 서버에는 결과만 남는다. 어느 지갑이
-        응답했는지, 체인 전환이 어떤 코드로 멈췄는지는 여기에만 있다. 실패했을 때
-        펼쳐 두고, 복사해 전달할 수 있게 한다. 이 기록은 서버로 보내지 않는다.
+        Connecting happens inside this browser and only the result reaches the server. Which wallet
+        responded and which code stopped the chain switch exist only here. On failure
+        it is expanded and can be copied and forwarded. This log is never sent to the server.
       */}
       {connectionLog.length > 0 ? (
         <details className="panel" data-testid="connection-log" open={Boolean(error)}>
@@ -156,8 +156,8 @@ export default function SignInPage() {
               className="account-card"
               disabled={signingIn}
               onClick={async () => {
-                // 성공했을 때만 넘어간다. 지갑 경로와 같은 규칙이다 — 실패한 채
-                // 이동하면 오류 안내가 그려지기 전에 화면이 사라진다.
+                // Navigate only on success. Same rule as the wallet path — navigating after a failure
+                // removes the screen before the error notice is drawn.
                 if (await signIn(account)) router.push("/w/projects");
               }}
             >
@@ -178,8 +178,8 @@ export default function SignInPage() {
       <div className="panel" style={{ marginTop: 24 }}>
         <h2>Boundaries this workspace enforces</h2>
         <ul style={{ margin: 0, paddingLeft: 18, color: "var(--muted-foreground)" }}>
-          {/* 경계 문구는 `@mpc/ui`가 원본이다. 화면마다 다르게 번역되면 그
-              문구를 강제하는 의미가 없다. */}
+          {/* Boundary copy originates in `@mpc/ui`. If each screen translates it differently,
+              enforcing that copy means nothing. */}
           <li>{REQUIRED_BOUNDARY_COPY.verification.en}</li>
           <li>{REQUIRED_BOUNDARY_COPY.readiness.en}</li>
           <li>{REQUIRED_BOUNDARY_COPY.sourceStatus.en}</li>

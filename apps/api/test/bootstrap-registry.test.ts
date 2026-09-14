@@ -13,17 +13,17 @@ import { setupFixture, type TestFixture } from "./helpers/db.js";
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 검토를 시작하는 데 필요한 세 가지의 bootstrap.
+ * Bootstrap of the three things a review needs to start.
  *
- * 사람만 넣으면 프로젝트 등록까지 가고 검토 구간에서 멈춘다 — 배정이 credential과
- * schema를, 준비도가 policy set을 요구하기 때문이다. 그 셋을 만드는 경로가 E2E
- * seed에만 있었다.
+ * With only people seeded, flow reaches project creation and stops at review — assignment
+ * needs a credential and schema, readiness needs a policy set. The only path that created
+ * those three was the E2E seed.
  *
- * 여기서 확인하는 것은 "행이 들어갔다"가 아니라 **거짓 상태로 들어가지 않는다**이다.
- * 만료된 자격이 valid로, 승인 없는 규격이 active로 들어가면 그 뒤의 검사가 전부
- * 통과해 버린다.
+ * This checks not "the row was inserted" but **that nothing is inserted in a false state**.
+ * An expired credential entered as valid, or an unapproved spec as active, lets every
+ * later check pass.
  */
-describeDb("검토 registry bootstrap", () => {
+describeDb("review registry bootstrap", () => {
   let fx: TestFixture;
   let tenantSlug: string;
 
@@ -94,7 +94,7 @@ describeDb("검토 registry bootstrap", () => {
     ],
   };
 
-  it("자격을 만들고 다시 돌려도 하나만 남는다", async () => {
+  it("creating a credential and rerunning leaves exactly one", async () => {
     const wallet = await seedPerson();
     const args = credential({ walletAddress: wallet });
 
@@ -107,27 +107,27 @@ describeDb("검토 registry bootstrap", () => {
     expect(first.state).toBe("valid");
   });
 
-  it("만료된 자격을 valid로 넣지 않는다", async () => {
+  it("does not insert an expired credential as valid", async () => {
     const wallet = await seedPerson();
     await expect(
       bootstrapCredential(fx.sql, credential({ walletAddress: wallet, expiresAt: "2020-01-01T00:00:00Z" })),
     ).rejects.toThrow(BootstrapRegistryError);
   });
 
-  it("범위 없는 자격을 거절한다 — 그 자격으로는 서명이 막힌다", async () => {
+  it("rejects a credential without scope — it could not sign anything", async () => {
     const wallet = await seedPerson();
     await expect(
       bootstrapCredential(fx.sql, credential({ walletAddress: wallet, credentialScope: [] })),
     ).rejects.toThrow(BootstrapRegistryError);
   });
 
-  it("없는 지갑에는 자격을 붙이지 않는다", async () => {
+  it("does not attach a credential to a nonexistent wallet", async () => {
     await expect(
       bootstrapCredential(fx.sql, credential({ walletAddress: newWallet() })),
     ).rejects.toThrow(BootstrapRegistryError);
   });
 
-  it("승인자를 대지 않은 검토 규격은 draft다", async () => {
+  it("a review spec without an approver is draft", async () => {
     await seedPerson();
     const result = await bootstrapAttestationSchema(fx.sql, {
       tenantSlug,
@@ -143,7 +143,7 @@ describeDb("검토 registry bootstrap", () => {
     expect(result.state).toBe("draft");
   });
 
-  it("한계 없는 검토 규격을 거절한다 (AC-01)", async () => {
+  it("rejects a review spec without limitations (AC-01)", async () => {
     await seedPerson();
     await expect(
       bootstrapAttestationSchema(fx.sql, {
@@ -160,7 +160,7 @@ describeDb("검토 registry bootstrap", () => {
     ).rejects.toThrow(BootstrapRegistryError);
   });
 
-  it("승인자를 대면 활성이 되고 누가 말했는지가 감사에 남는다", async () => {
+  it("naming an approver makes it active and records who said so in audit", async () => {
     await seedPerson();
     const schemaKey = `approved-${randomUUID().slice(0, 8)}`;
     const result = await bootstrapAttestationSchema(fx.sql, {
@@ -182,11 +182,11 @@ describeDb("검토 registry bootstrap", () => {
       WHERE resource_id = ${result.id} AND command = 'bootstrap.attestation_schema.created'
     `;
     expect(event?.reason).toBe("Verification lead");
-    // 앱이 식별하지 않은 사람이다. 없는 신원을 지어내지 않는다.
+    // A person the app has not identified. No identity is invented.
     expect(event?.actor_subject_id).toBeNull();
   });
 
-  it("draft로 넣은 규격을 나중에 승인할 수 있다 (02 §2.8)", async () => {
+  it("a spec inserted as draft can be approved later (02 §2.8)", async () => {
     await seedPerson();
     const schemaKey = `two-step-${randomUUID().slice(0, 8)}`;
     const args = {
@@ -219,7 +219,7 @@ describeDb("검토 registry bootstrap", () => {
     expect(event?.reason).toBe("Verification lead");
   });
 
-  it("draft로 넣은 규칙도 나중에 승인할 수 있다", async () => {
+  it("a rule inserted as draft can be approved later too", async () => {
     await seedPerson();
     const definition = { ...RULE_SET, ruleSetId: `two-step-${randomUUID().slice(0, 8)}` };
 
@@ -235,7 +235,7 @@ describeDb("검토 registry bootstrap", () => {
     expect(approved.state).toBe("effective");
   });
 
-  it("schema를 통과하지 못하는 rule set을 거절한다 (OD-15)", async () => {
+  it("rejects a rule set that fails the schema (OD-15)", async () => {
     await seedPerson();
     await expect(
       bootstrapPolicySet(fx.sql, {
@@ -246,7 +246,7 @@ describeDb("검토 registry bootstrap", () => {
     ).rejects.toThrow(BootstrapRegistryError);
   });
 
-  it("rule set의 값에서 행의 열을 가져온다", async () => {
+  it("takes row columns from the rule set values", async () => {
     await seedPerson();
     const result = await bootstrapPolicySet(fx.sql, {
       tenantSlug,

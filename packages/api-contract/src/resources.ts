@@ -43,8 +43,8 @@ export const createProjectRequest = z.object({
 });
 
 /**
- * 미확인 항목 — 04 §4.2.
- * nullable text가 아니라 4상태 + evidence reference로 관리한다.
+ * Unconfirmed items — 04 §4.2.
+ * Tracked as four states plus an evidence reference, not as nullable text.
  */
 export const projectFact = z.object({
   factKey: z.string(),
@@ -73,7 +73,7 @@ export const sourceReceipt = z
   })
   .merge(sourceStatusView);
 
-/** Claim — 수치는 decimal string + 단위 + 기준일이다(ADR-T07). */
+/** Claim — numbers are a decimal string + unit + as-of date (ADR-T07). */
 export const claim = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -91,9 +91,9 @@ export const claim = z.object({
     "rejected",
   ]),
   grade: z.enum(GRADES),
-  /** 이 값이 나온 Source Receipt. `null`은 근거 없음이며 숨기지 않는다. */
+  /** Source Receipt this value came from. `null` means no evidence and is not hidden. */
   sourceReceiptId: z.string().nullable(),
-  /** 근거가 흔들렸는가 — AC-21. 검토가 없었다는 뜻이 아니다. */
+  /** Whether the evidence has been shaken — AC-21. Does not mean it was never reviewed. */
   stale: z.boolean(),
   staleSince: z.string().nullable(),
   staleReason: z.string().nullable(),
@@ -101,10 +101,11 @@ export const claim = z.object({
 });
 
 /**
- * anchor batch 상태 — 08 §8.9.
+ * Anchor batch status — 08 §8.9.
  *
- * `confirmationState`를 가공하지 않고 그대로 노출한다. 화면에서 "완료/진행중"으로
- * 뭉개면 `included`와 `confirmed`의 차이가 사라진다 — 그 차이가 이 기록의 핵심이다.
+ * Exposes `confirmationState` unprocessed. Collapsing it into "done/in progress"
+ * in the UI erases the difference between `included` and `confirmed` — that
+ * difference is the point of this record.
  */
 export const anchorBatchStatus = z.object({
   id: z.string(),
@@ -119,19 +120,19 @@ export const anchorBatchStatus = z.object({
   blockNumber: z.string().nullable(),
   confirmations: z.number().int(),
   attempts: z.number().int(),
-  /** 마지막 실패 사유. 다음 행동을 정하는 데 필요하다. */
+  /** Last failure reason. Needed to decide the next action. */
   lastError: z.string().nullable(),
   submittedAt: isoDateTime.nullable(),
   confirmedAt: isoDateTime.nullable(),
-  /** 이 batch가 한 번이라도 뒤집힌 적이 있는가. 재확정돼도 사실은 남는다. */
+  /** Whether this batch was ever reorged. The fact persists even after reconfirmation. */
   reorgCount: z.number().int(),
-  /** 사람이 봐야 하는 상태인가. 자동으로 풀리지 않는다. */
+  /** Whether a human needs to look. Does not clear automatically. */
   needsAttention: z.boolean(),
   /**
-   * Safe 제안 정보. EOA 제출이 막힌 체인에서만 생긴다.
+   * Safe proposal details. Present only on chains where EOA submission is blocked.
    *
-   * **제안이 있다는 것은 제출됐다는 뜻이 아니다.** 서명 수집과 실행은 Safe에서
-   * 사람이 하며, 그때까지 체인에는 아무것도 없다.
+   * **A proposal existing does not mean it was submitted.** People collect
+   * signatures and execute in the Safe; until then nothing is on chain.
    */
   proposal: z
     .object({
@@ -144,13 +145,14 @@ export const anchorBatchStatus = z.object({
 });
 
 /**
- * 업로드 — 05 §5.2, 06 §6.7.
+ * Upload — 05 §5.2, 06 §6.7.
  *
- * **업로드는 evidence가 아니다.** quarantine을 지나 검사를 통과해야 승격된다.
- * 두 상태를 같은 화면에서 같은 말로 보여주면 검사되지 않은 파일이 검토 대상
- * 자료로 읽힌다.
+ * **An upload is not evidence.** It is promoted only after passing through
+ * quarantine and scanning clean. Showing both states on one screen with the same
+ * wording would make unscanned files read as material for review.
  *
- * `originalFilename`은 restricted다. 응답에는 담되 공개 projection에는 갈 수 없다.
+ * `originalFilename` is restricted. It is included in responses but can never
+ * reach a public projection.
  */
 export const objectUpload = z.object({
   id: z.string(),
@@ -172,18 +174,19 @@ export const objectUpload = z.object({
   scannedAt: isoDateTime.nullable(),
   promotedArtifactId: z.string().nullable(),
   rejectionReason: z.string().nullable(),
-  /** 이 상태에서 다음에 할 수 있는 것. 추측하게 두지 않는다. */
+  /** What can be done next from this state. Not left to guesswork. */
   nextActions: z.array(z.string()),
   version: z.number().int().positive(),
 });
 
-/** 다운로드용 단기 URL. 영구 공개 URL은 만들지 않는다(06 §6.7). */
+/** Short-lived download URL. No permanent public URL is created (06 §6.7). */
 /**
- * 검사기 생존.
+ * Scanner liveness.
  *
- * 업로드 목록에 붙는다. `promote`는 `scanned_clean`에서만 전이하므로 검사 worker가
- * 없는 배포에서 업로드는 `quarantined`에 영원히 머물고, **그 정지는 오류가 아니라
- * 대기처럼 보인다.** 목록이 그 구분을 스스로 말한다.
+ * Attached to the upload list. `promote` transitions only from `scanned_clean`,
+ * so in a deployment without a scan worker uploads stay `quarantined` forever,
+ * and **that stall looks like waiting, not an error.** The list states the
+ * difference itself.
  */
 export const scannerStatus = z.object({
   state: z.enum(["running", "stale", "never_seen", "unknown"]),
@@ -194,19 +197,20 @@ export const scannerStatus = z.object({
 export const uploadDownloadLink = z.object({
   url: z.string(),
   expiresInSeconds: z.number().int().positive(),
-  /** 이 링크가 무엇을 우회하지 않는지. 받은 사람은 권한 검사를 다시 지나지 않는다. */
+  /** What this link does not bypass. Its recipient does not go through authorization again. */
   warning: z.string(),
 });
 
 /**
- * Audit 이벤트 — 02 §2.6.
+ * Audit event — 02 §2.6.
  *
- * `audit.events`는 append-only이며 superuser도 수정할 수 없다. 읽기 경로가
- * 없으면 그 보장이 운영에 쓰이지 못한다 — 누가 무엇을 했는지 확인하려면
- * DB에 직접 붙어야 하고, 그 자체가 감사의 신뢰를 떨어뜨린다.
+ * `audit.events` is append-only; even a superuser cannot modify it. Without a
+ * read path, operations cannot use that guarantee — checking who did what would
+ * require connecting to the DB directly, which itself undermines trust in the
+ * audit.
  *
- * **payload는 노출하지 않는다.** detail에 PII를 넣지 않기로 했지만, 약속이
- * 깨졌을 때 이 화면이 최초 유출 경로가 된다.
+ * **The payload is not exposed.** PII is not supposed to go into detail, but if
+ * that promise breaks, this screen would be the first leak path.
  */
 export const auditEvent = z.object({
   id: z.string(),
@@ -224,26 +228,26 @@ export const auditEvent = z.object({
 });
 
 /**
- * 이벤트 발행 backlog — 07 §7.5.
+ * Event publication backlog — 07 §7.5.
  *
- * outbox는 at-least-once다. 쌓이기 시작하면 이벤트가 사라지는 것이 아니라
- * **늦어진다** — 그 구분이 대응을 정한다.
+ * The outbox is at-least-once. When it backs up, events are not lost but
+ * **delayed** — that distinction determines the response.
  */
 export const outboxBacklog = z.object({
   pending: z.number().int(),
   oldestPendingAt: isoDateTime.nullable(),
-  /** 가장 오래된 미발행 이벤트의 지연(초). null이면 backlog가 없다. */
+  /** Age in seconds of the oldest unpublished event. Null means no backlog. */
   oldestPendingAgeSeconds: z.number().int().nullable(),
   publishedLastHour: z.number().int(),
   byEventType: z.array(z.object({ eventType: z.string(), pending: z.number().int() })),
 });
 
 /**
- * Verification Case 요약 — 04 §4.4.
+ * Verification Case summary — 04 §4.4.
  *
- * 검토자는 자기에게 배정된 case를 찾을 수 있어야 한다. 배정을 만든 사람과
- * 서명하는 사람이 다르므로(02 §2.4), 화면 상태로만 전달하면 검토자는 자기
- * 배정에 도달할 방법이 없다.
+ * Reviewers must be able to find the cases assigned to them. The person who
+ * creates an assignment differs from the one who signs (02 §2.4), so passing it
+ * only through UI state would leave reviewers no way to reach their assignments.
  */
 export const verificationCaseSummary = z.object({
   id: z.string(),
@@ -253,12 +257,12 @@ export const verificationCaseSummary = z.object({
   state: z.string(),
   evidenceSnapshotHash: hex32,
   claimIds: z.array(z.string()),
-  /** 이 case에 배정된 검토자. 로그인한 사람이 그 사람인지 화면이 대조한다. */
+  /** Reviewer assigned to this case. The UI checks whether the logged-in user is that reviewer. */
   reviewerSubjectId: z.string(),
   assignedAt: isoDateTime,
-  /** 상태 전이마다 올라간다. If-Match가 이 값을 본다. */
+  /** Incremented on every state transition. If-Match checks this value. */
   version: z.number().int().positive(),
-  /** 지나온 상태와 그 이유. 되돌아가도 경로는 남는다. */
+  /** Past states and reasons. The path persists even after going back. */
   transitions: z.array(
     z.object({
       fromState: z.string(),
@@ -270,11 +274,11 @@ export const verificationCaseSummary = z.object({
 });
 
 /**
- * case 상태 전이 요청 — 04 §4.4.
+ * Case state transition request — 04 §4.4.
  *
- * 상태를 바꾸는 것은 사실을 기록하는 것이다. 이유 없이 바꿀 수 없다 —
- * `changes_requested`는 무엇을 보완해야 하는지, `cancelled`는 왜 그만두는지가
- * 없으면 다음 사람이 판단할 근거가 사라진다.
+ * Changing state records a fact, so it cannot happen without a reason — without
+ * what `changes_requested` needs fixed or why `cancelled` stopped, the next
+ * person has nothing to judge by.
  */
 export const transitionCaseRequest = z.object({
   toState: z.enum([
@@ -283,21 +287,22 @@ export const transitionCaseRequest = z.object({
     "declined",
     "cancelled",
   ]),
-  reason: z.string().min(1, "상태를 바꾼 이유는 비워 둘 수 없다"),
+  reason: z.string().min(1, "The reason for the state change cannot be empty"),
 });
 
 /**
- * attestation 이의 제기 — 04 §4.2.
+ * Attestation dispute — 04 §4.2.
  *
- * **서명을 지우지 않는다.** 서명 당시의 판단은 그대로 남고 `disputed`라는 새
- * 사실이 추가된다. 서명을 삭제하면 "누가 무엇을 언제 판단했는가"를 잃는다.
+ * **The signature is never erased.** The judgment at signing time stays and a new
+ * fact, `disputed`, is added. Deleting the signature would lose "who judged what,
+ * and when".
  */
 export const disputeAttestationRequest = z.object({
   reasonCode: z.string().min(1),
-  detail: z.string().min(1, "이의 제기 사유는 비워 둘 수 없다"),
+  detail: z.string().min(1, "The dispute reason cannot be empty"),
 });
 
-/** 제기된 이의. 해소돼도 지워지지 않는다. */
+/** A raised dispute. Not deleted even when resolved. */
 export const attestationDispute = z.object({
   id: z.string(),
   attestationId: z.string(),
@@ -305,21 +310,21 @@ export const attestationDispute = z.object({
   detail: z.string(),
   raisedAt: isoDateTime,
   resolvedAt: isoDateTime.nullable(),
-  /** `upheld`·`dismissed`. 미해소면 null. */
+  /** `upheld` or `dismissed`. Null while unresolved. */
   outcome: z.string().nullable(),
   resolution: z.string().nullable(),
 });
 
 /**
- * 이의 해소 요청 — 04 §4.2.
+ * Dispute resolution request — 04 §4.2.
  *
- * `upheld`는 이의가 맞았다는 뜻이고, `dismissed`는 검토가 유지된다는 뜻이다.
- * 어느 쪽이든 **이의 기록 자체는 남는다** — 해소됐다고 지우면 "한 번 문제가
- * 제기됐다"는 사실이 사라진다.
+ * `upheld` means the dispute was right; `dismissed` means the review stands.
+ * Either way **the dispute record itself remains** — deleting it on resolution
+ * would erase the fact that "a problem was once raised".
  */
 export const resolveDisputeRequest = z.object({
   outcome: z.enum(["upheld", "dismissed"]),
-  resolution: z.string().min(1, "해소 근거는 비워 둘 수 없다"),
+  resolution: z.string().min(1, "The resolution rationale cannot be empty"),
 });
 
 /** Verification Attestation — 04 §4.2. */
@@ -332,14 +337,14 @@ export const verificationAttestation = z.object({
   evidenceSnapshotHash: hex32,
   findings: z.array(z.record(z.unknown())),
   citations: z.array(z.record(z.unknown())),
-  /** AC-01: 빈 문자열을 허용하지 않는다. */
+  /** AC-01: empty strings are not allowed. */
   limitations: z.string().min(1),
   credentialStatusSnapshot: z.object({
     credentialId: z.string(),
     statusAtSigning: z.string(),
     validAtAttestationTime: z.boolean(),
   }),
-  /** AC-17: 현재 상태는 별도로 표시한다. 과거를 덮어쓰지 않는다. */
+  /** AC-17: current status is shown separately. The past is not overwritten. */
   credentialCurrentStatus: z.enum(["valid", "expired", "revoked", "suspended", "unknown"]),
   ongoingApplicability: z.enum(["applicable", "needs_review", "not_applicable"]),
   methodVersion: z.string(),
@@ -367,7 +372,7 @@ export const createAttestationRequest = z.object({
   claimScope: z.array(z.string()).min(1),
   findings: z.array(z.record(z.unknown())).default([]),
   citations: z.array(z.record(z.unknown())).default([]),
-  limitations: z.string().min(1, "limitations는 비워 둘 수 없다"),
+  limitations: z.string().min(1, "limitations cannot be empty"),
 });
 
 /** Readiness Assessment — 05 §5.4. */
@@ -396,7 +401,7 @@ export const readinessAssessment = z
   })
   .merge(safetyFields.pick({ authority: true, ruleVersion: true, limitations: true, disclaimerCodes: true }));
 
-/** Gate Decision — 사람이 내린다. readiness와 별도 record다(§4.2). */
+/** Gate Decision — made by a human. A record separate from readiness (§4.2). */
 export const gateDecision = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -424,10 +429,12 @@ export const createGateDecisionRequest = z.object({
 /**
  * Asset/Offering activation gate — OD-07.
  *
- * **거래 필드가 없다.** `price`·`amount`·`subscribe` 같은 이름이 이 스키마에
- * 없는 것이 의도다 — 응답 형태가 곧 "무엇이 있는가"를 말한다.
+ * **There are no trading fields.** Names like `price`, `amount`, or `subscribe`
+ * are absent from this schema by design — the response shape itself states
+ * "what exists".
  *
- * 남은 조건과 담당만 반환한다. 화면이 빈 자리 대신 그것을 보여준다.
+ * Returns only the remaining conditions and their owners. The UI shows those
+ * instead of an empty slot.
  */
 export const offeringGateStatus = z.object({
   projectId: z.string(),
@@ -440,18 +447,19 @@ export const offeringGateStatus = z.object({
       owner: z.string(),
     }),
   ),
-  /** 근거 없이 충족으로 표시된 항목. 빠진 것보다 위험하다. */
+  /** Items marked satisfied without evidence. More dangerous than missing ones. */
   unsupported: z.array(z.string()),
-  /** 기능이 없다는 사실 자체를 문구로 보낸다. */
+  /** States in words that the feature does not exist. */
   absenceNotice: z.string(),
   notMeaning: z.string(),
 });
 
 /**
- * 근거 신호 — AC-21.
+ * Evidence signal — AC-21.
  *
- * 대상을 바꾸지 않고 "이 산출물이 딛고 있던 근거가 흔들렸다"는 사실만 남긴다.
- * **열려 있다는 것은 재검토가 필요하다는 뜻이지 그 기록이 틀렸다는 뜻이 아니다.**
+ * Leaves the target unchanged and records only that "the evidence this output
+ * stood on has been shaken". **An open signal means review is needed, not that
+ * the record is wrong.**
  */
 export const evidenceStaleSignal = z.object({
   id: z.string(),
@@ -464,15 +472,15 @@ export const evidenceStaleSignal = z.object({
   resolution: z.enum(["open", "superseded", "revoked", "dismissed"]),
   resolvedAt: z.string().nullable(),
   resolutionNote: z.string().nullable(),
-  /** 이 신호로 할 수 있는 것. 화면이 추측하지 않게 서버가 정한다. */
+  /** What can be done with this signal. The server decides so the UI does not guess. */
   nextActions: z.array(z.string()),
 });
 
 /**
- * 신호 종결 — AC-21.
+ * Signal resolution — AC-21.
  *
- * 공개 기록을 내리는 것은 세상이 보는 것을 바꾸는 행위다. 그 판정을 자동화하지
- * 않으므로 이유를 반드시 받는다.
+ * Taking down a public record changes what the world sees. That decision is not
+ * automated, so a reason is always required.
  */
 export const resolveStaleSignalRequest = z.object({
   resolution: z.enum(["superseded", "revoked", "dismissed"]),
@@ -480,59 +488,60 @@ export const resolveStaleSignalRequest = z.object({
 });
 
 /**
- * 두 번째 검토 — AC-29.
+ * Second review — AC-29.
  *
- * 수동 확인은 API 응답도 서명도 없이 한 사람의 진술이 유일한 근거다. 다른
- * 사람이 같은 등록부를 조회해 확인해야 확정된다.
+ * A manual check has no API response and no signature; one person's statement is
+ * the only evidence. It is confirmed only when another person looks up the same
+ * registry and verifies it.
  */
 export const secondReviewRequest = z.object({
-  /** 두 번째 조회에서 무엇을 봤는가. 같다는 말만으로는 검토가 아니다. */
+  /** What the second lookup showed. Saying "same" alone is not a review. */
   observation: z.string().min(1),
   confirmed: z.boolean(),
 });
 
 /**
- * 출처 조회 요청 — 05 §5.12, OD-42.
+ * Source lookup request — 05 §5.12, OD-42.
  *
- * `result`를 받지 않는다. 무엇이 나왔는지는 출처가 정하는 것이지 부르는 쪽이
- * 정하는 것이 아니다. 요청은 "무엇을 근거로 조회하는가"만 말한다.
+ * Does not accept `result`. The source decides what came back, not the caller.
+ * The request states only "what the lookup is based on".
  */
 export const sourceCollectRequest = z.object({
   projectId: z.string().uuid(),
-  /** 조회 조건. receipt에 그대로 남아 재현의 근거가 된다. */
+  /** Lookup criteria. Kept verbatim in the receipt as the basis for reproduction. */
   queryBasis: z.record(z.string(), z.string()),
 });
 
 /**
- * 출처 조회 결과 — 05 §5.12.
+ * Source lookup result — 05 §5.12.
  *
- * **실패도 receipt를 만든다.** "기록 없음"(404)과 "출처 장애"(503)는 둘 다
- * 사실이고, 남기지 않으면 다음 사람이 같은 조회를 반복한다.
+ * **Failures create receipts too.** "No record" (404) and "source outage" (503)
+ * are both facts; unrecorded, the next person repeats the same lookup.
  */
 export const sourceCollectResult = z.object({
   receiptId: z.string(),
   connectionId: z.string(),
   authorityId: z.string(),
-  /** 12개 결과 중 하나. `confirmed_from_source`만 확인된 것이다. */
+  /** One of the 12 results. Only `confirmed_from_source` counts as confirmed. */
   result: z.string(),
-  /** 성공했는가. `result`를 화면이 다시 해석하지 않게 서버가 판정한다. */
+  /** Whether it succeeded. The server decides so the UI does not reinterpret `result`. */
   confirmed: z.boolean(),
-  /** 출처가 밝힌 기준일. 조회 시각과 다르다. */
+  /** Effective date stated by the source. Differs from the lookup time. */
   effectiveAt: z.string().nullable(),
-  /** authority가 선언한 한계가 반드시 포함된다. */
+  /** Always includes the limitations the authority declared. */
   limitations: z.array(z.string()),
   detail: z.string().nullable(),
 });
 
 /**
- * Authority 등록 — 02 §2.8, 05 §5.11, REQ-DAPP-043.
+ * Authority registration — 02 §2.8, 05 §5.11, REQ-DAPP-043.
  *
- * **`doesNotProve`가 필수이고 비어 있을 수 없다.** 한계 없는 authority는
- * 존재하지 않는다. 선택 항목으로 두면 급할 때 비워두고, 그 receipt를 읽는 쪽은
- * 전체 확인으로 오해한다.
+ * **`doesNotProve` is required and cannot be empty.** No authority is without
+ * limitations. If optional, it would be left blank under time pressure, and
+ * readers of the receipt would mistake it for full confirmation.
  *
- * `state`를 받지 않는다. 등록은 항상 `proposed`에서 시작하며, 등록하는 사람이
- * 승인 상태를 정할 수 있으면 §2.8의 분리가 무너진다.
+ * Does not accept `state`. Registration always starts at `proposed`; if the
+ * registrant could set approval state, the §2.8 separation would collapse.
  */
 export const authorityRegisterRequest = z.object({
   name: z.string().min(1),
@@ -544,11 +553,11 @@ export const authorityRegisterRequest = z.object({
   publicDisclosureLevel: z.enum(["public", "restricted", "confidential", "pii", "whistleblower"]),
   validFrom: z.string(),
   validUntil: z.string().nullable().optional(),
-  /** 왜 이 기관을 후보로 올리는가. 이력의 첫 줄이 된다. */
+  /** Why this authority is proposed as a candidate. Becomes the first history entry. */
   reason: z.string().min(1),
 });
 
-/** 갱신. 관할은 바꿀 수 없다 — 다른 관할이면 다른 기관이다. */
+/** Update. Jurisdiction cannot change — a different jurisdiction is a different authority. */
 export const authorityUpdateRequest = z.object({
   name: z.string().min(1).optional(),
   proves: z.array(z.string().min(1)).min(1).optional(),
@@ -560,17 +569,17 @@ export const authorityUpdateRequest = z.object({
 });
 
 /**
- * 상태 전환.
+ * State transition.
  *
- * 등록한 사람은 승인할 수 없다(02 §2.8: 운영자 단독 `accepted` 전환 금지).
- * 그 판정은 서버가 한다 — 화면이 버튼을 감추는 것으로는 막지 못한다.
+ * The registrant cannot approve (02 §2.8: no operator-only `accepted`
+ * transition). The server enforces this — hiding a button in the UI cannot.
  */
 export const authorityStateRequest = z.object({
   state: z.enum(["under_review", "accepted", "suspended", "expired", "revoked", "superseded"]),
   reason: z.string().min(1),
 });
 
-/** Authority 이력 한 줄. 그때 이 기관이 무엇을 확인해 준다고 했는지가 남는다. */
+/** One authority history entry. Records what the authority claimed to prove at the time. */
 export const authorityVersionEntry = z.object({
   version: z.number().int(),
   name: z.string(),
@@ -585,14 +594,14 @@ export const authorityVersionEntry = z.object({
 });
 
 /**
- * 연동 구성 — 02 §2.8.
+ * Connection configuration — 02 §2.8.
  *
- * `state`를 `active`로 직접 넣을 수 있지만, 기관이 `accepted`가 아니면 DB가
- * 거절한다. **API 성공을 authority 승인으로 바꾸지 못하게** 하는 것이 §2.8의
- * 요구다.
+ * `state` can be set to `active` directly, but the DB rejects it unless the
+ * authority is `accepted`. §2.8 requires that **API success cannot be turned
+ * into authority approval**.
  *
- * 자격증명 값을 받지 않는다. `secretReference`만 받는다 — 값이 API를 지나가면
- * 요청 로그·에러 리포트에 남는다.
+ * Credential values are not accepted, only `secretReference` — a value passing
+ * through the API would end up in request logs and error reports.
  */
 export const connectionConfigureRequest = z.object({
   connectionKey: z.string().min(1).optional(),
@@ -633,22 +642,23 @@ export const sourceConnectionEntry = z.object({
   connectionKey: z.string(),
   collectionMethod: z.string(),
   state: z.string(),
-  /** 호출 대상. 비밀이 아니므로 보여준다 — 자격증명은 여기 없다. */
+  /** Call target. Not secret, so it is shown — credentials are not here. */
   endpoint: z.string().nullable(),
-  /** 자격증명이 설정돼 있는가. 값은 반환하지 않는다. */
+  /** Whether a credential is configured. The value is never returned. */
   hasSecret: z.boolean(),
   lastSuccessAt: z.string().nullable(),
   version: z.number().int(),
 });
 
 /**
- * Authority Registry 항목 — 05 §5.11, OD-42·OD-43.
+ * Authority Registry entry — 05 §5.11, OD-42·OD-43.
  *
- * `doesNotProve`를 항상 함께 반환한다. 무엇을 확인해 주는지만 보여주면 읽는
- * 쪽이 전체 확인으로 오해한다.
+ * Always returns `doesNotProve` too. Showing only what an authority proves makes
+ * readers mistake it for full confirmation.
  *
- * `adapterState`가 `active`가 아닌 것도 목록에 남긴다 — 빼면 "왜 이 기관은
- * 없나"를 알 수 없고, 활성으로 두면 있지도 않은 연동을 약속한다.
+ * Entries whose `adapterState` is not `active` stay in the list — dropping them
+ * hides "why is this authority missing", and marking them active promises a
+ * connection that does not exist.
  */
 export const authorityEntry = z.object({
   id: z.string(),
@@ -661,31 +671,31 @@ export const authorityEntry = z.object({
   state: z.string(),
   validFrom: z.string(),
   validUntil: z.string().nullable(),
-  /** 연동 상태. `active`만 실제로 호출된다. */
+  /** Connection status. Only `active` is actually called. */
   adapterState: z.enum(["active", "manual", "pending_access", "blocked", "none"]),
   adapterStateReason: z.string().nullable(),
   connectionKey: z.string().nullable(),
-  /** 지금 이 출처를 호출할 수 있는가. 못 하면 다음에 무엇을 할지 알려준다. */
+  /** Whether this source can be called now. If not, says what to do next. */
   callable: z.boolean(),
   nextAction: z.string().nullable(),
 });
 
-/** Jurisdiction Profile 요약 — 관할별 연동 현황. */
+/** Jurisdiction Profile summary — connection status per jurisdiction. */
 export const jurisdictionProfileView = z.object({
   jurisdiction: z.string(),
   authorities: z.array(authorityEntry),
   activeCount: z.number().int(),
   manualCount: z.number().int(),
   pendingCount: z.number().int(),
-  /** 이 profile이 약속하지 않는 것. 미확인 통합을 과장하지 않는다(R5 gate). */
+  /** What this profile does not promise. Does not overstate unconfirmed integrations (R5 gate). */
   limitations: z.array(z.string()),
 });
 
 /**
- * Governance 제안 — 04 §4.5, OD-06.
+ * Governance proposal — 04 §4.5, OD-06.
  *
- * 정족수·통과 기준을 응답에 담는다. 제안 시점 값을 고정해 두므로 나중에 규칙이
- * 바뀌어도 결과가 뒤집히지 않는다(non-retroactive).
+ * Includes the quorum and pass threshold in the response. Values are fixed at
+ * proposal time, so later rule changes cannot flip the outcome (non-retroactive).
  */
 export const governanceProposal = z.object({
   id: z.string(),
@@ -702,7 +712,7 @@ export const governanceProposal = z.object({
   votingClosesAt: isoDateTime.nullable(),
   createdAt: isoDateTime,
   version: z.number().int().positive(),
-  /** 현재 집계. 무게는 decimal string이다(ADR-T07). */
+  /** Current tally. Weights are decimal strings (ADR-T07). */
   tally: z.object({
     forWeight: z.string(),
     againstWeight: z.string(),
@@ -710,11 +720,11 @@ export const governanceProposal = z.object({
     participatedWeight: z.string(),
     quorumMet: z.boolean(),
     thresholdMet: z.boolean(),
-    /** 지금 마감하면 어떤 결과인지. 확정이 아니다. */
+    /** Outcome if voting closed now. Not final. */
     provisionalOutcome: z.string(),
     reason: z.string(),
   }),
-  /** 지나온 경로. 정족수 미달과 취소는 결과만 같아 보인다. */
+  /** Transition history. No quorum and cancellation only look alike in outcome. */
   transitions: z.array(
     z.object({
       fromState: z.string(),
@@ -724,29 +734,30 @@ export const governanceProposal = z.object({
     }),
   ),
   /**
-   * 무게가 어디서 왔는가.
+   * Where the weight came from.
    *
-   * `manual`이면 던지는 사람이 값을 지정했다는 뜻이다 — 그 결과를 온체인
-   * 근거로 읽으면 안 된다.
+   * `manual` means the voter specified the value — the result must not be read
+   * as on-chain evidence.
    */
   weightSource: z.enum(["onchain_snapshot", "manual"]),
-  /** 스냅숏 블록. `manual`이면 null이다. */
+  /** Snapshot block. Null when `manual`. */
   snapshotBlock: z.string().nullable(),
   /**
-   * 정족수의 분모 — 투표할 수 있었던 전체 무게.
+   * Quorum denominator — the total weight eligible to vote.
    *
-   * 던진 표의 합이 아니다. 그러면 `참여 × D >= 참여 × N`이 항상 참이라
-   * `no_quorum`이 구조적으로 나올 수 없다(09 §9.6). 투표를 열 때 고정되며 그
-   * 전에는 null이다.
+   * Not the sum of votes cast; otherwise `participation × D >= participation × N`
+   * is always true and `no_quorum` is structurally impossible (09 §9.6). Fixed
+   * when voting opens; null before then.
    */
   eligibleWeight: z.string().nullable(),
   /**
-   * 분모가 어디서 왔는가.
+   * Where the denominator came from.
    *
-   * `manual`이면 사람이 지정한 값이다 — 그 결과를 온체인 근거로 읽으면 안 된다.
+   * `manual` means a person specified the value — the result must not be read as
+   * on-chain evidence.
    */
   eligibleWeightSource: z.enum(["onchain_total_supply", "manual"]).nullable(),
-  /** 이 제안이 만들 수 없는 것. 투표는 오프체인 사실을 만들지 않는다. */
+  /** What this proposal cannot create. A vote does not create off-chain facts. */
   limitations: z.array(z.string()),
 });
 
@@ -755,20 +766,20 @@ export const createProposalRequest = z.object({
   projectId: z.string().uuid().nullable().default(null),
   proposalType: z.string().min(1),
   title: z.string().min(1),
-  rationale: z.string().min(1, "제안 이유는 비워 둘 수 없다"),
+  rationale: z.string().min(1, "The proposal rationale cannot be empty"),
   quorumNumerator: z.number().int().positive().default(1),
   quorumDenominator: z.number().int().positive().default(4),
   thresholdNumerator: z.number().int().positive().default(1),
   thresholdDenominator: z.number().int().positive().default(2),
   /**
-   * 정족수의 분모 후보.
+   * Candidate quorum denominator.
    *
-   * 온체인 총공급을 읽을 수 있는 제안에서는 무시된다. 읽을 수 없는 제안은 이
-   * 값이 있어야 투표를 열 수 있다.
+   * Ignored for proposals whose on-chain total supply is readable. Proposals
+   * without it need this value before voting can open.
    */
   eligibleWeight: z
     .string()
-    .regex(/^[1-9]\d*$/, "정족수 분모는 1 이상의 정수 문자열이어야 한다")
+    .regex(/^[1-9]\d*$/, "The quorum denominator must be an integer string of 1 or more")
     .nullable()
     .default(null),
 });
@@ -776,15 +787,15 @@ export const createProposalRequest = z.object({
 export const castVoteRequest = z.object({
   choice: z.enum(["for", "against", "abstain"]),
   /**
-   * 투표 무게. decimal string이다 — JSON number는 정밀도를 잃는다.
+   * Vote weight, as a decimal string — JSON numbers lose precision.
    *
-   * **온체인 스냅숏이 있으면 무시된다.** 그 경우 서버가 스냅숏 시점의 잔고로
-   * 정하므로 선택이다. 필수로 두면 클라이언트가 무시될 값을 지어내야 하고,
-   * 그 값이 반영된다고 읽는다.
+   * **Ignored when an on-chain snapshot exists.** The server then uses the balance
+   * at the snapshot, so this is optional. If required, clients would have to
+   * invent a value that gets ignored and would read it as counted.
    */
   weight: z
     .string()
-    .regex(/^\d+$/, "무게는 음이 아닌 정수 문자열이어야 한다")
+    .regex(/^\d+$/, "Weight must be a non-negative integer string")
     .optional(),
 });
 
@@ -803,7 +814,7 @@ export const transitionProposalRequest = z.object({
     "failed",
     "cancelled",
   ]),
-  reason: z.string().min(1, "상태를 바꾼 이유는 비워 둘 수 없다"),
+  reason: z.string().min(1, "The reason for the state change cannot be empty"),
 });
 
 /** Registry version — 05 §5.6. */
@@ -823,10 +834,10 @@ export const registryEntryVersion = z.object({
 });
 
 /**
- * 공개 projection — 05 §5.7 allowlist를 통과한 것만.
+ * Public projection — only what passes the 05 §5.7 allowlist.
  *
- * `.strict()`가 중요하다. 정의되지 않은 필드가 응답에 섞이면 allowlist가
- * 무의미해진다(AC-22).
+ * `.strict()` matters. If undefined fields slipped into the response, the
+ * allowlist would be meaningless (AC-22).
  */
 export const publicProjection = z
   .object({
@@ -847,7 +858,7 @@ export const publicProjection = z
     authorityType: z.string().optional(),
     authorityScope: z.array(z.string()).optional(),
     collectionMethod: z.string().optional(),
-    /** 자연인 이름·등록번호가 아니라 pseudonymous handle이 기본이다(AC-32). */
+    /** Defaults to a pseudonymous handle, not a natural person's name or registration number (AC-32). */
     reviewerPseudonymousHandle: z.string().optional(),
     reviewerOrganization: z.string().optional(),
     reviewerCredentialType: z.string().optional(),
@@ -866,10 +877,11 @@ export const publicProjection = z
   .strict();
 
 /**
- * inclusion proof — AC-23.
+ * Inclusion proof — AC-23.
  *
- * `included: true`가 무엇을 뜻하는지 응답 자체에 담는다. 클라이언트가 이것을
- * "검증됨"으로 번역하지 못하게 `proves`와 `doesNotProve`를 함께 반환한다.
+ * The response itself states what `included: true` means. `proves` and
+ * `doesNotProve` are returned together so clients cannot translate it into
+ * "verified".
  */
 export const inclusionProofResponse = z.object({
   entryVersionId: z.string(),
@@ -894,17 +906,18 @@ export const inclusionProofResponse = z.object({
     "reconciliation_required",
   ]),
   included: z.boolean(),
-  proves: z.array(z.string()).describe("이 증명이 확인하는 것"),
-  doesNotProve: z.array(z.string()).describe("이 증명이 확인하지 않는 것"),
+  proves: z.array(z.string()).describe("What this proof confirms"),
+  doesNotProve: z.array(z.string()).describe("What this proof does not confirm"),
   /**
-   * leaf를 다시 만들 때 쓸 규격 — 2026-09-09 결정.
+   * Spec for rebuilding the leaf — decided 2026-09-09.
    *
-   * 셋 다 **비식별 버전 문자열**이다. 주체나 원문은 담지 않는다 — 그것은
-   * 별개 결정이다. 이 셋이 없으면 검증자가 어떤 규격으로 재구성해야 하는지
-   * 알 수 없다.
+   * All three are **non-identifying version strings**. They carry no subject or
+   * source content — that is a separate decision. Without them, a verifier cannot
+   * tell which spec to reconstruct with.
    *
-   * `serializationVersion`이 `literal("1")`이 아닌 이유: 규격을 올리면 값이
-   * 바뀐다(CLAUDE.md). 계약이 `"1"`을 강제하면 그날 응답이 계약을 위반한다.
+   * Why `serializationVersion` is not `literal("1")`: bumping the spec changes the
+   * value (CLAUDE.md). If the contract forced `"1"`, responses would violate the
+   * contract on that day.
    */
   policyVersion: z.string().min(1),
   schemaVersion: z.string().min(1),
@@ -912,26 +925,27 @@ export const inclusionProofResponse = z.object({
 });
 
 export const PROOF_PROVES = [
-  "이 공개 version의 바이트가 해당 anchor batch에 포함됐다",
-  "포함 이후 그 바이트가 바뀌지 않았다",
+  "The bytes of this public version are included in the anchor batch",
+  "Those bytes have not changed since inclusion",
 ] as const;
 
 export const PROOF_DOES_NOT_PROVE = [
-  "원문 내용의 사실성",
-  "검토자의 authority 적격성",
-  "법률 효력이나 발행 적법성",
-  "투자 적합성이나 수익성",
-  "정부 승인이나 MPC의 보증",
+  "Factual accuracy of the source content",
+  "The reviewer's authority eligibility",
+  "Legal effect or lawfulness of issuance",
+  "Investment suitability or profitability",
+  "Government approval or an MPC guarantee",
 ] as const;
 
 export const sourceResultEnumValues = SOURCE_RESULTS;
 
 /**
- * 공개 목록 한 줄.
+ * One public list row.
  *
- * projection을 펼치지 않고 `projection` 아래에 둔다. 펼치면 목록 메타(`publicKey`·
- * `entryVersionId`)와 projection 필드가 같은 평면에 섞이고, 그러면 "공개 허용
- * 필드만 나갔는가"를 응답만 보고 판정할 수 없다. 중첩은 그 판정을 한 줄로 만든다.
+ * The projection is nested under `projection`, not spread. Spreading would mix
+ * list metadata (`publicKey`, `entryVersionId`) with projection fields on one
+ * level, making it impossible to tell from the response alone whether "only
+ * public-allowed fields went out". Nesting makes that a one-line check.
  */
 export const publicRegistryListItem = z
   .object({
@@ -947,20 +961,20 @@ export const publicRegistryListItem = z
   .strict();
 
 /**
- * 공개 목록 — 정렬과 페이지네이션이 계약에 고정된다.
+ * Public list — sorting and pagination are fixed by the contract.
  *
- * `nextCursor`가 불투명 문자열인 이유: 클라이언트가 정렬 키를 조립하기 시작하면
- * 정렬을 바꿀 수 없게 된다. 다음 페이지를 요청하는 방법은 이 값을 그대로 돌려주는
- * 것 하나뿐이다.
+ * Why `nextCursor` is an opaque string: once clients start assembling sort keys,
+ * the sort can never change. The only way to request the next page is to send
+ * this value back unchanged.
  */
 export const publicRegistryList = z.object({
   items: z.array(publicRegistryListItem),
   nextCursor: z.string().nullable(),
-  /** 정렬은 고정이다. 클라이언트가 고를 수 없고, 무엇으로 정렬됐는지 밝힌다. */
+  /** Sort order is fixed. Clients cannot choose it; the response states what it is sorted by. */
   sort: z.literal("publishedAt:desc,entryId:desc"),
 });
 
-/** 공개 목록 질의 — 07 §7.1. 여기 없는 파라미터는 무시되지 않고 거절된다. */
+/** Public list query — 07 §7.1. Parameters not listed here are rejected, not ignored. */
 export const publicRegistryListQuery = z
   .object({
     q: z.string().trim().min(1).max(120).optional(),
@@ -971,13 +985,14 @@ export const publicRegistryListQuery = z
   .strict();
 
 /**
- * 공개 protocol 제안.
+ * Public protocol proposal.
  *
- * 투표자 명단을 담지 않는다. 집계는 판정 근거이지만 명단은 아니며, 개별
- * 투표자는 subject이고 자연인 식별자로 이어진다(AC-32).
+ * Does not include the voter list. The tally is the basis for the outcome; the
+ * list is not, and individual voters are subjects that lead to natural-person
+ * identifiers (AC-32).
  *
- * 무게는 decimal string이다. `NUMERIC(78,0)`은 JSON number에 담기지 않는다
- * (ADR-T07 — 큰 정수를 number로 옮기면 조용히 반올림된다).
+ * Weights are decimal strings. `NUMERIC(78,0)` does not fit in a JSON number
+ * (ADR-T07 — moving big integers into numbers silently rounds them).
  */
 export const publicProposal = z
   .object({
@@ -1006,7 +1021,7 @@ export const publicProposalList = z.object({
   sort: z.literal("createdAt:desc,id:desc"),
 });
 
-/** 제안 하나와 지나온 경로. 상태만 보면 정족수 미달과 취소가 같아 보인다. */
+/** One proposal and its transition history. By state alone, no quorum and cancellation look the same. */
 export const publicProposalDetail = publicProposal.extend({
   transitions: z.array(
     z.object({
@@ -1020,23 +1035,24 @@ export const publicProposalDetail = publicProposal.extend({
 });
 
 /**
- * 공개 이력 사건.
+ * Public history events.
  *
- * 여기서 새로 공개되는 것은 없다. `revoked`·`superseded` 공개 version은 이미
- * 상세 조회로 반환된다 — 다른 것은 "어느 기록에서" 대신 "언제 무슨 일이"로
- * 정렬한다는 점뿐이다.
+ * Nothing new is disclosed here. `revoked` and `superseded` public versions are
+ * already returned by detail lookups — the only difference is ordering by "what
+ * happened when" instead of "which record".
  */
 /**
- * 공개 이력의 사건 하나.
+ * One public history event.
  *
- * **입도는 "일어났다 + 언제 + 어느 기록"이다**(결정, 2026-09-09).
- * 내용(사유·법적 근거·상세)과 당사자(행위자·요구 기관·제기자)는 담지 않는다.
- * 나중에 넓히는 것은 가능하지만 좁히는 것은 불가능하므로(05 §5.7) 좁은 쪽에서
- * 시작한다.
+ * **Granularity is "it happened + when + which record"** (decision, 2026-09-09).
+ * Content (reason, legal basis, details) and parties (actor, requesting
+ * authority, raiser) are excluded. Widening later is possible but narrowing is
+ * not (05 §5.7), so it starts narrow.
  *
- * `registryVersion`은 정정·철회에만 있다. suspension·pause·dispute는 registry
- * version이 아니라 전이·제한·이의 행이라 version이 없다 — `null`이 "이 종류에는
- * 그 값이 없다"를 말한다.
+ * `registryVersion` exists only for corrections and revocations. suspension,
+ * pause, and dispute are transition, restriction, and dispute rows rather than
+ * registry versions, so they have no version — `null` says "this kind has no
+ * such value".
  */
 export const publicDisclosureEvent = z
   .object({
@@ -1051,7 +1067,7 @@ export const publicDisclosureEvent = z
     occurredAt: isoDateTime,
     registryType: z.enum(["project", "verification", "asset"]),
     publicKey: z.string(),
-    /** 정정·철회에만 있다. 나머지는 null. */
+    /** Present only for corrections and revocations. Null otherwise. */
     registryVersion: z
       .object({
         entryVersionId: z.string(),
@@ -1061,12 +1077,12 @@ export const publicDisclosureEvent = z
       })
       .strict()
       .nullable(),
-    /** suspension에만 있다. 사유와 행위자는 담지 않는다. */
+    /** Present only for suspension. Excludes reason and actor. */
     lifecycle: z
       .object({ fromState: z.string(), toState: z.string() })
       .strict()
       .nullable(),
-    /** pause·dispute가 끝난 시각. 아직 열려 있으면 null. */
+    /** When the pause or dispute ended. Null while still open. */
     resolvedAt: isoDateTime.nullable(),
   })
   .strict();
@@ -1076,15 +1092,16 @@ export const publicDisclosureList = z.object({
   nextCursor: z.string().nullable(),
   sort: z.literal("occurredAt:desc,eventId:desc"),
   /**
-   * 이 목록이 **덮지 않는** 사건 종류.
+   * Event kinds this list **does not cover**.
    *
-   * 빈 목록과 "그 종류는 애초에 여기 오지 않는다"를 구분하지 않으면 사용자가
-   * "그런 일이 없었다"로 읽는다. 응답이 스스로 범위를 말한다.
+   * Without distinguishing an empty list from "that kind never appears here",
+   * users read it as "nothing like that happened". The response states its own
+   * scope.
    */
   notCovered: z.array(z.object({ kind: z.string(), reason: z.string() })),
 });
 
-/** 커서만 받는 공개 목록 질의. `q`가 없는 이유는 시계열이 검색 대상이 아니라서다. */
+/** Cursor-only public list query. No `q` because a timeline is not a search target. */
 export const publicCursorQuery = z
   .object({
     limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -1093,11 +1110,12 @@ export const publicCursorQuery = z
   .strict();
 
 /**
- * 공개 통합 검색.
+ * Unified public search.
  *
- * 0x로 시작하는 32바이트 hex는 hash(transaction·Merkle root·leaf·batch)로, 그 밖은
- * registry key 정확 일치와 이름·국가·광물 검색으로 본다. 지갑 주소는 받지 않는다 —
- * 공개 기록에 제출자 주소가 없어서 답할 수 없는 질문이다.
+ * A 0x-prefixed 32-byte hex is treated as a hash (transaction, Merkle root, leaf,
+ * batch); anything else as an exact registry key match plus name, country, and
+ * mineral search. Wallet addresses are not accepted — public records carry no
+ * submitter address, so the question cannot be answered.
  */
 export const publicSearchQuery = z
   .object({
@@ -1133,11 +1151,12 @@ export const publicSearchResult = z.object({
 });
 
 /**
- * 내 활동.
+ * My activity.
  *
- * 이 지갑에 묶인 주체가 한 mutation의 감사 기록. **본인만 본다.** 역할이 필요
- * 없는 이유는 남의 기록이 아니라 자기가 한 일이기 때문이다. 요청 IP와 detail은
- * 내지 않는다 — 무엇을 했는지는 command·resource로 충분하다.
+ * Audit records of mutations made by the subject bound to this wallet. **Visible
+ * only to that subject.** No role is needed because these are one's own actions,
+ * not someone else's records. Request IP and detail are omitted — command and
+ * resource are enough to show what was done.
  */
 export const myActivityQuery = z
   .object({
@@ -1165,19 +1184,19 @@ export const myActivity = z.object({
   asOf: isoDateTime,
 });
 
-// --- 플랫폼 관리 -------------------------------------------
+// --- Platform administration -------------------------------------------
 
 /**
- * 관리 화면이 보는 주체 하나.
+ * One subject as seen by the admin screen.
  *
- * 지갑과 역할을 **함께** 낸다. 따로 조회하면 "역할은 있는데 붙은 지갑이 전부
- * 비활성"인 상태가 두 화면에 흩어져 보이지 않는다 — 그 상태가 곧 로그인할 수
- * 없는 계정이다.
+ * Returns wallets and roles **together**. Queried separately, the state "has
+ * roles but every bound wallet is disabled" would be split across two screens
+ * and go unnoticed — and that state is exactly an account that cannot log in.
  */
 export const adminSubject = z.object({
   id: z.string(),
   displayName: z.string(),
-  /** 사람인가 시스템 identity인가. 자격증명 관리가 다르다. */
+  /** Person or system identity. Credentials are managed differently. */
   kind: z.enum(["person", "service"]),
   wallets: z.array(
     z.object({
@@ -1199,13 +1218,13 @@ export const adminSubject = z.object({
       revokedAt: isoDateTime.nullable(),
     }),
   ),
-  /** 로그인 가능한 지갑이 하나도 없는가. 화면이 그것을 먼저 말해야 한다. */
+  /** Whether no wallet can log in. The UI must say so first. */
   locked: z.boolean(),
 });
 
 export const createSubjectRequest = z.object({
   displayName: z.string().min(1).max(200),
-  /** 기본은 사람이다. `service`는 scan worker 같은 시스템 identity에만 쓴다. */
+  /** Defaults to a person. `service` is only for system identities such as the scan worker. */
   kind: z.enum(["person", "service"]).default("person"),
 });
 
@@ -1216,10 +1235,11 @@ export const bindWalletRequest = z.object({
 });
 
 /**
- * 지갑 비활성 — AC-27.
+ * Wallet disable — AC-27.
  *
- * 사유 코드를 요구한다. 분실·침해·교체·퇴사는 같은 결과를 내지만 **과거 서명을
- * 어떻게 읽어야 하는지가 다르다.** 자유 문장만 받으면 그 구분이 남지 않는다.
+ * Requires a reason code. Loss, compromise, rotation, and offboarding have the
+ * same effect but **differ in how past signatures should be read.** Free text
+ * alone would not preserve that distinction.
  */
 export const disableWalletRequest = z.object({
   reasonCode: z.enum(["key_lost", "key_compromised", "rotation", "offboarding"]),
@@ -1250,19 +1270,20 @@ export const createRoleGrantRequest = z.object({
   reason: z.string().min(1).max(1000),
 });
 
-/** 승인·반려. 제안자와 같은 사람이면 거절된다 — DB도 같은 것을 막는다. */
+/** Approve or reject. Rejected if the decider is the proposer — the DB blocks this too. */
 export const decideRoleGrantRequest = z.object({
   decision: z.enum(["approve", "reject"]),
   reason: z.string().min(1).max(1000),
 });
 
-// --- 워크스페이스 집계 ---------------------------------------
+// --- Workspace aggregates ---------------------------------------
 
 /**
- * Registry 게시 상태 한 줄.
+ * One registry publication status row.
  *
- * 지금까지 게시 상태는 프로젝트를 열어야만 보였다. 그러면 "이 tenant에서 무엇이
- * 게시됐나"에 답하려면 프로젝트를 하나씩 열어야 하고, 그것은 답이 아니다.
+ * Previously, publication status was visible only by opening a project.
+ * Answering "what has this tenant published" then meant opening projects one by
+ * one, which is not an answer.
  */
 export const registryEntrySummary = z.object({
   entryId: z.string(),
@@ -1273,18 +1294,18 @@ export const registryEntrySummary = z.object({
   status: z.enum(["draft", "published", "revoked", "superseded"]),
   publishedAt: isoDateTime.nullable(),
   revokedAt: isoDateTime.nullable(),
-  /** 이 version이 anchor batch에 들어갔는가. 게시와 anchor는 다른 사건이다. */
+  /** Whether this version is in an anchor batch. Publishing and anchoring are separate events. */
   anchored: z.boolean(),
 });
 
 /**
  * My Work.
  *
- * 셋을 **의미로 갈라 낸다.** 한 목록에 섞으면 "내가 해야 하는 것"과 "내가 기다리는
- * 것"이 같아 보이고, 그 둘은 다음 행동이 정반대다.
+ * Splits the three **by meaning.** Mixed into one list, "what I must do" and
+ * "what I am waiting on" look alike, yet their next actions are opposite.
  */
 export const myWork = z.object({
-  /** 나에게 배정된 검토. 내가 움직여야 끝난다. */
+  /** Reviews assigned to me. They finish only when I act. */
   assignedToMe: z.array(
     z.object({
       caseId: z.string(),
@@ -1295,7 +1316,7 @@ export const myWork = z.object({
       conflictStatus: z.string(),
     }),
   ),
-  /** 내가 시작했고 다른 사람의 결정을 기다리는 것. 내가 할 일은 없다. */
+  /** Things I started that await someone else's decision. Nothing for me to do. */
   waitingOnOthers: z.array(
     z.object({
       kind: z.literal("role_grant"),
@@ -1304,7 +1325,7 @@ export const myWork = z.object({
       since: isoDateTime,
     }),
   ),
-  /** 아무에게도 배정되지 않았지만 열려 있는 것. 방치되면 아무도 모른다. */
+  /** Open items assigned to no one. Left alone, nobody notices. */
   unassigned: z.array(
     z.object({
       kind: z.enum(["stale_signal", "role_grant_decision"]),
@@ -1317,22 +1338,23 @@ export const myWork = z.object({
 });
 
 /**
- * 알림.
+ * Notification.
  *
- * `read`가 알림 자체의 속성이 아니라 **읽는 사람에 따라 달라지는 값**이다.
- * 역할로 간 알림은 여러 사람이 보며, 한 사람이 읽었다고 나머지에게서 사라지면
- * 그 사람이 처리하지 않았을 때 아무도 다시 보지 않는다.
+ * `read` is not a property of the notification itself but **a value that depends
+ * on the reader**. A notification sent to a role is seen by several people; if
+ * one person reading it cleared it for everyone, nobody would look again when
+ * that person did not act on it.
  */
 export const notification = z
   .object({
     id: z.string(),
     kind: z.enum(["review_assigned", "readiness_gap", "evidence_stale", "registry_revoked"]),
-    /** 나에게 온 것인가, 내가 가진 역할에게 온 것인가. */
+    /** Sent to me, or to a role I hold. */
     audience: z.enum(["you", "role"]),
     audienceRole: z.string().nullable(),
     projectId: z.string().nullable(),
     summary: z.string(),
-    /** 알림만 있고 갈 곳이 없으면 다시 찾아야 한다. */
+    /** A notification with nowhere to go forces a search. */
     link: z.string(),
     occurredAt: isoDateTime,
     read: z.boolean(),
@@ -1340,9 +1362,10 @@ export const notification = z
   .strict();
 
 /**
- * project lifecycle 전이 — 04 §4.3.
+ * Project lifecycle transition — 04 §4.3.
  *
- * `reason`이 필수다. 이유 없는 전이는 나중에 판단할 근거가 없다.
+ * `reason` is required. A transition without a reason leaves nothing to judge by
+ * later.
  */
 export const projectLifecycleTransitionRequest = z.object({
   toState: z.enum([
@@ -1363,14 +1386,14 @@ export const projectLifecycleTransitionRequest = z.object({
 export const projectLifecycle = z.object({
   projectId: z.string(),
   lifecycleState: z.string(),
-  /** `suspended`가 아니면 null. 복귀 대상이다(§4.3). */
+  /** Null unless `suspended`. The state to resume to (§4.3). */
   priorLifecycleState: z.string().nullable(),
   version: z.number().int().positive(),
   /**
-   * 지나온 경로.
+   * Transition history.
    *
-   * 현재 상태만으로는 `suspended`에서 돌아온 프로젝트와 한 번도 멈춘 적 없는
-   * 프로젝트가 같아 보인다.
+   * By current state alone, a project resumed from `suspended` looks the same as
+   * one that was never suspended.
    */
   transitions: z.array(
     z.object({
@@ -1384,11 +1407,12 @@ export const projectLifecycle = z.object({
 });
 
 /**
- * 알림 수신처.
+ * Notification sink.
  *
- * **비밀을 반환하지 않는다.** `secretReference`는 참조이지 값이 아니지만, 그것도
- * 내지 않는다 — 참조가 `file:/run/secrets/x` 같은 경로를 드러내면 그 자체가
- * 배포 구조에 대한 정보다. 대신 설정돼 있는지만 낸다.
+ * **Secrets are never returned.** `secretReference` is a reference, not a value,
+ * but it is withheld too — a reference exposing a path like
+ * `file:/run/secrets/x` is itself information about the deployment layout. Only
+ * whether one is configured is returned.
  */
 export const notificationSink = z
   .object({
@@ -1398,7 +1422,7 @@ export const notificationSink = z
     hasSecret: z.boolean(),
     createdAt: isoDateTime,
     version: z.number().int().positive(),
-    /** 이 수신처의 배달 상태. 보내지 못하고 있는 것을 화면이 말해야 한다. */
+    /** Delivery status for this sink. The UI must say what is failing to send. */
     delivery: z.object({
       pending: z.number().int().nonnegative(),
       delivered: z.number().int().nonnegative(),
@@ -1409,9 +1433,9 @@ export const notificationSink = z
   .strict();
 
 export const createNotificationSinkRequest = z.object({
-  // https만 받는다. 알림 본문에 프로젝트 식별자가 들어간다.
-  url: z.string().regex(/^https:\/\/[^@\s]+$/, "https URL이어야 한다"),
-  /** `file:`·`env:` 참조. 값을 직접 넣지 않는다(05 §5.12). */
+  // https only. Notification bodies contain project identifiers.
+  url: z.string().regex(/^https:\/\/[^@\s]+$/, "Must be an https URL"),
+  /** A `file:` or `env:` reference. Never the value itself (05 §5.12). */
   secretReference: z.string().min(1),
 });
 

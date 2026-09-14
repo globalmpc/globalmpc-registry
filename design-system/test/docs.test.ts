@@ -89,15 +89,15 @@ describe("ai/CLAUDE.md", () => {
   });
 
   it("carries every tone rule", () => {
-    for (const rule of voice.tone) expect(rules, rule.rule.ko).toContain(rule.rule.ko);
+    for (const rule of voice.tone) expect(rules, rule.rule.en).toContain(rule.rule.en);
   });
 
   it("carries every logo prohibition", () => {
     const logo = JSON.parse(read("content/logo.json"));
-    for (const dont of logo.donts) expect(rules, dont.ko).toContain(dont.ko);
+    for (const dont of logo.donts) expect(rules, dont.en).toContain(dont.en);
   });
 
   it("states the positioning so a new project starts from it", () => {
-    expect(rules).toContain(voice.positioning.statement.ko);
+    expect(rules).toContain(voice.positioning.statement.en);
   });
 });

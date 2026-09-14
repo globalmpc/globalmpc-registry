@@ -1,31 +1,31 @@
--- 역할 부여의 2인 원칙 — spec 02 §2.8.
+-- Two-person rule for role grants — spec 02 §2.8.
 --
--- **왜 필요한가:** 역할을 부여하는 유일한 경로가 `apps/api/src/bootstrap.ts`의
--- CLI였다. 즉 배포된 시스템에 사람을 추가하려면 매번 서버에 들어가야 했고, 그
--- 경로는 RLS를 우회하는 superuser 연결로 돈다.
+-- **Why:** the only path to grant a role was the CLI in
+-- `apps/api/src/bootstrap.ts`. Adding a person to a deployed system meant logging into the server each time, and that
+-- path runs on a superuser connection that bypasses RLS.
 --
--- 이것을 화면·API로 올리면 **역할을 부여하는 역할**이 새로 생긴다. 그 역할 하나가
--- 자기 자신에게 무엇이든 줄 수 있으면 나머지 권한 체계가 의미를 잃는다.
+-- Moving this to UI/API creates a new **role that grants roles**. If that one role
+-- could give itself anything, the rest of the permission model would lose its meaning.
 --
--- 02 §2.8은 "운영자 단독 accepted 전환"을 금지하고, 이 저장소는 이미 "등록한
--- 사람은 그 기관을 승인할 수 없다"를 코드로 강제한다. **역할 부여에 같은 규칙을
--- 적용한다** — 제안과 승인을 다른 사람이 한다.
+-- 02 §2.8 forbids "operator-only transition to accepted", and this repo already enforces in code
+-- that "the registrant cannot approve that authority". **The same rule applies to role
+-- grants** — a different person proposes and approves.
 --
--- 최초 1인은 이 표로 만들 수 없다(승인할 사람이 없다). `bootstrap` CLI가 그
--- 자리를 계속 갖는다 — 배포마다 한 번 도는 seed이지 상시 경로가 아니다.
+-- The first person cannot be created through this table (no one to approve). The `bootstrap` CLI
+-- keeps that role — a seed run once per deployment, not a standing path.
 
 CREATE TYPE core.role_grant_state AS ENUM ('pending', 'approved', 'rejected', 'withdrawn');
 
 CREATE TABLE core.role_grant_requests (
   id                      UUID PRIMARY KEY,
   tenant_id               UUID NOT NULL REFERENCES core.tenants(id),
-  -- 누구에게 줄 것인가.
+  -- Who receives the grant.
   subject_id              UUID NOT NULL REFERENCES core.subjects(id),
   organization_id         UUID REFERENCES core.organizations(id),
-  -- 프로젝트 범위 바인딩이면 채운다. 조직 수준이면 NULL이다.
+  -- Set for a project-scoped binding. NULL at organization level.
   project_id              UUID,
   role                    TEXT NOT NULL CHECK (length(btrim(role)) > 0),
-  -- 이유 없는 권한 부여는 나중에 판단할 근거가 없다. 제안·결정 양쪽에 요구한다.
+  -- A grant without a reason leaves no basis for later judgment. Required on both proposal and decision.
   reason                  TEXT NOT NULL CHECK (length(btrim(reason)) > 0),
   requested_by_subject_id UUID NOT NULL REFERENCES core.subjects(id),
   requested_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -33,15 +33,15 @@ CREATE TABLE core.role_grant_requests (
   decided_by_subject_id   UUID REFERENCES core.subjects(id),
   decided_at              TIMESTAMPTZ,
   decision_reason         TEXT,
-  -- 부여가 실제로 만들어진 binding. 승인 이후에만 채워진다.
+  -- The binding the grant actually created. Set only after approval.
   role_binding_id         UUID REFERENCES core.role_bindings(id),
   version                 INTEGER NOT NULL DEFAULT 1,
 
   /**
-   * 2인 원칙 — DB가 강제한다.
+   * Two-person rule — enforced by the DB.
    *
-   * 애플리케이션에서만 막으면 route가 하나 늘 때마다 다시 확인해야 한다. 여기에
-   * 두면 어떤 경로로 들어와도 같은 사람이 제안하고 승인할 수 없다.
+   * Blocking only in the application means rechecking with every new route. Here,
+   * no path lets the same person both propose and approve.
    */
   CONSTRAINT role_grant_two_person CHECK (
     decided_by_subject_id IS NULL OR decided_by_subject_id <> requested_by_subject_id
@@ -61,10 +61,10 @@ CREATE INDEX role_grant_requests_pending_idx
   ON core.role_grant_requests (tenant_id, state, requested_at DESC);
 
 /**
- * 같은 대상에 대한 pending 제안은 하나만 둔다.
+ * Only one pending proposal per target.
  *
- * 둘이 열려 있으면 승인자가 어느 것을 승인했는지가 이력에서 흐려지고, 둘 다
- * 승인되면 같은 binding이 두 번 만들어진다.
+ * With two open, history blurs which one the approver approved, and approving
+ * both would create the same binding twice.
  */
 CREATE UNIQUE INDEX role_grant_requests_one_pending_idx
   ON core.role_grant_requests (tenant_id, subject_id, role, COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid))
@@ -80,13 +80,13 @@ CREATE POLICY role_grant_requests_tenant ON core.role_grant_requests FOR ALL
 GRANT SELECT, INSERT, UPDATE ON core.role_grant_requests TO mpc_app;
 
 /**
- * 지갑 비활성 이력 — AC-27.
+ * Wallet disable history — AC-27.
  *
- * `wallet_identities.disabled_at`은 컬럼만 있고 그것을 설정하는 경로가 없었다.
- * 즉 **분실한 키를 끊는 방법 자체가 없었다.**
+ * `wallet_identities.disabled_at` existed as a column with no path to set it.
+ * So **there was no way at all to cut off a lost key.**
  *
- * 끊는 것만으로는 부족하다. 왜 끊었는지가 남지 않으면 나중에 그 계정의 과거
- * 서명을 어떻게 읽어야 할지 판단할 수 없다 — 분실과 퇴사와 침해는 다르다.
+ * Cutting off is not enough. Without a reason, there is no way to judge later how to
+ * read that account's past signatures — loss, departure, and compromise differ.
  */
 CREATE TABLE core.wallet_disable_events (
   id                    UUID PRIMARY KEY,

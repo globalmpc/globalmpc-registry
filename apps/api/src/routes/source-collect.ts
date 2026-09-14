@@ -35,24 +35,24 @@ import { enqueueEvent } from "../outbox.js";
 import { requireMutationContext } from "./shared.js";
 
 /**
- * 공식 출처 조회 — spec 05 §5.12, OD-42.
+ * Official source lookup — spec 05 §5.12, OD-42.
  *
- * `services/source-adapter.ts`가 응답을 12개 결과로 나누는 규칙을 갖고, 이
- * 라우트가 그것을 부르는 유일한 진입점이다.
+ * `services/source-adapter.ts` owns the rules that split a response into 12 outcomes; this
+ * route is the only entry point that calls it.
  *
- * 여기서 지키는 것:
+ * What this route guarantees:
  *
- * - **호출 가능 여부를 먼저 판정한다.** `pending_access`인 연동을 부르면 401을
- *   받아 "인증 실패"로 남는데, 실제로는 협의가 안 된 것이다.
- * - **receipt는 출처에 실제로 요청이 나갔을 때만 만든다.** 로컬 설정 문제로
- *   요청조차 못 보낸 것을 receipt로 남기면 "출처를 조회했다"는 기록이 된다.
- * - **출처가 답한 것은 실패라도 남긴다.** 404(기록 없음)와 503(출처 장애)은
- *   둘 다 사실이고, 버리면 다음 사람이 같은 조회를 반복한다.
- * - **자격증명은 DB에 없다.** `secret_reference`가 가리키는 곳에서만 읽고,
- *   응답·감사·로그 어디에도 값이 나가지 않는다.
+ * - **Callability is decided first.** Calling a `pending_access` connection returns 401
+ *   and is recorded as "authentication failed", when access was in fact never agreed.
+ * - **A receipt is created only when a request actually reached the source.** A receipt for
+ *   a request that local config kept from leaving would read as "the source was queried".
+ * - **Whatever the source answered is kept, even failures.** 404 (no record) and 503 (source
+ *   outage) are both facts; discarding them makes the next person repeat the same lookup.
+ * - **Credentials are not in the DB.** They are read only from where `secret_reference` points,
+ *   and the value never appears in responses, audit entries, or logs.
  */
 
-/** 재시도가 그대로 돌려받는 응답. 예약과 마감이 같은 형태를 다룬다. */
+/** The response a retry gets back verbatim. Reservation and completion handle the same shape. */
 interface CollectResponse {
   readonly receiptId: string;
   readonly connectionId: string;
@@ -73,7 +73,7 @@ const secondReviewSchema = z.object({
 
 const collectSchema = z.object({
   projectId: z.string().uuid(),
-  // 조회 조건. receipt에 그대로 남아 재현의 근거가 된다.
+  // Query parameters. Stored verbatim in the receipt as the basis for reproduction.
   queryBasis: z.record(z.string(), z.string()),
 });
 
@@ -104,11 +104,11 @@ interface ConnectionRow {
 }
 
 /**
- * 인증 헤더를 만든다.
+ * Builds the authentication header.
  *
- * 방식은 `authentication_method`가 정하고 값은 `secret_reference`가 가리키는
- * 곳에서 온다. **값이 DB에 있으면 DB 백업·복제본·덤프가 전부 자격증명 사본이
- * 된다.**
+ * `authentication_method` sets the scheme; the value comes from where `secret_reference`
+ * points. **If the value were in the DB, every DB backup, replica, and dump would be a copy
+ * of the credential.**
  */
 function buildAuthHeaders(row: ConnectionRow): Readonly<Record<string, string>> {
   const method = row.authentication_method;
@@ -117,7 +117,7 @@ function buildAuthHeaders(row: ConnectionRow): Readonly<Record<string, string>> 
   if (!row.secret_reference) {
     throw unprocessable(
       "SOURCE_SECRET_UNAVAILABLE",
-      `연동이 ${method} 인증을 쓰지만 secret reference가 없다`,
+      `Connection uses ${method} authentication but has no secret reference`,
       { connectionKey: row.connection_key },
     );
   }
@@ -126,9 +126,9 @@ function buildAuthHeaders(row: ConnectionRow): Readonly<Record<string, string>> 
   try {
     secret = resolveSecret(row.connection_key, row.secret_reference);
   } catch (error) {
-    // **원인 문자열을 그대로 내보내지 않는다.** 참조 해석 실패 메시지에는
-    // 경로나 환경변수 이름이 들어갈 수 있다.
-    throw unprocessable("SOURCE_SECRET_UNAVAILABLE", "연동 자격증명을 읽지 못했다", {
+    // **The cause string is not passed through.** A reference resolution failure message
+    // can contain paths or environment variable names.
+    throw unprocessable("SOURCE_SECRET_UNAVAILABLE", "Failed to read connection credentials", {
       connectionKey: row.connection_key,
       reason: error instanceof Error ? error.name : "UnknownError",
     });
@@ -136,21 +136,21 @@ function buildAuthHeaders(row: ConnectionRow): Readonly<Record<string, string>> 
 
   if (method === "bearer") return { authorization: `Bearer ${secret}` };
 
-  // `header:X-Api-Key` 형태. 기관마다 헤더 이름이 다르다.
+  // `header:X-Api-Key` form. Header names differ by authority.
   const named = /^header:(.+)$/.exec(method);
   if (named?.[1]) return { [named[1]]: secret };
 
-  throw unprocessable("SOURCE_AUTH_METHOD_UNSUPPORTED", `알 수 없는 인증 방식이다: ${method}`);
+  throw unprocessable("SOURCE_AUTH_METHOD_UNSUPPORTED", `Unknown authentication method: ${method}`);
 }
 
 export async function registerSourceCollectRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
   /**
-   * 기본값이 전역 `fetch`이면 안 된다 — 2026-09-10 실사 A2.
+   * The default must not be global `fetch` — 2026-09-10 audit A2.
    *
-   * 전역 `fetch`는 이름을 스스로 다시 푼다. 그러면 `assertEndpointReachable`이
-   * 검사한 주소와 실제로 연결하는 주소가 다를 수 있다.
+   * Global `fetch` re-resolves the hostname itself, so the address `assertEndpointReachable`
+   * checked can differ from the address actually connected to.
    */
   fetchImpl: SourceFetch = pinnedFetch,
   resolveHost: HostResolver = dnsResolver,
@@ -162,7 +162,7 @@ export async function registerSourceCollectRoutes(
 
       const parsed = collectSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -197,14 +197,14 @@ export async function registerSourceCollectRoutes(
         `,
       );
 
-      if (!connection) throw notFound("연동을 찾을 수 없다");
+      if (!connection) throw notFound("Connection not found");
 
       const adapterState = connectionStateToAdapterState(connection.state);
       const reason = adapterStateReason(adapterState, connection.state);
 
       if (adapterState === "none") {
         throw unprocessable("SOURCE_NOT_CALLABLE", reason, {
-          nextAction: "연동을 먼저 등록한다",
+          nextAction: "Register the connection first",
         });
       }
 
@@ -214,17 +214,17 @@ export async function registerSourceCollectRoutes(
         jurisdiction: connection.jurisdiction,
         state: adapterState,
         proves: connection.proves,
-        // 05 §5.11: 한계 없는 authority는 존재하지 않는다.
+        // 05 §5.11: no authority exists without limitations.
         doesNotProve: connection.does_not_prove,
         stateReason: reason,
       };
 
       /**
-       * 호출 가능 여부를 먼저 본다.
+       * Checks callability first.
        *
-       * adapter도 같은 판정을 하지만 그쪽은 실패 결과를 돌려주고, 그 결과로
-       * receipt를 만들면 "조회했는데 권한이 없었다"가 된다. 실제로는 요청을
-       * 보내지 않았다. **receipt는 출처에 요청이 나갔다는 뜻으로만 쓴다.**
+       * The adapter makes the same decision but returns a failure outcome; creating a receipt from
+       * it would record "queried, but not authorized". In fact no request was
+       * sent. **A receipt means only that a request reached the source.**
        */
       const availability = checkAdapterAvailable(descriptor);
       if (!availability.callable) {
@@ -235,11 +235,11 @@ export async function registerSourceCollectRoutes(
       }
 
       if (!connection.endpoint) {
-        // DB CHECK가 active + authenticated_api 조합을 막지만, 다른 수집 방식이
-        // active로 올라온 경우가 여기로 온다.
+        // The DB CHECK blocks active + authenticated_api, but a connection with another collection
+        // method that was made active lands here.
         throw unprocessable(
           "SOURCE_ENDPOINT_MISSING",
-          "이 연동에는 호출 대상이 없다. 자동 조회 대상이 아니다",
+          "This connection has no endpoint. It is not eligible for automated lookup.",
           { collectionMethod: connection.collection_method },
         );
       }
@@ -250,11 +250,11 @@ export async function registerSourceCollectRoutes(
         timeoutMs: connection.timeout_ms,
         effectiveAtField: connection.effective_at_field,
         /**
-         * 이 출처의 정상 응답이 어떻게 생겼는가 — 2026-09-10 실사 A7.
+         * What a normal response from this source looks like — 2026-09-10 audit A7.
          *
-         * `schema_fingerprint`를 bulk export와 **같이 쓴다.** 별도 컬럼을 두면
-         * 같은 질문에 두 개의 답이 생기고, 둘이 갈리면 어느 쪽이 진짜인지
-         * 알 수 없다. 비어 있으면 확정하지 않는다.
+         * `schema_fingerprint` is **shared** with bulk export. A separate column would give
+         * two answers to the same question, and if they diverged there would be no way to tell
+         * which is right. If empty, the result is not confirmed.
          */
         responseProfile: {
           requiredFields: connection.schema_fingerprint ?? [],
@@ -265,11 +265,11 @@ export async function registerSourceCollectRoutes(
       };
 
       /**
-       * 외부를 부르기 **전에** key를 잡는다.
+       * Reserves the key **before** calling out.
        *
-       * 순서를 뒤집으면 재시도가 그대로 출처로 나간다 — 우리 쪽 receipt는
-       * 하나로 유지되지만 등록부는 요청을 두 번 받는다. rate limit과 이용 조건은
-       * 우리 재시도 횟수를 모른다.
+       * In the reverse order, a retry goes straight to the source — our side keeps one receipt,
+       * but the registry receives the request twice. Rate limits and terms of use do not
+       * know our retry count.
        */
       const reservation = await withTenant(sql, { tenantId }, (tx) =>
         reserveIdempotency<CollectResponse>(tx, tenantId, idempotencyKey, requestHash),
@@ -278,16 +278,16 @@ export async function registerSourceCollectRoutes(
 
       let invocation;
       try {
-        // **트랜잭션 밖에서 부른다.** 외부 요청이 걸린 동안 DB 연결과 잠금을 쥐고
-        // 있으면 출처 한 곳이 느려질 때 수집 전체가 멈춘다.
+        // **Called outside the transaction.** Holding a DB connection and locks during an external
+        // request means one slow source stalls all collection.
         invocation = await invokeHttpAdapter(
           { descriptor, config, queryBasis: parsed.data.queryBasis },
           fetchImpl,
           resolveHost,
         );
       } catch (error) {
-        // 예약을 풀지 않으면 이 key는 영원히 `IN_FLIGHT`가 되고 클라이언트는
-        // 다시 시도할 방법이 없다.
+        // If the reservation is not released, this key stays `IN_FLIGHT` forever and the client
+        // has no way to retry.
         await releaseIdempotency(sql, tenantId, idempotencyKey);
         throw error;
       }
@@ -297,7 +297,7 @@ export async function registerSourceCollectRoutes(
         authorityId: connection.authority_id,
         collectionMethod: connection.collection_method,
         authenticationMethod: connection.authentication_method,
-        // 자격증명이 붙기 전의 주소만 남긴다. query string은 queryBasis에 있다.
+        // Records only the URL before credentials are attached. The query string is in queryBasis.
         endpointOrDocumentRef: connection.endpoint,
         sourceSchemaVersion: connection.source_schema_version,
         adapterVersion: connection.adapter_version,
@@ -310,10 +310,10 @@ export async function registerSourceCollectRoutes(
       const confirmed = result === "confirmed_from_source";
 
       /**
-       * 누가 이 결과를 만들었는가 — 2026-09-10 실사 A1.
+       * Who produced this result — 2026-09-10 audit A1.
        *
-       * 이 표시가 있어야 DB가 "사람이 적어 넣은 API 확정"과 "서버가 불러서 받은
-       * 확정"을 구분할 수 있다(제약 api_confirmation_requires_server_collection).
+       * This marker lets the DB tell "an API confirmation a person typed in" from "a confirmation
+       * the server fetched" (constraint api_confirmation_requires_server_collection).
        */
       const collectorEvidence = {
         collector: "server_adapter",
@@ -348,7 +348,7 @@ export async function registerSourceCollectRoutes(
             )
           `;
 
-          // 성공했을 때만 갱신한다. 이 값이 "마지막으로 실제 답을 받은 때"다.
+          // Updated only on success. This value is "the last time a real answer was received".
           if (confirmed) {
             await tx`
               UPDATE core.source_connections
@@ -367,7 +367,7 @@ export async function registerSourceCollectRoutes(
             resourceId: id,
             correlationId,
             requestIp: request.ip,
-            // 결과와 연동 키만 남긴다. queryBasis에는 식별자가 들어갈 수 있다.
+            // Records only the outcome and connection key. queryBasis can contain identifiers.
             detail: { result, connectionKey: connection.connection_key },
           });
 
@@ -394,8 +394,8 @@ export async function registerSourceCollectRoutes(
             asOf,
           };
 
-          // 같은 트랜잭션에서 마감한다. receipt는 남고 응답은 저장되지 않는
-          // 상태가 생기면 재시도가 출처를 다시 부른다.
+          // Completes in the same transaction. A state where the receipt exists but the response is
+          // not stored would make a retry call the source again.
           await completeIdempotency(tx, tenantId, idempotencyKey, response);
 
           return response;
@@ -409,13 +409,13 @@ export async function registerSourceCollectRoutes(
 }
 
 /**
- * 수동 확인의 두 번째 검토 — AC-29.
+ * Second review of a manual check — AC-29.
  *
- * 수동 경로에는 API 응답도 서명도 없다. 한 사람의 진술이 유일한 근거이므로
- * 그것만으로 확정되면 **가장 약한 채널이 가장 쉬운 채널이 된다.**
+ * The manual path has no API response and no signature. One person's statement is the only
+ * evidence, so if that alone confirmed it, **the weakest channel would become the easiest.**
  *
- * 처음 확인한 사람은 할 수 없다. DB CHECK도 같은 것을 막지만 거기서 걸리면
- * 500이 나가고, 보내는 쪽은 왜 막혔는지 알 수 없다.
+ * The first checker cannot do it. The DB CHECK blocks the same thing, but tripping it
+ * returns a 500 and the caller cannot tell why it was blocked.
  */
 export async function registerSecondReviewRoute(
   app: FastifyInstance,
@@ -428,7 +428,7 @@ export async function registerSecondReviewRoute(
 
       const parsed = secondReviewSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -437,7 +437,7 @@ export async function registerSecondReviewRoute(
         session,
         "source.collect",
         tenantResource(tenantId, {
-          // 다른 눈이 요건이다. conflict가 미해소면 두 번째 검토가 아니다.
+          // A different reviewer is required. An unresolved conflict is not a second review.
           separationSensitive: true,
         }),
         sessionFacts(session),
@@ -476,28 +476,28 @@ export async function registerSecondReviewRoute(
                  r.disclosure_permission::text AS disclosure_permission
           FROM core.source_receipts r WHERE r.id = ${request.params.receiptId}
         `;
-        if (!receipt) throw notFound("receipt를 찾을 수 없다");
+        if (!receipt) throw notFound("Receipt not found");
 
         if (receipt.collection_method !== "manual_official_registry_confirmation") {
           throw unprocessable(
             "SECOND_REVIEW_NOT_APPLICABLE",
-            "두 번째 검토는 수동 확인 경로에만 있다",
+            "Second review exists only on the manual check path",
             { collectionMethod: receipt.collection_method },
           );
         }
 
         if (receipt.second_confirmed_by) {
-          throw conflict("SECOND_REVIEW_ALREADY_DONE", "이미 두 번째 검토를 마쳤다");
+          throw conflict("SECOND_REVIEW_ALREADY_DONE", "Second review is already done");
         }
 
-        // 이 receipt를 이미 다른 사람이 이어받았는가. append-only라 원본은
-        // 그대로 남으므로 중복 이어받기를 여기서 막는다.
+        // Has someone already followed up on this receipt? The table is append-only, so the original
+        // stays as is; duplicate follow-ups are blocked here.
         const [existing] = await tx<{ id: string }[]>`
           SELECT id FROM core.source_receipts
           WHERE supersedes_receipt_id = ${receipt.id}
         `;
         if (existing) {
-          throw conflict("SECOND_REVIEW_ALREADY_DONE", "이미 두 번째 검토를 마쳤다");
+          throw conflict("SECOND_REVIEW_ALREADY_DONE", "Second review is already done");
         }
 
         const check = checkSecondReview({
@@ -511,19 +511,19 @@ export async function registerSecondReviewRoute(
         }
 
         /**
-         * 확인하지 못했다면 확정으로 만들지 않는다.
+         * If it could not be verified, it is not made confirmed.
          *
-         * 두 번째 사람이 다른 것을 봤다는 사실 자체가 기록이다. `conflicting`은
-         * "둘이 다르다"를 말하며, 어느 쪽이 맞는지는 사람이 판단한다.
+         * That the second person saw something different is itself the record. `conflicting`
+         * says "the two differ"; a person decides which is right.
          */
         const nextResult = parsed.data.confirmed ? "confirmed_from_source" : "conflicting";
 
         /**
-         * **새 receipt를 만든다.** 원본을 고치지 않는다.
+         * **Creates a new receipt.** The original is not modified.
          *
-         * `source_receipts`는 append-only다. 두 번째 검토가 원본을 덮어쓰면
-         * "한 사람만 봤을 때 무엇이라고 했는가"가 사라진다 — 나중에 두 진술이
-         * 갈렸을 때 그 기록이 판단의 근거다.
+         * `source_receipts` is append-only. If the second review overwrote the original, "what it
+         * said when only one person had looked" would be lost — when the two statements later
+         * diverge, that record is the evidence for the decision.
          */
         const id = randomUUID();
         await tx`

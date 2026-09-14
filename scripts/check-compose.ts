@@ -1,18 +1,18 @@
 /**
- * Compose 파일의 볼륨 경로에 변수 치환이 없는가 — 2026-09-11.
+ * No variable substitution in Compose volume paths — 2026-09-11.
  *
- * Coolify는 볼륨 source에 `${`가 있으면 보안상 거절하고 **배포 전체를 멈춘다**:
+ * Coolify rejects `${` in a volume source for security and **halts the whole deploy**:
  *
  *   Deployment failed: Invalid Docker volume definition: Invalid volume source:
  *   contains forbidden character '${' (variable substitution with potential
  *   command injection).
  *
- * 로컬 `docker compose`는 그 치환을 정상으로 받아들이므로 로컬 검사·CI·E2E가 모두
- * 초록인 채로 배포만 실패한다. 실제로 그랬다(2026-09-10 A4 수정 → 2026-09-11 배포
- * 실패). 사람이 기억해서 막을 수 없는 제약이라 게이트로 둔다.
+ * Local `docker compose` accepts the substitution, so local checks, CI, and E2E all stay
+ * green while only the deploy fails. That happened (2026-09-10 A4 fix → 2026-09-11 deploy
+ * failure). It is a constraint people cannot reliably remember, so it is a gate.
  *
- * YAML 파서를 쓰지 않는다 — 들여쓰기로 서비스의 `volumes:` 블록만 본다. 이
- * 저장소의 compose 파일은 짧은 문법(`- 원본:대상`)과 긴 문법(`source:`)만 쓴다.
+ * No YAML parser — indentation is used to see only services' `volumes:` blocks. This
+ * repository's compose files use only short syntax (`- source:target`) and long syntax (`source:`).
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -21,27 +21,27 @@ import { fileURLToPath } from "node:url";
 
 const DAPP = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 /**
- * 기본 대상은 이 저장소가 갖는 compose 파일 전부다.
+ * The default targets are all compose files this repository has.
  *
- * 배포 환경별 compose는 저장소에 따라 없을 수 있다. 기본 목록에 있는데 파일이
- * 없으면 **건너뛰었다고 출력하고** 지나간다 — 조용히 빼면 검사가 도는 줄 알고
- * 아무것도 보지 않는 상태가 생긴다. 인자로 직접 지정한 파일이 없으면 오류다.
- * 그것은 구성 차이가 아니라 오타다.
+ * Per-environment compose files may be absent depending on the repository. If a default file
+ * is missing, it **prints that it was skipped** and moves on — dropping it silently creates a
+ * state where the check seems to run but looks at nothing. A file named as an argument that
+ * does not exist is an error. That is a typo, not a configuration difference.
  */
 const DEFAULT_FILES = ["docker-compose.yml"];
 const requested = process.argv.slice(2);
 const FILES = (requested.length > 0 ? requested : DEFAULT_FILES).filter((file) => {
   if (existsSync(path.isAbsolute(file) ? file : path.join(DAPP, file))) return true;
   if (requested.length > 0) {
-    console.error(`검사 대상이 없다: ${file}`);
+    console.error(`Check target does not exist: ${file}`);
     process.exit(1);
   }
-  console.log(`없어서 건너뛴다: ${file}`);
+  console.log(`Skipping, not found: ${file}`);
   return false;
 });
 
 if (FILES.length === 0) {
-  console.error("검사할 compose 파일이 하나도 없다.");
+  console.error("No compose files to check.");
   process.exit(1);
 }
 
@@ -52,10 +52,10 @@ interface Violation {
 }
 
 /**
- * Coolify가 볼륨 source에서 거절하는 문자열 — `validateShellSafePath`
- * (coollabsio/coolify `bootstrap/helpers/shared.php`). `${`만이 아니다. 목록을
- * 그대로 옮겨 두어야 다음 거절이 또 배포 단계에서 드러나지 않는다.
- * 줄바꿈·CR은 한 줄 안에 올 수 없으므로 뺐다.
+ * Strings Coolify rejects in a volume source — `validateShellSafePath`
+ * (coollabsio/coolify `bootstrap/helpers/shared.php`). Not just `${`. The list is copied
+ * verbatim so the next rejection does not surface at deploy time again.
+ * Newline and CR are omitted since they cannot occur within one line.
  */
 const FORBIDDEN: readonly string[] = ["`", "$(", "${", "|", "&", ";", "\t", ">", "<"];
 
@@ -71,7 +71,7 @@ export function findVolumeSubstitutions(file: string, text: string): Violation[]
 
     const indent = indentOf(line);
 
-    // 서비스 아래의 `volumes:`만 본다. 최상위 `volumes:`(named volume 선언)는 경로가 없다.
+    // Only `volumes:` under a service. Top-level `volumes:` (named volume declarations) has no paths.
     if (/^\s+volumes:\s*$/.test(line)) {
       volumesIndent = indent;
       return;
@@ -80,8 +80,8 @@ export function findVolumeSubstitutions(file: string, text: string): Violation[]
     if (volumesIndent === null) return;
 
     const trimmed = line.trim();
-    // 짧은 문법(`- 원본:대상:모드`)은 항목 전체를 본다. `${A:-b}`처럼 치환 안에
-    // `:`가 있어 원본만 잘라 내기 어렵고, 대상·모드에도 이 문자들이 올 이유가 없다.
+    // Short syntax (`- source:target:mode`) checks the whole item. With `${A:-b}` the
+    // substitution contains `:`, so cutting out just the source is hard, and target/mode have no reason to contain these characters.
     const item = trimmed.startsWith("-") ? trimmed.replace(/^-\s*/, "") : "";
     const longSource = /^source:\s*(.+)$/.exec(trimmed)?.[1] ?? "";
     const candidate = item || longSource;
@@ -99,13 +99,13 @@ const all = FILES.flatMap((file) =>
 );
 
 if (all.length > 0) {
-  console.error("볼륨 경로에 Coolify 금지 문자가 있다. 배포가 거절된다:\n");
+  console.error("Volume paths contain Coolify-forbidden characters. The deploy will be rejected:\n");
   for (const violation of all) console.error(`  ${violation.file}:${violation.line}  ${violation.text}`);
   console.error(
-    "\n볼륨에는 고정 경로만 둔다. 파일 선택이 필요하면 시작 스크립트에서 환경변수로 고른다" +
-      " (예: 컨테이너 entrypoint에서 파일을 고른다).",
+    "\nKeep only fixed paths in volumes. If a file must be chosen, choose it via an env var in a start script" +
+      " (e.g. pick the file in the container entrypoint).",
   );
   process.exit(1);
 }
 
-console.log(`볼륨 경로 Coolify 금지 문자 없음 — ${FILES.join(" · ")}`);
+console.log(`No Coolify-forbidden characters in volume paths — ${FILES.join(" · ")}`);

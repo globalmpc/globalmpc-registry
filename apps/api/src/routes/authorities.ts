@@ -20,16 +20,16 @@ import { requireReadContext } from "./shared.js";
 /**
  * Authority Registry — spec 05 §5.11, OD-42·OD-43.
  *
- * 이 라우트가 지키는 것:
+ * What this route guarantees:
  *
- * - **`doesNotProve`를 항상 함께 반환한다.** 확인해 주는 것만 보여주면 읽는
- *   쪽이 전체 확인으로 오해한다. DB CHECK가 빈 값을 막지만 응답에서 빠지면
- *   같은 오해가 생긴다.
- * - **연동되지 않은 기관도 목록에 남는다.** 빼면 "왜 이 기관은 없나"를 알 수
- *   없고, active로 두면 있지도 않은 연동을 약속한다(R5 gate: 미확인 integration
- *   과장 0).
- * - **호출 가능 여부와 다음 행동을 서버가 판정한다.** 화면이 상태 문자열을 보고
- *   추측하면 화면마다 다르게 읽는다.
+ * - **`doesNotProve` is always returned alongside.** Showing only what is confirmed makes the
+ *   reader take it as full confirmation. A DB CHECK blocks empty values, but dropping the field
+ *   from the response causes the same misreading.
+ * - **Unconnected authorities stay in the list.** Removing them hides why an authority is
+ *   missing; marking them active promises an integration that does not exist (R5 gate: zero
+ *   overstatement of unverified integrations).
+ * - **The server decides callability and the next action.** If screens guess from the state
+ *   string, each screen reads it differently.
  */
 
 interface AuthorityRow {
@@ -51,10 +51,10 @@ function toView(row: AuthorityRow) {
   const adapterState = connectionStateToAdapterState(row.connection_state);
   const reason = adapterStateReason(adapterState, row.connection_state);
 
-  // `none`은 adapter 자체가 없으므로 도메인 판정 대상이 아니다.
+  // `none` has no adapter at all, so the domain check does not apply.
   const availability =
     adapterState === "none"
-      ? { callable: false as const, reason: "NO_CONNECTION", nextAction: "연동을 먼저 등록한다" }
+      ? { callable: false as const, reason: "NO_CONNECTION", nextAction: "Register a connection first" }
       : checkAdapterAvailable({
           connectionKey: row.connection_key ?? "",
           authorityName: row.name,
@@ -70,7 +70,7 @@ function toView(row: AuthorityRow) {
     name: row.name,
     jurisdiction: row.jurisdiction,
     proves: row.proves,
-    // 05 §5.11: 한계 없는 authority는 존재하지 않는다.
+    // 05 §5.11: no authority exists without limitations.
     doesNotProve: row.does_not_prove,
     recognizedScope: row.recognized_scope,
     verificationMethod: row.verification_method,
@@ -86,9 +86,9 @@ function toView(row: AuthorityRow) {
 }
 
 const PROFILE_LIMITATIONS = [
-  "연동 상태는 접근 권한 여부이며 그 출처가 사실을 보증한다는 뜻이 아니다",
-  "manual은 사람이 조회한다는 뜻이며 연동 장애가 아니다",
-  "pending_access인 출처는 호출되지 않는다 — 이 목록은 가능한 연동을 약속하지 않는다",
+  "Connection state reflects access only; it does not mean the source vouches for the facts",
+  "manual means a person performs the lookup; it is not an integration outage",
+  "Sources in pending_access are not called — this list does not promise any available integration",
 ] as const;
 
 export async function registerAuthorityRoutes(
@@ -122,14 +122,14 @@ export async function registerAuthorityRoutes(
   });
 
   /**
-   * 자산·청약 활성화 조건 — OD-07.
+   * Asset and offering activation conditions — OD-07.
    *
-   * **거래 route가 아니다.** 이 경로는 "왜 아직 없는가"에 답한다. 조건 충족
-   * 여부는 `project_facts`에 기록된 것을 읽는다 — 별도 승인 테이블을 만들면
-   * 그 테이블을 채우는 것이 곧 활성화처럼 보인다.
+   * **This is not a trading route.** It answers "why is it not available yet". Whether the
+   * conditions are met is read from `project_facts` — a separate approval table would make
+   * filling that table look like activation itself.
    *
-   * 지금은 어떤 프로젝트도 조건을 채우지 못한다. 그것이 정상이며, 채워지더라도
-   * 코드에 거래 경로는 여전히 없다.
+   * No project meets the conditions today. That is expected, and even once they are met the
+   * code still has no trading path.
    */
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/offering-gate",
@@ -154,7 +154,7 @@ export async function registerAuthorityRoutes(
 
       const statuses = facts.map((fact) => ({
         key: fact.fact_key as never,
-        // `confirmed`만 충족이다. `pending`은 확인 중이지 확인된 것이 아니다.
+        // Only `confirmed` counts as met. `pending` is under confirmation, not confirmed.
         satisfied: fact.status === "confirmed",
         evidenceRef: fact.evidence_ref,
       }));
@@ -166,9 +166,10 @@ export async function registerAuthorityRoutes(
         activatable: decision.activatable,
         missing: decision.activatable ? [] : decision.missing,
         unsupported: decision.activatable ? [] : decision.unsupported,
-        // 기능이 없다는 사실을 응답이 직접 말한다. 화면이 잊어도 API가 말한다.
-        absenceNotice: OFFERING_ABSENCE_COPY.ko,
-        notMeaning: OFFERING_NOT_MEANING.ko,
+        // The response itself states that the feature does not exist. If a screen forgets, the
+        // API still says it.
+        absenceNotice: OFFERING_ABSENCE_COPY.en,
+        notMeaning: OFFERING_NOT_MEANING.en,
         requestId,
         asOf,
       };
@@ -176,10 +177,10 @@ export async function registerAuthorityRoutes(
   );
 
   /**
-   * 관할별 연동 현황 — OD-43.
+   * Integration status per jurisdiction — OD-43.
    *
-   * 활성·수동·대기를 나눠 센다. 합계만 보여주면 "10개 기관 연동"이 실제로는
-   * 1개만 호출 가능한 상태를 감춘다.
+   * Counts active, manual, and pending separately. A total alone lets "10 authorities
+   * connected" hide that only 1 is actually callable.
    */
   app.get<{ Params: { jurisdiction: string } }>(
     "/api/v1/jurisdictions/:jurisdiction/profile",

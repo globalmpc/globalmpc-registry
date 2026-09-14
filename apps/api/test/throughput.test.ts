@@ -7,17 +7,17 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 처리량 측정 — spec 06 §6.9, OD-32.
+ * Throughput measurement — spec 06 §6.9, OD-32.
  *
- * **목표를 코드에 박지 않는다.** SLA·RPO·RTO 수치가 OD-32로 미정이고, 임의의
- * 숫자를 넣으면 그것이 결정이 되어 버린다. 대신 측정하고 출력한다.
+ * **Targets are not hardcoded.** SLA/RPO/RTO figures are undecided under OD-32, and an
+ * arbitrary number would become the decision. Measures and prints instead.
  *
- * 환경변수로 임계값을 주면 그때 실패로 바꾼다:
+ * Setting a threshold via environment variable turns it into a failure:
  *
  *   PERF_MAX_P95_MS=250 pnpm vitest run --project @mpc/api test/throughput.test.ts
  *
- * 이 파일이 CI에서 하는 일은 **회귀를 눈에 보이게 하는 것**이다. 절대 수치는
- * 기계마다 다르므로 통과 기준으로 쓰지 않는다.
+ * In CI this file's job is **to make regressions visible**. Absolute figures vary by
+ * machine, so they are not used as pass criteria.
  */
 
 interface Measurement {
@@ -43,7 +43,7 @@ function summarize(label: string, durations: number[], errors: number): Measurem
   };
 }
 
-/** 측정 결과를 사람이 읽을 수 있게 남긴다. 숫자만 보면 회귀를 못 알아본다. */
+/** Leaves results in human-readable form. Bare numbers hide regressions. */
 function report(measurement: Measurement): void {
   process.stdout.write(
     `  ${measurement.label}: n=${measurement.count} p50=${measurement.p50}ms ` +
@@ -52,30 +52,30 @@ function report(measurement: Measurement): void {
 }
 
 /**
- * 임계값.
+ * Threshold.
  *
- * 없으면 측정만 한다. OD-32가 정해지면 CI 환경변수로 넣는다 — 코드를 고치지
- * 않아도 되게.
+ * Without one, only measures. Once OD-32 is decided, set it as a CI environment variable —
+ * no code change needed.
  */
 function parseThreshold(raw: string | undefined): number | null {
-  // 배포 플랫폼은 설정되지 않은 변수를 빈 문자열로 넣는다. 그것은 "없음"이다.
+  // Deploy platforms inject unset variables as empty strings. That means "none".
   if (raw === undefined || raw.trim() === "") return null;
 
   const value = Number(raw);
   /**
-   * 숫자가 아니면 **던진다.** `Number("abc")`는 NaN이고 `p95 > NaN`은 항상
-   * 거짓이라, 오타 하나가 게이트를 조용히 꺼 버린다. 값을 넣은 사람은 게이트가
-   * 켜졌다고 믿는다 — 그 상태가 게이트가 없는 것보다 나쁘다.
+   * **Throws** on a non-number. `Number("abc")` is NaN and `p95 > NaN` is always
+   * false, so one typo silently disables the gate. Whoever set the value believes the gate
+   * is on — a state worse than having no gate.
    */
   if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`PERF_MAX_P95_MS는 양수여야 한다: ${JSON.stringify(raw)}`);
+    throw new Error(`PERF_MAX_P95_MS must be a positive number: ${JSON.stringify(raw)}`);
   }
   return value;
 }
 
 const MAX_P95_MS = parseThreshold(process.env["PERF_MAX_P95_MS"]);
 
-describeDb("처리량 측정", () => {
+describeDb("throughput measurement", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let token: string;
@@ -91,7 +91,7 @@ describeDb("처리량 측정", () => {
     await fx.close();
   });
 
-  /** 동시 요청을 보내고 각각의 소요를 잰다. */
+  /** Sends concurrent requests and times each one. */
   async function measure(
     label: string,
     concurrency: number,
@@ -114,7 +114,7 @@ describeDb("처리량 측정", () => {
       }),
     );
 
-    // 5xx는 오류로 센다. 성공으로 세면 장애가 빠른 응답으로 보인다.
+    // Counts 5xx as errors. Counting them as successes makes outages look like fast responses.
     errors += results.filter((status) => status >= 500).length;
 
     const measurement = summarize(label, durations, errors);
@@ -122,7 +122,7 @@ describeDb("처리량 측정", () => {
     return measurement;
   }
 
-  it("프로젝트 목록 읽기", async () => {
+  it("project list read", async () => {
     const measurement = await measure("GET /projects", 50, () =>
       app.inject({
         method: "GET",
@@ -135,8 +135,8 @@ describeDb("처리량 측정", () => {
     if (MAX_P95_MS !== null) expect(measurement.p95).toBeLessThanOrEqual(MAX_P95_MS);
   });
 
-  it("공개 조회 (무인증)", async () => {
-    // Explorer는 로그인 없이 열린다. 부하가 가장 예측하기 어려운 경로다.
+  it("public lookup (unauthenticated)", async () => {
+    // Explorer opens without login. Its load is the hardest to predict.
     const measurement = await measure("GET /public/registries", 50, () =>
       app.inject({ method: "GET", url: "/api/v1/public/registries/project/NOPE" }),
     );
@@ -145,7 +145,7 @@ describeDb("처리량 측정", () => {
     if (MAX_P95_MS !== null) expect(measurement.p95).toBeLessThanOrEqual(MAX_P95_MS);
   });
 
-  it("mutation — 프로젝트 등록", async () => {
+  it("mutation — project registration", async () => {
     let counter = 0;
     const stamp = Date.now();
 
@@ -157,7 +157,7 @@ describeDb("처리량 측정", () => {
         headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
         payload: {
           projectKey: `PERF-${stamp}-${counter}`,
-          name: "측정용",
+          name: "for measurement",
           hostCountryIso3: "MNG",
           minerals: ["copper"],
           ownerOrganizationId: fx.orgA,
@@ -169,8 +169,8 @@ describeDb("처리량 측정", () => {
     if (MAX_P95_MS !== null) expect(measurement.p95).toBeLessThanOrEqual(MAX_P95_MS);
   });
 
-  it("인증 — SIWE nonce 발급", async () => {
-    // 로그인 경로가 막히면 다른 모든 것이 막힌다.
+  it("auth — SIWE nonce issuance", async () => {
+    // If the login path is blocked, everything else is blocked.
     const measurement = await measure("POST /auth/siwe/nonce", 30, () =>
       app.inject({
         method: "POST",
@@ -182,20 +182,20 @@ describeDb("처리량 측정", () => {
     expect(measurement.errors).toBe(0);
   });
 
-  it("메트릭이 측정 트래픽을 반영한다", async () => {
-    // 위 케이스들이 남긴 관측이 실제로 수집됐는지 본다. 수집되지 않으면
-    // 운영에서 부하를 볼 방법이 없다.
+  it("reflects measurement traffic in metrics", async () => {
+    // Checks that observations left by the cases above were actually collected. Otherwise
+    // there is no way to see load in operations.
     const output = (await app.inject({ method: "GET", url: "/metrics" })).body;
 
     expect(output).toContain('route="/api/v1/projects"');
     expect(output).toContain("http_request_duration_ms_count");
   });
 
-  it("임계값이 없으면 측정만 한다", () => {
-    // OD-32가 정해지기 전까지 임의의 숫자를 통과 기준으로 쓰지 않는다.
+  it("only measures when no threshold is set", () => {
+    // Until OD-32 is decided, no arbitrary number serves as a pass criterion.
     if (MAX_P95_MS === null) {
       process.stdout.write(
-        "  임계값 미설정 — PERF_MAX_P95_MS로 지정하면 회귀가 실패로 바뀐다 (OD-32)\n",
+        "  no threshold set — set PERF_MAX_P95_MS to turn regressions into failures (OD-32)\n",
       );
     }
     expect(true).toBe(true);

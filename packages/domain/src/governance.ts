@@ -1,10 +1,10 @@
 /**
- * 두 Governance Space의 격리 — spec 04 §4.6(5·6) / 08 §8.7 / 09.
+ * Isolation of the two Governance Spaces — spec 04 §4.6(5·6) / 08 §8.7 / 09.
  *
- * Protocol과 Project는 화면만 나누는 것이 아니라 contract·storage·voter 명부·
- * 실행 대상까지 분리한다. 이 모듈은 그 격리의 도메인 측 판정이며, 같은 규칙이
- * API route(07 §7.2)와 contract target allowlist(08 §8.7)에서 독립적으로 다시
- * 검사된다. 한 곳이 뚫려도 나머지 두 곳에서 막히도록 3중으로 둔다(AC-05).
+ * Protocol and Project are split not only on screen but in contracts, storage, voter rolls,
+ * and execution targets. This module is the domain-side check of that isolation; the same rule
+ * is re-checked independently in the API routes (07 §7.2) and the contract target allowlist
+ * (08 §8.7). Three layers, so a breach in one is still stopped by the other two (AC-05).
  */
 
 export type GovernanceSpace = "protocol" | { readonly kind: "project"; readonly projectId: string };
@@ -51,9 +51,9 @@ function isProjectType(type: string): type is ProjectProposalType {
 }
 
 /**
- * proposal type이 이 space에서 생성 가능한가.
+ * Can this proposal type be created in this space?
  *
- * protocol voter가 project sale을 제안하는 경로와 그 반대를 모두 막는다.
+ * Blocks both a protocol voter proposing a project sale and the reverse.
  */
 export function checkProposalSpace(space: GovernanceSpace, type: string): SpaceCheck {
   if (!isProtocolType(type) && !isProjectType(type)) {
@@ -72,10 +72,10 @@ export function checkProposalSpace(space: GovernanceSpace, type: string): SpaceC
 }
 
 /**
- * 투표 자격.
+ * Voting eligibility.
  *
- * project voter는 **해당** 프로젝트의 AT snapshot에서만 투표한다. 다른 프로젝트나
- * protocol에는 투표할 수 없다(02 §2.2 `project_voter` 금지 항목).
+ * A project voter votes only on the AT snapshot of **that** project. It cannot vote on other
+ * projects or on the protocol (02 §2.2 `project_voter` prohibitions).
  */
 export function checkVoteEligibility(
   voterSpace: GovernanceSpace,
@@ -93,11 +93,11 @@ export function checkVoteEligibility(
 }
 
 /**
- * 어느 space에서도 생성할 수 없는 대상.
+ * Targets no space can create.
  *
- * 설계 개요 다이어그램의 `Forbidden` 노드 — readiness override,
- * legal issuance 승인, 다른 project의 권리 변경. governance vote는 오프체인
- * authority·access·법률 사실을 만들지 않는다(12 §12.13 R4 exit criteria).
+ * The `Forbidden` node in the design overview diagram — readiness override,
+ * legal issuance approval, rights changes to another project. A governance vote does not
+ * create off-chain authority, access, or legal facts (12 §12.13 R4 exit criteria).
  */
 export const FORBIDDEN_GOVERNANCE_TARGETS = [
   "readiness_override",
@@ -114,19 +114,19 @@ export function isForbiddenTarget(target: string): target is ForbiddenGovernance
 }
 
 /**
- * 투표 집계 — spec 04 §4.5.
+ * Vote tally — spec 04 §4.5.
  *
- * 정족수와 통과 기준을 분리해 판정한다. 둘을 합치면 "참여가 부족해서"와
- * "반대가 많아서"가 같은 결과로 보이는데, 다음에 할 일이 다르다 —
- * 전자는 다시 알리는 것이고 후자는 제안을 고치는 것이다.
+ * Quorum and pass threshold are decided separately. Merged, "too little participation" and
+ * "too many against" look like the same outcome, yet the next step differs — the former
+ * means announcing again, the latter means revising the proposal.
  *
- * **분수로 계산한다.** 부동소수점을 쓰면 경계값에서 결과가 갈린다.
+ * **Computed as fractions.** Floating point splits outcomes at boundary values.
  */
 export interface TallyInput {
   readonly forWeight: bigint;
   readonly againstWeight: bigint;
   readonly abstainWeight: bigint;
-  /** 투표 가능한 전체 무게. 정족수의 분모다. */
+  /** Total eligible voting weight. The quorum denominator. */
   readonly eligibleWeight: bigint;
   readonly quorumNumerator: number;
   readonly quorumDenominator: number;
@@ -141,12 +141,12 @@ export interface TallyResult {
   readonly participatedWeight: bigint;
   readonly quorumMet: boolean;
   readonly thresholdMet: boolean;
-  /** 왜 이 결과인지. 화면이 추측하지 않게 서버가 말한다. */
+  /** Why this outcome. The server says it so the UI does not guess. */
   readonly reason: string;
 }
 
 export function tallyVotes(input: TallyInput): TallyResult {
-  // 기권도 참여다. 정족수는 "얼마나 관심을 보였나"이지 "얼마나 찬성했나"가 아니다.
+  // Abstaining is participation. Quorum measures "how much interest", not "how much support".
   const participated = input.forWeight + input.againstWeight + input.abstainWeight;
 
   const quorumMet =
@@ -159,11 +159,11 @@ export function tallyVotes(input: TallyInput): TallyResult {
       participatedWeight: participated,
       quorumMet: false,
       thresholdMet: false,
-      reason: "참여 무게가 정족수에 못 미친다",
+      reason: "Participating weight is below quorum",
     };
   }
 
-  // 통과 기준의 분모는 찬반 합이다. 기권을 반대로 세면 기권의 의미가 사라진다.
+  // The pass-threshold denominator is for + against. Counting abstentions as against erases their meaning.
   const decided = input.forWeight + input.againstWeight;
   const thresholdMet =
     decided > 0n &&
@@ -176,9 +176,9 @@ export function tallyVotes(input: TallyInput): TallyResult {
     quorumMet: true,
     thresholdMet,
     reason: thresholdMet
-      ? "정족수와 통과 기준을 모두 충족했다"
+      ? "Both quorum and pass threshold are met"
       : decided === 0n
-        ? "기권만 있어 찬반 판정이 불가능하다"
-        : "찬성이 통과 기준에 못 미친다",
+        ? "Only abstentions; for/against cannot be decided"
+        : "Support is below the pass threshold",
   };
 }

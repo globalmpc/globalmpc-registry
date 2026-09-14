@@ -27,12 +27,12 @@ import type { Grade, SourceResult } from "@mpc/domain";
 /**
  * Data Room — spec 11 §11.3.
  *
- * 폴더가 아니라 **claim/evidence 중심 view**다. 파일 목록이 아니라 "무엇이
- * 어떤 출처로 확인됐는가"를 보여준다.
+ * A **claim/evidence-centered view**, not folders. It shows "what was confirmed
+ * from which source", not a file list.
  *
- * 12개 source result가 각자 다른 배지와 다음 행동을 갖는 것이 핵심이다 —
- * "기록 없음"과 "확인 불가"가 같아 보이면 사용자는 존재하지 않는 기록을 계속
- * 재시도한다(AC-18).
+ * The core is that each of the 12 source results has its own badge and next action —
+ * if "no record" and "cannot confirm" look alike, users keep retrying a record
+ * that does not exist (AC-18).
  */
 export default function DataRoomPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -72,11 +72,11 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
   }, [load, sessionLoading]);
 
   /**
-   * 공식 출처를 **실제로 부른다** — 2026-09-10 실사 A1.
+   * **Actually calls** the official source — 2026-09-10 audit A1.
    *
-   * 예전에는 이 화면이 `confirmed_from_source`를 직접 보냈다. 그러면 확정의 뜻이
-   * "우리가 확인했다"가 아니라 **"올린 사람이 그렇다고 했다"**가 된다. 확정은
-   * 서버가 출처를 불러 받은 답에서만 나온다 — 답하지 못하면 그 사실이 남는다.
+   * This screen used to send `confirmed_from_source` directly. That turned the meaning of
+   * confirmation from "we checked" into **"the uploader said so"**. Confirmation
+   * comes only from the answer the server gets by calling the source — if it cannot answer, that fact is recorded.
    */
   async function lookUpSource() {
     if (!token) return;
@@ -160,10 +160,10 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
   }
 
   /**
-   * 충돌 기록.
+   * Record a conflict.
    *
-   * 이 claim의 현재 version을 함께 보낸다. 목록을 띄워 둔 사이 다른 사람이 먼저
-   * 바꿨으면 서버가 412로 거절하고, 화면은 그 사실을 그대로 보여준다.
+   * Sends this claim's current version too. If someone else changed it while the list
+   * was open, the server rejects with 412 and the screen shows that as is.
    */
   async function addConflict(claim: Claim) {
     if (!token) return;
@@ -185,7 +185,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
     }
   }
 
-  /** 파일을 올린다. 올린 것은 evidence가 아니라 quarantine에 들어간다. */
+  /** Upload a file. The upload goes into quarantine, not evidence. */
   async function addUpload(file: File) {
     if (!token) return;
     setBusy(true);
@@ -201,10 +201,10 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
   }
 
   /**
-   * 토큰이 필요한 동작을 한 곳에서 감싼다.
+   * Wrap token-requiring actions in one place.
    *
-   * 토큰을 인자로 넘기는 이유: 렌더 시점의 `token`은 세션 로딩 중 null일 수 있다.
-   * 호출부마다 확인하면 한 곳에서 빠뜨린다.
+   * Why the token is passed as an argument: `token` at render time can be null while the session loads.
+   * Checking at every call site means one will miss it.
    */
   async function step(action: (activeToken: string) => Promise<unknown>) {
     if (!token) return;
@@ -244,9 +244,9 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
       {error ? <ErrorNotice error={error} /> : null}
 
       {/*
-        검사기가 없으면 업로드는 quarantine에 **영원히** 머문다. 그 정지는
-        오류가 아니라 대기처럼 보이므로, 여기서 말하지 않으면 사용자는 기다리는
-        중이라고 믿는다.
+        Without a scanner, uploads stay in quarantine **forever**. That stall looks
+        like waiting, not an error, so unless it is stated here the user believes
+        it is still pending.
       */}
       {scanner && scanner.state !== "running" ? (
         <div
@@ -278,7 +278,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
       <div className="panel">
         <h2>Files</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          {/* 업로드 즉시 evidence가 되면 검사되지 않은 파일이 검토 대상 자료가 된다. */}
+          {/* If uploads became evidence immediately, unscanned files would become review material. */}
           An uploaded file does not become evidence on arrival. It enters quarantine, and only
           after the scan worker finishes can it be promoted to evidence.
         </p>
@@ -332,8 +332,8 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                     <td>
                       <div className="row" style={{ gap: 6 }}>
                         {upload.state === "quarantined" ? (
-                          // 검사는 별도 worker가 한다. 화면에서 결과를 만들 수
-                          // 있으면 격리가 형식만 남는다.
+                          // A separate worker performs the scan. If the screen could
+                          // produce a result, quarantine would be a formality.
                           <span className="meta">Awaiting scan</span>
                         ) : null}
 
@@ -385,7 +385,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
         )}
 
         <p className="meta" style={{ marginTop: 10 }}>
-          {/* 감염 판정을 되돌리는 경로는 존재하지 않는다 — 권한이 아니라 상태기계다. */}
+          {/* No path reverses an infected verdict — enforced by the state machine, not permissions. */}
           A separate worker runs the scan; this screen cannot produce the result. A file judged
           infected cannot be rescanned and is never promoted to evidence — upload it again as a
           new file. Download links expire after five minutes, and anyone holding one can fetch
@@ -399,8 +399,8 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
           The twelve results are different facts. Each carries a different next action.
         </p>
         {/*
-          확정을 화면에서 적어 넣을 수 없다는 것을 사람이 읽을 수 있게 적는다.
-          버튼만 없애면 "왜 없나"를 알 수 없고, 그러면 우회 경로를 찾게 된다.
+          State in readable text that confirmation cannot be entered from the screen.
+          Just removing the button leaves "why is it missing" unanswered, and people look for a workaround.
         */}
         <p className="sub" style={{ marginTop: 0 }}>
           A confirmation is not something this screen can record. It comes from the server
@@ -447,7 +447,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                     </td>
                     <td className="mono meta">{receipt.nextAction}</td>
                     <td>
-                      {/* 재시도 여부를 사용자가 추측하지 않게 한다. */}
+                      {/* Keep the user from guessing whether to retry. */}
                       {receipt.retryable ? "Possible" : <span className="meta">Not useful</span>}
                     </td>
                     <td className="mono meta">{receipt.collectionMethod}</td>
@@ -494,8 +494,8 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
               <tbody>
                 {claims.map((claim) => (
                   <tr key={claim.id}>
-                    {/* claim 하나를 가리킬 주소가 있어야 이의·검토 요청이 같은
-                        것을 가리킨다. */}
+                    {/* A claim needs its own address so disputes and review requests point
+                        to the same thing. */}
                     <td className="mono">
                       <Link href={`/w/projects/${id}/claims/${claim.id}`}>{claim.claimType}</Link>
                     </td>
@@ -547,6 +547,6 @@ function uploadColor(state: string): string {
   return "var(--alert)";
 }
 
-/** seed가 만든 데모 authority·connection. R5에서 실제 Mongolia profile로 대체한다. */
+/** Demo authority and connection created by seed. Replaced by the real Mongolia profile in R5. */
 const DEMO_AUTHORITY_ID = "cccccccc-0000-0000-0000-000000000001";
 const DEMO_CONNECTION_ID = "cccccccc-0000-0000-0000-000000000002";

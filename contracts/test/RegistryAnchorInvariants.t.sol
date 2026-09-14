@@ -5,10 +5,10 @@ import {Test} from "forge-std/Test.sol";
 import {RegistryAnchorV1} from "../src/RegistryAnchorV1.sol";
 import {IRegistryAnchor} from "../src/interfaces/IRegistryAnchor.sol";
 
-/// @notice invariant fuzzing 대상 handler.
-/// @dev 임의 순서·임의 인자로 컨트랙트를 두들기되, 제출된 root가 절대 변하지
-///      않는다는 것을 확인한다. 13 §13.5의 "Registry root는 overwrite/delete 불가"와
-///      "revoked/superseded는 새 event로만 표현"을 기계적으로 검증한다.
+/// @notice Handler targeted by invariant fuzzing.
+/// @dev Hammers the contract in arbitrary order with arbitrary arguments and checks that no
+///      submitted root ever changes. Mechanically verifies 13 §13.5's "Registry roots cannot be
+///      overwritten/deleted" and "revoked/superseded is expressed only as new events".
 contract AnchorHandler is Test {
     RegistryAnchorV1 public anchor;
 
@@ -61,7 +61,7 @@ contract AnchorHandler is Test {
 
         vm.prank(submitter);
         try anchor.submitRoot(batchId, differentRoot, bytes32(0), "1", 1) {
-            // 성공하면 안 된다. invariant가 이것을 잡는다.
+            // Must not succeed. The invariants catch it if it does.
         } catch {}
     }
 
@@ -82,7 +82,7 @@ contract RegistryAnchorInvariants is Test {
         targetContract(address(handler));
     }
 
-    /// @dev 제출된 root는 어떤 호출 순서로도 바뀌지 않는다.
+    /// @dev A submitted root never changes under any call sequence.
     function invariant_rootNeverChanges() public view {
         uint256 count = handler.knownBatchCount();
         for (uint256 i = 0; i < count; i++) {
@@ -92,7 +92,7 @@ contract RegistryAnchorInvariants is Test {
         }
     }
 
-    /// @dev recordCount도 마찬가지다.
+    /// @dev Neither does recordCount.
     function invariant_recordCountNeverChanges() public view {
         uint256 count = handler.knownBatchCount();
         for (uint256 i = 0; i < count; i++) {
@@ -105,12 +105,12 @@ contract RegistryAnchorInvariants is Test {
         }
     }
 
-    /// @dev batch는 사라지지 않는다. 제출된 것은 영구히 조회된다.
+    /// @dev Batches never disappear. Anything submitted stays queryable forever.
     function invariant_batchesNeverDisappear() public view {
         assertGe(anchor.batchCount(), handler.knownBatchCount(), "batch disappeared");
     }
 
-    /// @dev revoke·supersede는 상태 플래그일 뿐 root를 지우지 않는다.
+    /// @dev revoke and supersede are only status flags; they never erase the root.
     function invariant_revokedBatchesRetainRoot() public view {
         uint256 count = handler.knownBatchCount();
         for (uint256 i = 0; i < count; i++) {
@@ -122,7 +122,7 @@ contract RegistryAnchorInvariants is Test {
         }
     }
 
-    /// @dev 저장된 batch는 recordCount가 항상 1 이상이다. 빈 batch는 anchor되지 않는다.
+    /// @dev A stored batch always has recordCount >= 1. Empty batches are never anchored.
     function invariant_noEmptyBatchStored() public view {
         uint256 count = handler.knownBatchCount();
         for (uint256 i = 0; i < count; i++) {
@@ -130,7 +130,7 @@ contract RegistryAnchorInvariants is Test {
         }
     }
 
-    /// @dev batch는 자기 자신을 supersede할 수 없다.
+    /// @dev A batch cannot supersede itself.
     function invariant_noSelfSupersede() public view {
         uint256 count = handler.knownBatchCount();
         for (uint256 i = 0; i < count; i++) {

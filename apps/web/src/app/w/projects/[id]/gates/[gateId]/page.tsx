@@ -17,11 +17,11 @@ import type { ReadinessStatus } from "@mpc/domain";
 /**
  * Gate Decision — spec 11 §11.3.
  *
- * **Readiness Matrix와 별도 화면이다.** 같은 화면에 두면 "준비도가 ok니까
- * 통과"로 읽힌다. 준비도는 입력이고 결정은 사람이 서명하는 별개의 기록이다.
+ * **A separate screen from the Readiness Matrix.** On the same screen it reads as "readiness is
+ * ok, so it passes". Readiness is an input; the decision is a separate record a person signs.
  *
- * `gap`·`not_evaluable`이 있으면 go 버튼이 비활성화되고, 서버도 독립적으로
- * 거절한다(AC-02, AC-34). 화면의 비활성화는 안내이지 통제가 아니다.
+ * With any `gap`/`not_evaluable`, the go button is disabled and the server independently
+ * rejects (AC-02, AC-34). Disabling on screen is guidance, not a control.
  */
 export default function GateDecisionPage({
   params,
@@ -179,7 +179,7 @@ export default function GateDecisionPage({
         </div>
 
         <p className="meta" style={{ marginTop: 10 }}>
-          {/* 나쁜 소식을 기록하지 못하게 막으면 상태가 조용히 낡는다. */}
+          {/* Blocking the recording of bad news lets state go stale silently. */}
           hold, rework, and stop can always be recorded, whatever the readiness says. The
           disabled button is guidance; the server decides again on its own.
         </p>

@@ -3,14 +3,14 @@ import type postgres from "postgres";
 import type { MetricsRegistry } from "../metrics.js";
 
 /**
- * 운영 endpoint — 06 §6.9.
+ * Operational endpoints — 06 §6.9.
  *
- * `/health/*`와 `/metrics`는 API 계약(`ROUTES`)의 대상이 아니다. 오케스트레이터와
- * 수집기가 부르는 것이며 버전이 붙는 공개 API가 아니다.
+ * `/health/*` and `/metrics` are not part of the API contract (`ROUTES`). Orchestrators and
+ * collectors call them; they are not a versioned public API.
  *
- * **메트릭에 인증을 걸지 않는다.** 대신 tenant·경로 파라미터 같은 식별 정보를
- * 담지 않는다 — 인증을 거는 것보다 담지 않는 편이 확실하다. 네트워크 수준에서
- * 내부에만 노출하는 것은 배포의 몫이다.
+ * **Metrics are not authenticated.** Instead they carry no identifying data such as tenant or
+ * path parameters — leaving it out is more reliable than gating it. Restricting exposure to the
+ * internal network is the deployment's job.
  */
 export async function registerHealthRoutes(
   app: FastifyInstance,
@@ -22,15 +22,15 @@ export async function registerHealthRoutes(
   if (metrics) {
     app.get("/metrics", async (_request, reply) => {
       /**
-       * 스크레이프마다 DB 게이지를 갱신한다.
+       * Refreshes DB gauges on every scrape.
        *
-       * 프로세스가 세는 counter로는 **멈춘 worker**가 잡히지 않는다. 죽은
-       * worker는 아무것도 보고하지 않고 알림 규칙은 조용해진다. 쌓인 행을 여기서
-       * 세면 멈춘 상태 자체가 값으로 보인다.
+       * In-process counters do not catch a **stalled worker**. A dead worker reports nothing
+       * and alert rules go quiet. Counting the backlog here makes the stall itself visible as
+       * a value.
        *
-       * 집계 조회가 실패해도 스크레이프 전체를 실패시키지 않는다. 실패하면
-       * `mpc_gauge_scrape_failed_total`이 오르고, 그것 자체가 알림 대상이다 —
-       * 502를 돌려주면 수집기 로그에만 남고 지표에는 흔적이 없다.
+       * A failed aggregate query does not fail the whole scrape. On failure
+       * `mpc_gauge_scrape_failed_total` increments, and that itself is alertable — returning
+       * 502 would leave a trace only in collector logs, none in the metrics.
        */
       try {
         const rows = await sql<{ metric: string; label: string; value: string }[]>`
@@ -57,10 +57,10 @@ export async function registerHealthRoutes(
       await sql`SELECT 1`;
       return { status: "ready" };
     } catch {
-      // 장애를 성공으로 표시하지 않는다(06 §6.8 hidden success 금지).
+      // A failure is not reported as success (06 §6.8: no hidden success).
       return reply.status(503).send({
         code: "DATABASE_UNAVAILABLE",
-        message: "데이터베이스에 연결할 수 없다",
+        message: "Cannot connect to the database",
         retryable: true,
         correlationId: request.context.correlationId,
       });

@@ -1,11 +1,11 @@
 /**
- * 골든 벡터 생성기.
+ * Golden vector generator.
  *
- * `test/vectors.json`은 canonical serialization·leaf·Merkle 규격의 정본 대조표다.
- * 다른 언어로 구현이 나오거나 이 구현을 리팩터링할 때 이 파일이 회귀를 잡는다.
+ * `test/vectors.json` is the authoritative reference table for the canonical serialization,
+ * leaf, and Merkle specs. It catches regressions when another-language implementation appears or this one is refactored.
  *
- * 실행: node scripts/generate-vectors.ts
- * 값을 바꾸려면 규격이 바뀐 것이므로 serializationVersion을 올려야 한다.
+ * Run: node scripts/generate-vectors.ts
+ * Changing the values means the spec changed, so serializationVersion must be bumped.
  */
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -85,8 +85,8 @@ const tree = buildMerkleTree(leafHashes);
 const vectors = {
   serializationVersion: "1",
   note:
-    "MPC canonical serialization 골든 벡터. 값이 바뀌면 규격이 바뀐 것이며 " +
-    "serializationVersion을 올려야 한다.",
+    "MPC canonical serialization golden vectors. A changed value means the spec changed; " +
+    "bump serializationVersion.",
   keccak256: {
     empty: keccak256(new Uint8Array(0)),
     abc: keccak256(encoder.encode("abc")),
@@ -120,4 +120,4 @@ const outPath = path.join(
 );
 
 writeFileSync(outPath, `${JSON.stringify(vectors, null, 2)}\n`, "utf8");
-process.stdout.write(`벡터 ${outPath}에 기록\n`);
+process.stdout.write(`Wrote vectors to ${outPath}\n`);

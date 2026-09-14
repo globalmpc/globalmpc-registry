@@ -1,10 +1,10 @@
 /**
- * 공개 projection 경계와 중대정보 blackout — spec 05 §5.7·§5.9 / 07 §7.14 /
+ * Public projection boundary and material-information blackout — spec 05 §5.7·§5.9 / 07 §7.14 /
  * 13 AC-22·AC-30·AC-32.
  *
- * 공개는 되돌릴 수 없다. anchor된 leaf는 삭제할 수 없고, 한 번 공개된 자연인
- * 식별자는 crypto-shredding으로도 되돌릴 수 없다(05 §5.9). 그래서 이 모듈의
- * 기본값은 전부 거절이고, 허용은 allowlist로만 이루어진다.
+ * Disclosure cannot be undone. An anchored leaf cannot be deleted, and a natural-person
+ * identifier, once public, cannot be undone even by crypto-shredding (05 §5.9). So this
+ * module rejects by default and permits only through an allowlist.
  */
 
 export const SENSITIVITY_LEVELS = [
@@ -16,7 +16,7 @@ export const SENSITIVITY_LEVELS = [
 ] as const;
 export type Sensitivity = (typeof SENSITIVITY_LEVELS)[number];
 
-/** public projection에 포함 가능한 필드(05 §5.7 "포함 후보"). */
+/** Fields that may be included in the public projection (05 §5.7 "inclusion candidates"). */
 export const PUBLIC_FIELD_ALLOWLIST = [
   "stableId",
   "projectKey",
@@ -58,8 +58,8 @@ export const PUBLIC_FIELD_ALLOWLIST = [
 export type PublicField = (typeof PUBLIC_FIELD_ALLOWLIST)[number];
 
 /**
- * 어떤 승인으로도 public projection에 넣을 수 없는 것(05 §5.7 "제외").
- * allowlist에 없는 것은 전부 거절되지만, 이 목록은 오탐을 막기 위한 명시적 기록이다.
+ * What no approval can put into the public projection (05 §5.7 "exclusions").
+ * Anything outside the allowlist is rejected anyway; this list is an explicit record against false positives.
  */
 export const NEVER_PUBLIC_FIELDS = [
   "rawSourceResponse",
@@ -92,8 +92,8 @@ export interface PublicationGuardInput {
   readonly sensitivity: Sensitivity;
   readonly disclosureApproved: boolean;
   /**
-   * 자연인 이름·등록번호 등 person-level 식별자를 포함하는가.
-   * 기본은 pseudonymous handle이다(05 §5.9).
+   * Does it include person-level identifiers such as a natural person's name or registration number?
+   * The default is a pseudonymous handle (05 §5.9).
    */
   readonly containsPersonLevelIdentifier: boolean;
   readonly personIdentifierSafeguards: {
@@ -105,7 +105,7 @@ export interface PublicationGuardInput {
   };
   /** `terms/license.commercial_reuse` — AC-13. */
   readonly commercialReuse: "confirmed" | "unconfirmed" | "prohibited";
-  /** 상업적 offering 근거로 publish하려는가. */
+  /** Is it being published as grounds for a commercial offering? */
   readonly publishedAsCommercialBasis: boolean;
 }
 
@@ -172,10 +172,10 @@ export function checkPublishable(input: PublicationGuardInput): PublicationCheck
 }
 
 /**
- * 중대정보 blackout — 07 §7.14, AC-30.
+ * Material-information blackout — 07 §7.14, AC-30.
  *
- * active restriction 동안 지정된 action은 UI뿐 아니라 API와 contract adapter에서도
- * 같은 restriction ID로 거절된다. 버튼을 숨기는 것은 통제가 아니다.
+ * During an active restriction, designated actions are rejected with the same restriction ID not
+ * only in the UI but also in the API and the contract adapter. Hiding a button is not a control.
  */
 export interface DisclosureRestriction {
   readonly restrictionId: string;

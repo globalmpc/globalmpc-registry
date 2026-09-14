@@ -1,17 +1,17 @@
 -- Governance — spec 04 §4.5, OD-06
 --
--- Protocol governance와 Project governance를 **같은 테이블에 두되 space로 분리**한다.
--- 테이블을 나누면 같은 상태기계·같은 정족수 계산을 두 벌 유지해야 하고, 그 둘이
--- 어긋나면 어느 쪽이 맞는지 알 수 없다.
+-- Protocol governance and Project governance share **one table, separated by space**.
+-- Separate tables would mean maintaining two copies of the same state machine and quorum
+-- calculation, and if they diverge nobody can tell which is right.
 --
--- 분리는 `space`와 `project_id`가 강제한다.
+-- `space` and `project_id` enforce the separation.
 --
---   - protocol 제안은 `project_id`가 NULL이어야 한다.
---   - project 제안은 `project_id`가 있어야 한다.
+--   - A protocol proposal must have NULL `project_id`.
+--   - A project proposal must have a `project_id`.
 --
--- **투표가 오프체인 사실을 만들지 않는다**(불변조건 12). 이 스키마에는 투표
--- 결과로 authority·credential·법적 상태를 바꾸는 컬럼이 없다. 결과는
--- `execution_*`로 기록될 뿐이고 실제 집행은 별도 행위다.
+-- **Votes do not create off-chain facts** (invariant 12). This schema has no column that
+-- changes authority·credential·legal status from a vote result. The result is only
+-- recorded in `execution_*`; actual enforcement is a separate act.
 
 CREATE TYPE core.governance_space AS ENUM ('protocol', 'project');
 
@@ -26,16 +26,16 @@ CREATE TABLE core.governance_proposals (
   id                UUID PRIMARY KEY,
   tenant_id         UUID NOT NULL REFERENCES core.tenants(id),
   space             core.governance_space NOT NULL,
-  -- project space에서만 채운다. 아래 CHECK이 강제한다.
+  -- Filled only in project space. Enforced by the CHECK below.
   project_id        UUID,
   proposal_type     TEXT NOT NULL,
   title             TEXT NOT NULL CHECK (length(btrim(title)) > 0),
-  -- 무엇을 바꾸자는 것인지. 이유 없는 제안은 판단할 근거가 없다.
+  -- What it proposes to change. A proposal without a reason gives no basis for judgment.
   rationale         TEXT NOT NULL CHECK (length(btrim(rationale)) > 0),
   state             core.proposal_state NOT NULL DEFAULT 'draft',
   proposer_subject_id UUID NOT NULL REFERENCES core.subjects(id),
-  -- 정족수와 통과 기준은 제안 시점 값을 고정한다. 나중에 바꿔 결과를 뒤집을 수
-  -- 없다(§4.5 non-retroactive).
+  -- Quorum and passing threshold are fixed at proposal time. They cannot be changed later
+  -- to flip the result (§4.5 non-retroactive).
   quorum_numerator  INTEGER NOT NULL CHECK (quorum_numerator > 0),
   quorum_denominator INTEGER NOT NULL CHECK (quorum_denominator > 0),
   threshold_numerator INTEGER NOT NULL CHECK (threshold_numerator > 0),
@@ -56,8 +56,8 @@ CREATE TABLE core.governance_proposals (
   FOREIGN KEY (tenant_id, project_id) REFERENCES core.projects (tenant_id, id)
 );
 
--- tenant를 FK에 포함하려면 부모에 복합 UNIQUE가 있어야 한다. 자식 테이블보다
--- 먼저 만든다(0006과 같은 이유 — FK 검사는 RLS를 우회한다).
+-- Including tenant in the FK requires a composite UNIQUE on the parent. Create it before
+-- the child tables (same reason as 0006 — FK checks bypass RLS).
 ALTER TABLE core.governance_proposals ADD CONSTRAINT governance_proposals_tenant_scope_key
   UNIQUE (tenant_id, id);
 
@@ -65,13 +65,13 @@ CREATE INDEX governance_proposals_space_idx
   ON core.governance_proposals (tenant_id, space, state);
 
 /**
- * 투표.
+ * Vote.
  *
- * 한 주체는 한 제안에 한 번만 투표한다. 바꾸려면 새로 던지는 것이 아니라
- * 기존 투표를 갱신한다 — 두 표가 남으면 어느 것이 유효한지 판정이 필요해진다.
+ * A subject votes only once per proposal. To change it, update the existing vote rather
+ * than cast a new one — two remaining votes would require deciding which is valid.
  *
- * **투표 무게를 여기 저장한다.** 나중에 잔고가 바뀌어도 이미 던진 표의 무게는
- * 그대로다. 그러지 않으면 집계 시점마다 결과가 달라진다.
+ * **Vote weight is stored here.** Later balance changes do not alter the weight of a vote
+ * already cast. Otherwise the result would differ at every tally.
  */
 CREATE TABLE core.governance_votes (
   id            UUID PRIMARY KEY,
@@ -79,7 +79,7 @@ CREATE TABLE core.governance_votes (
   proposal_id   UUID NOT NULL,
   voter_subject_id UUID NOT NULL REFERENCES core.subjects(id),
   choice        TEXT NOT NULL CHECK (choice IN ('for', 'against', 'abstain')),
-  -- decimal string이다. JSON number를 쓰지 않는 것과 같은 이유(ADR-T07).
+  -- Decimal string. Same reason as avoiding JSON numbers (ADR-T07).
   weight        NUMERIC(78, 0) NOT NULL CHECK (weight >= 0),
   cast_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (proposal_id, voter_subject_id),
@@ -90,10 +90,10 @@ CREATE TABLE core.governance_votes (
 CREATE INDEX governance_votes_proposal_idx ON core.governance_votes (proposal_id);
 
 /**
- * 상태 전이 이력.
+ * State transition history.
  *
- * 제안이 지나온 경로를 남긴다. 현재 상태만으로는 "정족수 미달로 끝났다"와
- * "취소됐다"가 결과만 같아 보인다.
+ * Records the path a proposal took. By current state alone, "ended below quorum" and
+ * "cancelled" look the same.
  */
 CREATE TABLE core.governance_transitions (
   id            UUID PRIMARY KEY,
@@ -104,7 +104,7 @@ CREATE TABLE core.governance_transitions (
   reason        TEXT NOT NULL CHECK (length(btrim(reason)) > 0),
   actor_subject_id UUID,
   occurred_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  -- 집계 결과를 함께 굳힌다. 나중에 표가 바뀌어도 그때의 판정 근거가 남는다.
+  -- Freeze the tally result too. Even if votes change later, the basis of that decision remains.
   tally_snapshot JSONB,
   FOREIGN KEY (tenant_id, proposal_id)
     REFERENCES core.governance_proposals (tenant_id, id)
@@ -131,17 +131,17 @@ CREATE POLICY tenant_isolation ON core.governance_transitions
   WITH CHECK (tenant_id = core.current_tenant());
 
 GRANT SELECT, INSERT, UPDATE ON core.governance_proposals TO mpc_app;
--- 투표는 갱신할 수 있다(마음을 바꿀 수 있다). 삭제는 없다 — 던진 적이 없는
--- 것과 철회한 것은 다른 사실이다.
+-- Votes can be updated (voters may change their minds). No deletion — never having voted
+-- and having withdrawn a vote are different facts.
 GRANT SELECT, INSERT, UPDATE ON core.governance_votes TO mpc_app;
--- 전이 이력은 append-only다.
+-- Transition history is append-only.
 GRANT SELECT, INSERT ON core.governance_transitions TO mpc_app;
 
 /**
- * 투표 종료 후 표를 바꿀 수 없다.
+ * Votes cannot change after voting ends.
  *
- * 애플리케이션이 확인하지만 그것만으로는 부족하다 — 집계가 끝난 뒤 표가 하나
- * 바뀌면 이미 기록된 결과와 어긋난다.
+ * The application checks this, but that is not enough — one vote changing after the tally
+ * would contradict the already recorded result.
  */
 CREATE OR REPLACE FUNCTION core.reject_vote_after_close() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$

@@ -2,33 +2,33 @@ import { z } from "zod";
 import { SOURCE_RESULTS } from "@mpc/domain";
 
 /**
- * 공통 API 규약 — spec 07 §7.1·§7.3.
+ * Common API conventions — spec 07 §7.1·§7.3.
  *
- * 여기 정의된 것들이 모든 응답에 붙는다. 특히 `limitations`·`legalEffect`·
- * `disclaimerCodes`는 선택 항목이 아니다 — UI가 경고를 렌더링할 근거이며,
- * 문구를 하드코딩하지 않기 위한 구조다(§7.3).
+ * Everything defined here is attached to every response. In particular,
+ * `limitations`, `legalEffect`, and `disclaimerCodes` are not optional — the UI
+ * renders its warnings from them, so copy is never hardcoded (§7.3).
  */
 
 export const hex32 = z
   .string()
-  .regex(/^0x[0-9a-f]{64}$/, "32바이트 소문자 hex여야 한다");
+  .regex(/^0x[0-9a-f]{64}$/, "Must be 32-byte lowercase hex");
 
 export const walletAddress = z
   .string()
-  .regex(/^0x[0-9a-f]{40}$/, "20바이트 소문자 hex 주소여야 한다");
+  .regex(/^0x[0-9a-f]{40}$/, "Must be a 20-byte lowercase hex address");
 
-export const ulid = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, "ULID여야 한다");
+export const ulid = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, "Must be a ULID");
 
 export const isoDateTime = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/, "ISO 8601 UTC여야 한다");
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/, "Must be ISO 8601 UTC");
 
 /**
- * 오류 envelope.
+ * Error envelope.
  *
- * `retryable`이 있는 이유: 07 §7.11이 `source_returned_no_record`와 timeout을
- * 같은 error code로 반환하지 못하게 한다. 클라이언트가 재시도 여부를 추측하면
- * "기록 없음"을 장애로 오인한다.
+ * Why `retryable` exists: 07 §7.11 forbids returning `source_returned_no_record`
+ * and a timeout under the same error code. A client that guesses whether to
+ * retry mistakes "no record" for an outage.
  */
 export const errorEnvelope = z.object({
   code: z.string(),
@@ -40,7 +40,7 @@ export const errorEnvelope = z.object({
 
 export type ErrorEnvelope = z.infer<typeof errorEnvelope>;
 
-/** 모든 응답에 붙는 메타(§7.1). */
+/** Metadata attached to every response (§7.1). */
 export const responseMeta = z.object({
   requestId: z.string(),
   resourceVersion: z.number().int().nonnegative().optional(),
@@ -48,17 +48,17 @@ export const responseMeta = z.object({
 });
 
 /**
- * 안전 필드 — §7.3.
+ * Safety fields — §7.3.
  *
- * `legalEffect`가 `none`과 `counsel_required` 둘뿐인 것이 의도다. MPC API는
- * 법률 효력의 존재를 판정하지 않는다.
+ * `legalEffect` has only `none` and `counsel_required` by design. The MPC API
+ * does not determine whether legal effect exists.
  */
 export const safetyFields = z.object({
-  authority: z.string().describe("이 값을 산출·결정한 주체"),
+  authority: z.string().describe("Party that produced or decided this value"),
   basisVersion: z.string(),
   ruleVersion: z.string().nullable(),
   limitations: z.array(z.string()),
-  sourceAge: z.string().nullable().describe("경과일. 정수 decimal string"),
+  sourceAge: z.string().nullable().describe("Elapsed days, as an integer decimal string"),
   staleStatus: z.enum(["fresh", "aging", "stale", "unknown"]),
   verificationScope: z.array(z.string()),
   legalEffect: z.enum(["none", "counsel_required"]),
@@ -82,7 +82,7 @@ export const safetyFields = z.object({
 
 export const sourceResultEnum = z.enum(SOURCE_RESULTS);
 
-/** 12개 result의 UI·재시도 힌트(§7.11, §11.11). */
+/** UI and retry hints for the 12 results (§7.11, §11.11). */
 export const sourceStatusView = z.object({
   result: sourceResultEnum,
   retryable: z.boolean(),
@@ -102,10 +102,10 @@ export const sourceStatusView = z.object({
   limitations: z.array(z.string()),
 });
 
-/** mutation 공통 헤더(§7.1). */
+/** Common mutation headers (§7.1). */
 export const mutationHeaders = z.object({
-  "idempotency-key": z.string().min(16).describe("mutation 재시도 시 중복 실행을 막는다"),
-  "if-match": z.string().optional().describe('versioned resource mutation에 필수. `"<version>"` 형식'),
+  "idempotency-key": z.string().min(16).describe("Prevents duplicate execution when a mutation is retried"),
+  "if-match": z.string().optional().describe('Required for versioned resource mutations. Format: `"<version>"`'),
 });
 
 export const paginationQuery = z.object({

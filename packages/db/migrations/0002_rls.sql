@@ -1,18 +1,18 @@
--- Row Level Security — tenant 격리
+-- Row-level security — tenant isolation
 --
--- 02 §2.5 / 06 §6.8: tenant 데이터는 논리·권한·암호키로 분리한다.
+-- 02 §2.5 / 06 §6.8: tenant data is separated logically, by permission, and by encryption key.
 --
--- 중요: RLS는 **tenant 경계만** 강제한다. 역할·민감도·assignment·conflict·
--- resource state는 02 §2.1의 7개 조건 전체를 애플리케이션 authorization
--- 레이어가 평가한다. RLS 통과가 authorization 통과가 아니다.
+-- Important: RLS enforces **only the tenant boundary**. Role, sensitivity, assignment, conflict,
+-- and resource state — all 7 conditions of 02 §2.1 — are evaluated by the application
+-- authorization layer. Passing RLS is not passing authorization.
 --
--- 세션 변수는 매 요청 트랜잭션 시작 시 설정한다:
+-- Session variables are set at the start of every request transaction:
 --   SET LOCAL app.current_tenant = '<uuid>';
--- 설정하지 않으면 아무 행도 보이지 않는다. 기본값이 "전부 허용"이 되면
--- 설정 누락이 조용한 데이터 유출이 된다.
+-- If unset, no rows are visible. A default of "allow all" would turn a missing
+-- setting into a silent data leak.
 
--- role은 클러스터 전역 객체다. 같은 클러스터의 다른 DB가 이미 만들었을 수 있으므로
--- 멱등하게 생성한다.
+-- Roles are cluster-wide objects. Another DB in the same cluster may already have created it,
+-- so creation is idempotent.
 DO $$
 BEGIN
   CREATE ROLE mpc_app NOLOGIN;
@@ -58,7 +58,7 @@ BEGIN
 END
 $$;
 
--- tenant_id가 없는 부속 테이블은 상위 테이블의 RLS를 통해서만 접근된다.
+-- Child tables without tenant_id are reachable only through their parent table's RLS.
 GRANT SELECT, INSERT ON chain.anchor_batch_leaves TO mpc_app;
 GRANT SELECT, INSERT ON core.inbox TO mpc_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA core, chain, audit TO mpc_app;

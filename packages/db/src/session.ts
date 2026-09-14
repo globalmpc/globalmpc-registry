@@ -1,11 +1,11 @@
 import type postgres from "postgres";
 
 /**
- * tenant 세션 컨텍스트.
+ * Tenant session context.
  *
- * 02 §2.5: 모든 쿼리는 tenant scope 안에서 실행된다. RLS 정책이
- * `app.current_tenant`를 읽으므로, 이 함수를 거치지 않은 쿼리는 아무 행도 보지
- * 못한다. 기본값이 "전부 허용"이 아니라 "아무것도 없음"인 것이 의도다.
+ * 02 §2.5: every query runs inside a tenant scope. RLS policies read
+ * `app.current_tenant`, so a query that does not go through this function sees no rows.
+ * The default being "nothing" rather than "allow everything" is intentional.
  */
 export interface TenantContext {
   readonly tenantId: string;

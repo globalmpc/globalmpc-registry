@@ -1,9 +1,9 @@
 /**
- * Readiness 상태와 gate decision — spec 04 §4.2 / 05 §5.4.
+ * Readiness status and gate decision — spec 04 §4.2 / 05 §5.4.
  *
- * 이 모듈이 강제하는 것은 하나다: **준비도는 결정이 아니다.**
- * readiness가 전부 `ok`여도 사람의 GateDecision 없이는 lifecycle이 전이하지 않고
- * (AC-03), `gap`이나 `not_evaluable`이 하나라도 있으면 `go`가 불가능하다
+ * This module enforces one thing: **readiness is not a decision.**
+ * Even if every readiness result is `ok`, the lifecycle does not transition without a human
+ * GateDecision (AC-03), and a single `gap` or `not_evaluable` makes `go` impossible
  * (AC-02, AC-34).
  */
 
@@ -14,11 +14,11 @@ export const GATE_DECISIONS = ["go", "hold", "rework", "stop"] as const;
 export type GateDecisionValue = (typeof GATE_DECISIONS)[number];
 
 /**
- * 집계 우선순위 — 나쁠수록 낮다.
+ * Aggregation precedence — worse is lower.
  *
- * `not_evaluable`을 `gap`보다 낮게 두는 이유: `gap`은 "필요한 근거가 없다"이고
- * `not_evaluable`은 "판단 기준 자체가 없다"이다. 후자는 무엇을 채워야 할지도
- * 모르는 상태이므로 더 나쁘다. 둘 다 go-blocking인 것은 같다.
+ * Why `not_evaluable` ranks below `gap`: `gap` means "required evidence is missing" while
+ * `not_evaluable` means "there is no criterion to judge by". The latter does not even know what
+ * to fill in, so it is worse. Both block go all the same.
  */
 const READINESS_RANK: Readonly<Record<ReadinessStatus, number>> = {
   not_evaluable: 0,
@@ -27,7 +27,7 @@ const READINESS_RANK: Readonly<Record<ReadinessStatus, number>> = {
   ok: 3,
 };
 
-/** go를 차단하는 상태. 이 집합을 configuration으로 바꾸는 경로는 없다(§4.2). */
+/** States that block go. No path turns this set into configuration (§4.2). */
 const GO_BLOCKING: ReadonlySet<ReadinessStatus> = new Set<ReadinessStatus>([
   "gap",
   "not_evaluable",
@@ -37,7 +37,7 @@ export function isGoBlocking(status: ReadinessStatus): boolean {
   return GO_BLOCKING.has(status);
 }
 
-/** requirement 결과들의 전체 status — 최악값. 빈 집합은 not_evaluable이다. */
+/** Overall status of requirement results — the worst value. An empty set is not_evaluable. */
 export function aggregateReadiness(statuses: readonly ReadinessStatus[]): ReadinessStatus {
   if (statuses.length === 0) return "not_evaluable";
   return statuses.reduce((worst, current) =>
@@ -54,9 +54,9 @@ export type GateDenyReason =
 export interface GateDecisionRequest {
   readonly decision: GateDecisionValue;
   readonly requirementStatuses: readonly ReadinessStatus[];
-  /** 평가가 아예 없으면 false. */
+  /** false when there is no evaluation at all. */
   readonly hasAssessment: boolean;
-  /** watch → go 승격 시 필수(§11.3). */
+  /** Required when promoting watch → go (§11.3). */
   readonly rationale: string | null;
 }
 
@@ -69,10 +69,10 @@ export type GateDecisionCheck =
     };
 
 /**
- * GateDecision 허용 여부.
+ * Whether a GateDecision is allowed.
  *
- * `go` 이외의 결정(`hold`/`rework`/`stop`)은 준비도와 무관하게 언제나 기록할 수
- * 있다. 나쁜 소식을 기록하지 못하게 막으면 상태가 조용히 낡는다.
+ * Decisions other than `go` (`hold`/`rework`/`stop`) can always be recorded regardless of
+ * readiness. Blocking bad news from being recorded lets state go quietly stale.
  */
 export function checkGateDecision(request: GateDecisionRequest): GateDecisionCheck {
   if (!request.hasAssessment) {

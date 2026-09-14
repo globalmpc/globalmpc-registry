@@ -7,12 +7,12 @@ import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
- * 조직 ID는 seed 데이터의 값이다. 실제 제품에서는 세션의 organization 목록에서
- * 고르지만, R0에는 organization 조회 API가 아직 없다.
+ * Organization IDs come from seed data. The real product picks from the session's organization
+ * list, but R0 has no organization lookup API yet.
  */
 /**
- * tenant별 조직. 실제 제품에서는 세션의 organization 목록에서 고르지만
- * R1에는 organization 조회 API가 아직 없다.
+ * Organization per tenant. The real product picks from the session's organization list, but
+ * R1 has no organization lookup API yet.
  */
 const DEMO_ORGS_BY_TENANT: Record<string, { label: string; id: string }> = {
   "e0000000-0000-4000-8000-00000000000a": {
@@ -35,8 +35,8 @@ export default function NewProjectPage() {
   const [minerals, setMinerals] = useState("copper");
   const [error, setError] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
-  // 폼 인스턴스마다 하나의 key를 유지한다. 사용자가 제출 버튼을 두 번 눌러도
-  // 같은 key가 가므로 서버가 중복 실행을 막는다(07 §7.1).
+  // Keep one key per form instance. If the user clicks submit twice,
+  // the same key is sent and the server blocks the duplicate (07 §7.1).
   const [idempotencyKey] = useState(() => newIdempotencyKey());
 
   if (!token) {

@@ -2,37 +2,37 @@ import { describe, expect, it } from "vitest";
 import { listMigrations } from "../src/migrate.js";
 
 /**
- * 마이그레이션 파일 이름 규약 — DB 없이 돈다.
+ * Migration file naming rules — runs without a database.
  *
- * **왜 이 파일이 생겼나:** 두 사람이 같은 번호(`0026`)로 마이그레이션을 썼고,
- * 그 사실이 **병합할 때까지 드러나지 않았다.** 각자의 브랜치에서는 파일이 하나씩만
- * 있어 아무 문제가 없었다.
+ * **Why this file exists:** two people wrote a migration with the same number (`0026`), and
+ * that **did not surface until merge.** Each branch had only one of the files, so nothing was
+ * wrong there.
  *
- * 그 상태가 위험한 이유는 파일이 겹쳐서가 아니다 — 파일명이 다르므로 둘 다
- * 적용된다. 위험한 것은 **순서**다. 번호가 곧 적용 순서이므로 같은 번호 둘은
- * 알파벳순이라는 우연에 순서를 맡기게 되고, 한쪽이 다른 쪽의 테이블에 기대면
- * 환경마다 성공과 실패가 갈린다.
+ * The danger is not that the files collide — the names differ, so both are applied. The danger
+ * is **order**. The number is the application order, so two files with the same number leave
+ * the order to the accident of alphabetical sorting, and if one depends on the other's table,
+ * success and failure differ per environment.
  *
- * `runMigrations`는 본문 해시를 대조하므로 **고쳐진** 마이그레이션은 잡는다.
- * 그러나 번호가 겹친 것은 잡지 못한다 — 이름이 다르기 때문이다. 이 파일이 그 자리다.
+ * `runMigrations` compares checksums, so it catches an **edited** migration. It does not catch
+ * a duplicated number — the names differ. This file covers that.
  */
 
 const NAME_PATTERN = /^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 
-describe("마이그레이션 파일 이름", () => {
+describe("migration file names", () => {
   const migrations = listMigrations();
 
-  it("적용할 것이 있다", () => {
-    // 목록이 비면 아래 검사가 전부 조용히 통과한다.
+  it("there is something to apply", () => {
+    // With an empty list every check below passes silently.
     expect(migrations.length).toBeGreaterThan(0);
   });
 
-  it("`NNNN_snake_case.sql` 형식을 따른다", () => {
+  it("follow the `NNNN_snake_case.sql` format", () => {
     const wrong = migrations.map((m) => m.name).filter((name) => !NAME_PATTERN.test(name));
     expect(wrong).toEqual([]);
   });
 
-  it("번호가 겹치지 않는다", () => {
+  it("numbers do not collide", () => {
     const byNumber = new Map<string, string[]>();
     for (const { name } of migrations) {
       const number = NAME_PATTERN.exec(name)?.[1];
@@ -44,11 +44,11 @@ describe("마이그레이션 파일 이름", () => {
       .filter(([, names]) => names.length > 1)
       .map(([number, names]) => `${number}: ${names.join(", ")}`);
 
-    // 겹치면 적용 순서가 알파벳순이라는 우연에 걸린다. 뒤에 쓴 쪽이 번호를 옮긴다.
+    // A collision leaves the order to alphabetical accident. The later author moves the number.
     expect(collisions).toEqual([]);
   });
 
-  it("번호가 1부터 빈틈없이 이어진다", () => {
+  it("numbers run from 1 without gaps", () => {
     const numbers = migrations
       .map((m) => NAME_PATTERN.exec(m.name)?.[1])
       .filter((n): n is string => n !== undefined)
@@ -56,17 +56,17 @@ describe("마이그레이션 파일 이름", () => {
       .sort((a, b) => a - b);
 
     /**
-     * 빈틈을 막는 이유: 번호가 비어 있으면 그것이 **아직 안 온 것**인지
-     * **지운 것**인지 알 수 없다. 전자라면 병합 뒤에 순서가 뒤집히고, 후자라면
-     * 이미 적용한 환경과 새 환경의 스키마가 갈린다.
+     * Why gaps are rejected: a missing number could be **not yet merged** or **deleted**. In
+     * the first case the order flips after merge; in the second, environments that already
+     * applied it and new ones diverge.
      */
     const gaps = numbers.filter((n, index) => n !== index + 1);
     expect(gaps).toEqual([]);
   });
 
-  it("파일명 정렬과 번호 정렬이 같다", () => {
-    // `runMigrations`는 파일명 오름차순으로 적용한다. 둘이 갈리면 읽은 순서와
-    // 실행 순서가 다르다.
+  it("file-name order equals number order", () => {
+    // `runMigrations` applies in ascending file-name order. If the two differ, the order a
+    // reader sees is not the order that runs.
     const byName = migrations.map((m) => m.name);
     const byNumber = [...byName].sort(
       (a, b) => Number(NAME_PATTERN.exec(a)?.[1]) - Number(NAME_PATTERN.exec(b)?.[1]),

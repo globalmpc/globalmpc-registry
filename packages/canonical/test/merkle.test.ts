@@ -11,8 +11,8 @@ function leaf(label: string): Hex {
   return keccak256(new TextEncoder().encode(label));
 }
 
-describe("keccak256 — 알려진 벡터", () => {
-  it("빈 입력", () => {
+describe("keccak256 — known vectors", () => {
+  it("empty input", () => {
     expect(keccak256(new Uint8Array(0))).toBe(
       "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
     );
@@ -25,8 +25,8 @@ describe("keccak256 — 알려진 벡터", () => {
   });
 });
 
-describe("buildMerkleTree — 결정성", () => {
-  it("입력 순서와 무관하게 같은 root를 만든다", () => {
+describe("buildMerkleTree — determinism", () => {
+  it("produces the same root regardless of input order", () => {
     const leaves = [leaf("a"), leaf("b"), leaf("c"), leaf("d"), leaf("e")];
     const forward = buildMerkleTree(leaves).root;
     const reversed = buildMerkleTree([...leaves].reverse()).root;
@@ -36,49 +36,49 @@ describe("buildMerkleTree — 결정성", () => {
     expect(shuffled).toBe(forward);
   });
 
-  it("leaf 하나면 root가 그 leaf다", () => {
+  it("with one leaf the root is that leaf", () => {
     const single = leaf("only");
     expect(buildMerkleTree([single]).root).toBe(single);
   });
 
-  it("leaf 둘이면 root가 정렬쌍 해시다", () => {
+  it("with two leaves the root is the sorted-pair hash", () => {
     const a = leaf("a");
     const b = leaf("b");
     expect(buildMerkleTree([a, b]).root).toBe(hashPair(a, b));
   });
 });
 
-describe("buildMerkleTree — 거절 조건", () => {
-  it("빈 batch를 거절한다", () => {
-    expect(() => buildMerkleTree([])).toThrowError(/빈 batch/);
+describe("buildMerkleTree — rejection conditions", () => {
+  it("rejects an empty batch", () => {
+    expect(() => buildMerkleTree([])).toThrowError(/empty batch/);
   });
 
-  it("중복 leaf를 거절한다", () => {
+  it("rejects duplicate leaves", () => {
     const a = leaf("a");
-    expect(() => buildMerkleTree([a, leaf("b"), a])).toThrowError(/중복 leaf/);
+    expect(() => buildMerkleTree([a, leaf("b"), a])).toThrowError(/Duplicate leaf/);
   });
 
-  it("32바이트가 아닌 값을 거절한다", () => {
-    expect(() => buildMerkleTree(["0xdeadbeef" as Hex])).toThrowError(/32바이트/);
+  it("rejects values that are not 32 bytes", () => {
+    expect(() => buildMerkleTree(["0xdeadbeef" as Hex])).toThrowError(/32-byte/);
   });
 
-  it("대문자 hex를 거절한다 — 표현이 갈리면 정렬이 갈린다", () => {
+  it("rejects uppercase hex — a different representation means a different sort", () => {
     const upper = leaf("a").toUpperCase().replace("0X", "0x") as Hex;
-    expect(() => buildMerkleTree([upper])).toThrowError(/소문자/);
+    expect(() => buildMerkleTree([upper])).toThrowError(/lowercase/);
   });
 });
 
-describe("hashPair — 정렬쌍", () => {
-  it("인자 순서와 무관하다", () => {
+describe("hashPair — sorted pair", () => {
+  it("is independent of argument order", () => {
     const a = leaf("a");
     const b = leaf("b");
     expect(hashPair(a, b)).toBe(hashPair(b, a));
   });
 });
 
-describe("proof — 생성과 검증", () => {
+describe("proof — generation and verification", () => {
   for (const size of [1, 2, 3, 4, 5, 7, 8, 9, 16, 17, 33]) {
-    it(`leaf ${size}개 전체에 대해 inclusion proof가 검증된다`, () => {
+    it(`inclusion proofs verify for all ${size} leaves`, () => {
       const leaves = Array.from({ length: size }, (_, i) => leaf(`leaf-${i}`));
       const tree = buildMerkleTree(leaves);
 
@@ -89,19 +89,19 @@ describe("proof — 생성과 검증", () => {
     });
   }
 
-  it("batch에 없는 leaf는 proof를 만들 수 없다", () => {
+  it("cannot build a proof for a leaf not in the batch", () => {
     const tree = buildMerkleTree([leaf("a"), leaf("b")]);
-    expect(() => getMerkleProof(tree, leaf("z"))).toThrowError(/batch에 없다/);
+    expect(() => getMerkleProof(tree, leaf("z"))).toThrowError(/not in this batch/);
   });
 
-  it("다른 batch의 root로는 검증되지 않는다", () => {
+  it("does not verify against another batch's root", () => {
     const treeA = buildMerkleTree([leaf("a"), leaf("b"), leaf("c")]);
     const treeB = buildMerkleTree([leaf("x"), leaf("y"), leaf("z")]);
     const proof = getMerkleProof(treeA, leaf("a"));
     expect(verifyMerkleProof(leaf("a"), proof, treeB.root)).toBe(false);
   });
 
-  it("proof 항목이 조작되면 검증에 실패한다", () => {
+  it("fails verification when a proof entry is tampered with", () => {
     const leaves = [leaf("a"), leaf("b"), leaf("c"), leaf("d")];
     const tree = buildMerkleTree(leaves);
     const proof = getMerkleProof(tree, leaf("a"));
@@ -110,7 +110,7 @@ describe("proof — 생성과 검증", () => {
     expect(verifyMerkleProof(leaf("a"), tampered, tree.root)).toBe(false);
   });
 
-  it("proof가 비면 leaf가 root인 경우에만 통과한다", () => {
+  it("an empty proof passes only when the leaf is the root", () => {
     const single = leaf("only");
     expect(verifyMerkleProof(single, [], single)).toBe(true);
 
@@ -119,18 +119,18 @@ describe("proof — 생성과 검증", () => {
   });
 });
 
-describe("홀수 노드 — 복제가 아니라 승격", () => {
-  it("leaf 3개 트리에서 마지막 노드는 승격된다", () => {
+describe("odd nodes — promoted, not duplicated", () => {
+  it("in a 3-leaf tree the last node is promoted", () => {
     const [a, b, c] = [leaf("a"), leaf("b"), leaf("c")];
     const tree = buildMerkleTree([a, b, c]);
     const sorted = tree.layers[0]!;
 
-    // 레벨 1 = [hashPair(sorted0, sorted1), sorted2(승격)]
+    // level 1 = [hashPair(sorted0, sorted1), sorted2 (promoted)]
     expect(tree.layers[1]).toEqual([hashPair(sorted[0]!, sorted[1]!), sorted[2]!]);
     expect(tree.root).toBe(hashPair(hashPair(sorted[0]!, sorted[1]!), sorted[2]!));
   });
 
-  it("마지막 leaf를 복제한 4-leaf 트리와 3-leaf 트리의 root가 다르다", () => {
+  it("a 4-leaf tree duplicating the last leaf has a different root from the 3-leaf tree", () => {
     const [a, b, c] = [leaf("a"), leaf("b"), leaf("c")];
     const three = buildMerkleTree([a, b, c]);
     const sorted = three.layers[0]!;

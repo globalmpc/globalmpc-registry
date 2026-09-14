@@ -12,17 +12,17 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 /**
  * Disclosures & Incidents — spec 11 §11.3.
  *
- * 정정과 철회는 각 기록의 상세 화면에 흩어져 있었다. 그러면 "이 프로젝트에
- * 무슨 일이 있었나"는 볼 수 있어도 "최근에 무슨 일이 있었나"는 볼 수 없다.
- * 감시자에게 필요한 것은 후자다.
+ * Corrections and revocations were scattered across each record's detail screen. That shows
+ * "what happened to this project" but not "what happened recently".
+ * Watchers need the latter.
  *
- * **이 화면은 새 사실을 공개하지 않는다.** `revoked`·`superseded` 공개 version은
- * 이미 상세 조회로 나간다 — 다른 것은 "어느 기록에서" 대신 "언제 무슨 일이"로
- * 정렬한다는 점뿐이다.
+ * **This screen discloses no new facts.** `revoked`/`superseded` public versions
+ * are already served by detail lookup — the only difference is ordering by "when and what"
+ * instead of "which record".
  *
- * **덮지 않는 종류를 화면이 말한다.** 목록이 비어 있는 것과 "그 종류는 애초에
- * 여기 오지 않는다"를 구분하지 않으면 "그런 일이 없었다"로 읽힌다. 범위는
- * 서버가 응답에 담아 보내므로 화면이 따로 적지 않는다 — 두 곳에 적으면 갈라진다.
+ * **The screen states which kinds it does not cover.** Without separating an empty list from "that kind
+ * never comes here", it reads as "nothing like that happened". The scope
+ * is sent by the server in the response, so the screen does not restate it — written in two places, it diverges.
  */
 
 const KIND_LABEL: Record<PublicDisclosureEvent["eventKind"], string> = {
@@ -42,11 +42,11 @@ const KIND_MEANING: Record<PublicDisclosureEvent["eventKind"], string> = {
 };
 
 /**
- * 사건마다 색을 다르게 두지 않는다.
+ * No distinct color per event.
  *
- * 다섯 종류에 다섯 색을 주면 **색이 유일한 구분 수단**이 되고 WCAG 1.4.1에
- * 걸린다(OD-31). 라벨과 설명이 종류를 말하므로 색은 "되돌릴 수 없는 것"과
- * "그 외" 둘로만 나눈다.
+ * Five colors for five kinds would make **color the only distinguishing cue**, failing WCAG 1.4.1
+ * (OD-31). Label and description state the kind, so color splits only into "irreversible"
+ * and "other".
  */
 const IRREVERSIBLE: ReadonlySet<PublicDisclosureEvent["eventKind"]> = new Set(["revocation"]);
 
@@ -56,11 +56,11 @@ function projectionText(projection: Record<string, unknown>, field: string): str
 }
 
 /**
- * 마지막 칸.
+ * Last column.
  *
- * 종류마다 담을 것이 다르다 — version, 상태 전이, 해소 여부. 칸을 셋으로
- * 늘리면 대부분이 비고, 비어 있는 칸은 "값이 없다"와 "이 종류에는 그 항목이
- * 없다"를 구분하지 못한다.
+ * Each kind holds something different — version, state transition, resolution. Three columns
+ * would be mostly empty, and an empty cell cannot distinguish "no value" from "this kind has no
+ * such item".
  */
 function detailOf(event: PublicDisclosureEvent): string {
   if (event.registryVersion) return `v${event.registryVersion.version}`;
@@ -187,8 +187,8 @@ export default function DisclosuresPage() {
       </div>
 
       {/*
-        범위를 화면이 아니라 응답이 말한다. 여기에 다시 적으면 서버가 종류를
-        늘렸을 때 화면만 옛 목록을 계속 보인다.
+        The response states the scope, not the screen. Restating it here means when the server adds kinds,
+        only the screen keeps showing the old list.
       */}
       {page ? (
         <div className="panel" data-testid="disclosure-not-covered">

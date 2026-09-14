@@ -7,12 +7,12 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 관측 route — 02 §2.6, 07 §7.5.
+ * Observability routes — 02 §2.6, 07 §7.5.
  *
- * 여기서 확인하는 것은 "조회가 된다"가 아니라 **무엇을 내보내지 않는가**다.
- * 감사 화면이 민감 정보의 통로가 되면 append-only 보장의 의미가 없어진다.
+ * What is checked here is not "lookup works" but **what is not exported**.
+ * If the audit view becomes a channel for sensitive data, the append-only guarantee is moot.
  */
-describeDb("관측", () => {
+describeDb("observability", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operatorToken: string;
@@ -24,7 +24,7 @@ describeDb("관측", () => {
     operatorToken = await signIn(app, fx.operatorA);
     stewardToken = await signIn(app, fx.stewardA);
 
-    // 감사 기록이 남는 행위를 하나 만든다.
+    // Performs one action that leaves an audit record.
     await app.inject({
       method: "POST",
       url: `/api/v1/projects/${fx.projectA}/claims`,
@@ -52,31 +52,31 @@ describeDb("관측", () => {
     });
   }
 
-  it("감사 기록을 조회한다", async () => {
+  it("reads audit records", async () => {
     const response = await audit(operatorToken);
     expect(response.statusCode).toBe(200);
     expect(response.json().items.length).toBeGreaterThan(0);
   });
 
-  it("detail을 내보내지 않는다", async () => {
+  it("does not export detail", async () => {
     const response = await audit(operatorToken);
     const [event] = response.json().items as Record<string, unknown>[];
 
-    // 이벤트 payload에 PII를 넣지 않기로 했지만, 약속이 깨졌을 때 이 화면이
-    // 최초 유출 경로가 된다. 애초에 통로를 만들지 않는다.
+    // Event payloads are meant to exclude PII, but if that promise breaks, this view would be
+    // the first leak path. So the channel is never built.
     expect(event).not.toHaveProperty("detail");
     expect(event).toHaveProperty("command");
     expect(event).toHaveProperty("correlationId");
   });
 
-  it("audit.read 권한이 없으면 거절한다", async () => {
-    // 누가 무엇을 했는지는 아무나 볼 것이 아니다.
+  it("rejects without audit.read", async () => {
+    // Who did what is not for everyone to see.
     const response = await audit(stewardToken);
     expect(response.statusCode).toBe(403);
     expect(response.json().details.requiredRoles).toContain("auditor");
   });
 
-  it("resource 유형으로 좁힐 수 있다", async () => {
+  it("filters by resource type", async () => {
     const response = await audit(operatorToken, "?resourceType=claim");
     expect(response.statusCode).toBe(200);
     for (const event of response.json().items as { resourceType: string }[]) {
@@ -84,16 +84,16 @@ describeDb("관측", () => {
     }
   });
 
-  it("다른 tenant의 기록은 보이지 않는다", async () => {
+  it("records of another tenant are not visible", async () => {
     const otherToken = await signIn(app, fx.operatorB);
     const response = await audit(otherToken, `?projectId=${fx.projectA}`);
 
-    // 권한 오류가 아니라 빈 목록이다. 다른 tenant에게 이 프로젝트는 없다.
+    // An empty list, not a permission error. For another tenant, this project does not exist.
     expect(response.statusCode).toBe(200);
     expect(response.json().items).toEqual([]);
   });
 
-  it("outbox backlog가 지연을 초 단위로 알려준다", async () => {
+  it("outbox backlog reports lag in seconds", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/outbox-backlog",
@@ -103,14 +103,14 @@ describeDb("관측", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
 
-    // 건수보다 지연 시간이 중요하다. 1000건이 1초 늦는 것과 1건이 한 시간 늦는
-    // 것은 다른 문제다.
+    // Lag matters more than count. 1000 items 1 second late and 1 item an hour late are
+    // different problems.
     expect(body).toHaveProperty("oldestPendingAgeSeconds");
     expect(body).toHaveProperty("byEventType");
     expect(typeof body.pending).toBe("number");
   });
 
-  it("backlog 조회에도 권한이 필요하다", async () => {
+  it("backlog lookup also requires permission", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/outbox-backlog",
@@ -120,39 +120,39 @@ describeDb("관측", () => {
   });
 
   /**
-   * 시간 상한이 **실제 서버 인스턴스에** 걸렸는지 본다.
+   * Checks that time caps are applied **on the actual server instance**.
    *
-   * 설정에 값이 있는 것과 Fastify가 그것을 Node 서버에 넘기는 것은 다르다.
-   * 실측으로 0을 발견한 자리가 여기다.
+   * Having a value in config differs from Fastify passing it to the Node server.
+   * This is where a measurement found 0.
    */
-  it("요청 총시간과 소켓 유휴 상한이 서버에 걸려 있다", () => {
+  it("server has total request time and socket idle caps applied", () => {
     expect(app.server.requestTimeout).toBeGreaterThan(0);
     expect(app.server.timeout).toBeGreaterThan(0);
-    // headersTimeout은 requestTimeout보다 크면 의미가 없다 — 헤더를 다 받기
-    // 전에 요청이 먼저 끊긴다.
+    // headersTimeout is meaningless if larger than requestTimeout — the request is cut off
+    // before the headers finish arriving.
     expect(app.server.headersTimeout).toBeLessThanOrEqual(app.server.requestTimeout);
   });
 
   /**
-   * `/metrics`가 DB 게이지를 실제로 담는지.
+   * Whether `/metrics` actually carries DB gauges.
    *
-   * 레지스트리가 게이지를 그릴 수 있다는 것과 route가 그것을 채운다는 것은
-   * 다르다. 실측으로 "노출은 있는데 수집할 값이 없다"를 발견한 자리가 여기다.
+   * A registry being able to draw a gauge differs from the route filling it. This is where
+   * a measurement found "exposed, but nothing to collect".
    */
-  it("/metrics가 DB에서 읽은 게이지를 담는다", async () => {
+  it("/metrics carries gauges read from the DB", async () => {
     const response = await app.inject({ method: "GET", url: "/metrics" });
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain("mpc_outbox_pending");
     expect(response.body).toContain("mpc_uploads_quarantined");
-    // 조회가 실패하면 스크레이프를 죽이는 대신 이 counter가 오른다.
+    // On lookup failure this counter increments instead of failing the scrape.
     expect(response.body).not.toContain("mpc_gauge_scrape_failed_total");
   });
 
-  it("메트릭에 tenant를 담지 않는다", async () => {
+  it("metrics carry no tenant", async () => {
     const response = await app.inject({ method: "GET", url: "/metrics" });
 
-    // 메트릭은 인증 없이 수집된다. 담긴 것은 그대로 노출된다.
+    // Metrics are scraped without auth. Whatever they contain is exposed as is.
     expect(response.body).not.toContain(fx.tenantA);
   });
 });

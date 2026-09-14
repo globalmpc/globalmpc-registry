@@ -9,9 +9,9 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 /**
  * My Activity.
  *
- * 이 지갑에 묶인 주체가 한 일의 기록이다. **본인만 본다.** tenant 전체 감사
- * 기록(Audit)과 질문이 다르다 — 저쪽은 "여기서 무슨 일이 있었나", 이쪽은 "내가
- * 무엇을 했나"다. 그래서 역할이 없어도 주체가 있으면 열린다.
+ * Record of what the subject bound to this wallet did. **Visible only to that subject.** It asks a
+ * different question from the tenant-wide Audit log — that one asks "what happened here", this one
+ * "what did I do". So it opens for any subject, even without a role.
  */
 export default function MyActivityPage() {
   const { token, session, loading: sessionLoading } = useSession();

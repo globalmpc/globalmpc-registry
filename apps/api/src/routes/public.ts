@@ -18,27 +18,27 @@ import { buildInclusionProof } from "../services/anchor-batch.js";
 import { etagOf } from "./shared.js";
 
 /**
- * 무인증 공개 route — spec 07 §7.1, OD-02.
+ * Unauthenticated public routes — spec 07 §7.1, OD-02.
  *
- * 이 파일이 따로 있는 이유는 길이가 아니라 **경계가 다르기 때문**이다. 여기의
- * route는 세션도 tenant도 없이 돌고, RLS를 만족시킬 수 없어 전부 `core.public_*`
- * SECURITY DEFINER 함수를 지난다(0009 · 0027 · 0034). 워크스페이스 route 사이에
- * 섞여 있으면 "여기는 tenant가 없다"가 매번 다시 확인해야 하는 사실이 된다.
+ * This file is separate not because of length but because **the boundary differs**. Routes
+ * here run with no session and no tenant, cannot satisfy RLS, and so all go through
+ * `core.public_*` SECURITY DEFINER functions (0009 · 0027 · 0034). Mixed in with workspace
+ * routes, "there is no tenant here" becomes a fact that must be re-checked every time.
  *
- * 공통 규칙:
+ * Common rules:
  *
- * - 게시된 것만 낸다. `draft`는 어떤 경로로도 나가지 않는다.
- * - tenant_id를 반환하지 않는다.
- * - 공개 allowlist 밖의 필드를 담지 않는다(05 §5.7).
- * - 목록은 keyset cursor를 쓴다. OFFSET은 앞쪽에 행이 늘면 페이지가 어긋난다.
+ * - Only published data goes out. `draft` never leaves through any path.
+ * - tenant_id is not returned.
+ * - No field outside the public allowlist is included (05 §5.7).
+ * - Lists use a keyset cursor. With OFFSET, pages drift when rows are added up front.
  */
 
 /**
- * cursor는 정렬 키를 감싼 불투명 문자열이다.
+ * The cursor is an opaque string that wraps the sort key.
  *
- * 왜 감싸는가: 클라이언트가 정렬 키를 조립하기 시작하면 정렬을 바꿀 수 없다.
- * base64는 암호가 아니고 숨기려는 것도 아니다 — "이 값은 우리가 만든 것을
- * 그대로 돌려주는 자리"라는 계약을 형태로 만든다.
+ * Why wrap it: once clients start assembling sort keys, the sort order can no longer change.
+ * base64 is not encryption and hides nothing — it gives shape to the contract "this is a
+ * value we issued, to be returned as is".
  */
 function encodeCursor(at: Date, id: string): string {
   return Buffer.from(`${at.toISOString()}|${id}`, "utf8").toString("base64url");
@@ -51,26 +51,26 @@ function decodeCursor(cursor: string): { at: Date; id: string } {
   const matched = CURSOR_SHAPE.exec(decoded);
   const at = matched ? new Date(matched.groups!["at"]!) : null;
   if (!matched || at === null || Number.isNaN(at.getTime())) {
-    // 조작된 cursor를 조용히 첫 페이지로 되돌리지 않는다. 그러면 클라이언트가
-    // 목록을 끝없이 다시 받으며 끝났다고 믿지 못한다.
-    throw badRequest("INVALID_CURSOR", "cursor가 이 목록에서 발급된 값이 아니다");
+    // A tampered cursor is not silently reset to the first page. That would make the client
+    // refetch the list forever without ever believing it has reached the end.
+    throw badRequest("INVALID_CURSOR", "Cursor was not issued by this list");
   }
   return { at, id: matched.groups!["id"]! };
 }
 
 type SearchMatch = z.infer<typeof publicSearchResult>["matches"][number];
 
-/** 공개 검색이 hash로 보는 형태. 32바이트 hex — tx·root·leaf·batch id가 전부 이 모양이다. */
+/** Shape public search treats as a hash. 32-byte hex — tx, root, leaf, and batch ids all look like this. */
 const HASH_SHAPE = /^0x[0-9a-f]{64}$/;
 const REGISTRY_TYPES = ["project", "verification", "asset"] as const;
-/** registry마다 이름 검색 결과 상한. 통합 검색은 목록이 아니라 길잡이다. */
+/** Cap on name-search results per registry. Unified search is a signpost, not a listing. */
 const TEXT_MATCH_LIMIT = 10;
 
-/** 계약에 없는 파라미터를 무시하지 않는다. 무시하면 오타 난 필터가 전체가 된다. */
+/** Parameters outside the contract are not ignored. Ignoring them turns a mistyped filter into "everything". */
 function parseQuery<T>(schema: { safeParse(input: unknown): { success: boolean; data?: T; error?: { issues: { path: (string | number)[]; message: string }[] } } }, input: unknown): T {
   const parsed = schema.safeParse(input);
   if (!parsed.success || parsed.data === undefined) {
-    throw badRequest("INVALID_QUERY", "질의 파라미터가 계약과 다르다", {
+    throw badRequest("INVALID_QUERY", "Query parameters do not match the contract", {
       issues: (parsed.error?.issues ?? []).map((issue) => ({
         path: issue.path.join("."),
         message: issue.message,
@@ -88,13 +88,13 @@ export async function registerPublicRoutes(
   app.get<{ Params: { registryType: string } }>(
     "/api/v1/public/registries/:registryType",
     async (request, reply) => {
-      // 계약에 없는 파라미터는 무시하지 않고 거절한다(`.strict()`). 무시하면
-      // 오타 난 필터가 "전체 목록"으로 조용히 넘어간다.
+      // Parameters outside the contract are rejected, not ignored (`.strict()`). Ignoring them
+      // lets a mistyped filter silently fall through to "the full list".
       const query = parseQuery(publicRegistryListQuery, request.query);
       const after = query.cursor ? decodeCursor(query.cursor) : null;
 
-      // 다음 페이지가 있는지 알려면 한 줄 더 받아야 한다. 총계를 세지 않는
-      // 이유는 공개 목록이 커질수록 COUNT가 매 요청마다 전체를 훑기 때문이다.
+      // Knowing whether a next page exists takes one extra row. No total is counted because
+      // as the public list grows, COUNT would scan everything on every request.
       const rows = await sql<
         {
           entry_id: string;
@@ -123,8 +123,8 @@ export async function registerPublicRoutes(
       const last = page.at(-1);
       const hasMore = rows.length > query.limit;
 
-      // 공개 목록은 캐시해도 되는 읽기다. 다만 개인화된 것이 아니므로 공유
-      // 캐시를 허용하고, 게시가 자주 일어나지 않으므로 짧게 잡는다.
+      // Public lists are cacheable reads. They are not personalized, so shared caches are
+      // allowed; publishing is infrequent, so the TTL is kept short.
       reply.header("cache-control", "public, max-age=30");
 
       return {
@@ -136,12 +136,12 @@ export async function registerPublicRoutes(
           publishedAt: row.published_at?.toISOString() ?? null,
           revokedAt: row.revoked_at?.toISOString() ?? null,
           supersededBy: row.superseded_by_id,
-          // projection을 펼치지 않는다 — 공개 허용 필드만 나갔는지 응답만 보고
-          // 판정할 수 있어야 한다.
+          // The projection is not spread — whether only public-allowed fields went out must be
+          // decidable from the response alone.
           projection: row.public_projection,
         })),
-        // cursor는 `published_at`이 아니라 정렬 키로 만든다. 둘은 published_at이
-        // 비어 있을 때 갈라지고, 그때 published_at으로 만들면 페이지가 어긋난다.
+        // The cursor is built from the sort key, not `published_at`. The two diverge when
+        // published_at is empty, and building from published_at then makes pages drift.
         nextCursor: hasMore && last ? encodeCursor(last.sort_at, last.entry_id) : null,
         sort: "publishedAt:desc,entryId:desc" as const,
         requestId: request.context.requestId,
@@ -154,10 +154,10 @@ export async function registerPublicRoutes(
   app.get<{ Params: { registryType: string; publicKey: string } }>(
     "/api/v1/public/registries/:registryType/:publicKey",
     async (request, reply) => {
-      // 공개 route는 tenant를 모른다 — 로그인하지 않은 독자가 조회하기 때문이다.
-      // RLS 정책을 만족시킬 수 없으므로 공개 경로만 SECURITY DEFINER 함수로
-      // 분리한다(0009_public_read.sql). 그 함수는 게시된 version의 public
-      // projection만 반환하며 tenant_id를 돌려주지 않는다.
+      // Public routes do not know the tenant — they are read by readers who are not signed in.
+      // RLS policies cannot be satisfied, so only the public path is split out into a SECURITY
+      // DEFINER function (0009_public_read.sql). That function returns only the public
+      // projection of published versions and does not return tenant_id.
       const rows = await sql<
         {
           id: string;
@@ -176,14 +176,14 @@ export async function registerPublicRoutes(
 
       const current = rows[0];
       if (current) {
-        // 클라이언트가 어느 version을 보고 있는지 헤더로도 알 수 있게 한다.
-        // 본문의 version과 같은 값이며 If-Match에 그대로 넣을 수 있다.
+        // Lets the client tell from a header which version it is viewing.
+        // Same value as the body's version; it can be passed to If-Match as is.
         reply.header("etag", etagOf(current.version));
       }
       if (!current) {
         return reply.status(404).send({
           code: "NOT_FOUND",
-          message: "공개된 기록을 찾을 수 없다",
+          message: "Public record not found",
           retryable: false,
           correlationId: request.context.correlationId,
         });
@@ -197,7 +197,7 @@ export async function registerPublicRoutes(
         publishedAt: current.published_at?.toISOString() ?? null,
         revokedAt: current.revoked_at?.toISOString() ?? null,
         supersededBy: current.superseded_by_id,
-        // 이전 version을 감추지 않는다. 정정·철회 이력이 공개의 일부다(§11.3).
+        // Earlier versions are not hidden. Correction and revocation history is part of the disclosure (§11.3).
         history: rows.slice(1).map((row) => ({
           entryVersionId: row.id,
           version: String(row.version),
@@ -218,7 +218,7 @@ export async function registerPublicRoutes(
       if (!proof) {
         return reply.status(404).send({
           code: "NOT_FOUND",
-          message: "이 version은 아직 anchor되지 않았다",
+          message: "This version is not anchored yet",
           retryable: true,
           correlationId: request.context.correlationId,
         });
@@ -236,13 +236,13 @@ export async function registerPublicRoutes(
         transactionHash: proof.transactionHash,
         blockNumber: proof.blockNumber,
         confirmationState: proof.confirmationState,
-        // AC-23: included는 confirmed일 때만 참이다. 그 전에는 아직 확정되지 않았다.
+        // AC-23: included is true only when confirmed. Before that, it is not final.
         included: verified && proof.confirmationState === "confirmed",
         merkleVerified: verified,
         proves: [...PROOF_PROVES],
         doesNotProve: [...PROOF_DOES_NOT_PROVE],
-        // 규격 버전은 **저장된 값**을 그대로 낸다. 상수로 고정하면
-        // 규격을 올렸을 때 응답만 옛 값을 계속 말한다.
+        // The spec version is returned as the **stored value**. Hard-coding a constant would
+        // leave responses stating the old value after the spec is bumped.
         policyVersion: proof.policyVersion,
         schemaVersion: proof.schemaVersion,
         serializationVersion: proof.serializationVersion,
@@ -252,12 +252,12 @@ export async function registerPublicRoutes(
     },
   );
 
-  // --- 공개 통합 검색 --------------------------------------------
+  // --- Public unified search --------------------------------------------
 
   app.get("/api/v1/public/search", async (request, reply) => {
     const { q } = parseQuery(publicSearchQuery, request.query);
     reply.header("cache-control", "public, max-age=30");
-    // chainId는 화면이 transaction hash를 그 체인의 탐색기로 잇는 데 쓴다.
+    // chainId lets the UI link a transaction hash to that chain's explorer.
     const base = {
       query: q,
       chainId: config.chainId,
@@ -265,7 +265,7 @@ export async function registerPublicRoutes(
       asOf: request.context.asOf,
     };
 
-    // hash는 저장 형식이 소문자다. 지갑·탐색기에서 복사한 대문자 hex도 같은 값이다.
+    // Hashes are stored lowercase. Uppercase hex copied from a wallet or explorer is the same value.
     const lowered = q.toLowerCase();
     if (HASH_SHAPE.test(lowered)) {
       const rows = await sql<
@@ -299,8 +299,8 @@ export async function registerPublicRoutes(
       };
     }
 
-    // key 정확 일치를 먼저 둔다. 공유받은 key를 붙여 넣은 사람에게 그 기록이
-    // 이름이 비슷한 다른 기록 아래에 묻히면 안 된다.
+    // Exact key matches come first. Someone pasting a shared key must not find that record
+    // buried under other records with similar names.
     const exact = (
       await Promise.all(
         REGISTRY_TYPES.map(async (registryType): Promise<SearchMatch[]> => {
@@ -353,18 +353,18 @@ export async function registerPublicRoutes(
     return { ...base, kind: "text" as const, matches: [...exact, ...listed] };
   });
 
-  // 공개 필드 목록. Explorer가 무엇을 기대할 수 있는지 알려준다.
+  // Public field list. Tells the Explorer what it can expect.
   app.get("/api/v1/public/projection-fields", async (request) => ({
     fields: Object.keys(publicProjection.shape).filter(isPublicField),
     requestId: request.context.requestId,
     asOf: request.context.asOf,
   }));
 
-  // --- 공개 거버넌스 ------------------------------------------------
+  // --- Public governance ------------------------------------------------
   //
-  // protocol space만, `draft` 제외, 투표자 명단 없음. 근거는 0027 머리말.
+  // Protocol space only, `draft` excluded, no voter roster. Rationale is in the 0027 header.
 
-  /** `NUMERIC(78,0)`은 JSON number에 담기지 않는다. 문자열로 그대로 옮긴다. */
+  /** `NUMERIC(78,0)` does not fit in a JSON number. It is carried over as a string. */
   function tallyOf(row: {
     weight_for: string;
     weight_against: string;
@@ -450,13 +450,13 @@ export async function registerPublicRoutes(
       if (!proposal) {
         return reply.status(404).send({
           code: "NOT_FOUND",
-          message: "공개된 제안을 찾을 수 없다",
+          message: "Public proposal not found",
           retryable: false,
           correlationId: request.context.correlationId,
         });
       }
 
-      // 현재 상태만 보면 "정족수 미달로 끝났다"와 "취소됐다"가 같아 보인다.
+      // The current state alone makes "ended short of quorum" and "cancelled" look the same.
       const transitions = await sql<
         {
           from_state: string;
@@ -486,13 +486,13 @@ export async function registerPublicRoutes(
     },
   );
 
-  // --- 공개 이력 — 정정과 철회 --------------------------------------
+  // --- Public history — corrections and revocations --------------------------------------
 
   /**
-   * 이 목록이 덮지 않는 사건 종류.
+   * Event kinds this list does not cover.
    *
-   * 빈 목록과 "그 종류는 애초에 여기 오지 않는다"를 구분하지 않으면 사용자가
-   * "그런 일이 없었다"로 읽는다. 응답이 스스로 범위를 말한다.
+   * Without distinguishing an empty list from "that kind never comes here", users read it as
+   * "that never happened". The response states its own scope.
    */
   const NOT_COVERED = [
     {
@@ -539,8 +539,8 @@ export async function registerPublicRoutes(
         occurredAt: row.occurred_at.toISOString(),
         registryType: row.registry_type,
         publicKey: row.public_key,
-        // registry version에서 온 것만 이 묶음을 갖는다. 나머지는 null이다 —
-        // 빈 객체로 두면 "version이 있는데 비었다"로 읽힌다.
+        // Only entries from a registry version carry this group. Others are null — an empty
+        // object would read as "there is a version, but it is empty".
         registryVersion:
           row.entry_version_id === null
             ? null

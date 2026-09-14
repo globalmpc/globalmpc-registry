@@ -12,13 +12,13 @@ import {
 import { unprocessable } from "../errors.js";
 
 /**
- * Merkle batch 빌더 — spec 05 §5.8, 08 §8.4.
+ * Merkle batch builder — spec 05 §5.8, 08 §8.4.
  *
- * 게시된 Registry version만 batch에 들어간다. draft·revoked 이전 상태를 넣으면
- * 공개되지 않은 내용의 커밋먼트가 체인에 올라간다.
+ * Only published Registry versions enter a batch. Including draft or pre-revocation states puts
+ * commitments to unpublished content on chain.
  *
- * leaf 구성·정렬·중복 검사는 `@mpc/canonical`이 한다. 여기서는 무엇을 넣을지만
- * 고른다.
+ * Leaf construction, ordering, and duplicate checks are done by `@mpc/canonical`. This only
+ * chooses what goes in.
  */
 
 export interface AnchorBatch {
@@ -47,7 +47,7 @@ export function toRegistryLeaf(row: PublishedVersionRow): RegistryLeaf {
     registryType: row.registry_type,
     entryVersionId: row.id,
     subjectId: row.subject_id,
-    // 정수 decimal string. number를 canonical payload에 넣지 않는다.
+    // Integer decimal string. Numbers do not go into the canonical payload.
     version: String(row.version),
     status: row.status,
     serializationVersion: "1",
@@ -58,10 +58,10 @@ export function toRegistryLeaf(row: PublishedVersionRow): RegistryLeaf {
 }
 
 /**
- * 아직 anchor되지 않은 게시 version으로 batch를 만든다.
+ * Builds a batch from published versions not yet anchored.
  *
- * 이미 batch에 들어간 version은 제외한다 — 같은 leaf가 두 batch에 들어가면
- * 어느 쪽 inclusion인지 구분할 수 없다.
+ * Versions already in a batch are excluded — if the same leaf is in two batches, it is
+ * impossible to tell which inclusion it is.
  */
 export async function buildAnchorBatch(
   tx: postgres.TransactionSql,
@@ -81,7 +81,7 @@ export async function buildAnchorBatch(
   `;
 
   if (rows.length === 0) {
-    throw unprocessable("ANCHOR_BATCH_EMPTY", "anchor할 새 version이 없다");
+    throw unprocessable("ANCHOR_BATCH_EMPTY", "No new version to anchor");
   }
 
   const leaves = rows.map((row) => ({
@@ -92,7 +92,7 @@ export async function buildAnchorBatch(
 
   const tree = buildMerkleTree(leaves.map((entry) => entry.leafHash));
 
-  // manifest는 오프체인에 보존한다. chain에는 그 해시만 올라간다(08 §8.4).
+  // The manifest is kept off-chain. Only its hash goes on chain (08 §8.4).
   const manifest = {
     manifestVersion: "1",
     serializationVersion: "1",
@@ -117,10 +117,10 @@ export async function buildAnchorBatch(
 }
 
 /**
- * inclusion proof를 만든다.
+ * Builds an inclusion proof.
  *
- * 무인증 공개 경로에서도 호출되므로 SECURITY DEFINER 함수를 쓴다. 그 함수는
- * 게시된 version만 반환하므로 draft의 proof는 만들어지지 않는다.
+ * Also called from the unauthenticated public path, so it uses a SECURITY DEFINER function.
+ * That function returns only published versions, so no proof is built for drafts.
  */
 export async function buildInclusionProof(
   sql: postgres.Sql,
@@ -134,10 +134,10 @@ export async function buildInclusionProof(
   readonly transactionHash: string | null;
   readonly blockNumber: number | null;
   /**
-   * leaf를 다시 만들 때 쓸 규격.
+   * Spec used to rebuild the leaf.
    *
-   * 셋 다 규격을 가리키는 이름이며 주체를 식별하지 않는다. 이것이 없으면
-   * 검증자가 어떤 규격으로 재구성해야 하는지 알 수 없고, proof는 "믿어라"가 된다.
+   * All three are names referring to a spec and do not identify a subject. Without them a
+   * verifier cannot know which spec to reconstruct with, and the proof becomes "trust me".
    */
   readonly policyVersion: string;
   readonly schemaVersion: string;
@@ -172,7 +172,7 @@ export async function buildInclusionProof(
     proof,
     root: row.merkle_root as Hex,
     batchId: row.external_batch_id,
-    // included는 성공이 아니다. confirmed만 성공이다(06 §6.8).
+    // included is not success. Only confirmed is success (06 §6.8).
     confirmationState: row.transaction_state ?? "created",
     transactionHash: row.transaction_hash,
     blockNumber: row.block_number ? Number(row.block_number) : null,

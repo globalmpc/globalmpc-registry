@@ -5,14 +5,14 @@ import { ATTESTATION_EIP712_TYPES } from "@mpc/api-contract";
 import type { AppConfig } from "../config.js";
 
 /**
- * EIP-712 attestation 서명 — ADR-T06, spec 07 §7.2.
+ * EIP-712 attestation signing — ADR-T06, spec 07 §7.2.
  *
- * **서버는 private key를 보관하거나 대리 서명하지 않는다.** 서버가 하는 일은
- * 서명 대상(frozen payload)을 만들고, 사용자가 자기 key로 만든 서명을 재계산·
- * 검증하는 것뿐이다.
+ * **The server neither holds private keys nor signs on anyone's behalf.** It only builds the
+ * signing target (frozen payload) and recomputes and verifies the signature the user made
+ * with their own key.
  *
- * signature request는 한 번만 쓰인다. nonce·expiry·expected version이
- * replay와 snapshot substitution을 막는다.
+ * A signature request is used once. Nonce, expiry, and expected version prevent
+ * replay and snapshot substitution.
  */
 
 export interface AttestationMessage {
@@ -31,8 +31,8 @@ export interface AttestationMessage {
 /**
  * EIP-712 domain.
  *
- * `verifyingContract`를 두지 않는다 — 이 서명은 오프체인 검증 대상이다.
- * 온체인 검증 요구가 실제로 생기면 domain version을 올린 v2로 처리한다.
+ * No `verifyingContract` — this signature is verified off-chain.
+ * If an on-chain verification need actually arises, handle it as v2 with a bumped domain version.
  */
 export function attestationDomain(config: AppConfig) {
   return {
@@ -43,17 +43,17 @@ export function attestationDomain(config: AppConfig) {
   } as const;
 }
 
-/** UUID를 bytes32로. EIP-712 타입이 bytes32를 요구한다. */
+/** UUID to bytes32. The EIP-712 type requires bytes32. */
 export function uuidToBytes32(uuid: string): ViemHex {
   const hex = uuid.replace(/-/g, "");
   return `0x${hex.padEnd(64, "0")}` as ViemHex;
 }
 
 /**
- * findings·citations·limitations의 커밋먼트.
+ * Commitment to findings, citations, and limitations.
  *
- * 본문 전체를 typed data에 펼치면 지갑 화면이 읽을 수 없게 된다. 대신
- * canonical 해시 하나로 커밋하고, 사람이 읽을 내용은 별도 문자열로 보여준다.
+ * Spreading the whole body into typed data makes the wallet screen unreadable. Instead it
+ * commits to one canonical hash and shows the human-readable content as a separate string.
  */
 export function hashAttestationPayload(payload: {
   readonly findings: readonly Record<string, string>[];
@@ -89,11 +89,11 @@ export function attestationDigest(config: AppConfig, message: AttestationMessage
 }
 
 /**
- * 서명자 주소를 복구한다.
+ * Recovers the signer address.
  *
- * 서버는 "이 서명이 이 payload에 대한 것인가"만 확인한다. 그 주소가 assignment의
- * 검토자인지는 호출부가 별도로 대조한다 — 서명 유효성과 권한은 다른 사실이다
- * (불변조건 13).
+ * The server only checks "is this signature over this payload". Whether that address is the
+ * assignment's reviewer is checked separately by the caller — signature validity and authority
+ * are different facts (invariant 13).
  */
 export async function recoverAttestationSigner(
   config: AppConfig,
@@ -108,10 +108,10 @@ export async function recoverAttestationSigner(
 }
 
 /**
- * 사람이 읽을 서명 대상.
+ * Human-readable signing target.
  *
- * 지갑에 표시되는 문구다. 무엇에 서명하는지 모른 채 승인하지 않도록,
- * 검토 범위와 한계를 그대로 담는다.
+ * The text shown in the wallet. It carries the review scope and limitations verbatim so that
+ * nobody approves without knowing what they sign.
  */
 export function humanReadablePayload(input: {
   readonly projectKey: string;
@@ -121,14 +121,14 @@ export function humanReadablePayload(input: {
   readonly evidenceSnapshotHash: string;
 }): string {
   return [
-    `프로젝트: ${input.projectKey}`,
-    `검토 유형: ${input.attestationType}`,
-    `대상 claim 수: ${input.claimCount}`,
-    `근거 snapshot: ${input.evidenceSnapshotHash}`,
+    `Project: ${input.projectKey}`,
+    `Review type: ${input.attestationType}`,
+    `Claims in scope: ${input.claimCount}`,
+    `Evidence snapshot: ${input.evidenceSnapshotHash}`,
     "",
-    "검토의 범위와 한계:",
+    "Review scope and limitations:",
     input.limitations,
     "",
-    "이 서명은 검토 결과에 대한 것이며 사실성·법률 효력·투자 적합성을 보증하지 않습니다.",
+    "This signature covers the review result and does not guarantee factual accuracy, legal effect, or investment suitability.",
   ].join("\n");
 }

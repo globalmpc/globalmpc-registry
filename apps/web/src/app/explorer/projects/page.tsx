@@ -3,11 +3,11 @@
 import { PublicRegistryBrowser } from "@/components/PublicRegistryBrowser";
 
 /**
- * Project Registry 공개 목록 — spec 11 §11.2.
+ * Project Registry public list — spec 11 §11.2.
  *
- * Explorer가 같은 목록을 첫 화면에 두지만 이 경로가 따로 있는 이유는 공개
- * navigation이 registry별로 갈라져 있기 때문이다(§11.2). "Explorer에서 찾아라"는
- * 안내는 세 registry 중 어느 것을 보고 있는지 말하지 않는다.
+ * Explorer shows the same list on its first screen, but this route exists separately because public
+ * navigation is split by registry (§11.2). "Find it in Explorer"
+ * does not say which of the three registries is being viewed.
  */
 export default function PublicProjectsPage() {
   return (

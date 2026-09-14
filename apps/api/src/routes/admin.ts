@@ -26,28 +26,28 @@ import {
 } from "./shared.js";
 
 /**
- * 플랫폼 관리 — spec 11 §11.2 Administration.
+ * Platform administration — spec 11 §11.2 Administration.
  *
- * **없던 것을 만든다.** 역할을 부여하는 유일한 경로가 `bootstrap.ts`의 CLI였고,
- * 그것은 RLS를 우회하는 superuser 연결로 돈다. 배포된 시스템에 사람을 추가하려면
- * 매번 서버에 들어가야 했다.
+ * **This did not exist before.** The only path for granting roles was the CLI in `bootstrap.ts`,
+ * which runs on a superuser connection that bypasses RLS. Adding a person to a deployed system
+ * meant logging into the server every time.
  *
- * **2인 원칙(결정).** 역할 부여를 API로 올리면 "역할을 부여하는 역할"이
- * 생긴다. 그 역할 하나가 자기 자신에게 무엇이든 줄 수 있으면 권한표 전체가
- * 의미를 잃는다. 02 §2.8의 "운영자 단독 전환 금지"를 여기에도 적용해 제안과
- * 승인을 다른 사람이 하게 한다. DB의 `role_grant_two_person`이 같은 것을 막으므로
- * route가 하나 늘어도 규칙이 새지 않는다.
+ * **Two-person rule (decision).** Moving role grants into the API creates "a role that grants
+ * roles". If that one role can give itself anything, the whole permission table loses its
+ * meaning. The "no operator-only transition" rule of 02 §2.8 applies here too: the proposal and
+ * the approval are made by different people. The DB's `role_grant_two_person` blocks the same
+ * thing, so adding a route does not leak the rule.
  *
- * **지갑 비활성은 1인이다.** 분실·침해된 키를 끊는 것은 급한 일이고, 2인을
- * 요구하면 두 번째 사람을 기다리는 동안 그 키가 살아 있다. 대신 사유 코드와
- * 실행자를 남긴다(AC-27).
+ * **Disabling a wallet takes one person.** Cutting off a lost or compromised key is urgent;
+ * requiring two people keeps the key alive while waiting for the second. Instead, the reason
+ * code and the actor are recorded (AC-27).
  *
- * **tenant 생성은 여기 없다.** 세션은 언제나 하나의 tenant에 묶이고 RLS가 그것을
- * 강제한다. 다른 tenant를 만드는 route는 그 경계를 넘어야 하므로 SECURITY DEFINER
- * 함수가 필요하고, 그러면 **HTTP로 도달 가능한 tenant 생성 경로**가 생긴다. 운영자
- * 세션 하나가 탈취됐을 때의 피해 범위가 tenant 하나에서 플랫폼 전체로 넓어진다.
- * tenant 생성은 배포마다 한 번인 seed이므로 `bootstrap` CLI에 남긴다. 이 판단은
- * 뒤집을 수 있다.
+ * **Tenant creation is not here.** A session is always bound to one tenant, and RLS enforces
+ * it. A route that creates another tenant must cross that boundary, so it needs a SECURITY
+ * DEFINER function, which creates an **HTTP-reachable tenant creation path**. The blast radius
+ * of one hijacked operator session widens from one tenant to the whole platform. Tenant
+ * creation is a once-per-deployment seed, so it stays in the `bootstrap` CLI. This decision is
+ * reversible.
  */
 
 interface WalletRow {
@@ -112,7 +112,7 @@ function toGrant(row: GrantRow, requestId: string, asOf: string) {
   };
 }
 
-/** 역할 부여를 승인할 수 있는 역할 — 이들의 지갑은 화면에서 붙이지 않는다. */
+/** Roles that can approve role grants — their wallets are not bound from the UI. */
 const ADMIN_ROLES: readonly string[] = ACTION_POLICIES["admin.role.approve"]?.allowedRoles ?? [];
 
 export async function registerAdminRoutes(
@@ -120,11 +120,11 @@ export async function registerAdminRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   /**
-   * 주체 하나를 지갑·역할과 **함께** 읽는다.
+   * Reads one subject **together** with its wallets and roles.
    *
-   * 따로 조회하면 "역할은 있는데 붙은 지갑이 전부 비활성"인 상태가 두 화면에
-   * 흩어진다 — 그 상태가 곧 로그인할 수 없는 계정이고, 관리 화면이 가장 먼저
-   * 말해야 하는 것이다.
+   * Queried separately, the state "has roles but every bound wallet is disabled" is split
+   * across two screens — that state is an account that cannot log in, and it is the first
+   * thing the admin screen must show.
    */
   async function readSubjects(
     tx: postgres.Sql | postgres.TransactionSql,
@@ -191,8 +191,8 @@ export async function registerAdminRoutes(
         grantedAt: role.granted_at.toISOString(),
         revokedAt: role.revoked_at?.toISOString() ?? null,
       })),
-      // 세션 해석은 `disabled_at IS NULL`인 지갑만 본다(0005). 그것이 없으면
-      // 역할이 무엇이든 로그인할 수 없다.
+      // Session resolution only sees wallets with `disabled_at IS NULL` (0005). Without one,
+      // the subject cannot log in whatever its roles.
       locked: wallets.every((wallet) => wallet.disabled_at !== null),
     };
   }
@@ -229,7 +229,7 @@ export async function registerAdminRoutes(
 
     const parsed = createSubjectRequest.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
     }
@@ -274,7 +274,7 @@ export async function registerAdminRoutes(
 
       const parsed = bindWalletRequest.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -287,15 +287,16 @@ export async function registerAdminRoutes(
           const [subject] = await tx<{ id: string }[]>`
             SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${request.params.subjectId}
           `;
-          if (!subject) throw notFound("주체를 찾을 수 없다");
+          if (!subject) throw notFound("Subject not found");
 
           /**
-           * 운영 권한자에게는 화면에서 지갑을 붙이지 않는다.
+           * Wallets are not bound from the UI to subjects with admin authority.
            *
-           * 지갑 연결은 1인 행위다. 운영자 A가 자기 지갑을 운영자 B에게 붙이면 A는 B로
-           * 로그인해 자기 제안을 승인한다 — 역할 부여의 2인 원칙이 한 사람 안에서 끝난다.
-           * 운영자의 키 교체는 bootstrap(인프라 접근)으로 새 주체를 만들고 예전 지갑을 끈다.
-           * 역할 없는 사람의 복구(AC-27)는 그대로 된다.
+           * Binding a wallet is a one-person act. If operator A binds their wallet to operator B,
+           * A logs in as B and approves their own proposal — the two-person rule for role grants
+           * collapses into one person. An operator key rotation creates a new subject through
+           * bootstrap (infrastructure access) and disables the old wallet.
+           * Recovery for people without roles (AC-27) still works.
            */
           const [adminBinding] = await tx<{ role: string }[]>`
             SELECT role FROM core.role_bindings
@@ -306,15 +307,15 @@ export async function registerAdminRoutes(
           if (adminBinding) {
             throw forbidden(
               "WALLET_BIND_ADMIN_SUBJECT",
-              "운영 권한을 가진 사람에게는 화면에서 지갑을 붙일 수 없다",
-              { hint: "운영자 키 교체는 bootstrap으로 새 주체를 만들고 예전 지갑을 비활성한다" },
+              "A wallet cannot be bound from the UI to a subject with admin authority",
+              { hint: "Operator key rotation creates a new subject via bootstrap and disables the old wallet" },
             );
           }
 
           /**
-           * 주소는 체인 전체에서 하나의 주체에만 붙는다(`UNIQUE (wallet_address,
-           * chain_id)`). 이미 붙어 있으면 조용히 옮기지 않는다 — 옮기면 그
-           * 주소의 과거 서명이 다른 사람의 것으로 읽힌다.
+           * An address is bound to only one subject per chain (`UNIQUE (wallet_address,
+           * chain_id)`). If already bound, it is not silently moved — moving it would make the
+           * address's past signatures read as someone else's.
            */
           const [existing] = await tx<{ subject_id: string | null; disabled_at: Date | null }[]>`
             SELECT subject_id, disabled_at FROM core.wallet_identities
@@ -323,8 +324,8 @@ export async function registerAdminRoutes(
           if (existing) {
             throw conflict(
               "WALLET_ALREADY_BOUND",
-              "이 주소는 이미 바인딩돼 있다. 다른 주체로 옮기지 않는다",
-              { hint: "새 키로 복구하려면 새 주소를 바인딩하고 예전 것을 비활성한다" },
+              "This address is already bound. It is not moved to another subject.",
+              { hint: "To recover with a new key, bind a new address and disable the old one" },
             );
           }
 
@@ -369,16 +370,16 @@ export async function registerAdminRoutes(
       );
 
       /**
-       * If-Match를 본문보다 **먼저** 본다.
+       * Checks If-Match **before** the body.
        *
-       * 순서가 반대면 헤더가 빠진 요청이 400(본문 오류)으로 답한다. 클라이언트는
-       * 본문을 고치며 헤어나지 못하고, 빠진 것이 헤더라는 사실은 드러나지 않는다.
+       * In the reverse order, a request missing the header gets a 400 (body error). The client
+       * keeps fixing the body in a loop, and the missing header never surfaces.
        */
       const expected = requireIfMatch(request);
 
       const parsed = disableWalletRequest.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -393,28 +394,28 @@ export async function registerAdminRoutes(
             WHERE tenant_id = ${tenantId} AND id = ${request.params.walletId}
             FOR UPDATE
           `;
-          if (!wallet) throw notFound("지갑을 찾을 수 없다");
+          if (!wallet) throw notFound("Wallet not found");
           assertVersionMatches(expected, wallet.version, "wallet_identity");
 
           /**
-           * 자기 지갑은 끄지 않는다.
+           * A caller does not disable their own wallet.
            *
-           * 호출자는 언제나 운영 권한자이므로 이것이 "마지막 운영자가 사라지는" 경우도
-           * 막는다. 되돌리는 화면이 없어서, 잘못 누르면 bootstrap으로만 돌아온다.
-           * 자기 키가 침해됐다면 다른 운영자가 끈다.
+           * The caller always has admin authority, so this also prevents "the last operator
+           * disappearing". There is no screen to undo it; a misclick is recoverable only via
+           * bootstrap. If your own key is compromised, another operator disables it.
            */
           if (wallet.subject_id === session.subjectId) {
             throw unprocessable(
               "WALLET_DISABLE_SELF",
-              "자기 지갑은 비활성할 수 없다",
-              { hint: "자기 키가 침해됐다면 다른 운영자가 끈다" },
+              "You cannot disable your own wallet",
+              { hint: "If your own key is compromised, another operator disables it" },
             );
           }
 
           if (wallet.disabled_at !== null) {
             throw unprocessable(
               "WALLET_ALREADY_DISABLED",
-              "이미 비활성된 지갑이다",
+              "Wallet is already disabled",
               { disabledAt: wallet.disabled_at.toISOString() },
             );
           }
@@ -426,8 +427,8 @@ export async function registerAdminRoutes(
           `;
 
           /**
-           * 끊은 이유를 함께 남긴다. 분실·침해·교체·퇴사는 같은 결과를 내지만
-           * **과거 서명을 어떻게 읽어야 하는지가 다르다.**
+           * Records why it was cut off. Loss, compromise, rotation, and departure have the same
+           * effect but **differ in how past signatures should be read.**
            */
           await tx`
             INSERT INTO core.wallet_disable_events (
@@ -491,15 +492,15 @@ export async function registerAdminRoutes(
 
     const parsed = createRoleGrantRequest.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
     }
 
-    // 존재하지 않는 역할을 제안할 수 없다. 승인 시점에 실패하면 승인자가
-    // 무엇을 잘못했는지 알 수 없다.
+    // A nonexistent role cannot be proposed. If it failed at approval time, the approver could not
+    // tell what went wrong.
     if (ROLE_MINIMUM_ASSURANCE[parsed.data.role] === undefined) {
-      throw unprocessable("ROLE_UNKNOWN", "권한표에 없는 역할이다", {
+      throw unprocessable("ROLE_UNKNOWN", "Role is not in the permission table", {
         role: parsed.data.role,
       });
     }
@@ -510,7 +511,7 @@ export async function registerAdminRoutes(
         const [subject] = await tx<{ id: string }[]>`
           SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${parsed.data.subjectId}
         `;
-        if (!subject) throw notFound("주체를 찾을 수 없다");
+        if (!subject) throw notFound("Subject not found");
 
         const id = randomUUID();
         try {
@@ -525,10 +526,10 @@ export async function registerAdminRoutes(
             )
           `;
         } catch (caught) {
-          // 같은 대상에 pending이 둘 있으면 승인자가 어느 것을 승인했는지가
-          // 이력에서 흐려진다. DB의 부분 UNIQUE가 막는다.
+          // Two pending proposals for the same target blur which one the approver approved in the
+          // history. A partial UNIQUE in the DB blocks it.
           if (caught instanceof Error && caught.message.includes("role_grant_requests_one_pending")) {
-            throw conflict("ROLE_GRANT_ALREADY_PENDING", "같은 대상에 대기 중인 제안이 있다");
+            throw conflict("ROLE_GRANT_ALREADY_PENDING", "A pending proposal already exists for this target");
           }
           throw caught;
         }
@@ -567,12 +568,12 @@ export async function registerAdminRoutes(
         sessionFacts(session),
       );
 
-      // If-Match를 본문보다 먼저 본다 — 위와 같은 이유다.
+      // Checks If-Match before the body — same reason as above.
       const expected = requireIfMatch(request);
 
       const parsed = decideRoleGrantRequest.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -587,26 +588,26 @@ export async function registerAdminRoutes(
             WHERE g.tenant_id = ${tenantId} AND g.id = ${request.params.grantId}
             FOR UPDATE OF g
           `;
-          if (!grant) throw notFound("제안을 찾을 수 없다");
+          if (!grant) throw notFound("Proposal not found");
           assertVersionMatches(expected, grant.version, "role_grant_request");
 
           if (grant.state !== "pending") {
-            throw unprocessable("ROLE_GRANT_ALREADY_DECIDED", "이미 결정된 제안이다", {
+            throw unprocessable("ROLE_GRANT_ALREADY_DECIDED", "Proposal is already decided", {
               state: grant.state,
             });
           }
 
           /**
-           * 2인 원칙 — 02 §2.8.
+           * Two-person rule — 02 §2.8.
            *
-           * DB의 CHECK도 같은 것을 막지만 여기서 먼저 걸러 **왜 거절됐는지**를
-           * 말한다. 제약 위반 메시지로는 사용자가 다음에 무엇을 해야 할지 모른다.
+           * The DB CHECK blocks the same thing, but filtering here first says **why it was
+           * rejected**. A constraint violation message does not tell the user what to do next.
            */
           if (grant.requested_by_subject_id === session.subjectId) {
             throw unprocessable(
               "ROLE_GRANT_SELF_APPROVAL",
-              "제안한 사람은 그 제안을 승인할 수 없다",
-              { hint: "다른 admin 권한 보유자가 결정한다" },
+              "The proposer cannot approve their own proposal",
+              { hint: "Another admin holder decides" },
             );
           }
 
@@ -662,11 +663,11 @@ export async function registerAdminRoutes(
     },
   );
 
-  // --- 알림 수신처 ------------------------------------------
+  // --- Alert sinks ------------------------------------------
   //
-  // **비밀을 반환하지 않는다.** `secret_reference`는 값이 아니지만 그것도 내지
-  // 않는다 — `file:/run/secrets/x` 같은 경로는 그 자체가 배포 구조에 대한
-  // 정보다. 설정돼 있는지만 낸다.
+  // **Secrets are not returned.** `secret_reference` is not the value, but it is not returned
+  // either — a path like `file:/run/secrets/x` is itself information about the deployment
+  // layout. Only whether it is set is returned.
 
   interface SinkRow {
     id: string;
@@ -701,10 +702,10 @@ export async function registerAdminRoutes(
   }
 
   /**
-   * 배달 상태를 함께 읽는다.
+   * Reads delivery state alongside.
    *
-   * 수신처 목록만 내면 "등록돼 있다"와 "실제로 가고 있다"가 구분되지 않는다.
-   * 설정해 두고 아무것도 못 보내는 상태가 가장 나쁘다 — 보내고 있다고 믿는다.
+   * A bare sink list does not separate "registered" from "actually delivering". Configured
+   * but sending nothing is the worst state — everyone believes it is sending.
    */
   async function readSinks(
     tx: postgres.Sql | postgres.TransactionSql,
@@ -759,7 +760,7 @@ export async function registerAdminRoutes(
 
     const parsed = createNotificationSinkRequest.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
     }
@@ -775,7 +776,7 @@ export async function registerAdminRoutes(
           `;
         } catch (caught) {
           if (caught instanceof Error && caught.message.includes("notification_sinks_tenant_id_url_key")) {
-            throw conflict("SINK_ALREADY_REGISTERED", "이 주소는 이미 등록돼 있다");
+            throw conflict("SINK_ALREADY_REGISTERED", "This address is already registered");
           }
           throw caught;
         }
@@ -812,7 +813,7 @@ export async function registerAdminRoutes(
 
       const parsed = updateNotificationSinkRequest.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -825,15 +826,15 @@ export async function registerAdminRoutes(
             WHERE tenant_id = ${tenantId} AND id = ${request.params.sinkId}
             FOR UPDATE
           `;
-          if (!current) throw notFound("수신처를 찾을 수 없다");
+          if (!current) throw notFound("Alert sink not found");
           assertVersionMatches(expected, current.version, "notification_sink");
 
           /**
-           * 지우지 않고 멈춘다.
+           * Pauses instead of deleting.
            *
-           * 지우면 배달 이력의 FK가 끊기고, 그러면 "왜 알림이 끊겼나"에 답할
-           * 근거가 사라진다. 멈춘 수신처는 새 배달을 받지 않는다(트리거가
-           * `active`만 본다).
+           * Deleting breaks the delivery history FK, and with it the evidence for answering "why
+           * did alerts stop". A paused sink receives no new deliveries (the trigger only looks at
+           * `active`).
            */
           await tx`
             UPDATE core.notification_sinks

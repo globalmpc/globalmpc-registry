@@ -4,10 +4,10 @@ import { listMigrations, runMigrations } from "../src/migrate.js";
 import { withTenant } from "../src/session.js";
 
 /**
- * 스키마·RLS·guard 통합 테스트.
+ * Schema, RLS, and guard integration tests.
  *
- * `DATABASE_URL`이 없으면 전체를 skip한다. CI에서는 반드시 설정한다 —
- * 이 파일이 skip되면 tenant 격리와 append-only 보장이 검증되지 않은 채 통과한다.
+ * Skips entirely without `DATABASE_URL`. CI must always set it —
+ * if this file is skipped, tenant isolation and append-only guarantees pass unverified.
  */
 
 const DATABASE_URL = process.env["DATABASE_URL"];
@@ -16,14 +16,14 @@ const describeDb = DATABASE_URL ? describe : describe.skip;
 const TENANT_A = "11111111-1111-1111-1111-111111111111";
 const TENANT_B = "22222222-2222-2222-2222-222222222222";
 
-describeDb("스키마·RLS·guard", () => {
+describeDb("schema, RLS, guards", () => {
   let sql: postgres.Sql;
   let appSql: postgres.Sql;
 
   beforeAll(async () => {
     sql = postgres(DATABASE_URL!, { onnotice: () => {} });
-    // role은 클러스터 전역이라 DROP하지 않는다. 같은 클러스터의 다른 DB가
-    // 참조 중이면 DROP이 실패하고, role은 원래 DB보다 오래 사는 객체다.
+    // Roles are cluster-global, so they are not dropped. DROP fails while another DB in the same
+    // cluster references them, and a role is an object that outlives its original DB.
     await sql.unsafe(`
       DROP SCHEMA IF EXISTS core CASCADE;
       DROP SCHEMA IF EXISTS chain CASCADE;
@@ -31,8 +31,8 @@ describeDb("스키마·RLS·guard", () => {
     `);
     await runMigrations(sql);
 
-    // 애플리케이션이 실제로 쓰는 role로 접속한다. superuser로 테스트하면
-    // RLS가 우회되어(BYPASSRLS) 격리를 검증할 수 없다.
+    // Connect with the role the application actually uses. Testing as superuser bypasses
+    // RLS (BYPASSRLS), so isolation cannot be verified.
     await sql.unsafe(`
       DO $$
       BEGIN
@@ -66,24 +66,24 @@ describeDb("스키마·RLS·guard", () => {
     await sql?.end();
   });
 
-  describe("마이그레이션", () => {
-    it("재실행해도 안전하다", async () => {
+  describe("migrations", () => {
+    it("safe to re-run", async () => {
       const executed = await runMigrations(sql);
       expect(executed).toEqual([]);
     });
 
     /**
-     * 이름만 비교하면 적용된 파일을 나중에 고쳐도 건너뛴다. 환경마다 스키마가
-     * 갈리고 그 사실이 어디에도 드러나지 않는다.
+     * Comparing names only would skip an applied file edited later. Schemas would diverge per
+     * environment, and that fact would surface nowhere.
      */
-    it("적용된 마이그레이션의 내용이 바뀌면 거절한다", async () => {
+    it("rejects when an applied migration's content changed", async () => {
       const [first] = listMigrations();
       await expect(
         runMigrations(sql, [{ name: first!.name, sql: "SELECT 1" }]),
-      ).rejects.toThrow(/체크섬/);
+      ).rejects.toThrow(/checksum differs/);
     });
 
-    it("12개 source result enum이 그대로 존재한다", async () => {
+    it("the 12 source result enums exist as is", async () => {
       const rows = await sql<{ enumlabel: string }[]>`
         SELECT enumlabel FROM pg_enum e
         JOIN pg_type t ON t.oid = e.enumtypid
@@ -107,7 +107,7 @@ describeDb("스키마·RLS·guard", () => {
     });
   });
 
-  describe("tenant 격리 (RLS)", () => {
+  describe("tenant isolation (RLS)", () => {
     beforeAll(async () => {
       for (const tenant of [TENANT_A, TENANT_B]) {
         await sql`
@@ -117,12 +117,12 @@ describeDb("스키마·RLS·guard", () => {
       }
     });
 
-    it("tenant를 설정하지 않으면 아무 행도 보이지 않는다", async () => {
+    it("no rows are visible without a tenant set", async () => {
       const rows = await appSql`SELECT id FROM core.organizations`;
       expect(rows).toHaveLength(0);
     });
 
-    it("자기 tenant의 행만 보인다", async () => {
+    it("only the own tenant's rows are visible", async () => {
       const rowsA = await withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
         tx`SELECT tenant_id FROM core.organizations`,
       );
@@ -130,14 +130,14 @@ describeDb("스키마·RLS·guard", () => {
       expect(rowsA[0]!["tenant_id"]).toBe(TENANT_A);
     });
 
-    it("다른 tenant의 행을 명시적으로 조회해도 보이지 않는다", async () => {
+    it("another tenant's rows stay invisible even when queried explicitly", async () => {
       const rows = await withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
         tx`SELECT id FROM core.organizations WHERE tenant_id = ${TENANT_B}`,
       );
       expect(rows).toHaveLength(0);
     });
 
-    it("다른 tenant의 행을 INSERT할 수 없다", async () => {
+    it("cannot INSERT another tenant's rows", async () => {
       await expect(
         withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
           tx`
@@ -149,7 +149,7 @@ describeDb("스키마·RLS·guard", () => {
     });
   });
 
-  describe("audit는 append-only다 (02 §2.7)", () => {
+  describe("audit is append-only (02 §2.7)", () => {
     beforeAll(async () => {
       await sql`
         INSERT INTO audit.events (tenant_id, command, resource_type, correlation_id)
@@ -157,24 +157,24 @@ describeDb("스키마·RLS·guard", () => {
       `;
     });
 
-    it("INSERT는 된다", async () => {
+    it("INSERT works", async () => {
       const rows = await sql`SELECT id FROM audit.events WHERE correlation_id = 'corr-1'`;
       expect(rows).toHaveLength(1);
     });
 
-    it("UPDATE가 거절된다", async () => {
+    it("UPDATE is rejected", async () => {
       await expect(
         sql`UPDATE audit.events SET command = 'tampered' WHERE correlation_id = 'corr-1'`,
       ).rejects.toThrow(/append-only/);
     });
 
-    it("DELETE가 거절된다", async () => {
+    it("DELETE is rejected", async () => {
       await expect(
         sql`DELETE FROM audit.events WHERE correlation_id = 'corr-1'`,
       ).rejects.toThrow(/append-only/);
     });
 
-    it("superuser도 우회할 수 없다 — 트리거는 권한과 무관하다", async () => {
+    it("even superuser cannot bypass — the trigger ignores privileges", async () => {
       const [role] = await sql<{ usesuper: boolean }[]>`
         SELECT usesuper FROM pg_user WHERE usename = current_user
       `;
@@ -183,8 +183,8 @@ describeDb("스키마·RLS·guard", () => {
     });
   });
 
-  describe("AC-01 — limitations 없는 attestation은 저장할 수 없다", () => {
-    it("빈 문자열을 DB가 거절한다", async () => {
+  describe("AC-01 — an attestation without limitations cannot be stored", () => {
+    it("the DB rejects an empty string", async () => {
       await expect(
         sql.unsafe(`
           INSERT INTO core.verification_attestations (
@@ -203,7 +203,7 @@ describeDb("스키마·RLS·guard", () => {
       ).rejects.toThrow();
     });
 
-    it("공백만 있는 문자열도 거절한다", async () => {
+    it("rejects a whitespace-only string too", async () => {
       await expect(
         sql.unsafe(`
           INSERT INTO core.verification_attestations (
@@ -223,8 +223,8 @@ describeDb("스키마·RLS·guard", () => {
     });
   });
 
-  describe("hash 형식 제약", () => {
-    it("대문자 hex를 거절한다 — 표현이 갈리면 정렬과 비교가 갈린다", async () => {
+  describe("hash format constraints", () => {
+    it("rejects uppercase hex — a different representation means different sorting and comparison", async () => {
       await expect(
         sql`
           INSERT INTO chain.anchor_batches (
@@ -239,7 +239,7 @@ describeDb("스키마·RLS·guard", () => {
       ).rejects.toThrow();
     });
 
-    it("record_count가 0인 batch를 거절한다 — 빈 batch는 anchor하지 않는다", async () => {
+    it("rejects a batch with record_count 0 — empty batches are not anchored", async () => {
       await expect(
         sql`
           INSERT INTO chain.anchor_batches (
@@ -255,7 +255,7 @@ describeDb("스키마·RLS·guard", () => {
     });
   });
 
-  describe("anchor batch는 immutable이다 (08 §8.4)", () => {
+  describe("anchor batches are immutable (08 §8.4)", () => {
     const batchId = "0x" + "44".repeat(32);
 
     beforeAll(async () => {
@@ -271,7 +271,7 @@ describeDb("스키마·RLS·guard", () => {
       `;
     });
 
-    it("root를 수정할 수 없다", async () => {
+    it("cannot modify the root", async () => {
       await expect(
         sql`
           UPDATE chain.anchor_batches SET merkle_root = ${"0x" + "77".repeat(32)}
@@ -280,13 +280,13 @@ describeDb("스키마·RLS·guard", () => {
       ).rejects.toThrow(/수정·삭제할 수 없다/);
     });
 
-    it("삭제할 수 없다", async () => {
+    it("cannot delete", async () => {
       await expect(
         sql`DELETE FROM chain.anchor_batches WHERE batch_id = ${batchId}`,
       ).rejects.toThrow(/수정·삭제할 수 없다/);
     });
 
-    it("같은 batch_id를 재사용할 수 없다", async () => {
+    it("cannot reuse the same batch_id", async () => {
       await expect(
         sql`
           INSERT INTO chain.anchor_batches (
@@ -302,7 +302,7 @@ describeDb("스키마·RLS·guard", () => {
     });
   });
 
-  describe("REQ-DAPP-017 — readiness override 불가", () => {
+  describe("REQ-DAPP-017 — no readiness override", () => {
     let assessmentId: string;
     let projectId: string;
     let policySetId: string;
@@ -341,19 +341,19 @@ describeDb("스키마·RLS·guard", () => {
       assessmentId = assessment!.id;
     });
 
-    it("status를 gap에서 ok로 바꿀 수 없다", async () => {
+    it("cannot change status from gap to ok", async () => {
       await expect(
         sql`UPDATE core.compliance_assessments SET status = 'ok' WHERE id = ${assessmentId}`,
       ).rejects.toThrow(/수정·삭제할 수 없다/);
     });
 
-    it("삭제할 수 없다", async () => {
+    it("cannot delete", async () => {
       await expect(
         sql`DELETE FROM core.compliance_assessments WHERE id = ${assessmentId}`,
       ).rejects.toThrow(/수정·삭제할 수 없다/);
     });
 
-    it("gate decision도 수정할 수 없다", async () => {
+    it("gate decisions cannot be modified either", async () => {
       const [subject] = await sql<{ id: string }[]>`
         INSERT INTO core.subjects (id, tenant_id, kind, display_name)
         VALUES (gen_random_uuid(), ${TENANT_A}, 'person', 'Approver')
@@ -367,7 +367,7 @@ describeDb("스키마·RLS·guard", () => {
         ) VALUES (
           gen_random_uuid(), ${TENANT_A}, ${projectId}, 'registry_publication', 'hold',
           ${assessmentId}, ${"0x" + "cc".repeat(32)}, 'MPC Gate Approver', ${subject!.id},
-          '근거 부족으로 보류', '0xsig', now()
+          'Held for insufficient evidence', '0xsig', now()
         ) RETURNING id
       `;
       await expect(
@@ -375,7 +375,7 @@ describeDb("스키마·RLS·guard", () => {
       ).rejects.toThrow(/수정·삭제할 수 없다/);
     });
 
-    it("빈 rationale로 결정을 기록할 수 없다", async () => {
+    it("cannot record a decision with an empty rationale", async () => {
       const [subject] = await sql<{ id: string }[]>`
         SELECT id FROM core.subjects WHERE tenant_id = ${TENANT_A} LIMIT 1
       `;
@@ -395,8 +395,8 @@ describeDb("스키마·RLS·guard", () => {
     });
   });
 
-  describe("lifecycle 제약", () => {
-    it("suspended가 아니면 prior_lifecycle_state를 가질 수 없다", async () => {
+  describe("lifecycle constraints", () => {
+    it("cannot have prior_lifecycle_state unless suspended", async () => {
       const [org] = await sql<{ id: string }[]>`
         SELECT id FROM core.organizations WHERE tenant_id = ${TENANT_A} LIMIT 1
       `;
@@ -413,7 +413,7 @@ describeDb("스키마·RLS·guard", () => {
       ).rejects.toThrow();
     });
 
-    it("suspended면 prior_lifecycle_state가 필수다", async () => {
+    it("prior_lifecycle_state is required when suspended", async () => {
       const [org] = await sql<{ id: string }[]>`
         SELECT id FROM core.organizations WHERE tenant_id = ${TENANT_A} LIMIT 1
       `;
@@ -431,8 +431,8 @@ describeDb("스키마·RLS·guard", () => {
     });
   });
 
-  describe("authority는 한계를 명시해야 한다 (05 §5.11)", () => {
-    it("does_not_prove가 비면 거절한다", async () => {
+  describe("authorities must state limitations (05 §5.11)", () => {
+    it("rejects an empty does_not_prove", async () => {
       await expect(
         sql`
           INSERT INTO core.authorities (
@@ -447,7 +447,7 @@ describeDb("스키마·RLS·guard", () => {
       ).rejects.toThrow();
     });
 
-    it("한계를 명시하면 통과한다", async () => {
+    it("passes when limitations are stated", async () => {
       const rows = await sql`
         INSERT INTO core.authorities (
           id, tenant_id, name, jurisdiction, proves, does_not_prove,
@@ -463,7 +463,7 @@ describeDb("스키마·RLS·guard", () => {
     });
   });
 
-  describe("published registry version은 덮어쓸 수 없다", () => {
+  describe("a published registry version cannot be overwritten", () => {
     let versionId: string;
 
     beforeAll(async () => {
@@ -485,7 +485,7 @@ describeDb("스키마·RLS·guard", () => {
       versionId = version!.id;
     });
 
-    it("projection을 수정할 수 없다", async () => {
+    it("cannot modify the projection", async () => {
       await expect(
         sql`
           UPDATE core.registry_entry_versions
@@ -495,7 +495,7 @@ describeDb("스키마·RLS·guard", () => {
       ).rejects.toThrow(/덮어쓸 수 없다/);
     });
 
-    it("상태 전이(revoke)는 허용된다", async () => {
+    it("state transition (revoke) is allowed", async () => {
       const result = await sql`
         UPDATE core.registry_entry_versions
         SET status = 'revoked', revoked_at = now()
@@ -505,7 +505,7 @@ describeDb("스키마·RLS·guard", () => {
       expect(result).toHaveLength(1);
     });
 
-    it("published인데 projection이 없으면 저장할 수 없다", async () => {
+    it("cannot store published without a projection", async () => {
       const [entry] = await sql<{ id: string }[]>`
         SELECT id FROM core.registry_entries WHERE tenant_id = ${TENANT_A} LIMIT 1
       `;
@@ -524,7 +524,7 @@ describeDb("스키마·RLS·guard", () => {
   });
 
   describe("lineage recursive CTE (ADR-T03)", () => {
-    it("영향 전파 경로를 조회할 수 있다", async () => {
+    it("can query the impact propagation path", async () => {
       const ids = Array.from({ length: 4 }, (_, i) =>
         `3333333${i}-3333-3333-3333-333333333333`,
       );

@@ -1,28 +1,28 @@
 /**
- * README 테스트 수치 드리프트 검사.
+ * README test count drift check.
  *
- * `README.md`는 패키지·앱별 테스트 수와 합계를 적는다. 이 수치는 두 번
- * 어긋났다 — 테스트를 늘린 커밋이 README를 같이 고치지 않았기 때문이다.
- * 사람의 규율로 막히지 않는다는 것이 두 번의 재발로 확인됐으므로 검사로 고정한다.
+ * `README.md` lists test counts per package/app and a total. These counts drifted
+ * twice — commits that added tests did not update README. Two recurrences showed
+ * human discipline does not prevent it, so it is fixed as a check.
  *
- * 세는 방법과 그 이유:
+ * How each is counted, and why:
  *
- * - **vitest**: `vitest list --json`. `DATABASE_URL`이 없으면 DB 의존 테스트가
- *   collect 단계에서 빠져 수치가 작게 나온다. 그래서 이 스크립트는 그것을
- *   요구한다 — CI `verify` job이 이미 설정한다.
- * - **Playwright**: `playwright test --list`. 브라우저 설치가 필요 없다(spec을
- *   읽기만 한다).
- * - **Foundry**: `.t.sol`의 `test*`·`invariant*` 함수를 센다. `forge test`를
- *   부르지 않는 이유는 이 검사가 도는 CI job에 foundry가 없기 때문이다.
- *   실제 실행값과의 일치는 `contracts` job이 따로 확인한다.
- * - **route**: `ROUTES` 계약의 길이. `openapi.json`의 operation 수와 같아야
- *   하지만 그 대조는 `check:openapi`가 이미 한다.
+ * - **vitest**: `vitest list --json`. Without `DATABASE_URL`, DB-dependent tests drop
+ *   out at collect time and the count comes out low. So this script requires
+ *   it — the CI `verify` job already sets it.
+ * - **Playwright**: `playwright test --list`. No browser install needed (it only reads
+ *   specs).
+ * - **Foundry**: counts `test*`/`invariant*` functions in `.t.sol`. `forge test` is not
+ *   invoked because the CI job running this check has no foundry.
+ *   Agreement with the actual run is checked separately by the `contracts` job.
+ * - **route**: length of the `ROUTES` contract. It must equal the operation count in
+ *   `openapi.json`, but `check:openapi` already compares that.
  *
- * `--write`를 주면 README를 실측값으로 고친다. CI는 인자 없이 돌려 드리프트를
- * 실패로 만든다 — `check:openapi`와 같은 형태다.
+ * `--write` rewrites README with the measured values. CI runs without arguments so drift
+ * fails — the same shape as `check:openapi`.
  *
- * **실측일은 수치가 바뀔 때만 옮긴다.** 매번 오늘로 찍으면 수치가 맞는 날에도
- * 실패하고, 그 실패는 자기 사유를 잘못 말한다(`recordedDate` 주석 참조).
+ * **The measured date moves only when counts change.** Stamping today every time fails even
+ * on days the counts match, and that failure misstates its own reason (see `recordedDate`).
  */
 
 import { execFileSync } from "node:child_process";
@@ -38,7 +38,7 @@ const README = path.join(DAPP, "README.md");
 
 const WRITE = process.argv.includes("--write");
 
-/** README 표의 행 하나. `label`은 첫 칸의 경로, `count`는 마지막 칸의 수. */
+/** One README table row. `label` is the path in the first cell, `count` the number in the last. */
 interface Row {
   readonly label: string;
   readonly count: number;
@@ -53,11 +53,11 @@ function run(command: string, args: readonly string[], cwd: string): string {
   });
 }
 
-/** vitest project별 테스트 수. `DATABASE_URL` 없이는 셀 수 없다. */
+/** Test count per vitest project. Cannot be counted without `DATABASE_URL`. */
 function vitestCounts(): ReadonlyMap<string, number> {
   if (!process.env.DATABASE_URL) {
     console.error(
-      "DATABASE_URL이 없다. 없으면 DB 의존 테스트가 collect에서 빠져 수치가 작게 나온다.\n" +
+      "DATABASE_URL is not set. Without it, DB-dependent tests drop out at collect and the count comes out low.\n" +
         '  DATABASE_URL="postgres://postgres@localhost:5432/mpc_test" pnpm check:counts',
     );
     process.exit(2);
@@ -72,15 +72,15 @@ function vitestCounts(): ReadonlyMap<string, number> {
   }, new Map<string, number>());
 }
 
-/** Playwright spec 수. `--list`는 브라우저 없이 돈다. */
+/** Playwright spec count. `--list` runs without a browser. */
 function playwrightCount(): number {
   const out = run("pnpm", ["exec", "playwright", "test", "--list"], path.join(DAPP, "apps/web"));
   const matched = /Total:\s+(\d+)\s+tests?/.exec(out);
-  if (!matched) throw new Error(`playwright --list 출력에서 총계를 찾지 못했다:\n${out}`);
+  if (!matched) throw new Error(`Could not find the total in playwright --list output:\n${out}`);
   return Number(matched[1]);
 }
 
-/** `.t.sol`의 test·invariant 함수 수. forge 없이 센다. */
+/** Number of test/invariant functions in `.t.sol`. Counted without forge. */
 function foundryCount(): number {
   const dir = path.join(DAPP, "contracts/test");
   return readdirSync(dir)
@@ -98,15 +98,15 @@ const counts = {
 };
 
 /**
- * README 표에서 세는 행.
+ * README table rows that are counted.
  *
- * `apps/web`은 빼 둔다. 그 칸은 단위 테스트와 E2E **둘**을 담으므로 다른 행처럼
- * 숫자 하나로 쓸 수 없다 — 아래에서 따로 쓴다. 처음에는 web에 vitest project가
- * 아예 없었고, 뒤에 그것이 생기면서 이 구분이 필요해졌다.
+ * `apps/web` is left out. Its cell holds **both** unit tests and E2E, so it cannot be a
+ * single number like the other rows — it is written separately below. At first web had no
+ * vitest project at all; adding one later made this distinction necessary.
  */
 const ROWS: readonly Row[] = [
   ...[...vitest.entries()]
-    // web의 project 이름은 `@mpc/web`이 아니라 `web`이다(자체 vitest.config).
+    // web's project name is `web`, not `@mpc/web` (its own vitest.config).
     .filter(([project]) => project !== "web")
     .map(([project, count]) => ({
       label: project.replace("@mpc/", ""),
@@ -114,7 +114,7 @@ const ROWS: readonly Row[] = [
     })),
 ];
 
-/** web의 단위 테스트. project가 없으면 0이고, 그때는 E2E만 적는다. */
+/** web unit tests. 0 when there is no project, in which case only E2E is written. */
 const webUnitCount = vitest.get("web") ?? 0;
 
 /** `@mpc/api` → `apps/api`, `@mpc/canonical` → `packages/canonical`. */
@@ -124,31 +124,31 @@ const pathFor = (label: string): string => `${APPS.has(label) ? "apps" : "packag
 const original = readFileSync(README, "utf8");
 const today = new Date().toISOString().slice(0, 10);
 
-/** 표의 마지막 칸(테스트 수)만 바꾼다. 설명 칸은 건드리지 않는다. */
+/** Replaces only the table's last cell (test count). The description cell is untouched. */
 function withRowCount(text: string, cell: string, count: number, prefix = ""): string {
   const pattern = new RegExp(`(^\\| \`${cell.replace("/", "\\/")}\` \\|[^|]*\\| )${prefix}\\d+( \\|$)`, "m");
-  if (!pattern.test(text)) throw new Error(`README에서 \`${cell}\` 행을 찾지 못했다`);
+  if (!pattern.test(text)) throw new Error(`Could not find the \`${cell}\` row in README`);
   return text.replace(pattern, `$1${prefix}${count}$2`);
 }
 
-/** 수치만 바꾸는 치환들. 합계 줄의 **날짜는 건드리지 않는다.** */
+/** Substitutions that change only numbers. The summary line's **date is untouched.** */
 const numericFixes = [
   ...ROWS.map((row) => (text: string) => withRowCount(text, pathFor(row.label), row.count)),
-  // web 칸은 `unit N · E2E M` 또는 `E2E M`이다. 다른 행과 형태가 다르므로
-  // 셀 전체를 바꾼다.
+  // The web cell is `unit N · E2E M` or `E2E M`. Its shape differs from other rows, so
+  // the whole cell is replaced.
   (text: string) => {
     const cell = webUnitCount > 0 ? `unit ${webUnitCount} · E2E ${counts.playwright}` : `E2E ${counts.playwright}`;
     const pattern = /(^\| `apps\/web` \|[^|]*\| )(?:unit \d+ · )?E2E \d+( \|$)/m;
-    if (!pattern.test(text)) throw new Error("README에서 `apps/web` 행을 찾지 못했다");
+    if (!pattern.test(text)) throw new Error("Could not find the `apps/web` row in README");
     return text.replace(pattern, `$1${cell}$2`);
   },
   (text: string) => text.replace(/(\| `apps\/api` \|[^|]*?)\d+ routes/, `$1${counts.routes} routes`),
   /**
-   * 표 밖의 route 수치 — 2026-09-10 실사.
+   * Route counts outside the table — 2026-09-10 audit.
    *
-   * 위 치환은 `| \`apps/api\` |` 행만 잡는다. 그래서 §아직 없는 것의 산문에
-   * 있던 "59개 route"는 route가 79개가 된 뒤에도 그대로 남았고, 게이트는
-   * 초록이었다. **한 곳만 검사하는 게이트는 나머지를 보증하지 않는다.**
+   * The substitution above only matches the `| \`apps/api\` |` row. So "59 routes" in the
+   * prose of §"What does not exist yet" stayed after routes reached 79, and the gate stayed
+   * green. **A gate that checks one place does not vouch for the rest.**
    */
   (text: string) =>
     text.replace(/\d+ routes in the contract \(`ROUTES`\)/g, `${counts.routes} routes in the contract (\`ROUTES\`)`),
@@ -157,7 +157,7 @@ const numericFixes = [
 
 const SUMMARY = /^Total: vitest \d+ \+ Playwright \d+ \+ Foundry \d+(?: \+ route \d+)?\. \(measured (\d{4}-\d{2}-\d{2})\)$/m;
 
-/** 합계 줄을 실측값으로 바꾼다. 날짜는 호출자가 정한다. */
+/** Replaces the summary line with measured values. The caller decides the date. */
 const withSummary =
   (date: string) =>
   (text: string): string =>
@@ -167,18 +167,18 @@ const withSummary =
     );
 
 /**
- * README에 적힌 실측일.
+ * The measured date recorded in README.
  *
- * **날짜를 무조건 오늘로 다시 찍으면 안 된다.** 그렇게 하면 수치가 전부 맞는
- * 날에도 `updated !== original`이 되어 CI가 "수치가 실측과 다르다"로 실패한다.
- * 실패 사유가 사실과 다르므로 보는 사람은 `--write`를 반사적으로 돌리게 되고,
- * 그러면 이 게이트는 드리프트를 잡는 장치가 아니라 통과 의식이 된다.
+ * **Never unconditionally re-stamp the date as today.** Doing so makes `updated !== original`
+ * even on days every count matches, and CI fails with "counts differ from measured".
+ * Since the stated reason is false, people reflexively run `--write`, and then
+ * this gate becomes a ritual to pass rather than a drift detector.
  *
- * 날짜는 **수치가 실제로 바뀔 때만** 옮긴다 — 그때가 다시 측정한 때다.
+ * The date moves **only when counts actually change** — that is when it was re-measured.
  */
 const recordedDate = SUMMARY.exec(original)?.[1] ?? today;
 
-/** 날짜를 그대로 둔 채 수치만 맞춘 것. original과 같으면 드리프트가 없다. */
+/** Counts fixed with the date left as is. Equal to original means no drift. */
 const withRecordedDate = [...numericFixes, withSummary(recordedDate)].reduce(
   (text, apply) => apply(text),
   original,
@@ -188,18 +188,18 @@ const updated = [...numericFixes, withSummary(today)].reduce((text, apply) => ap
 
 if (withRecordedDate === original) {
   console.log(
-    `README 수치 일치 — vitest ${counts.vitestTotal} · Playwright ${counts.playwright} · Foundry ${counts.foundry} · route ${counts.routes}`,
+    `README counts match — vitest ${counts.vitestTotal} · Playwright ${counts.playwright} · Foundry ${counts.foundry} · route ${counts.routes}`,
   );
   process.exit(0);
 }
 
 if (WRITE) {
   writeFileSync(README, updated);
-  console.log(`README를 실측값으로 갱신했다 (${today}).`);
+  console.log(`Updated README with measured values (${today}).`);
   process.exit(0);
 }
 
-console.error("README의 테스트 수치가 실측과 다르다.\n");
+console.error("README test counts differ from measured values.\n");
 const originalLines = original.split("\n");
 updated.split("\n").forEach((line, index) => {
   if (line !== originalLines[index]) {
@@ -208,5 +208,5 @@ updated.split("\n").forEach((line, index) => {
     console.error(`  + ${line}\n`);
   }
 });
-console.error("고치려면: pnpm check:counts --write");
+console.error("To fix: pnpm check:counts --write");
 process.exit(1);

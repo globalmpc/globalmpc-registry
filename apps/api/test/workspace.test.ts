@@ -8,13 +8,13 @@ import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 워크스페이스 집계.
+ * Workspace aggregation.
  *
- * 두 화면이 없던 이유는 데이터가 없어서가 아니라 프로젝트 하나를 열어야만 보이는
- * 구조였기 때문이다. 여기서 보는 것은 **집계가 tenant 경계를 지키는가**와
- * **"내가 할 일"과 "내가 기다리는 것"이 섞이지 않는가**다.
+ * The two screens were missing not for lack of data but because data showed only after
+ * opening a single project. This checks **that aggregation respects tenant boundaries** and
+ * **that "my to-dos" and "what I am waiting on" do not mix**.
  */
-describeDb("워크스페이스 집계", () => {
+describeDb("workspace aggregation", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operatorAToken: string;
@@ -36,7 +36,7 @@ describeDb("워크스페이스 집계", () => {
     return app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
   }
 
-  it("게시 상태를 프로젝트를 열지 않고 낸다", async () => {
+  it("reports publish status without opening a project", async () => {
     const publicKey = `WS-${randomUUID().slice(0, 8)}`;
     const published = await app.inject({
       method: "POST",
@@ -53,7 +53,7 @@ describeDb("워크스페이스 집계", () => {
           asOf: "2026-08-01T00:00:00.000Z",
           sourceAge: "12",
           staleStatus: "fresh",
-          limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+          limitations: ["Legal title verification is outside this review's scope"],
           legalEffect: "none",
           disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
         },
@@ -72,12 +72,12 @@ describeDb("워크스페이스 집계", () => {
       .items.find((item: { publicKey: string }) => item.publicKey === publicKey);
     expect(mine).toBeDefined();
     expect(mine.status).toBe("published");
-    // 게시와 anchor는 다른 사건이다. 한 칸에 합치면 "게시됐으니 체인에 있다"로
-    // 읽힌다.
+    // Publishing and anchoring are separate events. Merging them reads as "published, so
+    // it is on-chain".
     expect(mine.anchored).toBe(false);
   });
 
-  it("다른 tenant의 기록을 내지 않는다", async () => {
+  it("does not return another tenant's records", async () => {
     const a = await get(operatorAToken, "/api/v1/registry-entries");
     const b = await get(operatorBToken, "/api/v1/registry-entries");
 
@@ -87,7 +87,7 @@ describeDb("워크스페이스 집계", () => {
     }
   });
 
-  it("내가 기다리는 것과 결정해야 하는 것을 섞지 않는다", async () => {
+  it("keeps what I am waiting on apart from what I must decide", async () => {
     const subject = (
       await app.inject({
         method: "POST",
@@ -104,14 +104,14 @@ describeDb("워크스페이스 집계", () => {
       method: "POST",
       url: "/api/v1/admin/role-grants",
       headers: { authorization: `Bearer ${operatorAToken}`, "idempotency-key": idempotencyKey() },
-      payload: { subjectId: subject.id, role: "auditor", reason: "감사 담당" },
+      payload: { subjectId: subject.id, role: "auditor", reason: "audit duty" },
     });
 
     const mine = (await get(operatorAToken, "/api/v1/my-work")).json();
 
-    // 내가 제안했다 — 내가 할 일은 없다.
+    // I made the proposal — nothing for me to do.
     expect(mine.waitingOnOthers.some((item: { id: string }) => item.id)).toBe(true);
-    // 같은 제안이 "결정해야 하는 것"에도 있으면 두 목록의 의미가 사라진다.
+    // If the same proposal also appears under "to decide", both lists lose meaning.
     const waitingIds = new Set(mine.waitingOnOthers.map((item: { id: string }) => item.id));
     for (const item of mine.unassigned) {
       if (item.kind === "role_grant_decision") {
@@ -120,8 +120,8 @@ describeDb("워크스페이스 집계", () => {
     }
   });
 
-  it("아무에게도 배정되지 않은 것을 따로 낸다", async () => {
-    // 배정된 일만 보이면 아무도 맡지 않은 일이 영원히 보이지 않는다.
+  it("lists unassigned items separately", async () => {
+    // If only assigned work shows, work nobody owns never shows.
     const response = await get(operatorAToken, "/api/v1/my-work");
 
     expect(response.statusCode).toBe(200);

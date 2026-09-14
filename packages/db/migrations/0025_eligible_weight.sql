@@ -1,37 +1,37 @@
--- 정족수의 분모 — spec 09 §9.6, 04 §4.5
+-- Quorum denominator — spec 09 §9.6, 04 §4.5
 --
--- 지금까지 정족수는 **던진 표의 합**을 분모로 계산했다. 그러면
--- `참여 × D >= 참여 × N`이 N ≤ D인 한 항상 참이라 정족수가 통과만 한다.
--- `no_quorum`이 구조적으로 나올 수 없고, 한 표만 있어도 마감된다.
+-- Until now quorum used **the sum of votes cast** as the denominator. Then
+-- `turnout × D >= turnout × N` is always true while N ≤ D, so quorum always passes.
+-- `no_quorum` cannot occur structurally, and a single vote closes the proposal.
 --
--- 09 §9.6은 "no quorum은 defeated와 다른 상태"를 요구한다. 참여가 부족한 것과
--- 반대가 많은 것은 다음에 할 일이 다르다 — 전자는 다시 알리는 것이고 후자는
--- 제안을 고치는 것이다.
+-- 09 §9.6 requires "no quorum is a state distinct from defeated". Low turnout and
+-- majority opposition call for different next steps — the former means re-announcing, the latter
+-- revising the proposal.
 --
--- 분모는 **투표를 열 때 고정**한다. 토큰이 연결돼 있으면 스냅숏 블록의
--- 총공급이고, 아니면 사람이 넣은 값이다. 어느 쪽인지 감추지 않는다.
+-- The denominator is **fixed when voting opens**. With a linked token it is the total supply
+-- at the snapshot block; otherwise a human-entered value. Which one is never hidden.
 
 ALTER TABLE core.governance_proposals
-  -- 투표할 수 있었던 전체 무게. decimal string으로 다룬다(ADR-T07).
+  -- Total weight eligible to vote. Handled as a decimal string (ADR-T07).
   --
-  -- 0을 막는다. `참여 × D >= 0 × N`은 항상 참이라 분모를 두고도 정족수가
-  -- 통과만 하는 상태로 되돌아간다.
+  -- Blocks 0. `turnout × D >= 0 × N` is always true, so even with a denominator quorum
+  -- would revert to always passing.
   ADD COLUMN eligible_weight NUMERIC(78, 0) CHECK (eligible_weight > 0),
-  -- 분모가 어디서 왔는가. NULL이면 아직 고정되지 않았다.
+  -- Where the denominator came from. NULL means not yet fixed.
   ADD COLUMN eligible_weight_source TEXT
     CHECK (eligible_weight_source IN ('onchain_total_supply', 'manual'));
 
--- 출처가 정해졌으면 값도 있어야 한다. 하나만 있으면 근거를 알 수 없다.
+-- Once the source is set, the value must be too. Only one of them leaves the basis unknown.
 ALTER TABLE core.governance_proposals
   ADD CONSTRAINT eligible_weight_source_requires_value CHECK (
     eligible_weight_source IS NULL OR eligible_weight IS NOT NULL
   );
 
 /**
- * 고정된 분모는 바뀌지 않는다.
+ * A fixed denominator never changes.
  *
- * 분모를 고칠 수 있으면 결과를 고칠 수 있다. 제안 생성 시점의 값은 아직
- * 후보이므로(`eligible_weight_source IS NULL`) 투표를 열기 전까지는 고칠 수 있다.
+ * A changeable denominator means a changeable result. The value at proposal creation is
+ * still a candidate (`eligible_weight_source IS NULL`), so it can change until voting opens.
  */
 CREATE OR REPLACE FUNCTION core.protect_eligible_weight() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$

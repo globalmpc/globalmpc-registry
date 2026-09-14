@@ -13,15 +13,15 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 import { Address } from "@/components/Address";
 
 /**
- * 감사 로그와 이벤트 발행 상태 — spec 02 §2.6, 07 §7.5.
+ * Audit log and event outbox state — spec 02 §2.6, 07 §7.5.
  *
- * `audit.events`가 append-only이고 superuser도 수정할 수 없다는 보장은, 읽는
- * 경로가 없으면 운영에 쓰이지 못한다. DB에 직접 붙어야만 볼 수 있는 감사 기록은
- * 감사의 신뢰를 오히려 떨어뜨린다.
+ * The guarantee that `audit.events` is append-only and unmodifiable even by superuser is useless
+ * in operation without a read path. An audit record visible only through a direct DB connection
+ * undermines trust in the audit instead.
  *
- * **`detail`은 표시하지 않는다.** 이벤트 payload에 PII를 넣지 않기로 했지만,
- * 약속이 깨졌을 때 이 화면이 최초 유출 경로가 된다. 무엇이 일어났는지는
- * command와 resource로 충분하다.
+ * **`detail` is not displayed.** Event payloads are meant to carry no PII, but if that
+ * promise breaks this screen becomes the first leak path. Command and resource
+ * are enough to say what happened.
  */
 export default function AuditPage() {
   const { token, loading: sessionLoading } = useSession();
@@ -84,8 +84,8 @@ export default function AuditPage() {
             <dd className="mono" data-testid="backlog-pending">
               {backlog.pending}
               {backlog.pending > 0 ? (
-                // at-least-once다. 쌓인다는 것은 사라졌다는 뜻이 아니라 늦어진다는
-                // 뜻이다 — 그 구분이 대응을 정한다.
+                // Delivery is at-least-once. A backlog means delayed, not
+                // lost — that distinction decides the response.
                 <span className="meta"> · delayed, not lost</span>
               ) : null}
             </dd>
@@ -110,7 +110,7 @@ export default function AuditPage() {
           ) : null}
 
           <p className="meta" style={{ marginTop: 10 }}>
-            {/* 수동 재생성이 진짜 중복을 만든다. */}
+            {/* Manual regeneration creates real duplicates. */}
             The delay matters more than the count. A thousand events one second late and one
             event an hour late are different problems.
           </p>

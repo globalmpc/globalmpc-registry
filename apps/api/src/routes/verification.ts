@@ -45,15 +45,16 @@ import {
 } from "../services/attestation-signing.js";
 
 /**
- * Verification Case와 Attestation — spec 03 §3단계, 04 §4.4, 07 §7.2.
+ * Verification Case and Attestation — spec 03 §stage 3, 04 §4.4, 07 §7.2.
  *
- * 이 라우트가 지키는 것:
+ * What this route guarantees:
  *
- * - `limitations` 없는 서명은 불가능하다(AC-01). 도메인 검사 + DB CHECK 두 겹.
- * - 서버는 대리 서명하지 않는다. 서명 요청을 만들고 결과를 검증만 한다.
- * - signature request는 한 번만 쓰인다.
- * - 서명 시점의 evidence snapshot이 바뀌면 그 요청은 무효다.
- * - 서명 당시 credential 상태를 보존한다(AC-17).
+ * - A signature without `limitations` is impossible (AC-01). Two layers: domain check + DB CHECK.
+ * - The server does not sign on anyone's behalf. It only creates signature requests and
+ *   verifies results.
+ * - A signature request is used only once.
+ * - If the evidence snapshot changes after the request, the request is void.
+ * - Credential status at signing time is preserved (AC-17).
  */
 
 const SIGNATURE_REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -61,7 +62,7 @@ const SIGNATURE_REQUEST_TTL_MS = 10 * 60 * 1000;
 const createCaseSchema = z.object({
   projectId: z.string().uuid(),
   schemaId: z.string().uuid(),
-  claimIds: z.array(z.string().uuid()).min(1, "근거 없는 검토는 만들 수 없다"),
+  claimIds: z.array(z.string().uuid()).min(1, "A review cannot be created without evidence"),
   reviewerSubjectId: z.string().uuid(),
   credentialId: z.string().uuid(),
   conflictStatus: z.enum(["none", "disclosed_resolved", "unresolved"]).default("none"),
@@ -79,7 +80,7 @@ const createAttestationSchema = z.object({
   claimScope: z.array(z.string().uuid()).min(1),
   findings: z.array(z.record(z.string())).default([]),
   citations: z.array(z.record(z.string())).default([]),
-  limitations: z.string().min(1, "limitations는 비워 둘 수 없다"),
+  limitations: z.string().min(1, "limitations cannot be empty"),
 });
 
 const submitSignatureSchema = z.object({
@@ -88,10 +89,10 @@ const submitSignatureSchema = z.object({
 });
 
 /**
- * 리소스가 걸린 프로젝트.
+ * The project the resource belongs to.
  *
- * 인가는 멱등 블록 **밖에서** 한다. replay는 저장된 응답을 그대로 돌려주므로,
- * 안에 두면 남의 key를 재생한 요청이 인가를 지나지 않는다.
+ * Authorization runs **outside** the idempotency block. Replay returns the stored response
+ * as is, so inside it a request replaying someone else's key would skip authorization.
  */
 async function caseProjectId(
   sql: postgres.Sql,
@@ -103,7 +104,7 @@ async function caseProjectId(
       SELECT project_id FROM core.verification_cases WHERE id = ${caseId}
     `,
   );
-  if (!row) throw notFound("verification case를 찾을 수 없다");
+  if (!row) throw notFound("Verification case not found");
   return row.project_id;
 }
 
@@ -120,7 +121,7 @@ async function attestationProjectId(
       WHERE a.id = ${attestationId}
     `,
   );
-  if (!row) throw notFound("attestation을 찾을 수 없다");
+  if (!row) throw notFound("Attestation not found");
   return row.project_id;
 }
 
@@ -138,7 +139,7 @@ async function disputeProjectId(
       WHERE d.id = ${disputeId}
     `,
   );
-  if (!row) throw notFound("이의를 찾을 수 없다");
+  if (!row) throw notFound("Dispute not found");
   return row.project_id;
 }
 
@@ -154,7 +155,7 @@ export async function registerVerificationRoutes(
 
     const parsed = createCaseSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
     }
@@ -184,8 +185,8 @@ export async function registerVerificationRoutes(
           )
         `;
 
-        // 검토 범위를 보존한다. snapshot 해시는 바뀌었는지만 알려 줄 뿐
-        // 무엇이었는지 복원하지 못한다(0011).
+        // Preserves the review scope. The snapshot hash only tells whether it changed; it cannot
+        // restore what it was (0011).
         for (const claimId of snapshot.claimIds) {
           await tx`
             INSERT INTO core.verification_case_claims (tenant_id, case_id, claim_id)
@@ -242,15 +243,15 @@ export async function registerVerificationRoutes(
     );
   });
 
-  // --- Case 목록 -----------------------------------------------------------
+  // --- Case list -----------------------------------------------------------
 
   /**
-   * 배정된 검토자가 자기 case를 찾는 경로.
+   * The path by which an assigned reviewer finds their own cases.
    *
-   * 배정을 만드는 사람(`data_steward`)과 서명하는 사람(reviewer)은 다르다.
-   * 목록이 없으면 검토자는 자기 배정에 도달할 방법이 없다. 읽기는 RLS가
-   * tenant로 막고, 서명 가능 여부는 attestation 생성 시점에 따로 판정한다 —
-   * 보이는 것과 할 수 있는 것은 다른 질문이다.
+   * The assigner (`data_steward`) and the signer (reviewer) are different people.
+   * Without a list the reviewer has no way to reach their assignment. RLS limits reads to the
+   * tenant; whether signing is allowed is judged separately when the attestation is created —
+   * what one can see and what one can do are different questions.
    */
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/verification-cases",
@@ -333,23 +334,23 @@ export async function registerVerificationRoutes(
     },
   );
 
-  // --- Case 상태 전이 ------------------------------------------------------
+  // --- Case state transition -----------------------------------------------
 
   /**
-   * 검토 case 상태를 바꾼다 — 04 §4.4.
+   * Changes a review case's state — 04 §4.4.
    *
-   * 보완 요청·반려·취소를 기록하는 경로다. 이것이 없으면 검토는 "서명하거나
-   * 아무 일도 없거나" 둘뿐이고, 잘못된 근거를 발견해도 남길 자리가 없다.
+   * Records requests for changes, rejections, and cancellations. Without it a review is either
+   * "signed or nothing", and finding bad evidence leaves nowhere to record it.
    *
-   * 전이 가능 여부는 도메인 상태기계가 판정한다. 라우트가 조건을 다시 쓰면
-   * 상태기계와 갈라진다.
+   * The domain state machine judges whether a transition is allowed. If the route rewrote
+   * the conditions it would diverge from the state machine.
    *
-   * `signed` 이후로는 이 경로로 갈 수 없다. 서명된 검토를 되돌리는 것은 상태
-   * 변경이 아니라 이의 제기(dispute)나 supersede다.
+   * After `signed` this path is closed. Reversing a signed review is not a state change but
+   * a dispute or a supersede.
    */
   const transitionSchema = z.object({
     toState: z.enum(["in_review", "changes_requested", "declined", "cancelled"]),
-    reason: z.string().min(1, "상태를 바꾼 이유는 비워 둘 수 없다"),
+    reason: z.string().min(1, "Reason for the state change cannot be empty"),
   });
 
   app.post<{ Params: { caseId: string } }>(
@@ -360,7 +361,7 @@ export async function registerVerificationRoutes(
 
       const parsed = transitionSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -385,15 +386,15 @@ export async function registerVerificationRoutes(
             WHERE id = ${request.params.caseId}
             FOR UPDATE
           `;
-          if (!current) throw notFound("verification case를 찾을 수 없다");
+          if (!current) throw notFound("Verification case not found");
 
           assertVersionMatches(expectedVersion, current.version, "verification_case");
 
           if (!canTransition(verificationCaseMachine, current.state, toState)) {
-            throw conflict("INVALID_STATE_TRANSITION", "허용되지 않는 상태 전이다", {
+            throw conflict("INVALID_STATE_TRANSITION", "State transition not allowed", {
               fromState: current.state,
               toState,
-              // 다음에 무엇을 할 수 있는지 알려준다. 막기만 하면 사용자는 추측한다.
+              // Tells what can be done next. Blocking alone leaves the user guessing.
               allowedTransitions: [...(verificationCaseMachine.transitions[current.state] ?? [])],
             });
           }
@@ -403,8 +404,8 @@ export async function registerVerificationRoutes(
             WHERE id = ${current.id}
           `;
 
-          // 왜 바뀌었는지를 남긴다. 현재 상태만 있으면 다음 사람이 판단할
-          // 근거가 없다.
+          // Records why it changed. With only the current state, the next person has no
+          // basis for judgment.
           await tx`
             INSERT INTO core.verification_case_transitions (
               id, tenant_id, case_id, from_state, to_state, reason, actor_subject_id
@@ -454,20 +455,20 @@ export async function registerVerificationRoutes(
     },
   );
 
-  // --- Attestation 이의 제기 ------------------------------------------------
+  // --- Attestation dispute --------------------------------------------------
 
   /**
-   * 서명된 attestation에 이의를 제기한다 — 04 §4.2.
+   * Disputes a signed attestation — 04 §4.2.
    *
-   * **서명을 지우지 않는다.** 서명 당시의 판단은 그대로 남고 `disputed`라는 새
-   * 사실이 추가된다. 서명을 삭제하면 "누가 무엇을 언제 판단했는가"를 잃고,
-   * 그것은 잘못된 검토를 감추는 것과 구분되지 않는다.
+   * **The signature is not erased.** The judgment at signing time stays, and a new fact,
+   * `disputed`, is added. Deleting the signature loses "who judged what, when", which
+   * is indistinguishable from hiding a bad review.
    *
-   * 이의는 검토가 틀렸다는 판정이 아니다. 다시 볼 필요가 있다는 표시다.
+   * A dispute is not a ruling that the review is wrong. It marks that it needs another look.
    */
   const disputeSchema = z.object({
     reasonCode: z.string().min(1),
-    detail: z.string().min(1, "이의 제기 사유는 비워 둘 수 없다"),
+    detail: z.string().min(1, "Dispute reason cannot be empty"),
   });
 
   app.post<{ Params: { attestationId: string } }>(
@@ -477,7 +478,7 @@ export async function registerVerificationRoutes(
 
       const parsed = disputeSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -504,14 +505,14 @@ export async function registerVerificationRoutes(
             WHERE id = ${request.params.attestationId}
             FOR UPDATE
           `;
-          if (!attestation) throw notFound("attestation을 찾을 수 없다");
+          if (!attestation) throw notFound("Attestation not found");
 
-          // 이미 disputed면 상태는 그대로 두고 이의만 추가한다. 다른 사람이
-          // 다른 이유로 제기할 수 있어야 하고, 하나가 열려 있다고 나머지를
-          // 막으면 두 번째 지적이 기록될 자리가 없다.
+          // If already disputed, the state stays and only the dispute is added. Others must be
+          // able to raise disputes for other reasons; blocking the rest because one is open
+          // leaves nowhere to record a second finding.
           const alreadyDisputed = attestation.state === "disputed";
           if (!alreadyDisputed && !canTransition(attestationMachine, attestation.state, "disputed")) {
-            throw conflict("INVALID_STATE_TRANSITION", "이 상태에서는 이의를 제기할 수 없다", {
+            throw conflict("INVALID_STATE_TRANSITION", "Cannot dispute in this state", {
               fromState: attestation.state,
               toState: "disputed",
               allowedTransitions: [
@@ -529,7 +530,7 @@ export async function registerVerificationRoutes(
             )
           `;
 
-          // 상태만 바뀐다. payload_hash·signature·limitations는 그대로다.
+          // Only the state changes. payload_hash, signature, and limitations stay unchanged.
           await tx`
             UPDATE core.verification_attestations SET state = 'disputed'
             WHERE id = ${attestation.id}
@@ -560,7 +561,7 @@ export async function registerVerificationRoutes(
             id: attestation.id,
             state: "disputed",
             previousState: attestation.state,
-            // 서명 본문은 바뀌지 않았다. 같은 해시가 그대로 남는다.
+            // The signed body did not change. The same hash remains.
             payloadHash: attestation.payload_hash,
             reasonCode: parsed.data.reasonCode,
             requestId,
@@ -571,7 +572,7 @@ export async function registerVerificationRoutes(
     },
   );
 
-  // --- 이의 조회와 해소 ------------------------------------------------------
+  // --- Dispute lookup and resolution ----------------------------------------
 
   app.get<{ Params: { attestationId: string } }>(
     "/api/v1/attestations/:attestationId/disputes",
@@ -610,8 +611,8 @@ export async function registerVerificationRoutes(
       );
 
       return {
-        // 해소된 이의도 함께 보여준다. 감추면 "한 번 문제가 제기됐다"는 사실이
-        // 사라지고, 그것은 잘못된 검토를 덮는 것과 구분되지 않는다.
+        // Resolved disputes are shown too. Hiding them erases the fact that "an issue was once
+        // raised", which is indistinguishable from covering up a bad review.
         items: rows.map((row) => ({
           id: row.id,
           attestationId: row.attestation_id,
@@ -629,20 +630,20 @@ export async function registerVerificationRoutes(
   );
 
   /**
-   * 이의 해소 — 04 §4.2.
+   * Dispute resolution — 04 §4.2.
    *
-   * **이의 기록을 지우지 않는다.** `resolved_at`과 결과가 덧붙을 뿐이다.
+   * **The dispute record is not erased.** `resolved_at` and the outcome are only appended.
    *
-   * `upheld`(이의가 맞았다)면 attestation을 `active`로 되돌리지 않는다 — 검토가
-   * 틀렸다는 것이 확인된 상태에서 그것을 유효로 표시할 수 없다. supersede나
-   * revoke는 별도 결정이다.
+   * If `upheld` (the dispute was right), the attestation does not return to `active` — once the
+   * review is confirmed wrong it cannot be marked valid. Supersede or revoke is a separate
+   * decision.
    *
-   * `dismissed`(검토가 유지된다)면 남은 미해소 이의가 없을 때만 `active`로
-   * 돌아간다. 하나라도 남아 있으면 여전히 다시 볼 필요가 있다는 뜻이다.
+   * If `dismissed` (the review stands), it returns to `active` only when no unresolved
+   * disputes remain. Any remaining one means it still needs another look.
    */
   const resolveSchema = z.object({
     outcome: z.enum(["upheld", "dismissed"]),
-    resolution: z.string().min(1, "해소 근거는 비워 둘 수 없다"),
+    resolution: z.string().min(1, "Resolution rationale cannot be empty"),
   });
 
   app.post<{ Params: { disputeId: string } }>(
@@ -652,7 +653,7 @@ export async function registerVerificationRoutes(
 
       const parsed = resolveSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -680,10 +681,10 @@ export async function registerVerificationRoutes(
             WHERE id = ${request.params.disputeId}
             FOR UPDATE
           `;
-          if (!dispute) throw notFound("이의를 찾을 수 없다");
+          if (!dispute) throw notFound("Dispute not found");
 
           if (dispute.resolved_at) {
-            throw conflict("DISPUTE_ALREADY_RESOLVED", "이미 해소된 이의다", {
+            throw conflict("DISPUTE_ALREADY_RESOLVED", "Dispute is already resolved", {
               resolvedAt: dispute.resolved_at.toISOString(),
             });
           }
@@ -694,7 +695,7 @@ export async function registerVerificationRoutes(
             WHERE id = ${dispute.id}
           `;
 
-          // 남은 미해소 이의가 있으면 attestation은 disputed로 남는다.
+          // While unresolved disputes remain, the attestation stays disputed.
           const [remaining] = await tx<{ count: string }[]>`
             SELECT count(*)::text AS count FROM core.attestation_disputes
             WHERE attestation_id = ${dispute.attestation_id} AND resolved_at IS NULL
@@ -702,7 +703,7 @@ export async function registerVerificationRoutes(
 
           let attestationState = "disputed";
           if (outcome === "dismissed" && Number(remaining?.count ?? "1") === 0) {
-            // 검토가 유지된다. 이의가 모두 풀렸으므로 active로 돌아간다.
+            // The review stands. All disputes are resolved, so it returns to active.
             await tx`
               UPDATE core.verification_attestations SET state = 'active'
               WHERE id = ${dispute.attestation_id} AND state = 'disputed'
@@ -729,8 +730,8 @@ export async function registerVerificationRoutes(
             outcome,
             resolution,
             resolvedAt: new Date().toISOString(),
-            // 이의가 인정되면 검토를 유효로 되돌리지 않는다. supersede·revoke는
-            // 별도 결정이다.
+            // An upheld dispute does not restore the review to valid. Supersede or revoke is a
+            // separate decision.
             attestationState,
             unresolvedDisputes: Number(remaining?.count ?? "0"),
             requestId,
@@ -741,7 +742,7 @@ export async function registerVerificationRoutes(
     },
   );
 
-  // --- Attestation 초안 ----------------------------------------------------
+  // --- Attestation draft ----------------------------------------------------
 
   app.post<{ Params: { caseId: string } }>(
     "/api/v1/verification-cases/:caseId/attestations",
@@ -750,7 +751,7 @@ export async function registerVerificationRoutes(
 
       const parsed = createAttestationSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -791,24 +792,24 @@ export async function registerVerificationRoutes(
             WHERE vc.id = ${request.params.caseId}
           `;
 
-          if (!context) throw notFound("verification case를 찾을 수 없다");
+          if (!context) throw notFound("Verification case not found");
 
           /**
-           * 배정된 사람만 자기 배정으로 작성한다 — 02 §2.9, 불변조건 13.
+           * Only the assignee drafts under their own assignment — 02 §2.9, invariant 13.
            *
-           * 이 검사가 없으면 검토자 역할을 가진 누구나 **남의 assignmentId**로
-           * 초안을 만들 수 있고, 그 행에는 배정자의 지갑 주소가 서명자로 박힌다.
-           * 최종 서명은 복구된 주소를 배정자 지갑과 대조하므로 위조 서명까지는
-           * 가지 않지만, 그때까지 남의 이름으로 된 findings가 남는다.
+           * Without this check anyone with the reviewer role could draft with **someone else's
+           * assignmentId**, and that row would carry the assignee's wallet as signer. Final signing
+           * checks the recovered address against the assignee's wallet, so it stops short of a forged
+           * signature, but until then findings under someone else's name remain.
            *
-           * 역할 검사로는 막지 못한다 — 같은 tenant의 검토자는 전부 같은 역할을
-           * 갖기 때문이다.
+           * A role check cannot stop this — every reviewer in the same tenant has the same
+           * role.
            */
           if (context.assignment_subject !== session.subjectId) {
             throw forbidden(
               "ASSIGNMENT_NOT_OWNED",
-              "이 배정은 다른 검토자의 것이다",
-              { requiredAction: "자기에게 배정된 case에서 작성한다" },
+              "This assignment belongs to another reviewer",
+              { requiredAction: "Draft from a case assigned to you" },
             );
           }
 
@@ -829,7 +830,7 @@ export async function registerVerificationRoutes(
             }),
           );
 
-          // 서명 가능 여부는 도메인이 판정한다. 라우트가 조건을 다시 쓰지 않는다.
+          // The domain judges whether signing is allowed. The route does not restate the conditions.
           const check = checkAttestationSignable({
             attestationType: data.attestationType,
             claimScope: data.claimScope,
@@ -843,7 +844,7 @@ export async function registerVerificationRoutes(
           });
 
           if (!check.allowed) {
-            throw unprocessable(check.reason, "이 조건에서는 서명할 수 없다");
+            throw unprocessable(check.reason, "Cannot sign under these conditions");
           }
 
           const attestationId = randomUUID();
@@ -910,7 +911,7 @@ export async function registerVerificationRoutes(
     },
   );
 
-  // --- 서명 요청 -----------------------------------------------------------
+  // --- Signature request ----------------------------------------------------
 
   app.post<{ Params: { attestationId: string } }>(
     "/api/v1/attestations/:attestationId/signature-requests",
@@ -946,9 +947,9 @@ export async function registerVerificationRoutes(
             WHERE a.id = ${request.params.attestationId}
           `;
 
-          if (!attestation) throw notFound("attestation을 찾을 수 없다");
+          if (!attestation) throw notFound("Attestation not found");
           if (attestation.state !== "draft") {
-            throw conflict("ATTESTATION_ALREADY_SIGNED", "이미 서명된 attestation이다");
+            throw conflict("ATTESTATION_ALREADY_SIGNED", "Attestation is already signed");
           }
 
           const requestRowId = randomUUID();
@@ -1006,8 +1007,8 @@ export async function registerVerificationRoutes(
               domain: typedData.domain,
               types: typedData.types,
               primaryType: typedData.primaryType,
-              // bigint는 JSON으로 직렬화되지 않는다. 클라이언트가 다시 bigint로
-              // 만들 수 있도록 decimal string으로 보낸다.
+              // bigint does not serialize to JSON. Sent as a decimal string so the client can
+              // turn it back into a bigint.
               message: {
                 ...message,
                 issuedAt: issuedAt.toString(),
@@ -1025,7 +1026,7 @@ export async function registerVerificationRoutes(
     },
   );
 
-  // --- 서명 제출 -----------------------------------------------------------
+  // --- Signature submission -------------------------------------------------
 
   app.post<{ Params: { attestationId: string } }>(
     "/api/v1/attestations/:attestationId/signatures",
@@ -1034,7 +1035,7 @@ export async function registerVerificationRoutes(
 
       const parsed = submitSignatureSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다");
+        throw badRequest("REQUEST_INVALID", "Request format is invalid");
       }
 
       const { requestId, asOf, correlationId } = request.context;
@@ -1042,7 +1043,7 @@ export async function registerVerificationRoutes(
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-          // 요청을 원자적으로 소비한다. 두 번째 제출은 행을 찾지 못한다.
+          // Consumes the request atomically. A second submission finds no row.
           const [signatureRequest] = await tx<
             {
               id: string;
@@ -1066,7 +1067,7 @@ export async function registerVerificationRoutes(
           if (!signatureRequest) {
             throw conflict(
               "SIGNATURE_REQUEST_UNUSABLE",
-              "이 서명 요청은 이미 사용됐거나 만료됐다",
+              "This signature request has already been used or has expired",
             );
           }
 
@@ -1098,13 +1099,14 @@ export async function registerVerificationRoutes(
             WHERE a.id = ${request.params.attestationId}
           `;
 
-          if (!attestation) throw notFound("attestation을 찾을 수 없다");
+          if (!attestation) throw notFound("Attestation not found");
 
-          // snapshot substitution 방어: 서명 요청 이후 근거가 바뀌었으면 무효다.
+          // Snapshot substitution defense: if the evidence changed after the signature request,
+          // it is void.
           if (attestation.current_snapshot !== signatureRequest.evidence_snapshot_hash) {
             throw conflict(
               "EVIDENCE_SNAPSHOT_CHANGED",
-              "서명 요청 이후 근거가 바뀌었다. 새 요청을 만들어야 한다",
+              "Evidence changed after the signature request. Create a new request.",
             );
           }
 
@@ -1127,15 +1129,15 @@ export async function registerVerificationRoutes(
             parsed.data.signature as ViemHex,
           );
 
-          // 서명 유효성과 권한은 다른 사실이다(불변조건 13). 복구된 주소가
-          // assignment의 검토자인지 별도로 대조한다.
+          // Signature validity and authorization are separate facts (invariant 13). Checks
+          // separately that the recovered address is the assignment's reviewer.
           if (
             attestation.reviewer_wallet === null ||
             signer !== attestation.reviewer_wallet.toLowerCase()
           ) {
             throw badRequest(
               "SIGNATURE_SIGNER_MISMATCH",
-              "서명자가 이 case에 배정된 검토자가 아니다",
+              "Signer is not the reviewer assigned to this case",
             );
           }
 

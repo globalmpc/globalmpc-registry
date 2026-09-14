@@ -11,7 +11,7 @@ const VALID = {
 };
 
 describe("loadConfig", () => {
-  it("유효한 환경변수를 파싱한다", () => {
+  it("parses valid environment variables", () => {
     const config = loadConfig(VALID);
     expect(config.port).toBe(3001);
     expect(config.chainId).toBe(97);
@@ -19,11 +19,12 @@ describe("loadConfig", () => {
   });
 
   /**
-   * 배포 플랫폼은 선언된 변수를 값이 없어도 빈 문자열로 넣는다. Coolify는 compose에서
-   * 뽑은 변수 목록을 모든 컨테이너에 주입하므로, anchor worker용으로 비워 둔
-   * `CHAIN_RPC_URL`이 API에도 `""`로 들어와 API가 시작 직후 죽었다.
+   * Deploy platforms inject declared variables as empty strings even with no value. Coolify
+   * injects the variable list extracted from compose into every container, so the
+   * `CHAIN_RPC_URL` left empty for the anchor worker reached the API as `""` and killed it
+   * right after startup.
    */
-  it("빈 문자열로 들어온 선택 변수를 주지 않은 것으로 읽는다", () => {
+  it("reads an optional variable given as an empty string as unset", () => {
     const config = loadConfig({
       ...VALID,
       CHAIN_RPC_URL: "",
@@ -41,50 +42,50 @@ describe("loadConfig", () => {
     expect(config.objectStore.credentials).toBeUndefined();
   });
 
-  it("빈 문자열로 들어온 필수 변수는 누락으로 보고한다", () => {
+  it("reports a required variable given as an empty string as missing", () => {
     expect(() => loadConfig({ ...VALID, SIWE_URI: "" })).toThrowError(/SIWE_URI/);
   });
 
-  it("필수 환경변수가 없으면 시작 시 실패한다", () => {
+  it("fails at startup when a required variable is missing", () => {
     const { DATABASE_URL, ...missing } = VALID;
     expect(() => loadConfig(missing)).toThrowError(ConfigError);
     expect(() => loadConfig(missing)).toThrowError(/DATABASE_URL/);
   });
 
-  it("짧은 session secret을 거절한다", () => {
+  it("rejects a short session secret", () => {
     expect(() => loadConfig({ ...VALID, SESSION_SECRET: "short" })).toThrowError(
       /SESSION_SECRET/,
     );
   });
 
-  it("BSC mainnet·testnet 외의 chain ID를 거절한다", () => {
+  it("rejects chain IDs other than BSC mainnet and testnet", () => {
     expect(() => loadConfig({ ...VALID, CHAIN_ID: "1" })).toThrowError(/CHAIN_ID/);
     expect(loadConfig({ ...VALID, CHAIN_ID: "56" }).chainId).toBe(56);
     expect(loadConfig({ ...VALID, CHAIN_ID: "97" }).chainId).toBe(97);
   });
 
   /**
-   * 요청자 판정에 쓰는 홉 수 — 값이 조용히 0이 되면 안 된다.
+   * Hop count used to identify the requester — must never silently become 0.
    *
-   * 0은 "헤더를 믿지 않는다"이므로 프록시 뒤에서는 상한이 다시 사이트 전체
-   * 합산이 된다. 그 상태는 오류 없이 동작하므로 배포에서 눈에 띄지 않는다.
-   * 배포 플랫폼이 넣는 빈 문자열이 0으로 강제되지 않는다는 것을 고정한다.
+   * 0 means "do not trust the header", so behind a proxy the cap becomes a site-wide total
+   * again. That state runs without errors, so it goes unnoticed in deployment.
+   * Pins that the empty string a deploy platform injects is not coerced to 0.
    */
   /**
-   * 시간 상한.
+   * Time caps.
    *
-   * Fastify는 둘 다 끈 채로 만든다. 실측에서 `requestTimeout`도 `server.timeout`도
-   * 0이었다. 값이 있다는 것과 **끌 수 없다는 것**을 함께 고정한다 — 0을 허용하면
-   * "잠깐 꺼 두자"가 영구가 된다.
+   * Fastify ships with both disabled. Measured: `requestTimeout` and `server.timeout` were
+   * both 0. Pins both that a value exists and **that it cannot be disabled** — allowing 0
+   * turns "disable it for now" into permanent.
    */
-  describe("시간 상한", () => {
-    it("주지 않아도 값이 있다", () => {
+  describe("time caps", () => {
+    it("has a value when unset", () => {
       const config = loadConfig(VALID);
       expect(config.requestTimeoutMs).toBe(300_000);
       expect(config.socketIdleTimeoutMs).toBe(60_000);
     });
 
-    it("배포에서 낮출 수 있다", () => {
+    it("can be lowered in deployment", () => {
       const config = loadConfig({
         ...VALID,
         REQUEST_TIMEOUT_MS: "45000",
@@ -94,7 +95,7 @@ describe("loadConfig", () => {
       expect(config.socketIdleTimeoutMs).toBe(15_000);
     });
 
-    it("0으로 끌 수 없다", () => {
+    it("cannot be disabled with 0", () => {
       expect(() => loadConfig({ ...VALID, REQUEST_TIMEOUT_MS: "0" })).toThrowError(
         /REQUEST_TIMEOUT_MS/,
       );
@@ -103,7 +104,7 @@ describe("loadConfig", () => {
       );
     });
 
-    it("빈 문자열은 0이 아니라 기본값으로 읽는다", () => {
+    it("reads an empty string as the default, not 0", () => {
       const config = loadConfig({
         ...VALID,
         REQUEST_TIMEOUT_MS: "",
@@ -115,23 +116,23 @@ describe("loadConfig", () => {
   });
 
   describe("TRUSTED_PROXY_HOPS", () => {
-    it("주지 않으면 1이다 — 프록시 하나(Coolify) 뒤라는 전제", () => {
+    it("defaults to 1 — assumes one proxy (Coolify) in front", () => {
       expect(loadConfig(VALID).trustedProxyHops).toBe(1);
     });
 
-    it("빈 문자열은 0이 아니라 기본값으로 읽는다", () => {
+    it("reads an empty string as the default, not 0", () => {
       expect(loadConfig({ ...VALID, TRUSTED_PROXY_HOPS: "" }).trustedProxyHops).toBe(1);
     });
 
-    it("앞단 프록시가 늘면 올릴 수 있다", () => {
+    it("can be raised when more front proxies are added", () => {
       expect(loadConfig({ ...VALID, TRUSTED_PROXY_HOPS: "2" }).trustedProxyHops).toBe(2);
     });
 
-    it("0은 명시했을 때만 — 헤더를 아예 믿지 않는다", () => {
+    it("uses 0 only when explicit — trusts no header at all", () => {
       expect(loadConfig({ ...VALID, TRUSTED_PROXY_HOPS: "0" }).trustedProxyHops).toBe(0);
     });
 
-    it("음수·정수가 아닌 값을 거절한다", () => {
+    it("rejects negative and non-integer values", () => {
       expect(() => loadConfig({ ...VALID, TRUSTED_PROXY_HOPS: "-1" })).toThrowError(
         /TRUSTED_PROXY_HOPS/,
       );
@@ -144,7 +145,7 @@ describe("loadConfig", () => {
     });
   });
 
-  it("오류 메시지에 secret 값을 넣지 않는다", () => {
+  it("keeps secret values out of error messages", () => {
     try {
       loadConfig({ ...VALID, PORT: "not-a-number" });
       expect.unreachable();
@@ -156,27 +157,27 @@ describe("loadConfig", () => {
   });
 });
 
-describe("R1: 개발용 인증 스위치가 제거됐다", () => {
-  it("설정에 allowInsecureDevAuth가 없다", () => {
-    // wallet 주소를 헤더에 넣어 인증하던 경로는 R1에서 세션 토큰으로 대체됐다.
-    // 설정 자체가 사라졌으므로 실수로 켤 수 없다.
+describe("R1: the dev auth switch is removed", () => {
+  it("has no allowInsecureDevAuth in config", () => {
+    // R1 replaced header-based wallet-address auth with session tokens.
+    // The setting is gone, so it cannot be enabled by mistake.
     expect(loadConfig(VALID)).not.toHaveProperty("allowInsecureDevAuth");
   });
 
-  it("남아 있는 환경변수는 무시된다", () => {
-    // 옛 배포 설정에 값이 남아 있어도 기동을 막지 않는다. 다만 아무 효과도 없다.
+  it("ignores a leftover environment variable", () => {
+    // A value left in old deploy config does not block startup. It has no effect.
     expect(() => loadConfig({ ...VALID, ALLOW_INSECURE_DEV_AUTH: "true" })).not.toThrow();
   });
 
-  it("NODE_ENV 기본값은 development다", () => {
+  it("defaults NODE_ENV to development", () => {
     expect(loadConfig(VALID).nodeEnv).toBe("development");
   });
 
-  it("알 수 없는 NODE_ENV를 거절한다", () => {
+  it("rejects an unknown NODE_ENV", () => {
     expect(() => loadConfig({ ...VALID, NODE_ENV: "staging" })).toThrowError(ConfigError);
   });
 
-  describe("시크릿 참조", () => {
+  describe("secret references", () => {
     const base = {
       DATABASE_URL: "postgres://localhost/x",
       SIWE_DOMAIN: "localhost:3000",
@@ -185,8 +186,8 @@ describe("R1: 개발용 인증 스위치가 제거됐다", () => {
       SESSION_SECRET: "s".repeat(32),
     };
 
-    it("값 그대로도 계속 받는다", () => {
-      // 로컬 개발까지 vault를 요구하면 아무도 돌려보지 못한다.
+    it("still accepts plain values", () => {
+      // Requiring a vault for local development would stop anyone from running it.
       const config = loadConfig(base as NodeJS.ProcessEnv);
       expect(config.sessionSecret).toBe("s".repeat(32));
       expect(config.secretAudit.find((s) => s.variableName === "SESSION_SECRET")?.scheme).toBe(
@@ -194,7 +195,7 @@ describe("R1: 개발용 인증 스위치가 제거됐다", () => {
       );
     });
 
-    it("다른 환경변수를 가리킬 수 있다", () => {
+    it("can point to another environment variable", () => {
       const config = loadConfig({
         ...base,
         SESSION_SECRET: "env:PLATFORM_SESSION_SECRET",
@@ -207,8 +208,8 @@ describe("R1: 개발용 인증 스위치가 제거됐다", () => {
       );
     });
 
-    it("DATABASE_URL의 콜론을 scheme으로 오인하지 않는다", () => {
-      // `postgres://user:pass@host`가 잘리면 연결 문자열이 통째로 깨진다.
+    it("does not mistake the colon in DATABASE_URL for a scheme", () => {
+      // Truncating `postgres://user:pass@host` breaks the whole connection string.
       const config = loadConfig({
         ...base,
         DATABASE_URL: "postgres://u:p@localhost:5432/db",
@@ -216,25 +217,25 @@ describe("R1: 개발용 인증 스위치가 제거됐다", () => {
       expect(config.databaseUrl).toBe("postgres://u:p@localhost:5432/db");
     });
 
-    it("감사 기록에 값이 들어가지 않는다", () => {
+    it("keeps values out of the audit record", () => {
       const secret = "s".repeat(32);
       const config = loadConfig(base as NodeJS.ProcessEnv);
 
-      // 운영에서 "어떤 키를 쓰고 있나"는 지문으로 답한다. 값으로 답하면 로그가
-      // 유출 경로가 된다.
+      // In operations, "which key is in use" is answered by fingerprint. Answering with the
+      // value turns logs into a leak path.
       const serialized = JSON.stringify(config.secretAudit);
       expect(serialized).not.toContain(secret);
       expect(config.secretAudit.every((entry) => entry.fingerprint.length === 12)).toBe(true);
     });
 
-    it("가리킨 환경변수가 비면 시작하지 않는다", () => {
+    it("does not start when the referenced variable is empty", () => {
       expect(() =>
         loadConfig({ ...base, SESSION_SECRET: "env:MISSING" } as NodeJS.ProcessEnv),
       ).toThrow();
     });
   });
 
-  describe("객체 저장 (OD-17·OD-22)", () => {
+  describe("object storage (OD-17·OD-22)", () => {
     const base = {
       DATABASE_URL: "postgres://localhost/x",
       SIWE_DOMAIN: "localhost:3000",
@@ -243,26 +244,26 @@ describe("R1: 개발용 인증 스위치가 제거됐다", () => {
       SESSION_SECRET: "s".repeat(32),
     };
 
-    it("기본은 메모리 저장소다", () => {
+    it("defaults to in-memory storage", () => {
       expect(loadConfig(base as NodeJS.ProcessEnv).objectStore.kind).toBe("memory");
     });
 
-    it("production에서 메모리 저장소를 거절한다", () => {
-      // 증빙 원문이 재시작마다 사라지는데 그 사실이 아무 데도 드러나지 않는다.
+    it("rejects in-memory storage in production", () => {
+      // Original evidence would vanish on every restart, with nothing showing it anywhere.
       expect(() =>
         loadConfig({ ...base, NODE_ENV: "production" } as NodeJS.ProcessEnv),
       ).toThrow(/OBJECT_STORE=memory/);
     });
 
-    it("s3에는 리전을 반드시 요구한다", () => {
-      // 기본 리전을 두면 아무도 결정하지 않은 채 어딘가에 저장된다. OD-17을
-      // 코드로 강제하는 지점이다.
+    it("requires a region for s3", () => {
+      // A default region means data lands somewhere nobody decided. This is where OD-17
+      // is enforced in code.
       expect(() =>
         loadConfig({ ...base, OBJECT_STORE: "s3", OBJECT_BUCKET: "b" } as NodeJS.ProcessEnv),
       ).toThrow(/OBJECT_REGION/);
     });
 
-    it("bucket과 region이 있으면 s3 설정을 만든다", () => {
+    it("builds the s3 config when bucket and region are set", () => {
       const config = loadConfig({
         ...base,
         OBJECT_STORE: "s3",
@@ -276,8 +277,8 @@ describe("R1: 개발용 인증 스위치가 제거됐다", () => {
       expect(config.objectStore.kmsKeyId).toBe("arn:aws:kms:...:key/abc");
     });
 
-    it("자격증명은 둘 다 있을 때만 설정한다", () => {
-      // 한쪽만 있으면 SDK가 기본 credential chain으로 조용히 떨어진다.
+    it("sets credentials only when both are present", () => {
+      // With only one, the SDK silently falls back to the default credential chain.
       const config = loadConfig({
         ...base,
         OBJECT_STORE: "s3",

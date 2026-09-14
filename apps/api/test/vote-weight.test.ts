@@ -7,24 +7,24 @@ import { resolveVoteWeight, snapshotBlockFor } from "../src/services/vote-weight
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 투표 무게 스냅숏 — 04 §4.5.
+ * Vote weight snapshot — 04 §4.5.
  *
- * 핵심은 **던지는 사람이 자기 무게를 정할 수 없다**는 것이다. 요청 본문의
- * 값은 토큰이 설정되지 않은 제안에서만 쓰인다.
+ * The point is that **a voter cannot set their own weight**. The request body value is used
+ * only for proposals with no token configured.
  */
 
-describe("스냅숏 블록 선정", () => {
-  it("head가 아니라 확정된 블록을 쓴다", () => {
-    // head는 재구성될 수 있고, 그러면 이미 던진 표의 무게 근거가 사라진다.
+describe("snapshot block selection", () => {
+  it("uses a finalized block, not head", () => {
+    // head can be reorged, erasing the weight basis of votes already cast.
     expect(snapshotBlockFor(1000, 12)).toBe(988);
   });
 
-  it("체인 초기에도 음수가 되지 않는다", () => {
+  it("does not go negative early in the chain", () => {
     expect(snapshotBlockFor(5, 12)).toBe(0);
   });
 });
 
-describeDb("무게 해석", () => {
+describeDb("weight resolution", () => {
   let sql: postgres.Sql;
   let tenantId: string;
   let proposalId: string;
@@ -58,7 +58,7 @@ describeDb("무게 해석", () => {
         id, tenant_id, space, proposal_type, title, rationale, proposer_subject_id,
         quorum_numerator, quorum_denominator, threshold_numerator, threshold_denominator
       ) VALUES (
-        ${proposalId}, ${tenantId}, 'protocol', 'fee_schedule', '제목', '이유',
+        ${proposalId}, ${tenantId}, 'protocol', 'fee_schedule', 'title', 'reason',
         ${subjectId}, 1, 4, 1, 2
       )
     `;
@@ -73,7 +73,7 @@ describeDb("무게 해석", () => {
     manualWeight: null,
   });
 
-  it("온체인 잔고를 읽어 무게로 쓴다", async () => {
+  it("reads the onchain balance as weight", async () => {
     const result = await sql.begin((tx) =>
       resolveVoteWeight(tx, base(), async () => 5000n),
     );
@@ -81,8 +81,8 @@ describeDb("무게 해석", () => {
     expect(result).toMatchObject({ weight: 5000n, source: "onchain_snapshot" });
   });
 
-  it("요청 본문의 무게를 무시한다", async () => {
-    // 던지는 사람이 자기 무게를 정하면 투표가 아니라 선언이다.
+  it("ignores the weight in the request body", async () => {
+    // If voters set their own weight, it is a declaration, not a vote.
     const result = await sql.begin((tx) =>
       resolveVoteWeight(tx, { ...base(), manualWeight: "999999" }, async () => 100n),
     );
@@ -90,29 +90,29 @@ describeDb("무게 해석", () => {
     expect((result as { weight: bigint }).weight).toBe(100n);
   });
 
-  it("두 번째 조회는 저장된 값을 쓴다", async () => {
+  it("uses the stored value on the second lookup", async () => {
     await sql.begin((tx) => resolveVoteWeight(tx, base(), async () => 100n));
 
-    // 다시 읽으면 그 사이 블록이 재구성됐을 때 다른 값이 나온다.
+    // Re-reading would yield a different value if the block was reorged in between.
     const second = await sql.begin((tx) =>
       resolveVoteWeight(tx, base(), async () => 999n),
     );
     expect((second as { weight: bigint }).weight).toBe(100n);
   });
 
-  it("조회 실패를 잔고 0으로 읽지 않는다", async () => {
-    // 0은 "토큰이 없다"는 사실이고 실패는 "모른다"다. 전자로 기록하면
-    // 투표권을 조용히 뺏는다.
+  it("does not read a lookup failure as a zero balance", async () => {
+    // 0 means "holds no token"; failure means "unknown". Recording the former silently
+    // strips voting power.
     await expect(
       sql.begin((tx) =>
         resolveVoteWeight(tx, base(), async () => {
           throw new Error("archive node required");
         }),
       ),
-    ).rejects.toThrow(/읽지 못했다|VOTE_WEIGHT_UNAVAILABLE/);
+    ).rejects.toThrow(/Could not read the balance|VOTE_WEIGHT_UNAVAILABLE/);
   });
 
-  it("토큰이 없으면 수동 무게로 떨어진다", async () => {
+  it("falls back to manual weight when no token is set", async () => {
     const result = await sql.begin((tx) =>
       resolveVoteWeight(
         tx,
@@ -121,12 +121,12 @@ describeDb("무게 해석", () => {
       ),
     );
 
-    // 그 사실을 감추지 않는다 — 수동 무게로 집계된 결과를 온체인 근거로
-    // 읽으면 안 된다.
+    // This is not hidden — a result tallied with manual weight must not be read as
+    // onchain-backed.
     expect(result).toMatchObject({ weight: 42n, source: "manual", blockNumber: null });
   });
 
-  it("토큰도 수동 무게도 없으면 투표할 수 없다", async () => {
+  it("cannot vote with neither a token nor a manual weight", async () => {
     await expect(
       sql.begin((tx) =>
         resolveVoteWeight(
@@ -135,13 +135,13 @@ describeDb("무게 해석", () => {
           async () => 0n,
         ),
       ),
-    ).rejects.toThrow(/VOTE_WEIGHT_REQUIRED|지정해야/);
+    ).rejects.toThrow(/VOTE_WEIGHT_REQUIRED|must be specified/);
   });
 
-  it("스냅숏된 무게는 수정할 수 없다", async () => {
+  it("cannot modify a snapshotted weight", async () => {
     await sql.begin((tx) => resolveVoteWeight(tx, base(), async () => 100n));
 
-    // 무게를 고칠 수 있으면 결과를 고칠 수 있다.
+    // If weight can be changed, results can be changed.
     await expect(
       sql`
         UPDATE core.governance_vote_weights SET weight = 999
@@ -150,12 +150,12 @@ describeDb("무게 해석", () => {
     ).rejects.toThrow(/수정할 수 없다/);
   });
 
-  it("스냅숏 블록은 정해진 뒤 바뀌지 않는다", async () => {
+  it("does not change the snapshot block once set", async () => {
     await sql`
       UPDATE core.governance_proposals SET snapshot_block = 1000 WHERE id = ${proposalId}
     `;
 
-    // 투표 중에 블록을 옮기면 이미 던진 표의 무게 근거가 사라진다.
+    // Moving the block mid-vote erases the weight basis of votes already cast.
     await expect(
       sql`
         UPDATE core.governance_proposals SET snapshot_block = 2000 WHERE id = ${proposalId}
@@ -163,7 +163,7 @@ describeDb("무게 해석", () => {
     ).rejects.toThrow(/바꿀 수 없다/);
   });
 
-  it("18 decimals 무게도 정밀도를 잃지 않는다", async () => {
+  it("keeps precision for 18-decimal weights", async () => {
     const huge = 10n ** 24n + 7n;
     const result = await sql.begin((tx) => resolveVoteWeight(tx, base(), async () => huge));
     expect((result as { weight: bigint }).weight).toBe(huge);

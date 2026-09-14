@@ -7,15 +7,15 @@ import { deliverOnce, deliveryBacklog, signPayload } from "../src/notification-d
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 알림 webhook 배달.
+ * Notification webhook delivery.
  *
- * 지키는 것 셋.
+ * Three guarantees.
  *
- * 1. **서명한다** — 서명이 없으면 URL을 아는 누구나 알림을 위조할 수 있다.
- * 2. **영원히 두드리지 않는다** — 상한에 닿으면 굳고, 그 사실이 남는다.
- * 3. **보내지 못한 것을 성공으로 적지 않는다.**
+ * 1. **Sign it** — without a signature, anyone who knows the URL can forge a notification.
+ * 2. **Never retry forever** — at the cap the delivery is frozen, and that fact is recorded.
+ * 3. **Never record an unsent delivery as a success.**
  */
-describeDb("알림 배달", () => {
+describeDb("notification delivery", () => {
   let sql: postgres.Sql;
   let tenantId: string;
   let sinkId: string;
@@ -24,7 +24,7 @@ describeDb("알림 배달", () => {
     maxAttempts: 3,
     backoffMs: 1000,
     resolveSecret: (reference: string) => {
-      if (reference === "env:BROKEN") throw new Error("참조를 풀 수 없다");
+      if (reference === "env:BROKEN") throw new Error("cannot resolve reference");
       return "test-secret";
     },
   };
@@ -57,22 +57,22 @@ describeDb("알림 배달", () => {
     const id = randomUUID();
     await sql`
       INSERT INTO core.notifications (id, tenant_id, kind, audience_role, summary, link)
-      VALUES (${id}, ${tenantId}, 'registry_revoked', 'mpc_operator', '기록이 철회됐다', '/w/registries')
+      VALUES (${id}, ${tenantId}, 'registry_revoked', 'mpc_operator', 'Record revoked', '/w/registries')
     `;
     return id;
   }
 
-  it("알림이 생기면 배달 행이 자동으로 걸린다", async () => {
+  it("a delivery row is attached automatically when a notification is created", async () => {
     const id = await makeNotification();
 
     const [row] = await sql<{ state: string }[]>`
       SELECT state FROM core.notification_deliveries WHERE notification_id = ${id}
     `;
-    // 알림을 만드는 자리가 넷이다. route에서 걸면 새 자리에서 빠뜨린다.
+    // Four places create notifications. Attaching in a route would miss any new one.
     expect(row!.state).toBe("pending");
   });
 
-  it("서명과 함께 보내고 성공을 기록한다", async () => {
+  it("sends with a signature and records success", async () => {
     await makeNotification();
     let seen: { url: string; headers: Record<string, string>; body: string } | null = null;
 
@@ -91,7 +91,7 @@ describeDb("알림 배달", () => {
     expect(result).toEqual({ handled: true, delivered: 1, failed: 0 });
     expect(seen!.url).toBe("https://hooks.example.test/a");
 
-    // 받는 쪽이 같은 비밀로 재계산해 맞출 수 있어야 한다.
+    // The receiver must be able to recompute and match it with the same secret.
     const timestamp = seen!.headers["x-mpc-timestamp"]!;
     const expected = createHmac("sha256", "test-secret")
       .update(`${timestamp}.${seen!.body}`)
@@ -99,7 +99,7 @@ describeDb("알림 배달", () => {
     expect(seen!.headers["x-mpc-signature"]).toBe(expected);
     expect(signPayload("test-secret", seen!.body, timestamp)).toBe(expected);
 
-    // 본문에 projection도 증빙도 담지 않는다. 수신처는 우리가 통제하지 않는다.
+    // The body carries neither projection nor evidence. We do not control the receiver.
     const body = JSON.parse(seen!.body) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual([
       "kind",
@@ -110,7 +110,7 @@ describeDb("알림 배달", () => {
     ]);
   });
 
-  it("실패하면 재시도로 남기고 간격을 둔다", async () => {
+  it("on failure, leaves it for retry with a backoff", async () => {
     const id = await makeNotification();
 
     const result = await deliverOnce(sql, {
@@ -123,12 +123,12 @@ describeDb("알림 배달", () => {
       SELECT state, attempts, last_error FROM core.notification_deliveries
       WHERE notification_id = ${id}
     `;
-    // 굳지 않았다 — 아직 상한에 닿지 않았다.
+    // Not frozen — the cap has not been reached yet.
     expect(row!.state).toBe("pending");
     expect(row!.attempts).toBe(1);
     expect(row!.last_error).toContain("500");
 
-    // 즉시 재시도하면 죽은 수신처에 대고 계속 두드린다.
+    // Retrying immediately would keep hammering a dead receiver.
     const [again] = await sql<{ due: boolean }[]>`
       SELECT next_attempt_at > now() AS due FROM core.notification_deliveries
       WHERE notification_id = ${id}
@@ -136,12 +136,12 @@ describeDb("알림 배달", () => {
     expect(again!.due).toBe(true);
   });
 
-  it("상한에 닿으면 굳고 그 사실이 남는다", async () => {
+  it("freezes at the cap and records that fact", async () => {
     const id = await makeNotification();
     const failing = (async () => new Response("", { status: 503 })) as unknown as typeof fetch;
 
     for (let attempt = 0; attempt < options.maxAttempts; attempt += 1) {
-      // 간격을 건너뛰고 바로 다음 시도를 만든다.
+      // Skip the backoff and create the next attempt immediately.
       await sql`UPDATE core.notification_deliveries SET next_attempt_at = now()`;
       await deliverOnce(sql, { ...options, fetchImpl: failing });
     }
@@ -152,7 +152,7 @@ describeDb("알림 배달", () => {
     expect(row!.state).toBe("failed");
     expect(row!.attempts).toBe(options.maxAttempts);
 
-    // 앱 안 알림은 그대로 남는다. 사라지는 것은 "보냈다"는 사실뿐이다.
+    // The in-app notification remains. Only the fact that it was "sent" is lost.
     const [notification] = await sql<{ id: string }[]>`
       SELECT id FROM core.notifications WHERE id = ${id}
     `;
@@ -160,23 +160,23 @@ describeDb("알림 배달", () => {
     expect((await deliveryBacklog(sql)).failed).toBe(1);
   });
 
-  it("비밀을 풀지 못하면 재시도하지 않고 굳힌다", async () => {
+  it("freezes without retrying when the secret cannot be resolved", async () => {
     await sql`UPDATE core.notification_sinks SET secret_reference = 'env:BROKEN'`;
     const id = await makeNotification();
 
     const result = await deliverOnce(sql, options);
 
-    // 설정이 고쳐져야 하는 것이므로 상한을 기다리지 않는다. 그 사이 로그가
-    // 같은 오류로 찬다.
+    // Config must be fixed, so do not wait for the cap. Meanwhile the log would fill with the same
+    // error.
     expect(result.failed).toBe(1);
     const [row] = await sql<{ state: string; last_error: string }[]>`
       SELECT state, last_error FROM core.notification_deliveries WHERE notification_id = ${id}
     `;
     expect(row!.state).toBe("failed");
-    expect(row!.last_error).toContain("비밀 참조");
+    expect(row!.last_error).toContain("secret reference");
   });
 
-  it("멈춘 수신처로는 보내지 않는다", async () => {
+  it("does not send to a paused receiver", async () => {
     await makeNotification();
     await sql`UPDATE core.notification_sinks SET state = 'paused'`;
 
@@ -193,8 +193,8 @@ describeDb("알림 배달", () => {
     expect(called).toBe(false);
   });
 
-  it("보낼 것이 없으면 아무 일도 하지 않는다", async () => {
-    // 수신처를 만들지 않은 배포에 부담을 주지 않는다.
+  it("does nothing when there is nothing to send", async () => {
+    // Adds no load to deployments that have no receivers.
     const result = await deliverOnce(sql, options);
     expect(result).toEqual({ handled: false, delivered: 0, failed: 0 });
   });

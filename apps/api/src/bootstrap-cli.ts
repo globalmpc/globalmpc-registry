@@ -4,14 +4,14 @@ import { bootstrapOperator, BootstrapError } from "./bootstrap.js";
 import type { BootstrapInput } from "./bootstrap.js";
 
 /**
- * 운영 bootstrap 실행기.
+ * Operational bootstrap runner.
  *
- * 배포 직후 한 번, 또는 사람을 추가할 때마다 부른다. 아무것도 지우지 않으므로
- * 같은 값으로 다시 돌려도 안전하다.
+ * Run once right after deployment, or whenever adding a person. It deletes nothing, so
+ * re-running with the same values is safe.
  *
- * **RLS를 우회하는 연결로 붙는다.** 여기서 만드는 것이 tenant 자신이라 tenant
- * 컨텍스트를 먼저 세울 수 없다. `mpc_app_login`이 아니라 migration을 돌린 것과
- * 같은 연결 문자열을 준다.
+ * **Connects with an RLS-bypassing connection.** What it creates is the tenant itself, so a
+ * tenant context cannot be established first. Pass the same connection string used to run
+ * migrations, not `mpc_app_login`.
  */
 
 const REQUIRED = [
@@ -27,30 +27,30 @@ const missing = REQUIRED.filter((name) => (process.env[name] ?? "") === "");
 if (missing.length > 0) {
   process.stderr.write(
     [
-      `환경변수가 없다 — ${missing.join(", ")}`,
+      `Missing environment variables — ${missing.join(", ")}`,
       "",
-      "필수:",
-      "  DATABASE_URL              migration을 돌린 것과 같은 연결(RLS 우회)",
-      "  BOOTSTRAP_TENANT_SLUG     tenant 식별자. 이미 있으면 그것을 쓴다",
-      "  BOOTSTRAP_TENANT_NAME     tenant 표시 이름",
-      "  BOOTSTRAP_ORG_NAME        조직 법인명",
-      "  BOOTSTRAP_SUBJECT_NAME    사람 표시 이름",
-      "  BOOTSTRAP_WALLET          0x로 시작하는 40자리 주소",
+      "Required:",
+      "  DATABASE_URL              same connection used for migrations (bypasses RLS)",
+      "  BOOTSTRAP_TENANT_SLUG     tenant identifier. Reused if it already exists",
+      "  BOOTSTRAP_TENANT_NAME     tenant display name",
+      "  BOOTSTRAP_ORG_NAME        organization legal name",
+      "  BOOTSTRAP_SUBJECT_NAME    person display name",
+      "  BOOTSTRAP_WALLET          40-hex-digit address starting with 0x",
       "",
-      "선택:",
-      "  BOOTSTRAP_JURISDICTION    ISO3 대문자 3글자 (기본 MNG)",
-      "  BOOTSTRAP_CHAIN_ID        56 또는 97 (기본 97)",
-      "  BOOTSTRAP_ROLE            역할 (기본 mpc_operator)",
+      "Optional:",
+      "  BOOTSTRAP_JURISDICTION    3 uppercase ISO3 letters (default MNG)",
+      "  BOOTSTRAP_CHAIN_ID        56 or 97 (default 97)",
+      "  BOOTSTRAP_ROLE            role (default mpc_operator)",
       "  BOOTSTRAP_ASSURANCE       wallet_only·identity_bound·high_assurance",
-      "                            (기본 high_assurance)",
+      "                            (default high_assurance)",
       "",
     ].join("\n"),
   );
   process.exit(1);
 }
 
-// DATABASE_URL은 `file:`·`env:` 참조로도 줄 수 있다. API·worker와 같은 경로를
-// 지나야 "배포에서만 다르게 동작"하는 구간이 생기지 않는다.
+// DATABASE_URL may also be given as a `file:`·`env:` reference. Going through the same path as
+// the API and worker avoids any section that "behaves differently only in deployment".
 const databaseUrl = resolveSecret(
   "DATABASE_URL",
   process.env["DATABASE_URL"] as string,
@@ -75,7 +75,7 @@ const sql = postgres(databaseUrl, { onnotice: () => {} });
 
 try {
   const result = await bootstrapOperator(sql, input);
-  // 지갑 주소는 공개 정보다. 그 외에 비밀이 되는 값은 여기에 없다.
+  // Wallet addresses are public. No other value here is secret.
   process.stdout.write(
     `${JSON.stringify({
       msg: result.created ? "bootstrap.created" : "bootstrap.exists",
@@ -88,9 +88,9 @@ try {
     })}\n`,
   );
 } catch (error) {
-  // 무엇이 잘못됐는지 사람이 읽을 수 있게 남긴다. 스택은 원인을 가린다.
+  // Leave a human-readable account of what went wrong. A stack trace hides the cause.
   const message = error instanceof BootstrapError ? error.message : String(error);
-  process.stderr.write(`bootstrap 실패 — ${message}\n`);
+  process.stderr.write(`bootstrap failed — ${message}\n`);
   process.exitCode = 1;
 } finally {
   await sql.end();

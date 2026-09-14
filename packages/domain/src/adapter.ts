@@ -1,40 +1,40 @@
 /**
  * Evidence Adapter Framework — spec 05 §5.12, OD-42.
  *
- * 정부 등록부·전문기관·ERSP·수동 확인을 **하나의 Source Receipt envelope**으로
- * 묶는다. adapter마다 다른 결과 형식을 쓰면 12개 source result가 adapter 수만큼
- * 갈라지고, 화면은 그것을 다시 통합해야 한다.
+ * Wraps government registries, professional bodies, ERSPs, and manual checks in **one Source
+ * Receipt envelope**. If each adapter used its own result format, the 12 source results would
+ * fork once per adapter and the UI would have to merge them again.
  *
- * 이 파일에는 특정 기관이 없다. **Core에 기관·법률·schema를 hard-code하지
- * 않는다**(OD-43) — Mongolia profile은 설정으로 들어오고, 확인된 연동만 활성화된다.
+ * This file names no specific institution. **Core does not hard-code institutions, laws, or
+ * schemas** (OD-43) — the Mongolia profile arrives as configuration; only confirmed integrations are active.
  *
- * adapter가 지켜야 하는 것:
+ * What an adapter must uphold:
  *
- * 1. **실패를 성공으로 만들지 않는다.** 조회가 안 되면 `source_unavailable`이지
- *    `source_returned_no_record`가 아니다. 둘을 섞으면 사용자는 존재하지 않는
- *    기록을 계속 재시도한다.
- * 2. **원문 해시를 남긴다.** 나중에 같은 조회를 재현했을 때 응답이 바뀌었는지
- *    확인할 수 있어야 한다.
- * 3. **무엇을 확인하지 않았는지 말한다.** authority의 `does_not_prove`가 그대로
- *    receipt의 `limitations`에 들어간다.
+ * 1. **Never turn a failure into a success.** A failed lookup is `source_unavailable`, not
+ *    `source_returned_no_record`. Mixing the two makes users keep retrying for a record that
+ *    does not exist.
+ * 2. **Keep the raw-response hash.** Replaying the same lookup later must reveal whether the
+ *    response changed.
+ * 3. **State what was not checked.** The authority's `does_not_prove` goes straight into the
+ *    receipt's `limitations`.
  */
 
 import type { SourceResult } from "./source-result.js";
 
 /**
- * adapter 운영 상태 — OD-43.
+ * Adapter operating state — OD-43.
  *
- * `active`만 실제로 호출된다. 나머지는 **연동이 준비되지 않았다는 사실을
- * 드러내기 위해** 존재한다 — 목록에서 빼면 "왜 이 기관은 없나"를 알 수 없다.
+ * Only `active` is actually called. The rest exist **to expose that an integration is not
+ * ready** — drop them from the list and "why is this institution missing" has no answer.
  */
 export const ADAPTER_STATES = [
-  /** 접근 권한이 확인됐고 호출된다. */
+  /** Access is confirmed; the adapter is called. */
   "active",
-  /** 사람이 조회해 결과를 입력한다. API가 없거나 접근 협의 중이다. */
+  /** A person looks up the source and enters the result. No API, or access is under negotiation. */
   "manual",
-  /** 기관은 확인됐지만 접근 권한이 없다. 호출하지 않는다. */
+  /** The institution is identified but access is not granted. Not called. */
   "pending_access",
-  /** 법적·계약적 이유로 쓸 수 없다. */
+  /** Unusable for legal or contractual reasons. */
   "blocked",
 ] as const;
 
@@ -45,11 +45,11 @@ export interface AdapterDescriptor {
   readonly authorityName: string;
   readonly jurisdiction: string;
   readonly state: AdapterState;
-  /** 이 출처가 확인해 주는 것. authority의 `proves`와 같다. */
+  /** What this source confirms. Same as the authority's `proves`. */
   readonly proves: readonly string[];
-  /** 확인해 주지 않는 것. 비어 있을 수 없다(05 §5.11). */
+  /** What it does not confirm. Never empty (05 §5.11). */
   readonly doesNotProve: readonly string[];
-  /** 왜 이 상태인가. `pending_access`·`blocked`에서 특히 필요하다. */
+  /** Why it is in this state. Required in particular for `pending_access` and `blocked`. */
   readonly stateReason: string;
 }
 
@@ -58,10 +58,10 @@ export type AdapterAvailability =
   | { readonly callable: false; readonly reason: string; readonly nextAction: string };
 
 /**
- * 지금 이 adapter를 호출할 수 있는가.
+ * Can this adapter be called now?
  *
- * `manual`은 호출 대상이 아니지만 **막힌 것도 아니다** — 사람이 조회한다. 그
- * 구분을 없애면 수동 확인이 장애처럼 보인다.
+ * `manual` is not a call target but is **not blocked either** — a person does the lookup.
+ * Erasing that distinction makes manual checks look like outages.
  */
 export function checkAdapterAvailable(descriptor: AdapterDescriptor): AdapterAvailability {
   switch (descriptor.state) {
@@ -71,52 +71,52 @@ export function checkAdapterAvailable(descriptor: AdapterDescriptor): AdapterAva
       return {
         callable: false,
         reason: "MANUAL_COLLECTION_ONLY",
-        nextAction: "공식 창구에서 조회한 뒤 결과를 수동으로 기록한다",
+        nextAction: "Look up the official channel, then record the result manually",
       };
     case "pending_access":
       return {
         callable: false,
         reason: "ACCESS_NOT_GRANTED",
-        nextAction: "기관과 접근 권한을 협의한다. 확인 전까지 호출하지 않는다",
+        nextAction: "Negotiate access with the institution. Do not call it until access is confirmed",
       };
     case "blocked":
       return {
         callable: false,
         reason: "LEGALLY_BLOCKED",
-        nextAction: "법무 검토 결과를 확인한다",
+        nextAction: "Check the outcome of the legal review",
       };
   }
 }
 
 /**
- * adapter 호출 결과.
+ * Adapter call result.
  *
- * 12개 source result 중 하나로 정규화된다. adapter가 자기 형식을 쓰면 그
- * 형식만큼 판정 분기가 늘어난다.
+ * Normalized to one of the 12 source results. If an adapter used its own format, decision
+ * branches would multiply by that many formats.
  */
 export interface AdapterOutcome {
   readonly result: SourceResult;
-  /** 원문 바이트의 해시. 재현 가능성의 근거다. */
+  /** Hash of the raw bytes. The basis for reproducibility. */
   readonly rawHash: string;
-  /** 어떤 조건으로 조회했는가. 같은 조건으로 다시 조회할 수 있어야 한다. */
+  /** The conditions of the lookup. The same conditions must be replayable. */
   readonly queryBasis: Readonly<Record<string, string>>;
-  /** 이 조회가 확인하지 않은 것. authority의 `doesNotProve`가 들어온다. */
+  /** What this lookup did not check. Receives the authority's `doesNotProve`. */
   readonly limitations: readonly string[];
-  /** 출처가 밝힌 기준일. 조회 시각과 다르다. */
+  /** Reference date stated by the source. Differs from the lookup time. */
   readonly effectiveAt: string | null;
 }
 
 export type AdapterInvocation =
   | { readonly kind: "outcome"; readonly outcome: AdapterOutcome }
-  /** adapter가 판정하지 못했다. **성공으로 기록하지 않는다.** */
+  /** The adapter could not decide. **Never recorded as a success.** */
   | { readonly kind: "failed"; readonly result: SourceResult; readonly detail: string };
 
 /**
- * adapter 결과를 Source Receipt 입력으로 바꾼다.
+ * Converts an adapter result into Source Receipt input.
  *
- * **limitations를 여기서 합친다.** adapter가 빠뜨려도 authority가 선언한
- * `doesNotProve`는 반드시 들어간다 — 한계 없는 receipt가 만들어지면 읽는 쪽이
- * 전체 확인으로 오해한다.
+ * **Limitations are merged here.** Even if the adapter omits them, the authority's declared
+ * `doesNotProve` always goes in — a receipt without limitations would be misread as a full
+ * check.
  */
 export function toReceiptInput(
   descriptor: AdapterDescriptor,
@@ -131,9 +131,9 @@ export function toReceiptInput(
   if (invocation.kind === "failed") {
     return {
       result: invocation.result,
-      // 실패해도 한계는 그대로 붙는다. 실패한 조회를 "확인 안 됨"으로만 남기면
-      // 무엇을 확인하려 했는지 잃는다.
-      limitations: [...descriptor.doesNotProve, `조회 실패: ${invocation.detail}`],
+      // Limitations stay attached on failure too. Recording a failed lookup only as "not
+      // checked" would lose what it tried to check.
+      limitations: [...descriptor.doesNotProve, `Lookup failed: ${invocation.detail}`],
       rawHash: null,
       queryBasis: {},
       effectiveAt: null,
@@ -154,8 +154,8 @@ export function toReceiptInput(
 /**
  * Jurisdiction Profile — OD-43.
  *
- * 한 관할의 adapter 묶음이다. Core는 이 구조만 알고 내용은 설정으로 온다.
- * 몽골을 먼저 깊게 지원하되 코드에 몽골이 박히지 않게 하는 것이 목적이다.
+ * The adapter set for one jurisdiction. Core knows only this structure; the contents come from
+ * configuration. The goal is deep Mongolia support first without hard-coding Mongolia.
  */
 export interface JurisdictionProfile {
   readonly jurisdiction: string;
@@ -163,10 +163,10 @@ export interface JurisdictionProfile {
 }
 
 /**
- * profile 검증.
+ * Profile validation.
  *
- * **활성 adapter가 하나도 없어도 유효한 profile이다** — 접근 협의 중인 관할이
- * 그렇다. 대신 그 사실이 목록에 드러난다.
+ * **A profile with no active adapter is still valid** — e.g. a jurisdiction whose access is
+ * under negotiation. The fact is exposed in the list instead.
  */
 export type ProfileIssue = { readonly connectionKey: string; readonly problem: string };
 
@@ -176,35 +176,35 @@ export function validateProfile(profile: JurisdictionProfile): ProfileIssue[] {
 
   for (const adapter of profile.adapters) {
     if (seen.has(adapter.connectionKey)) {
-      issues.push({ connectionKey: adapter.connectionKey, problem: "connectionKey가 중복이다" });
+      issues.push({ connectionKey: adapter.connectionKey, problem: "duplicate connectionKey" });
     }
     seen.add(adapter.connectionKey);
 
-    // 05 §5.11: 한계를 선언하지 않은 authority는 등록할 수 없다.
+    // 05 §5.11: an authority that declares no limitations cannot be registered.
     if (adapter.doesNotProve.length === 0) {
       issues.push({
         connectionKey: adapter.connectionKey,
-        problem: "doesNotProve가 비어 있다 — 확인하지 않는 것을 반드시 밝힌다",
+        problem: "doesNotProve is empty — what is not checked must always be stated",
       });
     }
 
     if (adapter.proves.length === 0) {
-      issues.push({ connectionKey: adapter.connectionKey, problem: "proves가 비어 있다" });
+      issues.push({ connectionKey: adapter.connectionKey, problem: "proves is empty" });
     }
 
-    // 비활성 상태에는 이유가 있어야 한다. "왜 이 기관은 안 되나"에 답할 수
-    // 없으면 그 자체가 미확인 통합으로 보인다.
+    // An inactive state needs a reason. If "why doesn't this institution work" has no answer,
+    // that alone looks like an unverified integration.
     if (adapter.state !== "active" && adapter.stateReason.trim().length === 0) {
       issues.push({
         connectionKey: adapter.connectionKey,
-        problem: `${adapter.state} 상태에는 이유가 필요하다`,
+        problem: `${adapter.state} state requires a reason`,
       });
     }
 
     if (adapter.jurisdiction !== profile.jurisdiction) {
       issues.push({
         connectionKey: adapter.connectionKey,
-        problem: "profile의 관할과 adapter의 관할이 다르다",
+        problem: "profile jurisdiction and adapter jurisdiction differ",
       });
     }
   }
@@ -213,12 +213,12 @@ export function validateProfile(profile: JurisdictionProfile): ProfileIssue[] {
 }
 
 /**
- * connection 상태를 adapter 상태로 읽는다 — 05 §5.11.
+ * Reads a connection state as an adapter state — 05 §5.11.
  *
- * `source_connections.state`가 원본이고 adapter 상태는 그 해석이다. 별도 컬럼을
- * 두면 둘이 어긋난다. 읽는 곳이 둘 이상이므로 규칙을 여기 한 곳에 둔다 —
- * 화면과 수집 경로가 서로 다르게 읽으면 화면은 호출 가능하다고 말하고 수집은
- * 거절한다.
+ * `source_connections.state` is the source of truth; the adapter state is its interpretation.
+ * A separate column would drift from it. There are several readers, so the rule lives here in
+ * one place — if the UI and the ingestion path read it differently, the UI says callable while
+ * ingestion rejects.
  */
 export function connectionStateToAdapterState(
   connectionState: string | null,
@@ -226,11 +226,11 @@ export function connectionStateToAdapterState(
   switch (connectionState) {
     case "active":
       return "active";
-    // 접근은 확인됐지만 아직 자동 호출 경로가 없다. 사람이 조회한다.
+    // Access is confirmed but there is no automatic call path yet. A person does the lookup.
     case "access_confirmed":
     case "tested":
       return "manual";
-    // 타당성 검토·계획 단계다. 호출하면 미확인 통합을 약속하는 것이 된다.
+    // Feasibility review or planning stage. Calling it would promise an unverified integration.
     case "planned":
     case "feasibility_checked":
       return "pending_access";
@@ -239,15 +239,15 @@ export function connectionStateToAdapterState(
       return "blocked";
     case null:
     case undefined:
-      // 연동 자체가 없다. 기관은 알지만 접근 경로를 만들지 않았다.
+      // No integration at all. The institution is known but no access path was built.
       return "none";
     default:
-      // 모르는 상태를 호출 가능으로 읽지 않는다.
+      // An unknown state is never read as callable.
       return "pending_access";
   }
 }
 
-/** 왜 이 상태인가. `active`가 아닌 것에는 이유가 있어야 한다. */
+/** Why it is in this state. Anything other than `active` needs a reason. */
 export function adapterStateReason(
   adapterState: AdapterState | "none",
   connectionState: string | null,
@@ -256,12 +256,12 @@ export function adapterStateReason(
     case "active":
       return "";
     case "manual":
-      return "공식 API가 없거나 접근 협의 중이다. 사람이 조회해 결과를 기록한다";
+      return "No official API, or access is under negotiation. A person looks it up and records the result";
     case "pending_access":
-      return `접근 권한이 확인되지 않았다 (연동 상태: ${connectionState ?? "없음"})`;
+      return `Access is not confirmed (connection state: ${connectionState ?? "none"})`;
     case "blocked":
-      return `연동이 중단되거나 저하됐다 (연동 상태: ${connectionState})`;
+      return `Integration is suspended or degraded (connection state: ${connectionState})`;
     case "none":
-      return "이 기관에 대한 연동이 만들어지지 않았다";
+      return "No integration has been built for this institution";
   }
 }

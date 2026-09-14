@@ -8,18 +8,18 @@ import {
 } from "../src/services/source-fetch.js";
 
 /**
- * 검증된 주소로 연결을 고정한다 — 2026-09-10 실사 A2.
+ * Pins the connection to the validated address — 2026-09-10 audit A2.
  *
- * `assertEndpointReachable`이 이름을 풀어 사설 주소를 걸러도, 연결이 이름을 다시
- * 풀면 그 사이에 응답이 바뀔 수 있다(DNS rebinding). 검사한 주소로만 연결해야
- * 검사가 뜻을 갖는다.
+ * Even if `assertEndpointReachable` resolves the name and filters private addresses, a
+ * connection that re-resolves can get a different answer (DNS rebinding). The check only
+ * means something if the connection uses the checked address.
  *
- * **TLS 이름 검증은 그대로 둔다.** 주소를 URL에 박아 넣는 방식이면 인증서가
- * 호스트명과 맞지 않아 검증이 무너진다. 여기서는 이름은 그대로 두고 `lookup`만
- * 바꾼다 — SNI와 인증서 검증은 호스트명으로 일어난다.
+ * **TLS name verification stays intact.** Putting the address into the URL would make
+ * the certificate mismatch the host name. Here the name stays and only `lookup`
+ * changes — SNI and certificate checks use the host name.
  */
 describe("createPinnedLookup", () => {
-  it("이름을 풀지 않고 고정된 주소를 돌려준다", async () => {
+  it("returns the pinned address without resolving the name", async () => {
     const lookup = createPinnedLookup(["203.0.113.10"]);
 
     const result = await new Promise<{ address: string; family: number }>((resolve, reject) => {
@@ -32,7 +32,7 @@ describe("createPinnedLookup", () => {
     expect(result).toEqual({ address: "203.0.113.10", family: 4 });
   });
 
-  it("all 옵션에는 목록으로 돌려준다", async () => {
+  it("returns a list for the all option", async () => {
     const lookup = createPinnedLookup(["203.0.113.10", "2606:4700::1111"]);
 
     const result = await new Promise((resolve, reject) => {
@@ -48,8 +48,8 @@ describe("createPinnedLookup", () => {
     ]);
   });
 
-  it("고정할 주소가 없으면 연결을 만들지 않는다", async () => {
-    // 빈 목록에서 이름 해석으로 되돌아가면 고정이 없는 것과 같다.
+  it("does not connect when there is no address to pin", async () => {
+    // Falling back to name resolution on an empty list is the same as no pinning.
     const lookup = createPinnedLookup([]);
 
     await expect(
@@ -59,7 +59,7 @@ describe("createPinnedLookup", () => {
           else resolve(address);
         });
       }),
-    ).rejects.toThrow(/검증된 주소가 없다/);
+    ).rejects.toThrow(/No verified address/);
   });
 });
 
@@ -67,7 +67,7 @@ describe("pinnedFetch", () => {
   let server: Server;
   let port: number;
   let seen: { host: string | undefined; url: string | undefined }[] = [];
-  /** 다음 응답. 테스트가 출처 역할을 한다. */
+  /** Next response. The test plays the source. */
   let respond: (write: (status: number, body: string) => void) => void;
 
   beforeAll(async () => {
@@ -88,8 +88,8 @@ describe("pinnedFetch", () => {
 
   function call(path: string, addresses: readonly string[]) {
     seen = [];
-    // 이 이름은 실제로 해석되지 않는다(.invalid). 그런데도 요청이 도달하면
-    // 연결이 고정된 주소로 갔다는 뜻이다.
+    // This name never resolves (.invalid). If the request still arrives,
+    // the connection went to the pinned address.
     return pinnedFetch(
       new URL(`https://registry.invalid:${port}${path}`),
       {
@@ -102,36 +102,36 @@ describe("pinnedFetch", () => {
     );
   }
 
-  it("해석되지 않는 이름이어도 고정된 주소로 연결한다", async () => {
+  it("connects to the pinned address even for an unresolvable name", async () => {
     respond = (write) => write(200, JSON.stringify({ licenseId: "MN-1" }));
 
     const response = await call("/api?x=1", ["127.0.0.1"]);
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(JSON.stringify({ licenseId: "MN-1" }));
-    // Host 헤더는 주소가 아니라 이름이다 — TLS 이름 검증과 같은 이름이어야 한다.
+    // The Host header is the name, not the address — it must match the TLS-verified name.
     expect(seen[0]?.host).toBe(`registry.invalid:${port}`);
     expect(seen[0]?.url).toBe("/api?x=1");
   });
 
-  it("리다이렉트를 따라가지 않는다", async () => {
-    // 따라가면 3xx 한 번으로 검사 뒤의 주소가 바뀐다.
+  it("does not follow redirects", async () => {
+    // Following one 3xx would change the address after the check.
     respond = (write) => write(302, "");
 
     const response = await call("/api", ["127.0.0.1"]);
     expect(response.status).toBe(302);
   });
 
-  it("상한을 넘는 응답을 메모리에 다 올리지 않는다", async () => {
+  it("does not buffer a response over the cap into memory", async () => {
     respond = (write) => write(200, "x".repeat(MAX_SOURCE_RESPONSE_BYTES + 1024));
 
     await expect(call("/api", ["127.0.0.1"])).rejects.toThrow(SourceResponseTooLargeError);
   });
 
-  it("고정할 주소가 없으면 요청을 보내지 않는다", async () => {
+  it("sends no request when there is no address to pin", async () => {
     respond = (write) => write(200, "{}");
 
-    await expect(call("/api", [])).rejects.toThrow(/검증된 주소가 없다/);
+    await expect(call("/api", [])).rejects.toThrow(/No verified address/);
     expect(seen).toHaveLength(0);
   });
 });

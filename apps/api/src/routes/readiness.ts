@@ -23,33 +23,33 @@ import { enqueueEvent } from "../outbox.js";
 import { requireMutationContext, requireReadContext } from "./shared.js";
 
 /**
- * Readiness 평가와 Gate Decision — spec 04 §4.2, 05 §5.4, 07 §7.2.
+ * Readiness assessment and Gate Decision — spec 04 §4.2, 05 §5.4, 07 §7.2.
  *
- * 이 라우트가 지키는 것:
+ * What this route guarantees:
  *
- * - **readiness를 수정하는 경로가 없다.** 재계산만 가능하며 결과는 새 행이다.
- *   DB 트리거가 UPDATE를 막고, 여기에 PATCH·DELETE 핸들러가 없다(REQ-DAPP-017).
- * - 평가는 `@mpc/policy`의 순수 함수가 한다. 라우트는 DB에서 사실을 모아 넘길 뿐이다.
- * - `gap`·`not_evaluable`이면 `go`가 거절된다(AC-02, AC-34). 판정은 도메인이 한다.
- * - `hold`·`rework`·`stop`은 준비도와 무관하게 기록할 수 있다. 나쁜 소식을
- *   기록하지 못하면 상태가 조용히 낡는다.
+ * - **There is no path that modifies readiness.** Only recomputation, and the result is a new row.
+ *   A DB trigger blocks UPDATE, and there are no PATCH/DELETE handlers here (REQ-DAPP-017).
+ * - Assessment is done by pure functions in `@mpc/policy`. The route only gathers facts from the DB.
+ * - `go` is rejected on `gap`/`not_evaluable` (AC-02, AC-34). The domain makes that call.
+ * - `hold`/`rework`/`stop` can be recorded regardless of readiness. If bad news cannot be
+ *   recorded, state goes silently stale.
  */
 
 const createDecisionSchema = z.object({
   gateId: z.string().min(1),
   decision: z.enum(["go", "hold", "rework", "stop"]),
   inputAssessmentId: z.string().uuid(),
-  rationale: z.string().min(1, "결정에는 근거가 필요하다"),
+  rationale: z.string().min(1, "A decision requires a rationale"),
   assumptions: z.array(z.string()).default([]),
   conditions: z.array(z.string()).default([]),
   signature: z.string().default(""),
 });
 
 /**
- * DB의 현재 상태를 rule engine 입력으로 변환한다.
+ * Converts the current DB state into rule engine input.
  *
- * 평가 자체는 순수 함수이므로, 이 함수가 "무엇을 사실로 보는가"를 정한다.
- * 시각은 호출 시점이 아니라 snapshot에 고정된 값을 쓴다(AC-11).
+ * Assessment itself is a pure function, so this function decides "what counts as fact".
+ * Time is the value fixed in the snapshot, not the call time (AC-11).
  */
 async function collectRequirementFacts(
   tx: postgres.TransactionSql,
@@ -86,8 +86,8 @@ async function collectRequirementFacts(
     (row) => row.attestation_type,
   ) as RequirementFacts["presentAttestations"];
 
-  // 가장 낮은 grade가 weakest link다. 개별 requirement가 자기 claim type을
-  // 요구하므로 여기서는 전체 최저값을 넘긴다.
+  // The lowest grade is the weakest link. Each requirement demands its own claim type,
+  // so the overall minimum is passed here.
   const gradeRank: Record<string, number> = {
     rejected: 0,
     unverified: 1,
@@ -102,7 +102,7 @@ async function collectRequirementFacts(
           (gradeRank[claim.grade] ?? 0) < (gradeRank[worst.grade] ?? 0) ? claim : worst,
         ).grade;
 
-  // 가장 오래된 근거의 경과일. freshness는 최악값으로 본다.
+  // Age in days of the oldest evidence. Freshness takes the worst value.
   const ages = claims
     .map((claim) => claim.as_of)
     .filter((value): value is Date => value !== null)
@@ -121,7 +121,7 @@ async function collectRequirementFacts(
       evidenceAgeDays,
       unresolvedConflictTypes: conflicts.map((row) => row.conflict_type),
       context: {
-        // rule set의 predicate가 참조하는 사실. 프로젝트 상태에서 끌어온다.
+        // Facts referenced by rule set predicates. Derived from project state.
         projectStage: "exploration_or_later",
         acceptedReportingStandard: "JORC-2012",
         environmentalRequirementBasis: "MNG-EIA-2019",
@@ -149,7 +149,7 @@ export async function registerReadinessRoutes(
         .object({ policySetId: z.string().uuid() })
         .safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "policySetId가 필요하다");
+        throw badRequest("REQUEST_INVALID", "policySetId is required");
       }
 
       const effectiveRole = assertAuthorized(
@@ -170,18 +170,18 @@ export async function registerReadinessRoutes(
             SELECT id, definition, gate_id, state FROM core.compliance_policy_sets
             WHERE id = ${parsed.data.policySetId}
           `;
-          if (!policy) throw notFound("policy set을 찾을 수 없다");
+          if (!policy) throw notFound("Policy set not found");
           if (policy.state !== "effective") {
             throw unprocessable(
               "POLICY_NOT_EFFECTIVE",
-              "effective 상태가 아닌 policy로 평가할 수 없다",
+              "Cannot assess with a policy that is not effective",
             );
           }
 
           const ruleSet = parseRuleSet(policy.definition);
 
-          // 평가 기준 시각을 먼저 고정한다. 평가 도중 시간이 흐르면 같은 입력이
-          // 다른 결과를 만든다.
+          // Fix the assessment reference time first. If time passes mid-assessment, the same input
+          // yields a different result.
           const evaluatedAsOf = new Date(asOf);
           const facts = await collectRequirementFacts(
             tx,
@@ -268,11 +268,11 @@ export async function registerReadinessRoutes(
             status: assessment.status,
             requirementResults: assessment.requirementResults,
             canonicalResultHash,
-            // §7.3 안전 필드. 준비도는 결정이 아니다.
-            authority: "MPC 데이터·증빙 준비도 평가",
+            // §7.3 safety fields. Readiness is not a decision.
+            authority: "MPC data and evidence readiness assessment",
             ruleVersion: ruleSet.version,
             limitations: [
-              "이 평가는 데이터 요건 충족 여부이며 사람의 결정을 대신하지 않는다",
+              "This assessment covers whether data requirements are met and does not replace a human decision",
             ],
             legalEffect: "none" as const,
             disclaimerCodes: ["READINESS_IS_NOT_A_DECISION"],
@@ -288,7 +288,7 @@ export async function registerReadinessRoutes(
     "/api/v1/readiness-assessments/:assessmentId",
     async (request) => {
       const session = request.session;
-      if (!session?.tenantId) throw notFound("assessment를 찾을 수 없다");
+      if (!session?.tenantId) throw notFound("Assessment not found");
 
       const [row] = await withTenant(sql, { tenantId: session.tenantId }, (tx) =>
         tx<
@@ -308,10 +308,10 @@ export async function registerReadinessRoutes(
         `,
       );
 
-      if (!row) throw notFound("assessment를 찾을 수 없다");
+      if (!row) throw notFound("Assessment not found");
 
-      // 프로젝트를 안 뒤에야 project scope를 판정할 수 있다. 범위 밖이면
-      // 존재 여부도 알리지 않는다 — 404와 403을 구분하면 ID가 새어 나간다.
+      // Project scope can be judged only after the project is known. Out of scope, even
+      // existence is not disclosed — distinguishing 404 from 403 leaks IDs.
       assertAuthorized(
         session,
         "readiness.read",
@@ -329,8 +329,8 @@ export async function registerReadinessRoutes(
         status: row.status,
         requirementResults: row.requirement_results,
         canonicalResultHash: row.canonical_result_hash,
-        authority: "MPC 데이터·증빙 준비도 평가",
-        limitations: ["이 평가는 데이터 요건 충족 여부이며 사람의 결정을 대신하지 않는다"],
+        authority: "MPC data and evidence readiness assessment",
+        limitations: ["This assessment covers whether data requirements are met and does not replace a human decision"],
         legalEffect: "none" as const,
         disclaimerCodes: ["READINESS_IS_NOT_A_DECISION"],
         requestId: request.context.requestId,
@@ -346,7 +346,7 @@ export async function registerReadinessRoutes(
 
       const parsed = createDecisionSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
       }
@@ -357,7 +357,7 @@ export async function registerReadinessRoutes(
         projectResource(tenantId, request.params.projectId, {
           state: "assessed",
           statesAllowingAction: ["assessed"],
-          // 게이트 판정은 독립성이 요건이다(02 §2.4).
+          // Gate decisions require independence (02 §2.4).
           separationSensitive: true,
         }),
         sessionFacts(session),
@@ -382,9 +382,9 @@ export async function registerReadinessRoutes(
             WHERE id = ${data.inputAssessmentId} AND project_id = ${request.params.projectId}
           `;
 
-          if (!assessment) throw notFound("입력 assessment를 찾을 수 없다");
+          if (!assessment) throw notFound("Input assessment not found");
 
-          // 판정은 도메인이 한다. 라우트가 gap 여부를 직접 검사하지 않는다.
+          // The domain makes the call. The route does not check for gaps itself.
           const check = checkGateDecision({
             decision: data.decision,
             requirementStatuses: assessment.requirement_results
@@ -395,7 +395,7 @@ export async function registerReadinessRoutes(
           });
 
           if (!check.allowed) {
-            throw unprocessable(check.reason, "이 준비도에서는 그 결정을 기록할 수 없다", {
+            throw unprocessable(check.reason, "That decision cannot be recorded at this readiness", {
               blockingRequirementIndexes: check.blockingRequirementIndexes,
               assessmentStatus: assessment.status,
             });
@@ -404,7 +404,7 @@ export async function registerReadinessRoutes(
           const [subject] = await tx<{ id: string }[]>`
             SELECT id FROM core.subjects WHERE id = ${session.subjectId!}
           `;
-          if (!subject) throw notFound("결정 주체를 찾을 수 없다");
+          if (!subject) throw notFound("Decision subject not found");
 
           const id = randomUUID();
           await tx`

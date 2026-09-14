@@ -11,7 +11,7 @@ contract RegistryAnchorV1Test is Test {
     RegistryAnchorV1 internal anchor;
 
     address internal admin = address(0xA11CE);
-    address internal submitter = address(0x5AFE); // Safe multisig 대역
+    address internal submitter = address(0x5AFE); // stands in for the Safe multisig
     address internal pauser = address(0x9A05E);
     address internal stranger = address(0xBAD);
 
@@ -31,7 +31,7 @@ contract RegistryAnchorV1Test is Test {
     }
 
     // -----------------------------------------------------------------------
-    // 제출
+    // Submission
     // -----------------------------------------------------------------------
 
     function test_submitRoot_storesBatch() public {
@@ -52,7 +52,7 @@ contract RegistryAnchorV1Test is Test {
         _submit(BATCH_1, ROOT_1);
     }
 
-    /// @dev 08 §8.4: 동일 batchId 재사용 금지.
+    /// @dev 08 §8.4: a batchId is never reused.
     function test_submitRoot_revertsOnDuplicateBatchId() public {
         _submit(BATCH_1, ROOT_1);
 
@@ -61,7 +61,7 @@ contract RegistryAnchorV1Test is Test {
         anchor.submitRoot(BATCH_1, ROOT_2, MANIFEST_1, "1", 5);
     }
 
-    /// @dev 재사용이 거절된 뒤에도 원래 root가 그대로 남는다.
+    /// @dev After a rejected reuse, the original root is still in place.
     function test_submitRoot_duplicateDoesNotOverwrite() public {
         _submit(BATCH_1, ROOT_1);
 
@@ -79,7 +79,7 @@ contract RegistryAnchorV1Test is Test {
         anchor.submitRoot(BATCH_1, ROOT_1, MANIFEST_1, "1", 0);
     }
 
-    /// @dev batchId 0은 supersededBy의 "없음"과 값이 같아 의미가 충돌한다.
+    /// @dev batchId 0 has the same value as supersededBy's "none", so the meanings collide.
     function test_submitRoot_revertsOnZeroBatchId() public {
         vm.prank(submitter);
         vm.expectRevert(IRegistryAnchor.ZeroBatchId.selector);
@@ -93,8 +93,8 @@ contract RegistryAnchorV1Test is Test {
     }
 
     function test_submitRoot_revertsForUnauthorized() public {
-        // role 값을 미리 읽는다. expectRevert 인자 안에서 외부 호출을 하면
-        // 그 호출이 prank를 소비해 caller가 바뀐다.
+        // Read the role value up front. An external call inside the expectRevert arguments
+        // would consume the prank and change the caller.
         bytes32 role = anchor.ANCHOR_SUBMITTER_ROLE();
 
         vm.prank(stranger);
@@ -106,7 +106,7 @@ contract RegistryAnchorV1Test is Test {
         anchor.submitRoot(BATCH_1, ROOT_1, MANIFEST_1, "1", 3);
     }
 
-    /// @dev admin은 관리 권한이지 제출 권한이 아니다. 역할을 분리한다.
+    /// @dev admin is a management right, not a submission right. The roles are separate.
     function test_submitRoot_adminCannotSubmitWithoutRole() public {
         vm.prank(admin);
         vm.expectRevert();
@@ -114,7 +114,7 @@ contract RegistryAnchorV1Test is Test {
     }
 
     // -----------------------------------------------------------------------
-    // 정정 — 덮어쓰지 않고 새 사실을 추가한다
+    // Corrections — append new facts instead of overwriting
     // -----------------------------------------------------------------------
 
     function test_revokeBatch_keepsRoot() public {
@@ -125,7 +125,7 @@ contract RegistryAnchorV1Test is Test {
 
         IRegistryAnchor.Batch memory batch = anchor.getBatch(BATCH_1);
         assertTrue(batch.revoked);
-        // 핵심: root는 그대로다. 과거에 무엇을 제출했는지 영구히 조회할 수 있다.
+        // The key point: the root is unchanged. What was submitted stays queryable forever.
         assertEq(batch.root, ROOT_1);
         assertEq(batch.recordCount, 3);
     }
@@ -192,7 +192,7 @@ contract RegistryAnchorV1Test is Test {
     }
 
     // -----------------------------------------------------------------------
-    // 08 §8.8 — pause가 read와 proof를 막지 않는다
+    // 08 §8.8 — pause does not block reads or proofs
     // -----------------------------------------------------------------------
 
     function test_pause_blocksSubmissionOnly() public {
@@ -205,14 +205,14 @@ contract RegistryAnchorV1Test is Test {
         vm.expectRevert(Pausable.EnforcedPause.selector);
         anchor.submitRoot(BATCH_2, ROOT_2, MANIFEST_1, "1", 3);
 
-        // read는 계속 가능하다. 무결성 검증을 멈출 수 있으면 공개 검증권이
-        // 운영자에게 종속된다.
+        // Reads keep working. If integrity verification could be halted, the public right
+        // to verify would depend on the operator.
         assertEq(anchor.getBatch(BATCH_1).root, ROOT_1);
         assertEq(anchor.batchCount(), 1);
     }
 
-    /// @dev pause 중에도 정정은 가능해야 한다. 잘못된 root를 revoke하지 못한 채
-    ///      멈추면 오류가 그대로 남는다.
+    /// @dev Corrections must still work while paused. Halting without being able to revoke a
+    ///      bad root leaves the error in place.
     function test_pause_allowsRevoke() public {
         _submit(BATCH_1, ROOT_1);
 
@@ -231,18 +231,18 @@ contract RegistryAnchorV1Test is Test {
     }
 
     // -----------------------------------------------------------------------
-    // 관리자도 root를 바꿀 수 없다
+    // Not even the admin can change a root
     // -----------------------------------------------------------------------
 
-    /// @dev DEFAULT_ADMIN_ROLE이 root를 수정할 수 있는 함수가 아예 없다.
-    ///      이 테스트는 ABI에 그런 함수가 추가되면 실패한다.
+    /// @dev There is no function at all through which DEFAULT_ADMIN_ROLE can modify a root.
+    ///      This test fails if such a function is added to the ABI.
     function test_noFunctionCanMutateStoredRoot() public {
         _submit(BATCH_1, ROOT_1);
         bytes32 rootBefore = anchor.getBatch(BATCH_1).root;
 
         vm.startPrank(admin);
         anchor.grantRole(anchor.ANCHOR_SUBMITTER_ROLE(), admin);
-        // admin이 모든 권한을 가져도 할 수 있는 것은 revoke/supersede 표시뿐이다.
+        // Even with every role, all admin can do is mark revoke/supersede.
         anchor.revokeBatch(BATCH_1, "ADMIN_ATTEMPT");
         vm.stopPrank();
 
@@ -259,8 +259,8 @@ contract RegistryAnchorV1Test is Test {
         bytes32 manifestHash,
         uint32 recordCount
     ) public {
-        // batchId 0은 `ZeroBatchId`로 거절되는 별도 경계값이다. 정상 저장 성질을
-        // 검증하는 이 fuzz test에서는 그 전제조건을 명시한다.
+        // batchId 0 is a separate boundary value rejected with `ZeroBatchId`. This fuzz test
+        // checks the normal storage property, so it states that precondition explicitly.
         vm.assume(batchId != bytes32(0));
         vm.assume(root != bytes32(0));
         vm.assume(recordCount > 0);
@@ -277,8 +277,8 @@ contract RegistryAnchorV1Test is Test {
     function testFuzz_duplicateBatchIdAlwaysReverts(bytes32 batchId, bytes32 rootA, bytes32 rootB)
         public
     {
-        // batchId 0은 `ZeroBatchId`로 먼저 걸린다. 이 테스트가 보는 것은 중복
-        // 판정이므로 그 경로를 제외한다 — 별도 테스트가 0을 따로 본다.
+        // batchId 0 is caught first by `ZeroBatchId`. This test covers the duplicate check,
+        // so that path is excluded — a separate test covers 0.
         vm.assume(rootA != bytes32(0) && rootB != bytes32(0) && batchId != bytes32(0));
 
         vm.startPrank(submitter);

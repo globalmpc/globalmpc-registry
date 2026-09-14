@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiFetch, listProjects } from "../src/lib/api.js";
 
 /**
- * 화면 요청의 타임아웃.
+ * Screen request timeout.
  *
- * error envelope(07 §7.1)는 서버가 **응답을 준** 경우만 다룬다. 응답이 아예 오지
- * 않으면 화면은 그 설계에 닿지 못하고 무한 로딩에 머문다 — 사용자는 무엇이
- * 잘못됐는지도, 다시 시도해야 하는지도 알 수 없다.
+ * The error envelope (07 §7.1) covers only cases where the server **responds**. With no response at all,
+ * the screen never reaches that design and stays in an endless loading state — the user cannot
+ * tell what went wrong or whether to retry.
  */
 
-/** 끊길 때까지 응답하지 않는 서버. signal이 없으면 그냥 성공한다. */
+/** A server that does not respond until aborted. Without a signal it simply succeeds. */
 function hangingFetch(): typeof fetch {
   return ((_input: RequestInfo | URL, init: RequestInit = {}) =>
     new Promise<Response>((resolve, reject) => {
@@ -26,13 +26,13 @@ afterEach(() => {
 });
 
 describe("apiFetch", () => {
-  it("응답이 오지 않으면 타임아웃으로 끊는다", async () => {
+  it("aborts with a timeout when no response arrives", async () => {
     vi.stubGlobal("fetch", hangingFetch());
     await expect(apiFetch("/api/v1/projects", {}, 20)).rejects.toThrow(/aborted/);
   });
 
-  it("호출부가 준 signal을 덮어쓰지 않는다", async () => {
-    // 취소 가능한 화면 요청의 signal을 여기서 갈아치우면 그쪽 취소가 죽는다.
+  it("does not overwrite a signal the caller passed", async () => {
+    // Replacing a cancellable screen request's signal here kills that cancellation.
     const controller = new AbortController();
     let seen: AbortSignal | null = null;
     vi.stubGlobal("fetch", (async (_input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -46,9 +46,9 @@ describe("apiFetch", () => {
   });
 });
 
-describe("API 클라이언트", () => {
-  it("모든 요청이 타임아웃을 달고 나간다", async () => {
-    // 래퍼만 고쳐 두고 호출부가 여전히 맨 fetch를 쓰면 아무것도 달라지지 않는다.
+describe("API client", () => {
+  it("every request goes out with a timeout", async () => {
+    // Fixing only the wrapper changes nothing if callers still use bare fetch.
     let seen: AbortSignal | null = null;
     vi.stubGlobal("fetch", (async (_input: RequestInfo | URL, init: RequestInit = {}) => {
       seen = init.signal ?? null;

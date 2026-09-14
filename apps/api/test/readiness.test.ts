@@ -8,7 +8,7 @@ import rulesFixture from "../../../packages/policy/test/fixtures/registry-gate.r
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
-describeDb("Readiness와 Gate Decision", () => {
+describeDb("Readiness and Gate Decision", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let tokens: { approverA: string; operatorA: string; stewardA: string };
@@ -18,7 +18,7 @@ describeDb("Readiness와 Gate Decision", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
-    // R1부터 인증은 SIWE 서명 → 세션 토큰이다. 테스트도 같은 경로를 지난다.
+    // From R1, auth is SIWE signature → session token. Tests take the same path.
     tokens = {
       approverA: await signIn(app, fx.approverA),
       operatorA: await signIn(app, fx.operatorA),
@@ -60,7 +60,7 @@ describeDb("Readiness와 Gate Decision", () => {
     });
   }
 
-  it("평가가 실행되고 canonical hash를 남긴다", async () => {
+  it("runs an evaluation and records a canonical hash", async () => {
     const response = await recompute(tokens.operatorA);
     expect(response.statusCode).toBe(200);
 
@@ -70,25 +70,25 @@ describeDb("Readiness와 Gate Decision", () => {
     expect(body.requirementResults.length).toBeGreaterThan(0);
   });
 
-  it("AC-11: 같은 입력은 같은 canonical hash를 만든다", async () => {
+  it("AC-11: the same input yields the same canonical hash", async () => {
     const first = (await recompute(tokens.operatorA)).json();
     const second = (await recompute(tokens.operatorA)).json();
-    // evaluatedAsOf가 요청마다 달라지므로 입력 해시는 다를 수 있다.
-    // 같은 입력 snapshot이면 결과가 같아야 한다는 것은 policy 패키지가 보장하고,
-    // 여기서는 같은 사실 위에서 status가 흔들리지 않는 것을 본다.
+    // evaluatedAsOf differs per request, so the input hash may differ.
+    // The policy package guarantees that the same input snapshot gives the same result;
+    // here we check that status stays stable over the same facts.
     expect(second.status).toBe(first.status);
     expect(second.requirementResults.length).toBe(first.requirementResults.length);
   });
 
-  it("§7.3 안전 필드가 응답에 있다", async () => {
+  it("the response carries the §7.3 safety fields", async () => {
     const body = (await recompute(tokens.operatorA)).json();
-    expect(body.authority).toContain("준비도 평가");
+    expect(body.authority).toContain("readiness assessment");
     expect(body.legalEffect).toBe("none");
-    expect(body.limitations.join(" ")).toContain("사람의 결정을 대신하지 않는다");
+    expect(body.limitations.join(" ")).toContain("does not replace a human decision");
     expect(body.disclaimerCodes).toContain("READINESS_IS_NOT_A_DECISION");
   });
 
-  it("REQ-DAPP-017: readiness를 수정하는 경로가 없다", async () => {
+  it("REQ-DAPP-017: no route modifies readiness", async () => {
     const assessment = (await recompute(tokens.operatorA)).json();
 
     for (const method of ["PATCH", "PUT", "DELETE"] as const) {
@@ -101,7 +101,7 @@ describeDb("Readiness와 Gate Decision", () => {
     }
   });
 
-  it("REQ-DAPP-017: DB에서도 수정할 수 없다", async () => {
+  it("REQ-DAPP-017: the DB rejects modification too", async () => {
     const assessment = (await recompute(tokens.operatorA)).json();
     await expect(
       fx.sql`
@@ -110,7 +110,7 @@ describeDb("Readiness와 Gate Decision", () => {
     ).rejects.toThrow(/수정·삭제할 수 없다/);
   });
 
-  it("effective가 아닌 policy로 평가할 수 없다", async () => {
+  it("rejects evaluation with a non-effective policy", async () => {
     const draftPolicy = randomUUID();
     await fx.sql`
       INSERT INTO core.compliance_policy_sets (
@@ -133,15 +133,15 @@ describeDb("Readiness와 Gate Decision", () => {
   });
 
   describe("Gate Decision", () => {
-    it("AC-02: gap이 있으면 go가 거절된다", async () => {
+    it("AC-02: rejects go when a gap exists", async () => {
       const assessment = (await recompute(tokens.operatorA)).json();
-      // fixture 프로젝트에는 근거가 거의 없으므로 gap 또는 not_evaluable이다.
+      // The fixture project has almost no evidence, so it is gap or not_evaluable.
       expect(["gap", "not_evaluable"]).toContain(assessment.status);
 
       const response = await decide(tokens.approverA, {
         decision: "go",
         inputAssessmentId: assessment.id,
-        rationale: "진행하고 싶다",
+        rationale: "want to proceed",
       });
 
       expect(response.statusCode).toBe(422);
@@ -150,41 +150,41 @@ describeDb("Readiness와 Gate Decision", () => {
       );
     });
 
-    it("차단된 requirement 인덱스를 알려준다", async () => {
+    it("reports the blocked requirement indexes", async () => {
       const assessment = (await recompute(tokens.operatorA)).json();
       const response = await decide(tokens.approverA, {
         decision: "go",
         inputAssessmentId: assessment.id,
-        rationale: "진행 요청",
+        rationale: "request to proceed",
       });
       expect(response.json().details.blockingRequirementIndexes.length).toBeGreaterThan(0);
     });
 
-    it("hold는 gap이 있어도 기록된다", async () => {
+    it("records hold even with a gap", async () => {
       const assessment = (await recompute(tokens.operatorA)).json();
       const response = await decide(tokens.approverA, {
         decision: "hold",
         inputAssessmentId: assessment.id,
-        rationale: "근거 부족으로 보류한다",
+        rationale: "holding for lack of evidence",
       });
 
       expect(response.statusCode).toBe(200);
       expect(response.json().decision).toBe("hold");
     });
 
-    it("stop·rework도 기록된다 — 나쁜 소식을 막지 않는다", async () => {
+    it("records stop and rework too — bad news is not blocked", async () => {
       for (const decision of ["stop", "rework"] as const) {
         const assessment = (await recompute(tokens.operatorA)).json();
         const response = await decide(tokens.approverA, {
           decision,
           inputAssessmentId: assessment.id,
-          rationale: `${decision} 사유`,
+          rationale: `${decision} rationale`,
         });
         expect(response.statusCode, decision).toBe(200);
       }
     });
 
-    it("근거 없이 결정할 수 없다", async () => {
+    it("rejects a decision without rationale", async () => {
       const assessment = (await recompute(tokens.operatorA)).json();
       const response = await decide(tokens.approverA, {
         decision: "hold",
@@ -194,33 +194,33 @@ describeDb("Readiness와 Gate Decision", () => {
       expect(response.statusCode).toBe(400);
     });
 
-    it("gate approver가 아니면 결정할 수 없다", async () => {
+    it("rejects a decision from a non-gate-approver", async () => {
       const assessment = (await recompute(tokens.operatorA)).json();
       const response = await decide(tokens.stewardA, {
         decision: "hold",
         inputAssessmentId: assessment.id,
-        rationale: "권한 없는 시도",
+        rationale: "unauthorized attempt",
       });
       expect(response.statusCode).toBe(403);
       expect(response.json().details.requiredRoles).toContain("gate_approver");
     });
 
-    it("존재하지 않는 assessment로 결정할 수 없다", async () => {
+    it("rejects a decision on a nonexistent assessment", async () => {
       const response = await decide(tokens.approverA, {
         decision: "hold",
         inputAssessmentId: randomUUID(),
-        rationale: "존재하지 않는 평가",
+        rationale: "nonexistent assessment",
       });
       expect(response.statusCode).toBe(404);
     });
 
-    it("결정은 수정할 수 없다", async () => {
+    it("a decision cannot be modified", async () => {
       const assessment = (await recompute(tokens.operatorA)).json();
       const decision = (
         await decide(tokens.approverA, {
           decision: "hold",
           inputAssessmentId: assessment.id,
-          rationale: "보류",
+          rationale: "hold",
         })
       ).json();
 
@@ -229,13 +229,13 @@ describeDb("Readiness와 Gate Decision", () => {
       ).rejects.toThrow(/수정·삭제할 수 없다/);
     });
 
-    it("결정이 audit과 outbox를 남긴다", async () => {
+    it("a decision writes audit and outbox", async () => {
       const assessment = (await recompute(tokens.operatorA)).json();
       const decision = (
         await decide(tokens.approverA, {
           decision: "hold",
           inputAssessmentId: assessment.id,
-          rationale: "감사 확인용",
+          rationale: "for audit check",
         })
       ).json();
 
@@ -243,7 +243,7 @@ describeDb("Readiness와 Gate Decision", () => {
         SELECT command, reason FROM audit.events WHERE resource_id = ${decision.id}
       `;
       expect(audits[0]?.command).toBe("gate.decision.recorded");
-      expect(audits[0]?.reason).toBe("감사 확인용");
+      expect(audits[0]?.reason).toBe("for audit check");
     });
   });
 });

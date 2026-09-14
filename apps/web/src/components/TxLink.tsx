@@ -1,10 +1,10 @@
 import { blockExplorerTxUrl } from "@/lib/wallet";
 
 /**
- * transaction hash 표시. 체인 탐색기로 갈 수 있으면 링크로 둔다.
+ * Transaction hash display. Rendered as a link when a chain explorer is available.
  *
- * 링크 문구는 hash 자체다. "View on BscScan"으로 바꾸면 증명서의 hash와 눈으로
- * 대조할 수 없다.
+ * The link text is the hash itself. Changing it to "View on BscScan" makes it impossible to compare by eye
+ * with the hash on the certificate.
  */
 export function TxLink({
   chainId,

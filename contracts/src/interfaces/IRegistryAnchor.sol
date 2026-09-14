@@ -2,21 +2,23 @@
 pragma solidity 0.8.28;
 
 /// @title IRegistryAnchor
-/// @notice 공개 승인된 Registry projection의 무결성 commitment를 BNB Chain에 고정한다.
+/// @notice Fixes integrity commitments of the publicly approved Registry projection on BNB Chain.
 ///
 /// @dev spec 08 §8.4·§8.11 / OD-05·OD-41.
 ///
-/// 이 컨트랙트가 하지 않는 것:
-/// - 원문 저장. leaf는 commitment이고 원문·PII·계약·좌표는 오프체인에 남는다.
-/// - 사실성 판정. inclusion은 "그 바이트가 이 batch에 있었다"만 뜻한다.
-/// - 법률 효력 부여. 공식 등록부와 충돌해도 chain이 우선순위를 정하지 않는다.
+/// What this contract does not do:
+/// - Store source content. Leaves are commitments; content, PII, contracts, and coordinates
+///   stay off-chain.
+/// - Judge factuality. Inclusion only means "those bytes were in this batch".
+/// - Confer legal effect. Even if it conflicts with the official register, the chain does not
+///   decide precedence.
 interface IRegistryAnchor {
-    /// @notice batch가 제출됐다.
-    /// @param batchId 오프체인에서 생성한 논리 batch 식별자. 재사용 불가.
-    /// @param root Merkle root. leafHash 오름차순 정렬 + 정렬쌍 해시로 만든다.
-    /// @param manifestHash batch manifest의 keccak256. manifest는 오프체인에 보존한다.
-    /// @param schemaVersion canonical serialization/schema 버전.
-    /// @param recordCount batch에 포함된 record 수. 0은 허용하지 않는다.
+    /// @notice A batch was submitted.
+    /// @param batchId Logical batch identifier generated off-chain. Never reused.
+    /// @param root Merkle root. Built from leaves sorted ascending by leafHash plus sorted-pair hashing.
+    /// @param manifestHash keccak256 of the batch manifest. The manifest is kept off-chain.
+    /// @param schemaVersion canonical serialization/schema version.
+    /// @param recordCount Number of records in the batch. Zero is not allowed.
     event RootSubmitted(
         bytes32 indexed batchId,
         bytes32 indexed root,
@@ -26,10 +28,10 @@ interface IRegistryAnchor {
         address submitter
     );
 
-    /// @notice batch를 철회한다. 기존 root를 지우지 않고 새 사실을 추가한다.
+    /// @notice Revokes a batch. Adds a new fact without deleting the existing root.
     event BatchRevoked(bytes32 indexed batchId, string reasonCode, address actor);
 
-    /// @notice batch를 새 batch로 대체한다. 기존 root는 그대로 남는다.
+    /// @notice Supersedes a batch with a new batch. The existing root stays.
     event BatchSuperseded(bytes32 indexed batchId, bytes32 indexed newBatchId, address actor);
 
     error BatchAlreadyExists(bytes32 batchId);
@@ -38,7 +40,7 @@ interface IRegistryAnchor {
     error BatchAlreadySuperseded(bytes32 batchId);
     error EmptyBatch();
     error ZeroRoot();
-    /// @dev batchId 0은 "대체되지 않음"(supersededBy == 0)과 구분되지 않는다.
+    /// @dev batchId 0 is indistinguishable from "not superseded" (supersededBy == 0).
     error ZeroBatchId();
     error SelfSupersede(bytes32 batchId);
 

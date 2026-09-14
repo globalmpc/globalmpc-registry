@@ -1,15 +1,15 @@
 /**
- * 브라우저 지갑(EIP-1193) 연동.
+ * Browser wallet (EIP-1193) integration.
  *
- * 데모 계정은 알려진 private key로 브라우저에서 직접 서명한다. 실제 사용자는
- * 자기 키를 우리에게 주지 않는다 — 지갑 확장이 서명하고 우리는 결과만 받는다.
+ * Demo accounts sign directly in the browser with known private keys. Real users
+ * never give us their keys — the wallet extension signs and we receive only the result.
  *
- * **두 경로가 같은 SIWE·EIP-712 흐름을 쓴다.** 서명 주체만 다르고 서버가 보는
- * 것은 동일하다. 그래서 서버에는 "데모냐 실지갑이냐"를 구분하는 코드가 없다 —
- * 구분이 있으면 데모 경로가 실지갑 경로보다 느슨해질 수 있다.
+ * **Both paths use the same SIWE and EIP-712 flow.** Only the signer differs; what the server
+ * sees is identical. So the server has no code distinguishing "demo or real wallet" —
+ * such a distinction could let the demo path become looser than the real-wallet path.
  */
 
-/** EIP-1193 provider의 우리가 쓰는 부분만 정의한다. */
+/** Defines only the parts of an EIP-1193 provider that we use. */
 export interface Eip1193Provider {
   request(args: { method: string; params?: unknown[] }): Promise<unknown>;
   on?(event: string, handler: (...args: unknown[]) => void): void;
@@ -23,18 +23,18 @@ declare global {
 }
 
 /**
- * 설치된 지갑 하나 — EIP-6963.
+ * One installed wallet — EIP-6963.
  *
- * `window.ethereum`은 자리가 하나뿐이라 확장을 둘 이상 깔면 **먼저 잡은 쪽이
- * 이긴다.** 사용자가 MetaMask로 로그인하려 해도 다른 지갑이 응답하고, 그 지갑이
- * 거절하면 원인이 화면에 드러나지 않는다. EIP-6963은 각 지갑이 자기를 알리게
- * 해서 사용자가 고르게 한다.
+ * `window.ethereum` has a single slot, so with two or more extensions installed **whichever claims it
+ * first wins.** Even when the user tries to log in with MetaMask, another wallet responds, and when that
+ * wallet rejects, the cause never appears on screen. EIP-6963 has each wallet announce itself
+ * so the user can choose.
  */
 export interface DiscoveredWallet {
-  /** 지갑의 역-DNS 식별자. 같은 이름의 지갑이 둘일 수 있어 이것으로 고른다. */
+  /** The wallet's reverse-DNS identifier. Two wallets can share a name, so choose by this. */
   readonly id: string;
   readonly name: string;
-  /** data URI. 없을 수 있다. */
+  /** data URI. May be absent. */
   readonly icon: string | null;
   readonly provider: Eip1193Provider;
 }
@@ -44,14 +44,14 @@ interface Eip6963ProviderDetail {
   provider: Eip1193Provider;
 }
 
-/** 사용자가 고른 지갑. 고르기 전에는 `window.ethereum`으로 떨어진다. */
+/** The wallet the user chose. Falls back to `window.ethereum` before a choice is made. */
 let selectedProvider: Eip1193Provider | null = null;
 
 /**
- * 알림을 구독한다.
+ * Subscribe to announcements.
  *
- * 지갑은 요청을 받은 뒤에 자기를 알린다. 구독 → 요청 순서를 지키지 않으면 이미
- * 지나간 알림을 놓친다. 알림은 여러 번 올 수 있으므로 id로 중복을 지운다.
+ * Wallets announce themselves after receiving a request. Without subscribe → request ordering,
+ * announcements already sent are missed. Announcements can arrive more than once, so dedupe by id.
  */
 export function subscribeWallets(onChange: (wallets: DiscoveredWallet[]) => void): () => void {
   if (typeof window === "undefined") return () => undefined;
@@ -92,11 +92,11 @@ export function hasInjectedWallet(): boolean {
 export class WalletError extends Error {
   constructor(
     message: string,
-    /** 사용자가 직접 거부한 것인가. 오류가 아니라 선택이다. */
+    /** Whether the user rejected it directly. A choice, not an error. */
     readonly rejectedByUser: boolean,
     /**
-     * 지갑이 준 원래 코드. 감싸면서 잃으면 연결 기록이 "no code"를 남기고, 어느
-     * 지갑이 무엇으로 멈췄는지 재현할 수 없다(2026-09-11 E2E에서 드러났다).
+     * The original code from the wallet. Losing it when wrapping leaves "no code" in the connection log,
+     * and which wallet stopped on what cannot be reproduced (surfaced in E2E on 2026-09-11).
      */
     readonly code?: number,
   ) {
@@ -105,19 +105,19 @@ export class WalletError extends Error {
   }
 }
 
-/** EIP-1193의 사용자 거부 코드. 이것을 오류로 표시하면 선택을 실패로 보이게 한다. */
+/** EIP-1193 user rejection code. Showing it as an error makes a choice look like a failure. */
 const USER_REJECTED = 4001;
 
-/** JSON-RPC 내부 오류. MetaMask 모바일은 진짜 코드를 이 안에 싸서 준다. */
+/** JSON-RPC internal error. MetaMask mobile wraps the real code inside it. */
 const INTERNAL_ERROR = -32603;
 
 /**
- * 지갑 오류에서 코드를 꺼낸다.
+ * Extract the code from a wallet error.
  *
- * **지갑마다 코드를 싣는 자리가 다르다.** 데스크톱 MetaMask는 최상위 `code`에
- * 4902(체인 없음)를 주지만, MetaMask 모바일은 최상위를 `-32603`으로 두고 진짜
- * 코드를 `data.originalError.code`에 넣는다(metamask-mobile #3312). 최상위만 보면
- * 모바일 사용자는 체인 추가 제안 없이 "전환 실패"에서 멈춘다.
+ * **Each wallet puts the code in a different place.** Desktop MetaMask puts 4902 (unknown chain)
+ * in the top-level `code`, but MetaMask mobile sets the top level to `-32603` and puts the real
+ * code in `data.originalError.code` (metamask-mobile #3312). Reading only the top level leaves
+ * mobile users stuck at "switch failed" with no offer to add the chain.
  */
 export function rpcErrorCode(caught: unknown): number | undefined {
   const error = caught as { code?: unknown; data?: { originalError?: { code?: unknown } } } | null;
@@ -138,10 +138,10 @@ function toWalletError(caught: unknown, fallback: string): WalletError {
 }
 
 /**
- * 계정 연결 요청.
+ * Request account connection.
  *
- * 지갑은 사용자가 승인해야 주소를 알려준다. 승인 없이 주소를 얻는 방법은 없고,
- * 있어서도 안 된다.
+ * A wallet reveals the address only after the user approves. There is no way to get the address
+ * without approval, and there should not be.
  */
 export async function connectWallet(): Promise<string> {
   const provider = getInjectedProvider();
@@ -159,11 +159,11 @@ export async function connectWallet(): Promise<string> {
 }
 
 /**
- * 체인 확인.
+ * Check the chain.
  *
- * 서버는 특정 chainId의 서명만 받는다. 다른 체인에 연결된 지갑으로 서명하면
- * 검증에 실패하는데, 그 실패는 "서명이 틀렸다"로 보여 원인을 찾기 어렵다.
- * 미리 확인하고 무엇이 다른지 말한다.
+ * The server accepts signatures only for specific chainIds. Signing with a wallet on another chain
+ * fails verification, and that failure looks like "wrong signature", making the cause hard to find.
+ * Check up front and say what differs.
  */
 export async function currentChainId(): Promise<number> {
   const provider = getInjectedProvider();
@@ -174,10 +174,10 @@ export async function currentChainId(): Promise<number> {
 }
 
 /**
- * 지갑이 그 체인을 모를 때 추가를 제안하기 위한 값.
+ * Values used to offer adding the chain when the wallet does not know it.
  *
- * 서버가 받는 체인은 56과 97뿐이다(`apps/api/src/config.ts`). 그 외를 여기에
- * 두면 넣을 수 없는 체인으로 지갑을 옮기게 된다.
+ * The server accepts only chains 56 and 97 (`apps/api/src/config.ts`). Listing any other chain here
+ * would move the wallet to a chain that cannot be used.
  */
 const CHAIN_PARAMS: Readonly<
   Record<
@@ -205,11 +205,11 @@ const CHAIN_PARAMS: Readonly<
 };
 
 /**
- * transaction hash의 체인 탐색기 주소.
+ * Block explorer URL for a transaction hash.
  *
- * 공개 기록의 tx hash는 방문자가 BscScan에서 직접 확인할 수 있어야 한다. 서버가
- * 받는 체인(56·97) 밖이거나 hash 모양이 아니면 링크를 만들지 않는다 — 없는
- * 페이지로 보내는 것보다 글자로 두는 편이 낫다.
+ * Visitors must be able to check a public record's tx hash on BscScan themselves. If the chain is
+ * outside those the server accepts (56, 97) or the value is not hash-shaped, no link is made — plain
+ * text is better than sending them to a page that does not exist.
  */
 export function blockExplorerTxUrl(chainId: number, hash: string): string | null {
   const base = CHAIN_PARAMS[chainId]?.blockExplorerUrls[0];
@@ -217,15 +217,15 @@ export function blockExplorerTxUrl(chainId: number, hash: string): string | null
 }
 
 /**
- * 체인 전환 — 없으면 추가한다.
+ * Switch chains — add the chain if missing.
  *
- * **4902를 기다리지 않고 추가를 시도한다.** 지갑이 그
- * 체인을 모를 때 주는 응답이 제각각이다: 데스크톱 MetaMask는 4902, MetaMask
- * 모바일은 `-32603`에 싼 4902 또는 아예 코드 없음(#3312·#12502). 코드를 맞히려
- * 하면 한 지갑에서 또 멈춘다. 사용자가 거부한 경우만 멈추고, 나머지는 추가를
- * 제안한다 — 이미 있는 체인이면 지갑이 전환만 한다.
+ * **Tries adding without waiting for 4902.** Wallets respond differently when they
+ * do not know the chain: desktop MetaMask returns 4902; MetaMask
+ * mobile returns 4902 wrapped in `-32603`, or no code at all (#3312, #12502). Trying to match codes
+ * just stalls on yet another wallet. Stop only when the user rejects; otherwise offer to add
+ * the chain — if it already exists, the wallet only switches.
  *
- * 추가 뒤에 전환하지 않는 지갑이 있어 한 번 더 확인한다.
+ * Some wallets do not switch after adding, so check once more.
  */
 export async function switchChain(chainId: number): Promise<void> {
   const provider = getInjectedProvider();
@@ -240,7 +240,7 @@ export async function switchChain(chainId: number): Promise<void> {
     return;
   } catch (caught) {
     const params = CHAIN_PARAMS[chainId];
-    // 거부는 선택이다. 추가를 이어서 띄우면 거부를 무시하는 것이 된다.
+    // A rejection is a choice. Following it with an add prompt would ignore the rejection.
     if (rpcErrorCode(caught) === USER_REJECTED || !params) {
       throw toWalletError(caught, "Could not switch chain");
     }
@@ -265,9 +265,9 @@ export async function switchChain(chainId: number): Promise<void> {
 }
 
 /**
- * 지갑을 그 체인에 맞춘다. 이미 맞으면 아무것도 하지 않는다.
+ * Align the wallet to that chain. Does nothing if it already matches.
  *
- * 결과를 돌려준다 — 연결 기록(`session.tsx`)이 "전환했는가"를 남긴다.
+ * Returns the result — the connection log (`session.tsx`) records whether a switch happened.
  */
 export async function ensureChain(
   chainId: number,
@@ -279,11 +279,11 @@ export async function ensureChain(
 }
 
 /**
- * 응답하는 지갑이 스스로 밝힌 표시.
+ * Flags the responding wallet reports about itself.
  *
- * **기록용이다 — 판정에 쓰지 않는다.** 표시는 지갑이 자기를 그렇게 부르는 것일
- * 뿐이고(여러 지갑이 `isMetaMask`를 켠다), 그것으로 분기하면 지갑마다 다른 코드가
- * 생긴다. 무엇이 응답했는지 알아야 문제를 재현할 수 있어서 남긴다.
+ * **For logging only — not for decisions.** A flag is only what a wallet calls itself
+ * (many wallets set `isMetaMask`); branching on it produces per-wallet code.
+ * Recorded because reproducing a problem requires knowing what responded.
  */
 export function walletFlags(provider: Eip1193Provider | null): string[] {
   if (!provider) return [];
@@ -300,11 +300,11 @@ export function walletFlags(provider: Eip1193Provider | null): string[] {
 }
 
 /**
- * 지갑에서 계정·체인을 바꾸는 것을 듣는다.
+ * Listen for account and chain changes in the wallet.
  *
- * 세션은 서버에서 옛 주소에 묶여 있으므로 권한 문제는 아니다. 문제는 사용자가
- * 지갑에서 본 계정과 화면의 계정이 다르다는 것이다 — 서명을 요청받는 순간
- * 엉뚱한 계정으로 서명하거나 거절이 이유 없이 난다.
+ * The session is bound to the old address on the server, so it is not a permission problem. The problem is that
+ * the account the user sees in the wallet differs from the one on screen — when a signature is requested,
+ * it is signed with the wrong account or rejected for no visible reason.
  */
 export function subscribeProviderEvents(handlers: {
   onAccounts(accounts: string[]): void;
@@ -326,7 +326,7 @@ export function subscribeProviderEvents(handlers: {
   };
 }
 
-/** SIWE 메시지 서명. `personal_sign`은 인자 순서가 (message, address)다. */
+/** SIWE message signature. `personal_sign` takes arguments in (message, address) order. */
 export async function personalSign(message: string, address: string): Promise<string> {
   const provider = getInjectedProvider();
   if (!provider) throw new WalletError("No browser wallet is available", false);
@@ -342,11 +342,11 @@ export async function personalSign(message: string, address: string): Promise<st
 }
 
 /**
- * EIP-712 typed data 서명.
+ * EIP-712 typed data signature.
  *
- * 서버가 준 구조를 그대로 넘긴다. 여기서 재구성하면 사용자가 지갑에서 본 것과
- * 서버가 검증하는 것이 달라질 수 있다 — 그것이 무엇에 서명했는지 모르게 되는
- * 가장 흔한 경로다.
+ * Passes the server's structure as-is. Rebuilding it here can make what the user sees in the wallet
+ * differ from what the server verifies — the most common way to lose track of what was
+ * actually signed.
  */
 export async function signTypedDataWithWallet(
   typedData: unknown,

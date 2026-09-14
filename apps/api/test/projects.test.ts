@@ -7,7 +7,7 @@ import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from 
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
-describeDb("프로젝트 라우트", () => {
+describeDb("project routes", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let tokens: { operatorA: string; operatorB: string; readerA: string; unknownWallet: string };
@@ -16,7 +16,7 @@ describeDb("프로젝트 라우트", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
-    // R1부터 인증은 SIWE 서명 → 세션 토큰이다. 테스트도 같은 경로를 지난다.
+    // From R1, auth is SIWE signature → session token. Tests take the same path.
     tokens = {
       operatorA: await signIn(app, fx.operatorA),
       operatorB: await signIn(app, fx.operatorB),
@@ -33,7 +33,7 @@ describeDb("프로젝트 라우트", () => {
   function body(overrides: Record<string, unknown> = {}) {
     return {
       projectKey: `TEST-${idempotencyKey().slice(0, 8)}`,
-      name: "테스트 프로젝트",
+      name: "Test project",
       hostCountryIso3: "MNG",
       minerals: ["copper"],
       ownerOrganizationId: fx.orgA,
@@ -50,8 +50,8 @@ describeDb("프로젝트 라우트", () => {
     });
   }
 
-  describe("등록", () => {
-    it("권한 있는 operator가 등록한다", async () => {
+  describe("create", () => {
+    it("an authorized operator creates a project", async () => {
       const response = await create(tokens.operatorA, body());
       expect(response.statusCode).toBe(200);
 
@@ -59,12 +59,12 @@ describeDb("프로젝트 라우트", () => {
       expect(created.lifecycleState).toBe("draft");
       expect(created.version).toBe(1);
       expect(created.readinessSummary).toBeNull();
-      // 07 §7.1: 모든 응답에 requestId·asOf가 있다.
+      // 07 §7.1: every response carries requestId and asOf.
       expect(created.requestId).toBeTruthy();
       expect(created.asOf).toBeTruthy();
     });
 
-    it("등록이 audit과 outbox를 같은 트랜잭션에 남긴다", async () => {
+    it("writes audit and outbox in the same transaction", async () => {
       const payload = body();
       const response = await create(tokens.operatorA, payload);
       const created = response.json();
@@ -85,14 +85,14 @@ describeDb("프로젝트 라우트", () => {
     });
 
     /**
-     * 감사 기록의 역할은 통과시킨 역할이다 — 02 §2.7.
+     * The audited role is the role that granted the action — 02 §2.7.
      *
-     * 바인딩을 하나 더 붙여 두 개로 만든다. `auditor`는 `project.create`를 하지
-     * 못하므로 통과시키는 것은 `mpc_operator`뿐이다. 세션의 첫 바인딩을 적는
-     * 구현이면 이 단언이 절반의 확률로 깨진다 —
-     * `core.resolve_role_bindings`에 ORDER BY가 없어 순서가 계획에 달렸다.
+     * Adds a second binding. `auditor` cannot perform `project.create`,
+     * so only `mpc_operator` grants it. An implementation that records the session's
+     * first binding breaks this assertion half the time —
+     * `core.resolve_role_bindings` has no ORDER BY, so order depends on the plan.
      */
-    it("행위를 허용한 역할을 남긴다 — 세션의 첫 역할이 아니다", async () => {
+    it("records the role that allowed the action, not the session's first role", async () => {
       await fx.sql`
         INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
         VALUES (gen_random_uuid(), ${fx.tenantA}, ${fx.operatorSubjectA}, ${fx.orgA}, 'auditor')
@@ -114,7 +114,7 @@ describeDb("프로젝트 라우트", () => {
       }
     });
 
-    it("outbox payload에 개인정보를 넣지 않는다", async () => {
+    it("keeps personal data out of the outbox payload", async () => {
       const response = await create(tokens.operatorA, body());
       const created = response.json();
       const [event] = await fx.sql<{ payload: Record<string, unknown> }[]>`
@@ -126,8 +126,8 @@ describeDb("프로젝트 라우트", () => {
     });
   });
 
-  describe("인증·권한", () => {
-    it("인증 없이 등록할 수 없다", async () => {
+  describe("authentication and authorization", () => {
+    it("rejects creation without authentication", async () => {
       const response = await app.inject({
         method: "POST",
         url: "/api/v1/projects",
@@ -138,14 +138,14 @@ describeDb("프로젝트 라우트", () => {
       expect(response.json().code).toBe("UNAUTHENTICATED");
     });
 
-    it("미등록 wallet은 403 WALLET_NOT_ENROLLED다 — 로그인은 됐고 tenant가 없다", async () => {
-      // 401이면 "다시 로그인하라"로 읽힌다. 서명은 이미 됐으므로 사실과 다르다.
+    it("an unenrolled wallet gets 403 WALLET_NOT_ENROLLED — signed in, no tenant", async () => {
+      // A 401 reads as "sign in again". The signature already succeeded, so that is false.
       const response = await create(tokens.unknownWallet, body());
       expect(response.statusCode).toBe(403);
       expect(response.json().code).toBe("WALLET_NOT_ENROLLED");
     });
 
-    it("tenant 소속이지만 역할이 없으면 403과 필요 역할을 반환한다", async () => {
+    it("returns 403 and the required roles for a tenant member without a role", async () => {
       const response = await create(tokens.readerA, body());
       expect(response.statusCode).toBe(403);
 
@@ -156,7 +156,7 @@ describeDb("프로젝트 라우트", () => {
       expect(error.details.accessRequestPath).toBeTruthy();
     });
 
-    it("권한 거절은 행을 만들지 않는다", async () => {
+    it("an authorization rejection creates no row", async () => {
       const payload = body({ projectKey: "DENIED-NO-ROW" });
       await create(tokens.readerA, payload);
 
@@ -167,8 +167,8 @@ describeDb("프로젝트 라우트", () => {
     });
   });
 
-  describe("멱등성 (07 §7.1)", () => {
-    it("Idempotency-Key가 없으면 400이다", async () => {
+  describe("idempotency (07 §7.1)", () => {
+    it("returns 400 without Idempotency-Key", async () => {
       const response = await app.inject({
         method: "POST",
         url: "/api/v1/projects",
@@ -179,12 +179,12 @@ describeDb("프로젝트 라우트", () => {
       expect(response.json().code).toBe("IDEMPOTENCY_KEY_REQUIRED");
     });
 
-    it("짧은 key를 거절한다", async () => {
+    it("rejects a short key", async () => {
       const response = await create(tokens.operatorA, body(), "short");
       expect(response.statusCode).toBe(400);
     });
 
-    it("같은 key + 같은 요청은 같은 결과를 준다", async () => {
+    it("same key + same request returns the same result", async () => {
       const key = idempotencyKey();
       const payload = body();
 
@@ -201,7 +201,7 @@ describeDb("프로젝트 라우트", () => {
       expect(rows).toHaveLength(1);
     });
 
-    it("같은 key + 다른 요청은 409다", async () => {
+    it("same key + different request returns 409", async () => {
       const key = idempotencyKey();
       await create(tokens.operatorA, body(), key);
       const response = await create(tokens.operatorA, body(), key);
@@ -210,7 +210,7 @@ describeDb("프로젝트 라우트", () => {
       expect(response.json().code).toBe("IDEMPOTENCY_KEY_REUSE");
     });
 
-    it("멱등 재시도가 이벤트를 두 번 만들지 않는다", async () => {
+    it("an idempotent retry does not create the event twice", async () => {
       const key = idempotencyKey();
       const payload = body();
       const first = await create(tokens.operatorA, payload, key);
@@ -223,21 +223,21 @@ describeDb("프로젝트 라우트", () => {
     });
   });
 
-  describe("요청 검증", () => {
-    it("필수 필드가 없으면 400이다", async () => {
-      const response = await create(tokens.operatorA, { name: "이름만" });
+  describe("request validation", () => {
+    it("returns 400 when required fields are missing", async () => {
+      const response = await create(tokens.operatorA, { name: "name only" });
       expect(response.statusCode).toBe(400);
       expect(response.json().code).toBe("REQUEST_INVALID");
     });
 
-    it("잘못된 ISO3 코드를 거절한다", async () => {
+    it("rejects an invalid ISO3 code", async () => {
       const response = await create(tokens.operatorA, body({ hostCountryIso3: "MONGOLIA" }));
       expect(response.statusCode).toBe(400);
     });
   });
 
-  describe("tenant 격리", () => {
-    it("다른 tenant의 프로젝트는 404다 — 존재 여부도 알려주지 않는다", async () => {
+  describe("tenant isolation", () => {
+    it("another tenant's project is 404 — existence is not revealed", async () => {
       const created = await create(tokens.operatorB, body({ ownerOrganizationId: fx.orgB }));
       expect(created.statusCode).toBe(200);
 
@@ -250,7 +250,7 @@ describeDb("프로젝트 라우트", () => {
       expect(response.json().code).toBe("NOT_FOUND");
     });
 
-    it("목록에 자기 tenant의 프로젝트만 나온다", async () => {
+    it("lists only the caller's tenant projects", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/projects",
@@ -267,9 +267,9 @@ describeDb("프로젝트 라우트", () => {
       expect(new Set(ids)).toEqual(new Set(rows.map((row) => row.id)));
     });
 
-    it("다른 tenant의 조직으로 등록할 수 없다", async () => {
+    it("rejects creation under another tenant's organization", async () => {
       const response = await create(tokens.operatorA, body({ ownerOrganizationId: fx.orgB }));
-      // RLS가 FK 대상 조직을 보이지 않게 하므로 삽입이 실패한다.
+      // RLS hides the FK target organization, so the insert fails.
       expect(response.statusCode).toBeGreaterThanOrEqual(400);
 
       const rows = await fx.sql`
@@ -280,8 +280,8 @@ describeDb("프로젝트 라우트", () => {
     });
   });
 
-  describe("응답 규약", () => {
-    it("오류 응답이 envelope 형식이다", async () => {
+  describe("response conventions", () => {
+    it("error responses use the envelope format", async () => {
       const response = await app.inject({ method: "GET", url: "/api/v1/does-not-exist" });
       const envelope = response.json();
       expect(envelope).toHaveProperty("code");
@@ -290,7 +290,7 @@ describeDb("프로젝트 라우트", () => {
       expect(envelope).toHaveProperty("correlationId");
     });
 
-    it("correlation ID를 헤더에서 이어받는다", async () => {
+    it("carries the correlation ID over from the header", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/does-not-exist",
@@ -300,7 +300,7 @@ describeDb("프로젝트 라우트", () => {
       expect(response.headers["x-correlation-id"]).toBe("trace-from-client");
     });
 
-    it("모든 응답에 X-Request-Id가 있다", async () => {
+    it("every response has X-Request-Id", async () => {
       const response = await app.inject({ method: "GET", url: "/health/live" });
       expect(response.headers["x-request-id"]).toBeTruthy();
     });

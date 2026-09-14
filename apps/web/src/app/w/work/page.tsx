@@ -9,11 +9,11 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 /**
  * My Work — spec 11 §11.2.
  *
- * **셋을 의미로 갈라 낸다.** 한 목록에 섞으면 "내가 해야 하는 것"과 "내가
- * 기다리는 것"이 같아 보이고, 그 둘은 다음 행동이 정반대다.
+ * **Split the three by meaning.** In one list, "what I must do" and "what I am
+ * waiting on" look alike, yet their next actions are opposite.
  *
- * 세 번째(아무에게도 배정되지 않은 것)가 있는 이유: 배정된 일만 보이면 **아무도
- * 맡지 않은 일**이 영원히 보이지 않는다. 방치가 조용히 일어나는 자리다.
+ * Why the third (unassigned) group exists: if only assigned work is shown, **work nobody
+ * owns** is never seen. That is where neglect happens quietly.
  */
 export default function MyWorkPage() {
   const { token, session, loading: sessionLoading } = useSession();
@@ -81,7 +81,7 @@ export default function MyWorkPage() {
                     <td className="mono">{item.state}</td>
                     <td className="mono meta">{item.assignedAt}</td>
                     <td className="mono">
-                      {/* 이해상충이 해소되지 않은 배정은 진행할 수 없다(02 §2.4). */}
+                      {/* An assignment with an unresolved conflict of interest cannot proceed (02 §2.4). */}
                       {item.conflictStatus === "unresolved" ? (
                         <span style={{ color: "var(--destructive-text)" }}>unresolved</span>
                       ) : (

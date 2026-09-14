@@ -3,16 +3,16 @@ import { resolveSecret } from "@mpc/config";
 import type { SubmitterConfig } from "./anchor-submitter.js";
 
 /**
- * anchor worker 설정.
+ * Anchor worker configuration.
  *
- * 시작할 때 전부 검사한다. 누락을 런타임까지 미루면 batch가 쌓인 뒤에야 제출이
- * 안 되는 것을 알게 된다.
+ * Everything is validated at startup. Deferring a gap to runtime means learning that submission
+ * fails only after batches have piled up.
  *
- * **비밀은 기본값을 두지 않는다.** 기본 키가 있으면 누군가는 그것으로 운영한다.
+ * **Secrets have no defaults.** If a default key exists, someone will run production on it.
  *
- * 서명 키와 DB URL은 값 대신 참조로 받을 수 있다(`file:`·`env:`). 배포 환경에서
- * 개인키가 프로세스 환경에 남지 않는 것이 목적이다 — `docker inspect` 한 번이면
- * anchor signer 지갑이 통째로 노출된다.
+ * The signing key and DB URL may be given as references instead of values (`file:`, `env:`). The
+ * goal is to keep the private key out of the process environment in deployment — a single
+ * `docker inspect` would expose the whole anchor signer wallet.
  */
 
 export interface AnchorEnv {
@@ -43,11 +43,11 @@ export interface AnchorConfig extends SubmitterConfig {
 
 function required(env: AnchorEnv, key: keyof AnchorEnv): string {
   const value = env[key];
-  if (!value) throw new Error(`${key}가 필요하다`);
+  if (!value) throw new Error(`${key} is required`);
   return value;
 }
 
-/** 비밀 참조를 값으로 바꾼다. 실패 메시지에 값은 들어가지 않는다. */
+/** Resolves a secret reference to its value. Failure messages never include the value. */
 function requiredSecret(env: AnchorEnv, key: keyof AnchorEnv): string {
   return resolveSecret(key, env[key], undefined, env as NodeJS.ProcessEnv);
 }
@@ -55,58 +55,57 @@ function requiredSecret(env: AnchorEnv, key: keyof AnchorEnv): string {
 export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
   const contractAddress = required(env, "ANCHOR_CONTRACT_ADDRESS").toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(contractAddress)) {
-    throw new Error("ANCHOR_CONTRACT_ADDRESS가 주소 형식이 아니다");
+    throw new Error("ANCHOR_CONTRACT_ADDRESS is not a valid address");
   }
 
   const signerPrivateKey = requiredSecret(env, "ANCHOR_SIGNER_PRIVATE_KEY");
   if (!/^0x[0-9a-fA-F]{64}$/.test(signerPrivateKey)) {
-    // 형식만 본다. 값 자체는 오류 메시지에도 넣지 않는다.
-    throw new Error("ANCHOR_SIGNER_PRIVATE_KEY 형식이 올바르지 않다");
+    // Checks format only. The value itself never goes into the error message.
+    throw new Error("ANCHOR_SIGNER_PRIVATE_KEY has an invalid format");
   }
 
   const chainId = Number(required(env, "CHAIN_ID"));
-  if (!Number.isInteger(chainId) || chainId <= 0) throw new Error("CHAIN_ID가 올바르지 않다");
+  if (!Number.isInteger(chainId) || chainId <= 0) throw new Error("CHAIN_ID is invalid");
 
   const confirmationDepth = Number(env.ANCHOR_CONFIRMATIONS ?? "12");
   if (!Number.isInteger(confirmationDepth) || confirmationDepth < 1) {
-    // 확정 깊이 0은 "블록에 들어가면 확정"이라는 뜻이 되어 06 §6.8을 무너뜨린다.
-    throw new Error("ANCHOR_CONFIRMATIONS는 1 이상이어야 한다");
+    // A depth of 0 would mean "confirmed once in a block", which breaks 06 §6.8.
+    throw new Error("ANCHOR_CONFIRMATIONS must be at least 1");
   }
 
   const feeCapGwei = Number(env.ANCHOR_FEE_CAP_GWEI ?? "100");
-  if (!(feeCapGwei > 0)) throw new Error("ANCHOR_FEE_CAP_GWEI는 0보다 커야 한다");
+  if (!(feeCapGwei > 0)) throw new Error("ANCHOR_FEE_CAP_GWEI must be greater than 0");
 
-  // O1 — 하루에 태울 수 있는 가스 총액. **기본값을 두지 않는다.**
+  // O1 — total gas that may be burned per day. **No default.**
   //
-  // per-tx 상한과 재시도 상한은 이미 있다. 그 둘을 다 지켜도 batch가 계속 생기면
-  // 지갑은 빈다. 손실 상한은 하루 총액으로만 고정되고, 그 값은 운영자가 정한다
-  // (예상 소진 × 1.5). 기본값이 있으면 아무도 정하지 않은 채 배포된다 —
-  // `OBJECT_REGION`을 비워 두고 거절하는 것과 같은 이유다.
+  // A per-tx cap and a retry cap already exist. Even with both honored, a steady stream of
+  // batches drains the wallet. The loss cap is fixed only as a daily total, and the operator sets
+  // it (expected burn × 1.5). With a default, it ships without anyone deciding — the same reason
+  // an empty `OBJECT_REGION` is rejected.
   const dailySpendCapRaw = required(env, "ANCHOR_DAILY_SPEND_CAP_WEI");
   if (!/^[0-9]+$/.test(dailySpendCapRaw)) {
-    // wei는 정수다. `0.05`나 `1e17`은 단위를 착각한 것이며, 조용히 반올림하면
-    // 상한이 의도와 다른 자리에서 걸린다.
-    throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI는 wei 단위 정수여야 한다");
+    // wei is an integer. `0.05` or `1e17` means the unit was mistaken, and silently rounding
+    // would make the cap trip somewhere other than intended.
+    throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI must be an integer in wei");
   }
   const dailySpendCapWei = BigInt(dailySpendCapRaw);
   if (dailySpendCapWei <= 0n) {
-    // 0은 "상한 없음"이 아니라 "아무것도 제출하지 않음"이다.
-    throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI는 0보다 커야 한다");
+    // 0 does not mean "no cap"; it means "submit nothing".
+    throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI must be greater than 0");
   }
 
-  // 기본값은 로컬(31337)과 BNB testnet(97)뿐이다. mainnet에서 EOA가 단독으로
-  // 제출하려면 명시적으로 열어야 하며, 컨트랙트 설계상 그것은 Safe multisig의
-  // 역할이다.
+  // Defaults are local (31337) and BNB testnet (97) only. Solo EOA submission on mainnet must be
+  // opened explicitly, and by contract design that is the Safe multisig's role.
   const eoaAllowedChainIds = (env.ANCHOR_EOA_CHAIN_IDS ?? "31337,97")
     .split(",")
     .map((value) => Number(value.trim()))
     .filter((value) => Number.isInteger(value) && value > 0);
 
-  // EOA 제출이 막힌 체인에서 제안을 만들 Safe 주소. 없으면 그 체인에서는
-  // 아무것도 하지 못하며, worker가 그 사실을 로그로 남긴다.
+  // Safe address that receives proposals on chains where EOA submission is blocked. Without it,
+  // nothing happens on that chain, and the worker logs that fact.
   const safeAddress = env.ANCHOR_SAFE_ADDRESS?.toLowerCase() ?? null;
   if (safeAddress && !/^0x[0-9a-f]{40}$/.test(safeAddress)) {
-    throw new Error("ANCHOR_SAFE_ADDRESS가 주소 형식이 아니다");
+    throw new Error("ANCHOR_SAFE_ADDRESS is not a valid address");
   }
 
   return {

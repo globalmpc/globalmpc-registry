@@ -6,23 +6,23 @@ import { buildMerkleTree, getMerkleProof, verifyMerkleProof } from "../src/merkl
 import vectors from "./vectors.json" with { type: "json" };
 
 /**
- * 골든 벡터 회귀 테스트.
+ * Golden vector regression test.
  *
- * `scripts/generate-vectors.ts`가 만든 값과 현재 구현이 일치하는지 확인한다.
- * 여기가 깨지면 canonical 규격이 바뀐 것이고, 그러면 이미 anchor된 root를
- * 재현할 수 없다. 값을 갱신하기 전에 serializationVersion을 올려야 한다.
+ * Checks that the current implementation matches the values produced by `scripts/generate-vectors.ts`.
+ * If this breaks, the canonical spec changed, and already-anchored roots can no longer be
+ * reproduced. Bump serializationVersion before updating the values.
  */
 
 const encoder = new TextEncoder();
 
-describe("골든 벡터 — keccak256", () => {
-  it("알려진 값과 일치한다", () => {
+describe("golden vectors — keccak256", () => {
+  it("matches known values", () => {
     expect(keccak256(new Uint8Array(0))).toBe(vectors.keccak256.empty);
     expect(keccak256(encoder.encode("abc"))).toBe(vectors.keccak256.abc);
   });
 });
 
-describe("골든 벡터 — canonicalize", () => {
+describe("golden vectors — canonicalize", () => {
   for (const testCase of vectors.canonicalize) {
     it(`${testCase.name}`, () => {
       const canonical = canonicalize(testCase.input as CanonicalValue);
@@ -32,7 +32,7 @@ describe("골든 벡터 — canonicalize", () => {
   }
 });
 
-describe("골든 벡터 — leaf", () => {
+describe("golden vectors — leaf", () => {
   for (const [index, entry] of vectors.leaves.entries()) {
     it(`leaf[${index}] ${entry.leaf.registryType}/${entry.leaf.status}`, () => {
       expect(hashLeaf(entry.leaf as RegistryLeaf)).toBe(entry.leafHash);
@@ -40,18 +40,18 @@ describe("골든 벡터 — leaf", () => {
   }
 });
 
-describe("골든 벡터 — Merkle", () => {
+describe("golden vectors — Merkle", () => {
   const leafHashes = vectors.leaves.map((entry) => entry.leafHash as Hex);
 
-  it("root가 일치한다", () => {
+  it("root matches", () => {
     expect(buildMerkleTree(leafHashes).root).toBe(vectors.merkle.root);
   });
 
-  it("정렬된 leaf 배열이 일치한다", () => {
+  it("sorted leaf array matches", () => {
     expect(buildMerkleTree(leafHashes).layers[0]).toEqual(vectors.merkle.sortedLeaves);
   });
 
-  it("각 leaf의 proof가 일치하고 검증된다", () => {
+  it("each leaf's proof matches and verifies", () => {
     const tree = buildMerkleTree(leafHashes);
     for (const entry of vectors.merkle.proofs) {
       const proof = getMerkleProof(tree, entry.leafHash as Hex);
@@ -62,7 +62,7 @@ describe("골든 벡터 — Merkle", () => {
     }
   });
 
-  it("serializationVersion이 1이다", () => {
+  it("serializationVersion is 1", () => {
     expect(vectors.serializationVersion).toBe("1");
     for (const entry of vectors.leaves) {
       expect(entry.leaf.serializationVersion).toBe("1");

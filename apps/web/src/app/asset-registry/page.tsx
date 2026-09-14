@@ -1,20 +1,20 @@
 import Link from "next/link";
 
 /**
- * Asset Registry 공개 화면 — spec 11 §11.2, OD-07.
+ * Asset Registry public screen — spec 11 §11.2, OD-07.
  *
- * **이 화면의 일은 없는 기능을 설명하는 것이다.** Asset Registry는 비활성이고
- * 그 상태가 어디에도 적혀 있지 않았다 — 공개 navigation에 항목이 없으면
- * "아직 안 만들었다"와 "일부러 막아 두었다"가 구분되지 않는다.
+ * **This screen explains a feature that does not exist.** The Asset Registry is inactive, and
+ * that state was written nowhere — with no item in public navigation,
+ * "not built yet" and "deliberately blocked" are indistinguishable.
  *
- * **거래 경로를 만들지 않는다(OD-07).** `subscriptions`·`orders`·`transfers`
- * route가 존재하지 않으며 이 화면도 그 방향의 CTA를 두지 않는다. 남은 gate를
- * 나열하되 "곧 열린다"고 말하지 않는다 — 열릴지 여부가 결정된 바 없다.
+ * **No trading path (OD-07).** No `subscriptions`, `orders`, or `transfers`
+ * route exists, and this screen has no CTA in that direction. It lists the remaining gates
+ * but never says "opening soon" — whether it opens has not been decided.
  *
- * 서버 컴포넌트다. 이 화면에는 조회할 것이 없다.
+ * Server component. There is nothing to fetch on this screen.
  */
 
-/** 남은 gate. 각 항목은 근거 결정을 함께 적는다 — 근거 없는 목록은 로드맵이 된다. */
+/** Remaining gates. Each item names its basis decision — a list without basis becomes a roadmap. */
 const GATES = [
   {
     gate: "Legal issuance decision",

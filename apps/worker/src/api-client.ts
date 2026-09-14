@@ -3,31 +3,31 @@ import { createSiweMessage } from "viem/siwe";
 import type { Hex } from "viem";
 
 /**
- * worker → API 클라이언트.
+ * Worker → API client.
  *
- * worker도 **사람과 같은 인증 경로를 지난다** — SIWE 서명으로 세션을 받는다.
- * 서비스 전용 우회 헤더를 두면 그 헤더가 곧 인증 우회가 되고, 실제로 R1에서
- * 그런 경로를 제거한 적이 있다.
+ * The worker **takes the same auth path as a person** — it gets a session via a SIWE signature.
+ * A service-only bypass header would itself be an auth bypass, and R1 actually removed such a
+ * path.
  *
- * 세션은 만료되므로 401을 받으면 한 번 다시 로그인하고 재시도한다. 매 요청마다
- * 로그인하면 nonce 발급이 불필요하게 늘어난다.
+ * Sessions expire, so on a 401 it logs in once more and retries. Logging in on every request
+ * would issue nonces needlessly.
  *
- * 모든 요청에 타임아웃을 건다. worker는 루프 안에서 이 클라이언트를 부르므로
- * 한 번 매달리면 그 뒤의 이벤트가 전부 밀린다 — 실패가 아니라 정지로 나타나고,
- * 정지는 재시도도 경보도 걸리지 않는다.
+ * Every request has a timeout. The worker calls this client inside its loop, so one hang stalls
+ * every later event — it shows up as a stall, not a failure, and a stall triggers neither retry
+ * nor alert.
  */
 
-/** 요청 하나의 상한. 출처 조회(05 §5.12)와 같은 자리수로 둔다. */
+/** Cap for a single request. Same order of magnitude as source lookup (05 §5.12). */
 export const DEFAULT_TIMEOUT_MS = 15_000;
 
 export interface ApiClientOptions {
   readonly baseUrl: string;
   readonly privateKey: Hex;
   readonly chainId: number;
-  /** SIWE 메시지의 domain·uri. 서버 설정과 같아야 검증을 통과한다. */
+  /** domain and uri of the SIWE message. Must match the server config to pass verification. */
   readonly siweDomain: string;
   readonly siweUri: string;
-  /** 요청 하나의 상한. 기본 15초. */
+  /** Cap for a single request. Default 15 s. */
   readonly timeoutMs?: number;
 }
 
@@ -44,7 +44,7 @@ export class ApiRequestError extends Error {
 
 export interface ApiClient {
   post(path: string, body: unknown, headers?: Record<string, string>): Promise<unknown>;
-  /** 현재 세션 주체. 로그에 남길 공개 정보다. */
+  /** Current session principal. Public information, safe to log. */
   readonly walletAddress: string;
 }
 
@@ -57,7 +57,7 @@ export function createApiClient(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let token: string | null = null;
 
-  /** 요청마다 새 signal을 만든다. 재사용하면 첫 타임아웃 뒤 전부 즉시 끊긴다. */
+  /** A fresh signal per request. Reusing one aborts everything immediately after the first timeout. */
   const deadline = () => AbortSignal.timeout(timeoutMs);
 
   async function login(): Promise<string> {
@@ -68,7 +68,7 @@ export function createApiClient(
       signal: deadline(),
     });
     if (!nonceResponse.ok) {
-      throw new ApiRequestError(nonceResponse.status, "SIWE_NONCE_FAILED", "nonce 발급 실패");
+      throw new ApiRequestError(nonceResponse.status, "SIWE_NONCE_FAILED", "nonce issuance failed");
     }
     const challenge = (await nonceResponse.json()) as {
       nonce: string;
@@ -99,7 +99,7 @@ export function createApiClient(
       throw new ApiRequestError(
         verifyResponse.status,
         body.code ?? "SIWE_VERIFY_FAILED",
-        body.message ?? "서명 검증 실패",
+        body.message ?? "signature verification failed",
       );
     }
 
@@ -132,8 +132,8 @@ export function createApiClient(
       token ??= await login();
       let response = await send(path, body, headers, token);
 
-      // 세션이 만료됐을 수 있다. 한 번만 다시 로그인한다 — 반복하면 인증 실패를
-      // 무한 루프로 바꾼다.
+      // The session may have expired. Log in again only once — repeating turns an auth failure
+      // into an infinite loop.
       if (response.status === 401) {
         token = await login();
         response = await send(path, body, headers, token);
@@ -147,7 +147,7 @@ export function createApiClient(
         throw new ApiRequestError(
           response.status,
           envelope.code ?? "UNKNOWN",
-          envelope.message ?? "요청 실패",
+          envelope.message ?? "request failed",
         );
       }
 

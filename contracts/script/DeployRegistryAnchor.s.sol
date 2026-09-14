@@ -5,16 +5,16 @@ import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {RegistryAnchorV1} from "../src/RegistryAnchorV1.sol";
 
-/// @notice RegistryAnchorV1 배포 스크립트.
+/// @notice RegistryAnchorV1 deployment script.
 ///
-/// @dev **로컬·테스트넷 전용 배치다.** 세 role을 모두 같은 EOA에 주는 것은
-///      개발 편의이며, prod에서는 admin·submitter를 Safe multisig가 갖고 pauser를
-///      보안 대응 조직이 갖는다. 한 주소가 셋을 다 가지면 "MPC 자신도 단독으로
-///      바꿀 수 없다"는 컨트랙트의 전제가 성립하지 않는다.
+/// @dev **This layout is for local and testnet only.** Giving all three roles to one EOA is a
+///      development convenience; in prod a Safe multisig holds admin and submitter, and the
+///      security response team holds pauser. If one address holds all three, the contract's
+///      premise that "not even MPC can change it on its own" does not hold.
 ///
-///      환경변수:
-///      - `ANCHOR_DEPLOYER_KEY` — 배포·서명 키
-///      - `ANCHOR_ADMIN` / `ANCHOR_SUBMITTER` / `ANCHOR_PAUSER` — 없으면 배포자 주소
+///      Environment variables:
+///      - `ANCHOR_DEPLOYER_KEY` — deployment and signing key
+///      - `ANCHOR_ADMIN` / `ANCHOR_SUBMITTER` / `ANCHOR_PAUSER` — default to the deployer address
 contract DeployRegistryAnchor is Script {
     function run() external returns (RegistryAnchorV1 anchor) {
         uint256 deployerKey = vm.envUint("ANCHOR_DEPLOYER_KEY");

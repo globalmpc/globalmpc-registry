@@ -12,17 +12,17 @@ import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
- * 알림 — spec 12 §12.4.
+ * Notifications — spec 12 §12.4.
  *
- * 검토 요청·gap·stale·revoke가 일어나도 당사자가 아는 경로는 화면을 다시 여는
- * 것뿐이었다. 그것은 "무엇이 바뀌었나"에 답하지 않는다 — 사람이 화면마다 이전
- * 상태를 기억하고 있어야 한다.
+ * When a review request, gap, stale, or revoke occurred, the only way the affected person
+ * learned was reopening the screen. That does not answer "what changed" — a person would have to
+ * remember each screen's previous state.
  *
- * **읽음은 나에 대해서만이다.** 역할로 온 알림을 내가 읽었다고 남에게서 지우면,
- * 내가 처리하지 않았을 때 아무도 다시 보지 않는다. 화면이 그 사실을 밝힌다.
+ * **Read status is per person.** If my reading a role-addressed notification cleared it for others,
+ * no one would look again when I did not act. The screen states this.
  *
- * **여기 있는 것이 전부는 아니다.** 메일·webhook으로 내보내는 경로는 정해진 바
- * 없다. 앱을 열지 않으면 여전히 모른다 — 화면이 그것을 숨기지 않는다.
+ * **This is not everything.** Delivery by email or webhook is not yet
+ * decided. Without opening the app you still do not know — the screen does not hide that.
  */
 
 const KIND_LABEL: Record<Notification["kind"], string> = {

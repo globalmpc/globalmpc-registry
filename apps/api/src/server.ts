@@ -39,31 +39,31 @@ declare module "fastify" {
     session: Session | null;
   }
   interface FastifyInstance {
-    /** 실제로 등록된 라우트. 계약↔구현 대조와 운영 디버깅에 쓴다. */
+    /** Routes actually registered. Used for contract↔implementation comparison and ops debugging. */
     registeredRoutes: { method: string; url: string }[];
   }
 }
 
 /**
- * 외부에서 주입하는 것.
+ * What is injected from outside.
  *
- * 출처 조회는 실제 기관으로 나가는 요청이다. 테스트가 진짜 등록부를 부르면
- * 되지 않으므로 호출자를 바꿔 끼운다.
+ * Source lookup sends requests to real authorities. Tests must not call a real registry, so
+ * the caller is swappable.
  */
 export interface ServerDeps {
   readonly fetchImpl?: SourceFetch;
   /**
-   * 이름을 주소로 푸는 함수.
+   * Resolves a name to addresses.
    *
-   * 출처를 부르기 직전에 대상이 사설 주소로 해석되지 않는지 본다(SSRF).
-   * 테스트는 실제 DNS를 쓰지 않으므로 여기서 바꿔 낀다.
+   * Checks right before calling a source that the target does not resolve to a private address
+   * (SSRF). Tests do not use real DNS, so it is swapped here.
    */
   readonly resolveHost?: HostResolver;
   /**
-   * 거버넌스 스냅숏용 체인 접근.
+   * Chain access for governance snapshots.
    *
-   * 토큰 컨트랙트가 아직 없으므로(R4 이전) 테스트가 진짜 체인을 부를 수 없다.
-   * 주지 않으면 설정에서 만든다.
+   * The token contract does not exist yet (pre-R4), so tests cannot call a real chain.
+   * Built from config when not provided.
    */
   readonly governanceChain?: GovernanceChain;
 }
@@ -74,68 +74,68 @@ export async function buildServer(
   deps: ServerDeps = {},
 ): Promise<FastifyInstance> {
   /**
-   * 요청자 판정 — 프록시 뒤라는 사실을 서버가 알아야 한다.
+   * Requester determination — the server must know it sits behind a proxy.
    *
-   * 배포에서 브라우저는 `web`의 `/api/*`를 지나 여기 닿는다. 소켓 주소는 언제나
-   * web 컨테이너이므로, 그것을 요청자로 보면 상한·로그·감사가 전부 한 주소로
-   * 뭉친다.
+   * In deployment the browser reaches here through `web`'s `/api/*`. The socket address is
+   * always the web container, so treating it as the requester collapses caps, logs, and audit
+   * onto a single address.
    *
-   * `true`를 주지 않는다. 그러면 헤더의 **맨 왼쪽**을 믿게 되고, 그 값은 요청자가
-   * 직접 채울 수 있다 — 상한이 우회 가능해진다.
+   * Never pass `true`. That trusts the **leftmost** header entry, which the requester can fill
+   * directly — making the cap bypassable.
    *
-   * 홉 수만 주던 것도 더는 쓰지 않는다. fastify 5.12.1이 그 형태를 없앴고 이유가
-   * 정확하다 — **홉 수는 바로 앞 상대가 누구인지 검사하지 않는다.** 프록시를
-   * 거치지 않고 직접 닿은 요청이 헤더를 스스로 채우면 그대로 요청자가 된다.
-   * 홉 수와 피어 대역을 **둘 다** 요구한다(`createProxyTrust`).
+   * Passing only a hop count is no longer used either. fastify 5.12.1 removed that form, for a
+   * precise reason — **a hop count does not check who the immediate peer is.** A request that
+   * bypasses the proxy and fills the header itself becomes the requester as is.
+   * **Both** a hop count and a peer range are required (`createProxyTrust`).
    */
   const app = Fastify({
     logger: { level: process.env["LOG_LEVEL"] ?? "info" },
     trustProxy: createProxyTrust(config.trustedProxyHops, config.trustedProxyCidrs),
     /**
-     * 시간 상한.
+     * Time caps.
      *
-     * Fastify는 둘 다 **끈 채로** 만든다. 실측에서 `requestTimeout`도
-     * `server.timeout`도 0이었고, 걸려 있는 것은 `headersTimeout` 60초와
-     * `bodyLimit` 1MiB뿐이었다. 헤더만 제때 보내면 그 뒤로는 시간을 쓰지 않는
-     * 연결이 무한히 남는다 — 인터넷에서 도달하는 표면이다.
+     * Fastify builds both **turned off**. Measured: `requestTimeout` and
+     * `server.timeout` were both 0; only `headersTimeout` 60 s and
+     * `bodyLimit` 1 MiB applied. A client that sends headers on time can then hold the
+     * connection open indefinitely — on a surface reachable from the internet.
      *
-     * 둘은 서로 다른 것을 막는다. `requestTimeout`은 요청 하나의 총시간,
-     * `connectionTimeout`은 아무것도 보내지 않는 소켓이다. 후자는 전송 중에
-     * 갱신되므로 2GiB 스트리밍 업로드를 자르지 않는다.
+     * The two block different things. `requestTimeout` is one request's total time;
+     * `connectionTimeout` is a socket that sends nothing. The latter is refreshed during transfer,
+     * so it does not cut 2 GiB streaming uploads.
      */
     requestTimeout: config.requestTimeoutMs,
     connectionTimeout: config.socketIdleTimeoutMs,
   });
 
   /**
-   * 메트릭 수집.
+   * Metrics collection.
    *
-   * 경로는 route 템플릿으로 정규화한다 — URL을 그대로 쓰면 UUID마다 시계열이
-   * 생겨 수집기가 죽는다.
+   * Paths are normalized to route templates — raw URLs create a series per UUID and kill
+   * the collector.
    */
   /**
-   * 거버넌스 스냅숏용 체인 접근.
+   * Chain access for governance snapshots.
    *
-   * `GOVERNANCE_TOKEN_ADDRESS`가 없으면 스냅숏을 만들지 않고 수동 무게로
-   * 떨어진다 — 토큰이 배포되기 전에는 읽을 잔고가 없다. 그 사실은 응답의
-   * `weightSource`가 밝힌다.
+   * Without `GOVERNANCE_TOKEN_ADDRESS` no snapshot is taken and weight falls back to
+   * manual — before the token is deployed there is no balance to read. The response's
+   * `weightSource` discloses that.
    */
   const governanceChain = deps.governanceChain ?? createGovernanceChain(config);
 
   const metrics = createMetricsRegistry();
   app.addHook("onResponse", async (request, reply) => {
     const route = request.routeOptions?.url ?? "unmatched";
-    // 운영 endpoint 자신은 세지 않는다. 수집 주기가 곧 트래픽으로 보인다.
+    // Do not count the ops endpoint itself. The scrape interval would show up as traffic.
     if (route.startsWith("/health") || route === "/metrics") return;
     metrics.observeRequest(request.method, route, reply.statusCode, reply.elapsedTime);
 
     /**
-     * 알림이 필요한 둘을 따로 센다.
+     * Counts separately the two that need alerts.
      *
-     * `http_requests_total`의 `status`는 `4xx`로 뭉쳐 있다. 그 상태로는 "상한에
-     * 걸리고 있다"와 "잘못된 요청이 많다"가 구분되지 않고, 둘은 대응이 다르다.
-     * SIWE 실패도 마찬가지다 — 로그인 실패율이 오르는 것은 오타가 아니라
-     * 자격증명 시도일 수 있다.
+     * `status` in `http_requests_total` is bucketed as `4xx`. In that form "hitting the cap" and
+     * "many bad requests" are indistinguishable, and they need different responses.
+     * SIWE failures likewise — a rising login failure rate may be credential attempts rather
+     * than typos.
      */
     if (reply.statusCode === 429) {
       metrics.incrementCounter("mpc_rate_limited_total", { route });
@@ -148,11 +148,11 @@ export async function buildServer(
   });
 
   /**
-   * 등록된 라우트를 수집한다.
+   * Collects registered routes.
    *
-   * `@mpc/api-contract`의 `ROUTES`는 계약이고 여기 등록되는 것은 구현이다. 둘이
-   * 갈라지는 것을 사람이 눈으로 잡을 수 없으므로 목록을 노출해 테스트가 대조한다.
-   * 훅은 라우트 등록보다 먼저 걸어야 한다.
+   * `ROUTES` in `@mpc/api-contract` is the contract; what registers here is the implementation.
+   * Humans cannot catch the two diverging by eye, so the list is exposed for tests to compare.
+   * The hook must be attached before route registration.
    */
   const registeredRoutes: { method: string; url: string }[] = [];
   app.decorate("registeredRoutes", registeredRoutes);
@@ -167,36 +167,36 @@ export async function buildServer(
   await registerErrorHandler(app);
 
   /**
-   * 보안 응답 헤더 — 10 §10.6.
+   * Security response headers — 10 §10.6.
    *
-   * 상한보다 **먼저** 건다. 429도 브라우저가 받는 응답이므로 같은 헤더가 붙어야
-   * 한다.
+   * Attached **before** the cap. A 429 is also a response the browser receives, so it needs the
+   * same headers.
    */
   await registerSecurityHeaders(app, { production: config.nodeEnv === "production" });
 
   /**
-   * 요청 상한 — 06 §6.9, 07 §7.1.
+   * Request cap — 06 §6.9, 07 §7.1.
    *
-   * 계약(`openapi.json`)은 무인증 경로에 별도 상한이 있다고 밝히지만 구현이
-   * 없었다. 특히 `/auth/siwe/nonce`는 인증 없이 행을 만드는 경로다 — 상한이
-   * 없으면 아무나 `core.siwe_nonces`를 채울 수 있다.
+   * The contract (`openapi.json`) states a separate cap on unauthenticated paths, but there was
+   * no implementation. `/auth/siwe/nonce` in particular creates rows without auth — without a
+   * cap anyone could fill `core.siwe_nonces`.
    *
-   * 키는 **검증 전 헤더가 아니라 요청자 IP**다. `Authorization`에 들어온 값을
-   * 그대로 키로 쓰면 공격자가 가짜 Bearer 값을 요청마다 바꿔 새 몫을 얻는다.
-   * 실제 세션인지 확인하려면 DB를 읽어야 하는데, 그 조회보다 상한이 먼저 실행돼야
-   * DB 자체를 보호할 수 있다. 따라서 이 첫 방어선은 IP 기준이어야 한다.
+   * The key is **the requester IP, not an unverified header**. Using the `Authorization` value
+   * as the key lets an attacker get a fresh share per request by rotating a fake Bearer value.
+   * Checking for a real session requires a DB read, and the cap must run before that lookup to
+   * protect the DB itself. So this first line of defense must be IP-based.
    *
-   * **이것은 프로세스 안의 상한이다.** 복제본이 늘면 그만큼 총량이 늘어난다.
-   * 경계에서의 상한(프록시·WAF)을 대신하지 않는다.
+   * **This is an in-process cap.** More replicas raise the total accordingly.
+   * It does not replace a cap at the edge (proxy, WAF).
    */
   /**
-   * 홉 수 설정이 틀렸다는 것을 서버가 스스로 말하게 한다.
+   * Lets the server itself report a wrong hop-count setting.
    *
-   * `TRUSTED_PROXY_HOPS`가 맞는지는 코드가 알 수 없다 — 프록시 수는 배포 환경의
-   * 사실이다. 다만 **작게 잡혔을 때의 증상**은 여기서 보인다: 요청자가 컨테이너의
-   * 사설 주소로 판정된다. 크게 잡힌 경우(요청자가 헤더로 주소를 꾸미는 것)는
-   * 꾸민 주소도 공인 주소라 여기서 잡히지 않는다 — 그쪽은 배포 뒤 실제 프록시
-   * 홉 수를 확인하는 운영 절차가 맡는다.
+   * Code cannot know whether `TRUSTED_PROXY_HOPS` is right — the proxy count is a fact of the
+   * deployment. But **the symptom of setting it too low** shows here: the requester resolves to
+   * a container's private address. Setting it too high (the requester forging an address via
+   * the header) is not caught here since the forged address is also public — that is left to
+   * the ops procedure that checks the real proxy hop count after deployment.
    */
   const warnUnroutableClient = createUnroutableClientWarning((address, message) =>
     app.log.warn({ clientAddress: address, trustedProxyHops: config.trustedProxyHops }, message),
@@ -207,27 +207,27 @@ export async function buildServer(
     max: config.rateLimitMax,
     timeWindow: "1 minute",
     /**
-     * 검증 전 Bearer 값은 identity가 아니다. 여기서는 신뢰 프록시 경계를 통과해
-     * 판정한 IP만 쓴다. 이 hook은 세션 DB 조회보다 먼저 실행되므로, 상한을 넘은
-     * 요청은 `core.resolve_session_token`에도 닿지 않는다.
+     * An unverified Bearer value is not an identity. Only the IP determined through the trusted
+     * proxy boundary is used here. This hook runs before the session DB lookup, so requests
+     * over the cap never reach `core.resolve_session_token`.
      */
     keyGenerator: (request) => {
-      // 상한 키가 사설 주소로 떨어지는 첫 순간에 알린다. 그 상태는 오류 없이
-      // 동작하므로, 서버가 말하지 않으면 배포에서 아무도 알아채지 못한다.
+      // Report the first moment the cap key falls to a private address. That state runs without
+      // errors, so unless the server says so, nobody in deployment notices.
       warnUnroutableClient(request.ip);
       return request.ip;
     },
-    // 운영 endpoint는 세지 않는다. 수집 주기가 곧 상한을 먹는다.
+    // Do not count the ops endpoint. The scrape interval would eat the cap.
     allowList: (request) =>
       request.url.startsWith("/health") || request.url === "/metrics",
     /**
-     * 상한 초과도 07 §7.1의 envelope으로 나간다.
+     * Cap overruns also go out as the 07 §7.1 envelope.
      *
-     * 여기서 본문을 만들지 않고 `AppError`를 던져 error handler가 만들게 한다 —
-     * envelope을 만드는 곳이 둘이면 한쪽만 형식이 바뀐다.
+     * Do not build the body here; throw `AppError` and let the error handler build it —
+     * with two places building envelopes, only one of them changes format.
      */
     errorResponseBuilder: (_request, context) => {
-      throw tooManyRequests("RATE_LIMITED", "요청이 너무 잦다. 잠시 뒤 다시 시도한다", {
+      throw tooManyRequests("RATE_LIMITED", "Too many requests. Try again shortly", {
         limit: String(context.max),
         retryAfterSeconds: String(Math.ceil(context.ttl / 1000)),
       });
@@ -237,17 +237,17 @@ export async function buildServer(
   app.decorateRequest("session", null);
 
   /**
-   * 세션 해석.
+   * Session resolution.
    *
-   * Authorization 헤더의 Bearer 토큰으로 세션을 찾는다. 토큰은 SIWE 서명을
-   * 검증한 뒤에만 발급되며, 서버는 토큰 원문을 저장하지 않는다(해시만 저장).
+   * Finds the session from the Bearer token in the Authorization header. Tokens are issued only
+   * after verifying the SIWE signature, and the server does not store raw tokens (hash only).
    *
-   * 개발용 wallet 헤더 경로는 R1에서 제거됐다. 주소를 헤더에 넣어도 토큰으로
-   * 취급되어 조회에 실패하고 401이 된다 — 조용히 통과하는 경로가 없다.
+   * The dev wallet header path was removed in R1. An address in the header is treated as a
+   * token, fails lookup, and yields 401 — there is no silent pass-through path.
    */
   app.addHook("preParsing", async (request) => {
-    // 이 route들은 세션을 소비하지 않는다. 공격자가 무의미한 Bearer 헤더를 붙여
-    // 세션 DB 조회를 만들지 못하게 한다.
+    // These routes do not consume a session. Keeps an attacker from triggering session DB
+    // lookups by attaching meaningless Bearer headers.
     const route = request.routeOptions.url;
     if (
       route === "/api/v1/auth/siwe/nonce" ||
@@ -267,10 +267,10 @@ export async function buildServer(
   });
 
   /**
-   * 객체 저장소는 **한 인스턴스**를 나눠 쓴다.
+   * The object store is **one shared instance**.
    *
-   * 업로드와 증빙 확정이 각각 만들면 `memory` 구성에서 서로 다른 저장소를
-   * 보게 된다 — 올린 파일을 확정 경로가 찾지 못한다.
+   * If upload and evidence finalization each built their own, the `memory` setup would see
+   * different stores — the finalize path could not find uploaded files.
    */
   const objectStore = createObjectStore(config);
 
@@ -292,10 +292,10 @@ export async function buildServer(
   await registerAuthorityAdminRoutes(app, sql);
   await registerSecondReviewRoute(app, sql);
   await registerStaleSignalRoutes(app, sql);
-  // multipart는 업로드 route에서만 쓴다. 전역 등록이지만 파일 파트를 읽는
-  // route가 하나뿐이라 다른 route의 body 파싱에는 영향이 없다.
+  // multipart is used only by the upload route. It is registered globally, but only one route
+  // reads file parts, so body parsing for other routes is unaffected.
   await app.register(multipart);
-  // 저장소는 서버당 하나다. route마다 만들면 연결이 그만큼 늘어난다.
+  // One store per server. Building one per route multiplies connections.
   await registerUploadRoutes(app, sql, objectStore);
 
   return app;

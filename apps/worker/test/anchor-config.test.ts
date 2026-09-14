@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { loadAnchorConfig, type AnchorEnv } from "../src/anchor-config.js";
 
 /**
- * anchor worker 설정 검사.
+ * anchor worker config checks.
  *
- * 여기서 막지 못한 누락은 batch가 쌓인 뒤에 드러난다. 특히 일일 가스 상한(O1)은
- * 기본값을 두면 아무도 정하지 않은 채 운영에 들어간다 — `OBJECT_REGION`을 비워
- * 두고 기동을 거절하는 것과 같은 이유다.
+ * An omission not caught here surfaces only after batches pile up. The daily gas cap (O1) in
+ * particular would reach production with nobody having set it if it had a default — the same reason
+ * startup is refused when `OBJECT_REGION` is empty.
  */
 
 const base: AnchorEnv = {
@@ -19,35 +19,36 @@ const base: AnchorEnv = {
 };
 
 /**
- * 상한은 **산정 공식에서 나온 값**이어야 한다 — 공식과 넣는 자리는 `deploy/README.md`.
+ * The cap must be **the value produced by the sizing formula** — the formula and where to set it
+ * are in `deploy/README.md`.
  *
- *   일일 소진 상한 = 하루 제출 건수 × 건당 gas × 가스 가격 상한(gwei) × 1e9 × 1.5
+ *   daily spend cap = submissions per day × gas per submission × gas price cap (gwei) × 1e9 × 1.5
  *
- * 입력 하나를 고치고 결과를 안 고치면 상한이 의도한 배수에서 벗어나는데, 그
- * 어긋남은 **지갑이 비고 나서야** 드러난다. 설정은 문자열이라 자릿수가 하나 빠져도
- * 형식 검사는 통과한다. 그래서 곱셈을 여기에 한 번 더 두고, 값을 정한 사람이
- * 검산할 자리를 만든다.
+ * Changing one input without updating the result moves the cap off its intended multiple, and the
+ * drift shows up **only after the wallet is empty**. Config is a string, so a dropped digit still
+ * passes format checks. So the multiplication is repeated here, giving whoever sets the value a
+ * place to double-check it.
  *
- * 아래 숫자는 **예시 입력**이다. 실제 값은 운영 환경마다 다르고 저장소가 정하지
- * 않는다 — 하루 제출 건수는 등록 대상의 수에서 나온다.
+ * The numbers below are **example inputs**. Real values differ per environment and the repository
+ * does not set them — submissions per day follow from the number of registered subjects.
  */
-describe("일일 상한 산정 공식", () => {
+describe("daily cap sizing formula", () => {
   const GWEI = 1_000_000_000n;
 
-  /** 예상 소진 × 1.5. bigint라 분수를 3/2로 쓴다. */
+  /** Expected spend × 1.5. bigint, so the fraction is written as 3/2. */
   const capWei = (submissionsPerDay: bigint, gasPerSubmission: bigint, feeCapGwei: bigint): bigint =>
     (submissionsPerDay * gasPerSubmission * feeCapGwei * GWEI * 3n) / 2n;
 
-  /** 건당 gas는 `forge test --gas-report`의 `submitRoot` max에 기본 비용과 calldata 여유를 더한 값이다. */
+  /** Gas per submission is the `submitRoot` max from `forge test --gas-report` plus base cost and calldata headroom. */
   const example = capWei(50n, 170_000n, 100n);
 
-  it("공식이 낸 값을 그대로 싣는다", () => {
+  it("carries the value the formula produces", () => {
     expect(
       loadAnchorConfig({ ...base, ANCHOR_DAILY_SPEND_CAP_WEI: example.toString() }).dailySpendCapWei,
     ).toBe(example);
   });
 
-  it("자릿수를 하나 빠뜨리면 다른 값이 된다", () => {
+  it("dropping one digit yields a different value", () => {
     expect(
       loadAnchorConfig({ ...base, ANCHOR_DAILY_SPEND_CAP_WEI: (example / 10n).toString() })
         .dailySpendCapWei,
@@ -55,34 +56,34 @@ describe("일일 상한 산정 공식", () => {
   });
 });
 
-describe("anchor 설정 — 일일 가스 상한 (O1)", () => {
-  it("값을 주면 wei 그대로 싣는다", () => {
+describe("anchor config — daily gas cap (O1)", () => {
+  it("carries the given value as wei", () => {
     expect(loadAnchorConfig(base).dailySpendCapWei).toBe(50_000_000_000_000_000n);
   });
 
-  it("없으면 기동을 거절한다", () => {
-    // 기본값을 두면 손실 상한을 아무도 정하지 않은 채 배포된다. O1은 그 상한이
-    // 있다는 것을 배포 조건으로 삼는다.
+  it("refuses to start when missing", () => {
+    // A default would ship with nobody having set the loss cap. O1 makes the existence of that cap
+    // a deployment condition.
     const { ANCHOR_DAILY_SPEND_CAP_WEI: _omitted, ...without } = base;
     expect(() => loadAnchorConfig(without)).toThrowError(/ANCHOR_DAILY_SPEND_CAP_WEI/);
   });
 
-  it("빈 문자열은 주지 않은 것으로 본다", () => {
-    // 오케스트레이터가 미설정 변수를 빈 값으로 넘기는 경우가 있다.
+  it("treats an empty string as not provided", () => {
+    // Some orchestrators pass unset variables as empty values.
     expect(() => loadAnchorConfig({ ...base, ANCHOR_DAILY_SPEND_CAP_WEI: "" })).toThrowError(
       /ANCHOR_DAILY_SPEND_CAP_WEI/,
     );
   });
 
-  it("0이나 음수는 거절한다", () => {
-    // 0은 "상한 없음"이 아니라 "아무것도 제출하지 않음"이다. 그런 뜻으로 설정할
-    // 이유가 없으므로 오타로 본다.
+  it("rejects zero or negative", () => {
+    // 0 means "submit nothing", not "no cap". There is no reason to configure that, so it is
+    // treated as a typo.
     expect(() => loadAnchorConfig({ ...base, ANCHOR_DAILY_SPEND_CAP_WEI: "0" })).toThrowError();
     expect(() => loadAnchorConfig({ ...base, ANCHOR_DAILY_SPEND_CAP_WEI: "-1" })).toThrowError();
   });
 
-  it("정수가 아니면 거절한다", () => {
-    // wei는 정수다. 소수점이 들어온 것은 단위를 착각한 것이다.
+  it("rejects a non-integer", () => {
+    // wei is an integer. A decimal point means the unit was mistaken.
     expect(() => loadAnchorConfig({ ...base, ANCHOR_DAILY_SPEND_CAP_WEI: "0.05" })).toThrowError();
     expect(() => loadAnchorConfig({ ...base, ANCHOR_DAILY_SPEND_CAP_WEI: "1e17" })).toThrowError();
   });

@@ -3,26 +3,26 @@ import type postgres from "postgres";
 import { unprocessable } from "../errors.js";
 
 /**
- * 투표 무게 — spec 04 §4.5.
+ * Vote weight — spec 04 §4.5.
  *
- * 무게는 **투표 시작 시점의 온체인 잔고**다. 요청 본문으로 받으면 던지는 사람이
- * 자기 무게를 정한다 — 투표가 아니라 선언이다.
+ * Weight is **the on-chain balance at voting start**. Taking it from the request body lets the
+ * voter set their own weight — a declaration, not a vote.
  *
- * 시점을 고정하는 이유:
+ * Why the moment is pinned:
  *
- *   1. 투표 중에 토큰을 사서 무게를 늘릴 수 없다.
- *   2. 같은 토큰을 여러 지갑으로 옮겨 여러 번 던질 수 없다.
- *   3. 집계를 언제 다시 해도 같은 결과가 나온다.
+ *   1. Tokens cannot be bought mid-vote to increase weight.
+ *   2. The same tokens cannot be moved across wallets to vote multiple times.
+ *   3. Re-tallying at any time gives the same result.
  *
- * 스냅숏 조회는 아카이브 노드를 요구한다. 매 집계마다 다시 읽으면 결과가 노드
- * 상태에 좌우되므로 한 번 읽고 저장한다.
+ * Snapshot lookups require an archive node. Re-reading on every tally ties the result to node
+ * state, so it is read once and stored.
  */
 
 /**
- * 잔고 조회.
+ * Balance lookup.
  *
- * 주입하는 이유: 토큰 컨트랙트가 아직 없고(R4 이전), 아카이브 노드 없이는
- * 과거 블록을 읽을 수 없다. 두 상황을 테스트로 재현해야 한다.
+ * Why it is injected: the token contract does not exist yet (pre-R4), and past blocks cannot be
+ * read without an archive node. Tests must reproduce both situations.
  */
 export type BalanceReader = (input: {
   readonly tokenAddress: string;
@@ -31,26 +31,26 @@ export type BalanceReader = (input: {
 }) => Promise<bigint>;
 
 export interface SnapshotConfig {
-  /** 토큰 컨트랙트. 없으면 스냅숏을 만들지 않는다. */
+  /** Token contract. Absent means no snapshot is taken. */
   readonly tokenAddress: string | null;
   readonly chainId: number;
 }
 
 export interface WeightResult {
   readonly weight: bigint;
-  /** 무게가 어디서 왔는가. 화면이 이것을 밝혀야 한다. */
+  /** Where the weight came from. The screen must disclose this. */
   readonly source: "onchain_snapshot" | "manual";
   readonly blockNumber: number | null;
 }
 
 /**
- * 투표자의 무게를 정한다.
+ * Determines a voter's weight.
  *
- * 이미 스냅숏이 있으면 그것을 쓴다 — 두 번 읽으면 그 사이 블록이 재구성됐을
- * 때 다른 값이 나온다.
+ * An existing snapshot is reused — reading twice can yield different values if blocks were
+ * reorganized in between.
  *
- * 토큰이 설정되지 않았으면 `manual`로 떨어진다. **그 사실을 감추지 않는다** —
- * 수동 무게로 집계된 결과를 온체인 근거로 읽으면 안 된다.
+ * Without a configured token it falls back to `manual`. **That fact is not hidden** —
+ * results tallied with manual weight must not be read as on-chain evidence.
  */
 export async function resolveVoteWeight(
   tx: postgres.TransactionSql,
@@ -64,12 +64,12 @@ export async function resolveVoteWeight(
   },
   readBalance: BalanceReader,
 ): Promise<WeightResult> {
-  // 스냅숏 대상이 아니면 수동 무게다. 값이 없으면 투표할 수 없다.
+  // Not a snapshot target means manual weight. Without a value, voting is not possible.
   if (!input.snapshotBlock || !input.snapshotTokenAddress) {
     if (input.manualWeight === null) {
       throw unprocessable(
         "VOTE_WEIGHT_REQUIRED",
-        "온체인 스냅숏이 없는 제안에는 무게를 직접 지정해야 한다",
+        "Weight must be specified directly for proposals without an on-chain snapshot",
       );
     }
     return { weight: BigInt(input.manualWeight), source: "manual", blockNumber: null };
@@ -96,9 +96,9 @@ export async function resolveVoteWeight(
       blockNumber: input.snapshotBlock,
     });
   } catch (error) {
-    // 조회 실패를 잔고 0으로 읽지 않는다. 0은 "토큰이 없다"는 사실이고
-    // 실패는 "모른다"이며, 전자로 기록하면 투표권을 조용히 뺏는다.
-    throw unprocessable("VOTE_WEIGHT_UNAVAILABLE", "스냅숏 시점의 잔고를 읽지 못했다", {
+    // Do not read a failed lookup as a zero balance. 0 is the fact "holds no tokens", while
+    // failure is "unknown"; recording the former silently takes away voting power.
+    throw unprocessable("VOTE_WEIGHT_UNAVAILABLE", "Could not read the balance at the snapshot block", {
       blockNumber: String(input.snapshotBlock),
       reason: String(error).slice(0, 200),
     });
@@ -118,10 +118,10 @@ export async function resolveVoteWeight(
 }
 
 /**
- * 투표 시작 시 스냅숏 블록을 고정한다.
+ * Pins the snapshot block at voting start.
  *
- * head가 아니라 **확정된 블록**을 쓴다. head는 재구성될 수 있고, 그러면 이미
- * 던진 표의 무게 근거가 사라진다.
+ * Uses a **finalized block**, not the head. The head can be reorganized, taking away the
+ * weight basis of votes already cast.
  */
 export function snapshotBlockFor(headBlock: number, confirmationDepth: number): number {
   return Math.max(0, headBlock - confirmationDepth);

@@ -3,11 +3,11 @@
 import { useState } from "react";
 
 /**
- * 지갑 주소 표시 — 항상 전체 주소, 복사 가능.
+ * Wallet address display — always the full address, copyable.
  *
- * 줄인 주소(`0x4868…`)는 눈으로 대조할 수 없다. 앞 몇 자리가 같은 다른 주소를 만드는
- * 것은 어렵지 않고, 운영자가 사람을 연결·비활성할 때 틀린 줄을 누르게 된다.
- * 전체를 보이고, 옮겨 적다 틀리지 않게 복사 버튼을 붙인다.
+ * A shortened address (`0x4868…`) cannot be compared by eye. Producing another address with the
+ * same leading characters is not hard, and an operator linking or deactivating people clicks the wrong row.
+ * Show it in full and attach a copy button so transcription errors do not happen.
  */
 export function Address({ value, label = "wallet address" }: {
   readonly value: string;
@@ -20,7 +20,7 @@ export function Address({ value, label = "wallet address" }: {
       await navigator.clipboard.writeText(value);
       setState("copied");
     } catch {
-      // 권한 거부·비보안 문맥. 주소는 화면에 전부 있으므로 직접 선택해 복사할 수 있다.
+      // Permission denied or insecure context. The full address is on screen, so it can be selected and copied manually.
       setState("failed");
     }
     window.setTimeout(() => setState("idle"), 1600);

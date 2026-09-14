@@ -1,14 +1,14 @@
--- 저장 등급 게이트 — OD-17·OD-18 (2026-08-14 초안 결정).
+-- Storage tier gate — OD-17·OD-18 (draft decision, 2026-08-14).
 --
--- 초안 단계의 저장 경로는 하나다. provider 관리 키(SSE-S3)로 암호화된 단일
--- 버킷이며 tenant별 키 분리도 rotation·crypto-shredding 절차도 없다.
+-- The draft stage has a single storage path: one bucket encrypted with provider-managed keys
+-- (SSE-S3), with no per-tenant key separation and no rotation or crypto-shredding procedure.
 --
--- 그 경로가 받아도 되는 등급만 받는다. 실제 계약서·개인정보는 **별도의
--- secured route**가 열린 뒤에 올린다(OD-18 재판정과 함께).
+-- Accept only the tiers that path may hold. Real contracts and personal data go up only
+-- after a **separate secured route** opens (together with the OD-18 re-decision).
 --
--- 애플리케이션도 같은 것을 검사한다. 여기 두는 이유는 **라우트를 우회하는
--- 경로가 생겨도 남기 위해서다** — 마이그레이션 스크립트, 관리자 SQL,
--- 나중에 추가될 다른 업로드 route가 전부 이 제약을 지난다.
+-- The application checks the same thing. It lives here too **so it survives any path that
+-- bypasses the route** — migration scripts, admin SQL, and any upload route added
+-- later all pass through this constraint.
 
 ALTER TABLE core.object_uploads
   ADD CONSTRAINT object_uploads_draft_tier_only

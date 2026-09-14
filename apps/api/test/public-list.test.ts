@@ -9,17 +9,17 @@ import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * 공개 목록·검색.
+ * Public list and search.
  *
- * 0009의 공개 조회는 `(registryType, publicKey)`를 이미 알아야 한다. 즉 무엇이
- * 있는지 물을 방법이 없었다. 이 파일이 검증하는 것은 "목록이 나온다"가 아니라
- * **목록이 훑는 과정에서 경계가 새지 않는가**다.
+ * The public lookup from 0009 requires already knowing `(registryType, publicKey)`, so
+ * there was no way to ask what exists. This file verifies not "a list comes back" but
+ * **that no boundary leaks while the list scans**.
  */
-describeDb("공개 Registry 목록·검색", () => {
+describeDb("public Registry list and search", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let token: string;
-  /** 이 파일이 만든 entry의 publicKey. 다른 파일의 기록과 섞이지 않게 접두어를 둔다. */
+  /** publicKey of entries this file creates. Prefixed to avoid mixing with other files' records. */
   const prefix = `LIST-${randomUUID().slice(0, 8)}`;
 
   function projection(overrides: Record<string, unknown> = {}) {
@@ -30,7 +30,7 @@ describeDb("공개 Registry 목록·검색", () => {
       asOf: "2026-08-01T00:00:00.000Z",
       sourceAge: "12",
       staleStatus: "fresh",
-      limitations: ["법률 권리 확인은 이 검토 범위 밖이다"],
+      limitations: ["Legal title verification is outside this review's scope"],
       legalEffect: "none",
       disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
       ...overrides,
@@ -69,7 +69,7 @@ describeDb("공개 Registry 목록·검색", () => {
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     token = await signIn(app, fx.operatorA);
 
-    // 순서가 확정적이어야 페이지네이션을 검증할 수 있다. 게시를 직렬로 한다.
+    // Pagination needs a deterministic order. Publishes run serially.
     await publish(`${prefix}-A`, { projectName: "Altan Ridge", hostCountry: "MN" });
     await publish(`${prefix}-B`, { projectName: "Khuren Valley", mineral: ["copper", "gold"] });
     await publish(`${prefix}-C`, { projectName: "Nomin Hill", hostCountry: "MN" });
@@ -84,7 +84,7 @@ describeDb("공개 Registry 목록·검색", () => {
     return items.filter((item) => item.publicKey.startsWith(prefix));
   }
 
-  it("식별자 없이 목록을 낸다", async () => {
+  it("lists without an identifier", async () => {
     const { status, body } = await list("?limit=100");
 
     expect(status).toBe(200);
@@ -95,7 +95,7 @@ describeDb("공개 Registry 목록·검색", () => {
     ]);
   });
 
-  it("로그인하지 않고 조회된다", async () => {
+  it("is readable without signing in", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/public/registries/project?limit=1",
@@ -105,10 +105,10 @@ describeDb("공개 Registry 목록·검색", () => {
   });
 
   /**
-   * 이 파일의 핵심이다. 목록은 여러 tenant의 여러 entry를 훑으므로 한 줄이라도
-   * 새면 전체가 샌다.
+   * The core of this file. The list scans many entries across tenants, so one leaking
+   * row leaks everything.
    */
-  it("공개 allowlist 밖의 필드를 반환하지 않는다", async () => {
+  it("returns no fields outside the public allowlist", async () => {
     const { body } = await list("?limit=100");
 
     for (const item of body.items) {
@@ -119,7 +119,7 @@ describeDb("공개 Registry 목록·검색", () => {
     }
   });
 
-  it("tenant를 드러내지 않는다", async () => {
+  it("does not reveal the tenant", async () => {
     const { body } = await list("?limit=100");
 
     expect(JSON.stringify(body)).not.toContain(fx.tenantA);
@@ -128,7 +128,7 @@ describeDb("공개 Registry 목록·검색", () => {
     }
   });
 
-  it("정렬을 응답에 밝히고 클라이언트가 고를 수 없다", async () => {
+  it("states the sort order in the response and does not let the client choose it", async () => {
     const { body } = await list("?limit=100");
 
     expect(body.sort).toBe("publishedAt:desc,entryId:desc");
@@ -138,7 +138,7 @@ describeDb("공개 Registry 목록·검색", () => {
     expect(rejected.body.code).toBe("INVALID_QUERY");
   });
 
-  it("cursor로 이어 받으면 같은 줄을 두 번 주지 않는다", async () => {
+  it("does not repeat a row when paging with cursor", async () => {
     const first = await list("?limit=2");
     expect(first.body.items).toHaveLength(2);
     expect(first.body.nextCursor).toBeTypeOf("string");
@@ -150,20 +150,20 @@ describeDb("공개 Registry 목록·검색", () => {
     expect(secondKeys.some((key: string) => firstKeys.includes(key))).toBe(false);
   });
 
-  it("마지막 페이지의 nextCursor는 null이다", async () => {
+  it("the last page has a null nextCursor", async () => {
     const { body } = await list("?limit=100");
 
     expect(body.nextCursor).toBeNull();
   });
 
-  it("조작된 cursor를 조용히 첫 페이지로 되돌리지 않는다", async () => {
+  it("does not silently fall back to page one on a tampered cursor", async () => {
     const { status, body } = await list("?cursor=not-a-real-cursor");
 
     expect(status).toBe(400);
     expect(body.code).toBe("INVALID_CURSOR");
   });
 
-  it("projectName·hostCountry·mineral·publicKey로 검색한다", async () => {
+  it("searches by projectName, hostCountry, mineral and publicKey", async () => {
     for (const [term, expected] of [
       ["Khuren", `${prefix}-B`],
       ["copper", `${prefix}-B`],
@@ -176,23 +176,23 @@ describeDb("공개 Registry 목록·검색", () => {
   });
 
   /**
-   * `%`는 검색어이지 와일드카드가 아니다. 이스케이프하지 않으면 `%` 하나로
-   * 전체가 나오고, 그것은 검색이 아니라 필터 우회다.
+   * `%` is a search term, not a wildcard. Unescaped, a single `%` returns
+   * everything — a filter bypass, not a search.
    */
-  it("검색어의 LIKE 와일드카드를 글자로 다룬다", async () => {
+  it("treats LIKE wildcards in the query as literals", async () => {
     const { body } = await list("?limit=100&q=%25");
 
     expect(ours(body.items)).toEqual([]);
   });
 
-  it("limit 상한을 넘기면 거절한다", async () => {
+  it("rejects a limit above the cap", async () => {
     const { status, body } = await list("?limit=1000");
 
     expect(status).toBe(400);
     expect(body.code).toBe("INVALID_QUERY");
   });
 
-  it("게시되지 않은 registryType은 빈 목록이다", async () => {
+  it("an unpublished registryType yields an empty list", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/public/registries/asset?limit=100",

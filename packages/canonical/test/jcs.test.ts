@@ -2,30 +2,30 @@ import { describe, expect, it } from "vitest";
 import { CanonicalError } from "../src/errors.js";
 import { canonicalBytes, canonicalize } from "../src/jcs.js";
 
-describe("canonicalize — 키 정렬", () => {
-  it("객체 키를 UTF-16 코드 유닛 오름차순으로 정렬한다", () => {
+describe("canonicalize — key ordering", () => {
+  it("sorts object keys by ascending UTF-16 code units", () => {
     expect(canonicalize({ b: "1", a: "2", C: "3" })).toBe('{"C":"3","a":"2","b":"1"}');
   });
 
-  it("중첩 객체도 각 레벨에서 정렬한다", () => {
+  it("sorts nested objects at every level", () => {
     expect(canonicalize({ z: { y: "1", x: "2" }, a: "3" })).toBe(
       '{"a":"3","z":{"x":"2","y":"1"}}',
     );
   });
 
-  it("배열 순서는 보존한다 — 배열은 정렬 대상이 아니다", () => {
+  it("preserves array order — arrays are not sorted", () => {
     expect(canonicalize(["c", "a", "b"])).toBe('["c","a","b"]');
   });
 
-  it("키 순서가 다른 두 입력이 같은 바이트를 만든다", () => {
+  it("two inputs with different key order produce the same bytes", () => {
     const a = canonicalize({ one: "1", two: "2", three: "3" });
     const b = canonicalize({ three: "3", one: "1", two: "2" });
     expect(a).toBe(b);
   });
 });
 
-describe("canonicalize — number 금지 (ADR-T07)", () => {
-  it("정수를 거절한다", () => {
+describe("canonicalize — numbers forbidden (ADR-T07)", () => {
+  it("rejects integers", () => {
     expect(() => canonicalize({ amount: 1 } as never)).toThrowError(CanonicalError);
     try {
       canonicalize({ amount: 1 } as never);
@@ -35,54 +35,54 @@ describe("canonicalize — number 금지 (ADR-T07)", () => {
     }
   });
 
-  it("부동소수점을 거절한다", () => {
+  it("rejects floating point", () => {
     expect(() => canonicalize({ grade: 0.1 } as never)).toThrowError(
-      /JSON number를 쓸 수 없다/,
+      /JSON numbers are not allowed/,
     );
   });
 
-  it("bigint를 거절한다", () => {
+  it("rejects bigint", () => {
     expect(() => canonicalize({ supply: 10n } as never)).toThrowError(CanonicalError);
   });
 
-  it("decimal string은 허용한다", () => {
+  it("allows decimal strings", () => {
     expect(canonicalize({ amount: "10000000000", unit: "MPC" })).toBe(
       '{"amount":"10000000000","unit":"MPC"}',
     );
   });
 });
 
-describe("canonicalize — 타입 거절", () => {
-  it("undefined를 거절한다", () => {
+describe("canonicalize — type rejection", () => {
+  it("rejects undefined", () => {
     expect(() => canonicalize({ a: undefined } as never)).toThrowError(
-      /undefined를 쓸 수 없다/,
+      /undefined is not allowed/,
     );
   });
 
-  it("Date를 거절한다 — 평문 구조로 변환해야 한다", () => {
+  it("rejects Date — it must be converted to a plain structure", () => {
     expect(() => canonicalize({ at: new Date(0) } as never)).toThrowError(
-      /평문 구조로 변환/,
+      /converted to plain structures/,
     );
   });
 
-  it("Map을 거절한다", () => {
+  it("rejects Map", () => {
     expect(() => canonicalize({ m: new Map() } as never)).toThrowError(CanonicalError);
   });
 
-  it("순환 참조를 거절한다", () => {
+  it("rejects circular references", () => {
     const cyclic: Record<string, unknown> = { a: "1" };
     cyclic["self"] = cyclic;
-    expect(() => canonicalize(cyclic as never)).toThrowError(/순환 참조/);
+    expect(() => canonicalize(cyclic as never)).toThrowError(/Circular reference/);
   });
 
-  it("같은 객체를 형제로 두 번 참조하는 것은 순환이 아니다", () => {
+  it("referencing the same object twice as siblings is not circular", () => {
     const shared = { a: "1" };
     expect(canonicalize({ x: shared, y: shared })).toBe('{"x":{"a":"1"},"y":{"a":"1"}}');
   });
 });
 
-describe("canonicalize — 문자열 이스케이프 (RFC 8785 §3.2.2.2)", () => {
-  it("제어문자를 짧은 이스케이프로 표현한다", () => {
+describe("canonicalize — string escaping (RFC 8785 §3.2.2.2)", () => {
+  it("uses short escapes for control characters", () => {
     expect(canonicalize("a\nb")).toBe('"a\\nb"');
     expect(canonicalize("a\tb")).toBe('"a\\tb"');
     expect(canonicalize("a\rb")).toBe('"a\\rb"');
@@ -90,58 +90,58 @@ describe("canonicalize — 문자열 이스케이프 (RFC 8785 §3.2.2.2)", () =
     expect(canonicalize("a\fb")).toBe('"a\\fb"');
   });
 
-  it("따옴표와 역슬래시를 이스케이프한다", () => {
+  it("escapes quotes and backslashes", () => {
     expect(canonicalize('a"b')).toBe('"a\\"b"');
     expect(canonicalize("a\\b")).toBe('"a\\\\b"');
   });
 
-  it("짧은 형식이 없는 제어문자는 소문자 \\u00xx로 표현한다", () => {
+  it("uses lowercase \\u00xx for control characters without a short form", () => {
     expect(canonicalize("")).toBe('"\\u0001"');
     expect(canonicalize("")).toBe('"\\u001f"');
   });
 
-  it("비ASCII 문자는 이스케이프하지 않는다", () => {
+  it("does not escape non-ASCII characters", () => {
     expect(canonicalize("몽골 Mongolia Монгол")).toBe('"몽골 Mongolia Монгол"');
   });
 
-  it("올바른 surrogate pair는 통과시킨다", () => {
+  it("passes a valid surrogate pair", () => {
     expect(canonicalize("\u{1F600}")).toBe('"\u{1F600}"');
   });
 
-  it("짝 없는 high surrogate를 거절한다", () => {
+  it("rejects an unpaired high surrogate", () => {
     expect(() => canonicalize("\ud800")).toThrowError(/surrogate/);
   });
 
-  it("짝 없는 low surrogate를 거절한다", () => {
+  it("rejects an unpaired low surrogate", () => {
     expect(() => canonicalize("\udc00")).toThrowError(/surrogate/);
   });
 });
 
 describe("canonicalBytes", () => {
-  it("UTF-8 바이트를 만든다", () => {
+  it("produces UTF-8 bytes", () => {
     expect(canonicalBytes({ a: "b" })).toEqual(new TextEncoder().encode('{"a":"b"}'));
   });
 
-  it("비ASCII를 UTF-8로 인코딩한다", () => {
+  it("encodes non-ASCII as UTF-8", () => {
     const bytes = canonicalBytes("몽");
     expect(bytes).toEqual(new TextEncoder().encode('"몽"'));
   });
 });
 
-describe("canonicalize — 원시값", () => {
-  it("null·boolean·문자열을 직렬화한다", () => {
+describe("canonicalize — primitives", () => {
+  it("serializes null, boolean, and strings", () => {
     expect(canonicalize(null)).toBe("null");
     expect(canonicalize(true)).toBe("true");
     expect(canonicalize(false)).toBe("false");
     expect(canonicalize("")).toBe('""');
   });
 
-  it("빈 객체와 빈 배열", () => {
+  it("empty object and empty array", () => {
     expect(canonicalize({})).toBe("{}");
     expect(canonicalize([])).toBe("[]");
   });
 
-  it("공백을 넣지 않는다", () => {
+  it("inserts no whitespace", () => {
     expect(canonicalize({ a: ["1", "2"], b: { c: "3" } })).toBe(
       '{"a":["1","2"],"b":{"c":"3"}}',
     );

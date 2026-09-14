@@ -51,26 +51,26 @@ export async function registerProjectRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   app.post("/api/v1/projects", async (request) => {
-    // 401(모름)과 403(묶이지 않은 지갑)을 가르는 판정은 한 곳에 있다.
+    // The 401 (unknown) vs 403 (unbound wallet) decision lives in one place.
     const { session } = requireEnrolledSession(request);
 
     const idempotencyKey = request.headers["idempotency-key"];
     if (typeof idempotencyKey !== "string" || idempotencyKey.length < 16) {
       throw badRequest(
         "IDEMPOTENCY_KEY_REQUIRED",
-        "mutation에는 16자 이상의 Idempotency-Key가 필요하다",
+        "Mutations require an Idempotency-Key of at least 16 characters",
       );
     }
 
     const parsed = createProjectRequest.safeParse(request.body);
     if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "요청 형식이 올바르지 않다", {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
     }
 
-    // 프로젝트 생성은 아직 프로젝트가 없으므로 project scope 검사를 하지 않는다.
-    // tenant·역할·assurance만 검사한다.
+    // Project creation skips the project scope check because no project exists yet.
+    // Only tenant, role, and assurance are checked.
     const effectiveRole = assertAuthorized(
       session,
       "project.create",
@@ -78,11 +78,11 @@ export async function registerProjectRoutes(
       sessionFacts(session),
     );
 
-    // 역할은 통과해도 소유 조직은 따로 본다.
+    // Passing the role check does not settle the owner organization; it is checked separately.
     if (!canActForOrganization(session, "project.create", parsed.data.ownerOrganizationId)) {
       throw forbidden(
         "OWNER_ORGANIZATION_NOT_ALLOWED",
-        "자기 조직이 소유하는 프로젝트만 만들 수 있다",
+        "Only projects owned by your own organization can be created",
       );
     }
 
@@ -159,17 +159,17 @@ export async function registerProjectRoutes(
 
       const project = rows[0];
       if (!project) {
-        // RLS가 걸러낸 것과 존재하지 않는 것을 구분해 알려주지 않는다.
-        // 다른 tenant의 ID 존재 여부가 새어 나가면 안 된다.
+        // Filtered-by-RLS and nonexistent are not distinguished in the response.
+        // Whether an ID exists in another tenant must not leak.
         return reply.status(404).send({
           code: "NOT_FOUND",
-          message: "프로젝트를 찾을 수 없다",
+          message: "Project not found",
           retryable: false,
           correlationId: request.context.correlationId,
         });
       }
 
-      // 본문의 version과 같은 값이다. If-Match에 그대로 넣을 수 있다.
+      // Same value as the body's version; it can be passed to If-Match as-is.
       reply.header("etag", etagOf(project.version));
       return toSummary(project, request.context.requestId, request.context.asOf);
     },
@@ -179,11 +179,11 @@ export async function registerProjectRoutes(
     const { session, tenantId } = requireReadContext(request);
 
     /**
-     * 목록은 tenant 전체가 아니라 **볼 수 있는 프로젝트만** 담는다.
+     * The list holds **only visible projects**, not the whole tenant.
      *
-     * 조직 수준 바인딩이면 tenant의 프로젝트 전부, 프로젝트 수준 바인딩이면 그
-     * 목록만이다. 목록에서 거르지 않고 단건 조회에서만 막으면 프로젝트 이름과
-     * ID가 그대로 새어 나간다.
+     * An organization-level binding sees every project in the tenant; a project-level binding
+     * sees only its listed projects. Blocking only single lookups without filtering the list
+     * leaks project names and IDs.
      */
     assertAuthorized(
       session,

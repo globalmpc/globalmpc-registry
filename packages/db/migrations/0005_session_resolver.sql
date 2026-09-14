@@ -1,23 +1,23 @@
--- 세션 해석 전용 함수.
+-- Session-resolution functions.
 --
--- **왜 필요한가 (설계 순환):**
+-- **Why (design cycle):**
 --
--- `core.wallet_identities`와 `core.role_bindings`에는 RLS가 걸려 있고 정책은
--- `tenant_id = core.current_tenant()`를 요구한다. 그런데 로그인 시점에는 아직
--- tenant를 모른다 — tenant를 알아내려고 조회하는 것이기 때문이다. 그대로 두면
--- 인증 경로가 항상 0행을 받아 로그인이 불가능하다.
+-- `core.wallet_identities` and `core.role_bindings` have RLS, and the policy
+-- requires `tenant_id = core.current_tenant()`. But at login the tenant is not yet
+-- known — the lookup exists to find it. Left as is, the auth path always gets 0 rows
+-- and login is impossible.
 --
--- 그래서 인증 경로만 SECURITY DEFINER 함수로 분리한다. 애플리케이션은 이 두
--- 함수 외에는 어떤 방법으로도 RLS를 우회하지 못한다.
+-- So only the auth path is split into SECURITY DEFINER functions. The application cannot
+-- bypass RLS by any means other than these two functions.
 --
--- **보안 경계:**
+-- **Security boundary:**
 --
--- 1. 두 함수는 입력 wallet/subject에 **정확히 대응하는 행만** 반환한다. 임의
---    조회나 목록 조회를 제공하지 않는다.
--- 2. `search_path`를 고정해 함수 하이재킹을 막는다.
--- 3. wallet 소유 증명은 SIWE 서명이 담당한다(02 §2.9의 authentication 단계).
---    이 함수는 "이 wallet에 무엇이 연결돼 있는가"만 답하며 소유를 판정하지 않는다.
--- 4. 반환값에 PII가 없다 — ID·역할·assurance level뿐이다.
+-- 1. Both functions return **only rows that exactly match** the input wallet/subject. No
+--    arbitrary lookup or listing.
+-- 2. `search_path` is pinned to prevent function hijacking.
+-- 3. Wallet ownership is proven by the SIWE signature (authentication step of 02 §2.9).
+--    These functions only answer "what is linked to this wallet"; they do not judge ownership.
+-- 4. Return values contain no PII — only IDs, roles, and assurance level.
 
 CREATE FUNCTION core.resolve_wallet_session(p_wallet TEXT, p_chain_id INTEGER)
 RETURNS TABLE (

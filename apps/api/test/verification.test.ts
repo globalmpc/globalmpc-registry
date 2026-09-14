@@ -8,7 +8,7 @@ import { hashSnapshotInput } from "../src/services/evidence-snapshot.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
-describe("evidence snapshot 해시", () => {
+describe("evidence snapshot hash", () => {
   const base = {
     claimIds: ["c1", "c2"],
     artifactIds: ["a1"],
@@ -19,7 +19,7 @@ describe("evidence snapshot 해시", () => {
     ],
   };
 
-  it("순서와 무관하게 같은 hash가 나온다", () => {
+  it("yields the same hash regardless of order", () => {
     const reordered = {
       claimIds: ["c2", "c1"],
       artifactIds: ["a1"],
@@ -29,7 +29,7 @@ describe("evidence snapshot 해시", () => {
     expect(hashSnapshotInput(reordered)).toBe(hashSnapshotInput(base));
   });
 
-  it("claim 값이 바뀌면 hash가 바뀐다", () => {
+  it("changes the hash when a claim value changes", () => {
     const changed = {
       ...base,
       claimFingerprints: [
@@ -40,7 +40,7 @@ describe("evidence snapshot 해시", () => {
     expect(hashSnapshotInput(changed)).not.toBe(hashSnapshotInput(base));
   });
 
-  it("grade가 바뀌면 hash가 바뀐다", () => {
+  it("changes the hash when the grade changes", () => {
     const changed = {
       ...base,
       claimFingerprints: [
@@ -51,14 +51,14 @@ describe("evidence snapshot 해시", () => {
     expect(hashSnapshotInput(changed)).not.toBe(hashSnapshotInput(base));
   });
 
-  it("artifact가 추가되면 hash가 바뀐다", () => {
+  it("changes the hash when an artifact is added", () => {
     expect(hashSnapshotInput({ ...base, artifactIds: ["a1", "a2"] })).not.toBe(
       hashSnapshotInput(base),
     );
   });
 });
 
-describeDb("Verification과 EIP-712 서명", () => {
+describeDb("Verification and EIP-712 signature", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let config: AppConfig;
@@ -66,10 +66,10 @@ describeDb("Verification과 EIP-712 서명", () => {
   let stewardToken: string;
   let reviewerToken: string;
 
-  // 매 실행마다 새 키를 만든다. wallet_address는 (address, chain_id) 전역
-  // UNIQUE라 고정 키를 쓰면 이전 실행의 행과 충돌한다.
+  // Generates a new key per run. wallet_address is globally UNIQUE on (address, chain_id),
+  // so a fixed key collides with rows from earlier runs.
   const reviewerAccount = privateKeyToAccount(generatePrivateKey());
-  /** DB의 reviewer wallet을 이 주소로 바꾸므로 헤더도 같은 값을 써야 한다. */
+  /** The reviewer wallet in the DB is set to this address, so headers must use it too. */
   const reviewerWallet = reviewerAccount.address.toLowerCase();
   const outsiderAccount = privateKeyToAccount(generatePrivateKey());
 
@@ -77,8 +77,8 @@ describeDb("Verification과 EIP-712 서명", () => {
     fx = await setupFixture();
     config = loadConfig(testEnv());
 
-    // reviewer의 wallet 주소를 고정 키의 주소로 바꾼다. 실제 서명을 검증하려면
-    // 테스트가 그 키를 갖고 있어야 한다.
+    // Sets the reviewer's wallet address to this key's address. Verifying a real signature
+    // requires the test to hold that key.
     await fx.sql`
       UPDATE core.wallet_identities
       SET wallet_address = ${reviewerAccount.address.toLowerCase()}
@@ -88,7 +88,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     app = await buildServer(config, fx.appSql);
 
     stewardToken = await signIn(app, fx.stewardA);
-    // reviewer는 DB 주소를 바꿨으므로 그 키로 직접 로그인한다.
+    // The reviewer's DB address was changed, so it logs in directly with that key.
     reviewerToken = await signIn(app, { address: reviewerWallet as `0x${string}`, account: reviewerAccount });
 
     const claim = await app.inject({
@@ -140,9 +140,9 @@ describeDb("Verification과 EIP-712 서명", () => {
         assignmentId,
         attestationType: "professional_signoff",
         claimScope: [claimId],
-        findings: [{ note: "등록 상태 확인" }],
+        findings: [{ note: "registration status checked" }],
         citations: [{ source: "registry-extract" }],
-        limitations: "이 검토는 등록 상태에 한정되며 권리 완전성을 확인하지 않는다",
+        limitations: "Limited to registration status; does not confirm completeness of rights",
         ...overrides,
       },
     });
@@ -161,8 +161,8 @@ describeDb("Verification과 EIP-712 서명", () => {
     typedData: { domain: unknown; types: unknown; primaryType: string; message: Record<string, unknown> },
     account = reviewerAccount,
   ) {
-    // viem의 typed-data 제네릭은 리터럴 타입을 요구한다. 응답은 런타임 값이므로
-    // 호출부에서 한 번만 넓힌다.
+    // viem's typed-data generics require literal types. The response is a runtime value,
+    // so it is widened once at the call site.
     const payload = {
       domain: typedData.domain,
       types: typedData.types,
@@ -186,7 +186,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     });
   }
 
-  it("근거 없이 case를 만들 수 없다", async () => {
+  it("cannot create a case without evidence", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/verification-cases",
@@ -202,11 +202,11 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("배정된 검토자가 목록에서 자기 case와 검토 범위를 찾는다", async () => {
+  it("assigned reviewer finds their case and review scope in the list", async () => {
     const created = await createCase();
 
-    // 배정을 만든 사람(steward)과 서명하는 사람(reviewer)이 다르므로, 검토자가
-    // 자기 배정에 도달할 경로가 없으면 흐름이 끊긴다.
+    // The assigner (steward) and the signer (reviewer) differ, so the flow breaks if the
+    // reviewer has no path to their own assignment.
     const response = await app.inject({
       method: "GET",
       url: `/api/v1/projects/${fx.projectA}/verification-cases`,
@@ -218,12 +218,12 @@ describeDb("Verification과 EIP-712 서명", () => {
       (item) => item.id === created.id,
     );
 
-    // 검토 범위는 snapshot 해시가 아니라 목록으로 복원된다. 해시는 바뀌었는지만
-    // 알려 줄 뿐 무엇이었는지 말하지 못한다.
+    // Review scope is restored as a list, not as a snapshot hash. A hash only tells whether
+    // something changed, not what it was.
     expect(found?.claimIds).toEqual([claimId]);
   });
 
-  it("다른 tenant의 case는 목록에 나타나지 않는다", async () => {
+  it("does not list cases of another tenant", async () => {
     await createCase();
 
     const response = await app.inject({
@@ -232,16 +232,16 @@ describeDb("Verification과 EIP-712 서명", () => {
       headers: { authorization: `Bearer ${await signIn(app, fx.operatorB)}` },
     });
 
-    // 권한 오류가 아니라 빈 목록이다. tenant B에게 projectA는 존재하지 않는다.
+    // An empty list, not a permission error. For tenant B, projectA does not exist.
     expect(response.statusCode).toBe(200);
     expect(response.json().items).toEqual([]);
   });
 
-  it("배정 범위는 사후에 바꿀 수 없다", async () => {
+  it("assignment scope cannot be changed afterwards", async () => {
     const created = await createCase();
 
-    // 범위를 고칠 수 있으면 "서명이 덮은 근거"가 나중에 달라진다. 권한으로
-    // 막는 것이 아니라 mpc_app에 UPDATE·DELETE를 주지 않는다(0011).
+    // If scope were editable, "the evidence the signature covers" could change later. This is
+    // not a permission check: mpc_app is not granted UPDATE/DELETE (0011).
     await expect(
       fx.appSql`
         DELETE FROM core.verification_case_claims WHERE case_id = ${created.id}
@@ -249,7 +249,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     ).rejects.toThrow(/접근 권한|permission denied/i);
   });
 
-  describe("case 상태 전이", () => {
+  describe("case state transitions", () => {
     function transition(caseId: string, version: unknown, body: Record<string, unknown>) {
       return app.inject({
         method: "POST",
@@ -263,35 +263,35 @@ describeDb("Verification과 EIP-712 서명", () => {
       });
     }
 
-    it("보완 요청을 이유와 함께 기록한다", async () => {
+    it("records a changes request with its reason", async () => {
       const created = await createCase();
 
       const response = await transition(created.id, '"1"', {
         toState: "changes_requested",
-        reason: "등록부 조회의 기준일이 없다",
+        reason: "registry lookup has no reference date",
       });
 
-      // assigned → in_review → changes_requested 순서다. assigned에서 바로
-      // changes_requested로 갈 수 없다.
+      // Order is assigned → in_review → changes_requested. assigned cannot go directly
+      // to changes_requested.
       expect(response.statusCode).toBe(409);
       expect(response.json().code).toBe("INVALID_STATE_TRANSITION");
-      // 다음에 무엇을 할 수 있는지 알려준다. 막기만 하면 사용자는 추측한다.
+      // Tells what can be done next. Blocking alone leaves the user guessing.
       expect(response.json().details.allowedTransitions).toContain("in_review");
     });
 
-    it("허용된 전이는 이력과 함께 기록된다", async () => {
+    it("records allowed transitions with history", async () => {
       const created = await createCase();
 
       const toReview = await transition(created.id, '"1"', {
         toState: "in_review",
-        reason: "검토를 시작한다",
+        reason: "starting review",
       });
       expect(toReview.statusCode).toBe(200);
       expect(toReview.json().version).toBe(2);
 
       const changes = await transition(created.id, '"2"', {
         toState: "changes_requested",
-        reason: "등록부 조회의 기준일이 없다",
+        reason: "registry lookup has no reference date",
       });
       expect(changes.statusCode).toBe(200);
 
@@ -304,39 +304,39 @@ describeDb("Verification과 EIP-712 서명", () => {
         (item) => item.id === created.id,
       );
 
-      // 지나온 경로를 감추지 않는다. 되돌아가도 이력은 남는다.
+      // Does not hide the path taken. History remains even after going back.
       expect(found?.transitions).toHaveLength(2);
-      expect((found!.transitions[1] as { reason: string }).reason).toContain("기준일");
+      expect((found!.transitions[1] as { reason: string }).reason).toContain("reference date");
     });
 
-    it("이유 없이 상태를 바꿀 수 없다", async () => {
+    it("cannot change state without a reason", async () => {
       const created = await createCase();
       const response = await transition(created.id, '"1"', { toState: "in_review", reason: "" });
       expect(response.statusCode).toBe(400);
     });
 
-    it("If-Match 없이는 거절한다", async () => {
+    it("rejects without If-Match", async () => {
       const created = await createCase();
       const response = await transition(created.id, undefined, {
         toState: "in_review",
-        reason: "검토 시작",
+        reason: "start review",
       });
       expect(response.statusCode).toBe(428);
     });
 
-    it("낡은 버전으로 보내면 412다", async () => {
+    it("returns 412 for a stale version", async () => {
       const created = await createCase();
-      await transition(created.id, '"1"', { toState: "in_review", reason: "시작" });
+      await transition(created.id, '"1"', { toState: "in_review", reason: "start" });
 
       const stale = await transition(created.id, '"1"', {
         toState: "changes_requested",
-        reason: "보완",
+        reason: "changes needed",
       });
       expect(stale.statusCode).toBe(412);
     });
   });
 
-  describe("attestation 이의 제기", () => {
+  describe("attestation disputes", () => {
     async function signOne() {
       const created = await createCase();
       const draft = (await draftAttestation(created.id, created.assignmentId)).json();
@@ -361,7 +361,7 @@ describeDb("Verification과 EIP-712 서명", () => {
       });
     }
 
-    it("이의를 제기해도 서명 본문은 그대로다", async () => {
+    it("a dispute leaves the signed body unchanged", async () => {
       const attestationId = await signOne();
 
       const [before] = await fx.sql<{ payload_hash: string; signature: string }[]>`
@@ -371,7 +371,7 @@ describeDb("Verification과 EIP-712 서명", () => {
 
       const response = await dispute(attestationId, {
         reasonCode: "EVIDENCE_QUESTIONED",
-        detail: "등록부 조회의 기준일이 불명확하다",
+        detail: "reference date of the registry lookup is unclear",
       });
       expect(response.statusCode).toBe(200);
       expect(response.json().state).toBe("disputed");
@@ -381,17 +381,17 @@ describeDb("Verification과 EIP-712 서명", () => {
         WHERE id = ${attestationId}
       `;
 
-      // 서명을 삭제하면 "누가 무엇을 언제 판단했는가"를 잃는다. 상태만 바뀐다.
+      // Deleting the signature loses "who judged what, and when". Only the state changes.
       expect(after!.payload_hash).toBe(before!.payload_hash);
       expect(after!.signature).toBe(before!.signature);
       expect(after!.state).toBe("disputed");
     });
 
-    it("이의 내용이 기록으로 남는다", async () => {
+    it("records the dispute content", async () => {
       const attestationId = await signOne();
       await dispute(attestationId, {
         reasonCode: "SCOPE_MISMATCH",
-        detail: "검토 범위와 claim이 어긋난다",
+        detail: "review scope does not match the claim",
       });
 
       const rows = await fx.sql<{ reason_code: string; detail: string }[]>`
@@ -402,7 +402,7 @@ describeDb("Verification과 EIP-712 서명", () => {
       expect(rows[0]!.reason_code).toBe("SCOPE_MISMATCH");
     });
 
-    it("사유 없는 이의는 거절한다", async () => {
+    it("rejects a dispute without a reason", async () => {
       const attestationId = await signOne();
       const response = await dispute(attestationId, { reasonCode: "X", detail: "" });
       expect(response.statusCode).toBe(400);
@@ -429,92 +429,92 @@ describeDb("Verification과 EIP-712 서명", () => {
       return response.json().items as { id: string; resolvedAt: string | null }[];
     }
 
-    it("기각하면 검토가 다시 유효해진다", async () => {
+    it("dismissing restores the review to valid", async () => {
       const attestationId = await signOne();
-      await dispute(attestationId, { reasonCode: "X", detail: "확인 요청" });
+      await dispute(attestationId, { reasonCode: "X", detail: "please check" });
       const [raised] = await disputeOf(attestationId);
 
       const response = await resolve(raised!.id, {
         outcome: "dismissed",
-        resolution: "확인 결과 문제없다",
+        resolution: "checked, no issue",
       });
 
       expect(response.statusCode).toBe(200);
       expect(response.json().attestationState).toBe("active");
     });
 
-    it("인정해도 검토를 유효로 되돌리지 않는다", async () => {
+    it("upholding does not restore the review to valid", async () => {
       const attestationId = await signOne();
-      await dispute(attestationId, { reasonCode: "X", detail: "근거가 틀렸다" });
+      await dispute(attestationId, { reasonCode: "X", detail: "evidence is wrong" });
       const [raised] = await disputeOf(attestationId);
 
       const response = await resolve(raised!.id, {
         outcome: "upheld",
-        resolution: "지적이 맞다",
+        resolution: "the objection is correct",
       });
 
-      // 틀렸다고 확인된 검토를 유효로 표시할 수 없다. supersede·revoke는 별도
-      // 결정이다.
+      // A review confirmed wrong cannot be marked valid. Supersede/revoke is a separate
+      // decision.
       expect(response.json().attestationState).toBe("disputed");
     });
 
-    it("남은 이의가 있으면 기각해도 disputed로 남는다", async () => {
+    it("stays disputed after a dismissal while other disputes remain", async () => {
       const attestationId = await signOne();
-      await dispute(attestationId, { reasonCode: "A", detail: "첫 번째" });
-      await dispute(attestationId, { reasonCode: "B", detail: "두 번째" });
+      await dispute(attestationId, { reasonCode: "A", detail: "first" });
+      await dispute(attestationId, { reasonCode: "B", detail: "second" });
       const raised = await disputeOf(attestationId);
 
       const response = await resolve(raised[0]!.id, {
         outcome: "dismissed",
-        resolution: "이건 문제없다",
+        resolution: "this one is fine",
       });
       expect(response.json().attestationState).toBe("disputed");
       expect(response.json().unresolvedDisputes).toBe(1);
     });
 
-    it("해소돼도 이의 기록은 남는다", async () => {
+    it("keeps the dispute record after resolution", async () => {
       const attestationId = await signOne();
-      await dispute(attestationId, { reasonCode: "X", detail: "확인 요청" });
+      await dispute(attestationId, { reasonCode: "X", detail: "please check" });
       const [raised] = await disputeOf(attestationId);
-      await resolve(raised!.id, { outcome: "dismissed", resolution: "문제없다" });
+      await resolve(raised!.id, { outcome: "dismissed", resolution: "no issue" });
 
       const after = await disputeOf(attestationId);
-      // 지우면 "한 번 문제가 제기됐다"는 사실이 사라진다.
+      // Deleting it would erase the fact that "an issue was once raised".
       expect(after).toHaveLength(1);
       expect(after[0]!.resolvedAt).not.toBeNull();
     });
 
-    it("근거 없이 해소할 수 없다", async () => {
+    it("cannot resolve without a resolution", async () => {
       const attestationId = await signOne();
-      await dispute(attestationId, { reasonCode: "X", detail: "확인 요청" });
+      await dispute(attestationId, { reasonCode: "X", detail: "please check" });
       const [raised] = await disputeOf(attestationId);
 
       const response = await resolve(raised!.id, { outcome: "dismissed", resolution: "" });
       expect(response.statusCode).toBe(400);
     });
 
-    it("이미 해소된 이의를 다시 해소할 수 없다", async () => {
+    it("cannot resolve an already resolved dispute", async () => {
       const attestationId = await signOne();
-      await dispute(attestationId, { reasonCode: "X", detail: "확인 요청" });
+      await dispute(attestationId, { reasonCode: "X", detail: "please check" });
       const [raised] = await disputeOf(attestationId);
-      await resolve(raised!.id, { outcome: "dismissed", resolution: "문제없다" });
+      await resolve(raised!.id, { outcome: "dismissed", resolution: "no issue" });
 
-      const again = await resolve(raised!.id, { outcome: "upheld", resolution: "번복" });
+      const again = await resolve(raised!.id, { outcome: "upheld", resolution: "reversal" });
       expect(again.statusCode).toBe(409);
       expect(again.json().code).toBe("DISPUTE_ALREADY_RESOLVED");
     });
 
-    it("서명 전 초안에는 이의를 제기할 수 없다", async () => {
+    it("cannot dispute an unsigned draft", async () => {
       const created = await createCase();
       const draft = (await draftAttestation(created.id, created.assignmentId)).json();
 
-      // draft → disputed는 상태기계에 없다. 서명되지 않은 것에 이의는 성립하지 않는다.
-      const response = await dispute(draft.id, { reasonCode: "X", detail: "아직 서명 전" });
+      // draft → disputed is not in the state machine. An unsigned item cannot be disputed.
+      const response = await dispute(draft.id, { reasonCode: "X", detail: "not signed yet" });
       expect(response.statusCode).toBe(409);
     });
   });
 
-  it("AC-01: limitations 없이 초안을 만들 수 없다", async () => {
+  it("AC-01: cannot create a draft without limitations", async () => {
     const created = await createCase();
     const response = await draftAttestation(created.id, created.assignmentId, {
       limitations: "",
@@ -522,7 +522,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("AC-01: 공백만 있는 limitations도 거절한다", async () => {
+  it("AC-01: rejects whitespace-only limitations", async () => {
     const created = await createCase();
     const response = await draftAttestation(created.id, created.assignmentId, {
       limitations: "   ",
@@ -530,14 +530,14 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect([400, 422]).toContain(response.statusCode);
   });
 
-  it("정상 서명 흐름이 관통한다", async () => {
+  it("completes the normal signing flow", async () => {
     const created = await createCase();
     const draft = (await draftAttestation(created.id, created.assignmentId)).json();
     expect(draft.state).toBe("draft");
 
     const signatureRequest = (await requestSignature(draft.id)).json();
-    expect(signatureRequest.humanReadablePayload).toContain("검토의 범위와 한계");
-    expect(signatureRequest.humanReadablePayload).toContain("보증하지 않습니다");
+    expect(signatureRequest.humanReadablePayload).toContain("Review scope and limitations");
+    expect(signatureRequest.humanReadablePayload).toContain("does not guarantee factual accuracy");
 
     const signature = await signTypedData(signatureRequest.typedData);
     const submitted = await submitSignature(draft.id, {
@@ -550,7 +550,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect(submitted.json().signerWalletAddress).toBe(reviewerAccount.address.toLowerCase());
   });
 
-  it("서명 요청은 한 번만 쓸 수 있다", async () => {
+  it("a signature request is single-use", async () => {
     const created = await createCase();
     const draft = (await draftAttestation(created.id, created.assignmentId)).json();
     const signatureRequest = (await requestSignature(draft.id)).json();
@@ -570,7 +570,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect(replay.json().code).toBe("SIGNATURE_REQUEST_UNUSABLE");
   });
 
-  it("다른 사람의 서명을 거절한다", async () => {
+  it("rejects a signature from someone else", async () => {
     const created = await createCase();
     const draft = (await draftAttestation(created.id, created.assignmentId)).json();
     const signatureRequest = (await requestSignature(draft.id)).json();
@@ -584,12 +584,12 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect(response.json().code).toBe("SIGNATURE_SIGNER_MISMATCH");
   });
 
-  it("evidence가 바뀌면 서명 요청이 무효가 된다", async () => {
+  it("invalidates the signature request when evidence changes", async () => {
     const created = await createCase();
     const draft = (await draftAttestation(created.id, created.assignmentId)).json();
     const signatureRequest = (await requestSignature(draft.id)).json();
 
-    // 요청 이후 근거를 바꾼다.
+    // Changes evidence after the request.
     await fx.sql`
       UPDATE core.verification_cases
       SET evidence_snapshot_hash = ${"0x" + "ff".repeat(32)}
@@ -606,7 +606,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect(response.json().code).toBe("EVIDENCE_SNAPSHOT_CHANGED");
   });
 
-  it("서명 후 본문을 수정할 수 없다", async () => {
+  it("cannot modify the body after signing", async () => {
     const created = await createCase();
     const draft = (await draftAttestation(created.id, created.assignmentId)).json();
     const signatureRequest = (await requestSignature(draft.id)).json();
@@ -618,12 +618,12 @@ describeDb("Verification과 EIP-712 서명", () => {
 
     await expect(
       fx.sql`
-        UPDATE core.verification_attestations SET limitations = '수정됨' WHERE id = ${draft.id}
+        UPDATE core.verification_attestations SET limitations = 'modified' WHERE id = ${draft.id}
       `,
     ).rejects.toThrow(/수정할 수 없다/);
   });
 
-  it("서명된 attestation에 다시 서명 요청을 만들 수 없다", async () => {
+  it("cannot create a new signature request for a signed attestation", async () => {
     const created = await createCase();
     const draft = (await draftAttestation(created.id, created.assignmentId)).json();
     const signatureRequest = (await requestSignature(draft.id)).json();
@@ -638,7 +638,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect(again.json().code).toBe("ATTESTATION_ALREADY_SIGNED");
   });
 
-  it("미해결 이해상충이 있으면 초안을 만들 수 없다", async () => {
+  it("cannot create a draft with an unresolved conflict of interest", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/verification-cases",
@@ -658,7 +658,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect(draft.statusCode).toBe(403);
   });
 
-  it("검토자가 아니면 초안을 만들 수 없다", async () => {
+  it("non-reviewers cannot create a draft", async () => {
     const created = await createCase();
     const response = await app.inject({
       method: "POST",
@@ -668,16 +668,16 @@ describeDb("Verification과 EIP-712 서명", () => {
         assignmentId: created.assignmentId,
         attestationType: "professional_signoff",
         claimScope: [claimId],
-        limitations: "범위 제한",
+        limitations: "scope limited",
       },
     });
     expect(response.statusCode).toBe(403);
   });
 
-  it("남의 배정으로는 초안을 만들 수 없다", async () => {
+  it("cannot create a draft on someone else's assignment", async () => {
     /**
-     * 역할 검사로는 막히지 않는 경로다 — 같은 tenant의 검토자는 모두 같은
-     * 역할을 갖는다. 배정 주체를 대조하지 않으면 남의 이름으로 findings가 남는다.
+     * A role check does not block this path: all reviewers in a tenant share the same role.
+     * Without matching the assignee, findings are recorded under someone else's name.
      */
     const created = await createCase();
     const response = await app.inject({
@@ -688,9 +688,9 @@ describeDb("Verification과 EIP-712 서명", () => {
         assignmentId: created.assignmentId,
         attestationType: "professional_signoff",
         claimScope: [claimId],
-        findings: [{ note: "남의 배정" }],
+        findings: [{ note: "someone else's assignment" }],
         citations: [{ source: "registry-extract" }],
-        limitations: "범위 제한",
+        limitations: "scope limited",
       },
     });
 
@@ -698,7 +698,7 @@ describeDb("Verification과 EIP-712 서명", () => {
     expect((response.json() as { code: string }).code).toBe("ASSIGNMENT_NOT_OWNED");
   });
 
-  it("서명이 audit과 outbox를 남긴다", async () => {
+  it("signing writes audit and outbox records", async () => {
     const created = await createCase();
     const draft = (await draftAttestation(created.id, created.assignmentId)).json();
     const signatureRequest = (await requestSignature(draft.id)).json();

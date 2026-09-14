@@ -1,46 +1,46 @@
--- 공개 이력의 입도 결정 — spec 05 §5.7.
+-- Public history granularity decision — spec 05 §5.7.
 --
--- `0027`은 정정·철회 둘만 공개하고 나머지 넷(credential 철회 · suspension ·
--- pause · dispute)을 `notCovered`로 남겼다. 무엇을 어느 입도로 공개할지가
--- 정해지지 않았고, **공개는 되돌릴 수 없으므로**(05 §5.7) 개발자가 정하지
--- 않았다(D-41).
+-- `0027` disclosed only corrections and revocations, leaving the other four (credential revoke ·
+-- suspension · pause · dispute) as `notCovered`. What to disclose at which granularity was
+-- undecided, and **disclosure is irreversible** (05 §5.7), so developers did not
+-- decide it (D-41).
 --
--- **결정 (2026-09-09, 사용자 지시): "일어났다 + 언제 + 어느 기록"만 공개한다.**
+-- **Decision (2026-09-09, user instruction): disclose only "it happened + when + which record".**
 --
--- 내용과 당사자는 공개하지 않는다. 근거:
+-- Content and parties are not disclosed. Rationale:
 --
--- - 사건이 **있었다는 사실**은 이미 공개된 기록(registry entry)에 붙는 것이고,
---   그 기록 자체가 공개돼 있으므로 새로 드러나는 주체가 없다.
--- - **내용**(정지 사유·법적 근거·이의 사유·상세)은 되돌릴 수 없게 공개되며,
---   나중에 넓히는 것은 가능하지만 좁히는 것은 불가능하다. 좁은 쪽에서 시작한다.
--- - **당사자**(누가 정지시켰는가·누가 이의를 냈는가·어느 기관이 요구했는가)는
---   개인·조직 식별이며 OD-17·OD-18이 미해소인 상태에서 공개하지 않는다.
+-- - The **fact that an event occurred** attaches to an already public record (registry entry),
+--   and that record is itself public, so no new subject is revealed.
+-- - **Content** (suspension reason · legal basis · dispute reason · details) is disclosed
+--   irreversibly; widening later is possible, narrowing is not. Start narrow.
+-- - **Parties** (who suspended · who disputed · which authority demanded it)
+--   identify persons·organizations and are not disclosed while OD-17·OD-18 remain unresolved.
 --
--- 이 규칙에 따라 셋이 들어오고 하나가 남는다.
+-- Under this rule three kinds come in and one stays out.
 --
--- | 종류 | 들어오나 | 이유 |
+-- | Kind | Included | Reason |
 -- |---|---|---|
--- | suspension | **들어온다** | 대상이 공개된 project registry entry다. 사유·행위자는 뺀다 |
--- | pause | **들어온다** | 대상이 같은 project entry다. `legal_basis`·`authority`는 뺀다 |
--- | dispute | **들어온다** | case→project로 공개 entry에 붙는다. `reason_code`·`detail`은 뺀다 |
--- | credential_revocation | **남는다** | "어느 기록"이 **사람**이다. 위 규칙으로는 표현할 수 없다 |
+-- | suspension | **included** | Target is a public project registry entry. Reason·actor are omitted |
+-- | pause | **included** | Target is the same project entry. `legal_basis`·`authority` are omitted |
+-- | dispute | **included** | Attached to the public entry via case→project. `reason_code`·`detail` are omitted |
+-- | credential_revocation | **excluded** | "Which record" is a **person**. The rule above cannot express it |
 --
--- credential 철회는 입도를 못 정해서가 아니라 **이 규칙이 그것을 배제하기
--- 때문에** 빠진다. `notCovered`의 사유를 그렇게 고친다.
+-- Credential revocation is excluded not because its granularity is undecided but **because this
+-- rule excludes it.** The `notCovered` reason is updated accordingly.
 
--- 반환 열이 바뀌므로 CREATE OR REPLACE로 안 된다.
+-- The return columns change, so CREATE OR REPLACE does not work.
 DROP FUNCTION IF EXISTS core.public_disclosure_events(INTEGER, TIMESTAMPTZ, UUID);
 
 /**
- * 공개 이력.
+ * Public history.
  *
- * **커서 열이 `entry_version_id`에서 `event_id`로 바뀐다.** 새 세 종류는
- * registry version이 아니라 전이·제한·이의 행이라 version id가 없다. 이름이
- * 실제 값과 다르면 다음 사람이 그 열로 version을 조회한다.
+ * **The cursor column changes from `entry_version_id` to `event_id`.** The three new kinds are
+ * transition·restriction·dispute rows, not registry versions, so they have no version id. If
+ * the name differed from the actual value, the next person would look up versions by that column.
  *
- * registry version에서 온 것만 `entry_version_id`·`entry_version`·
- * `public_projection`·`superseded_by_id`를 갖는다. 나머지는 NULL이다 —
- * 응답이 스스로 "이 종류에는 그 값이 없다"를 말한다.
+ * Only rows from registry versions carry `entry_version_id`·`entry_version`·
+ * `public_projection`·`superseded_by_id`. Others are NULL —
+ * the response itself says "this kind has no such value".
  */
 CREATE FUNCTION core.public_disclosure_events(
   p_limit       INTEGER,
@@ -68,11 +68,11 @@ SET search_path = core, pg_temp
 AS $$
   WITH
   /**
-   * 공개된 project registry entry.
+   * Public project registry entries.
    *
-   * **이것이 새 세 종류의 게이트다.** 공개 projection을 가진 version이 하나도
-   * 없는 프로젝트의 정지·제한·이의는 나가지 않는다 — 나가면 비공개 프로젝트의
-   * 존재 자체가 드러난다.
+   * **This is the gate for the three new kinds.** Suspensions·restrictions·disputes of a project
+   * with no version carrying a public projection are not exposed — exposing them would reveal
+   * that a private project exists.
    */
   public_projects AS (
     SELECT DISTINCT e.subject_id AS project_id, e.public_key
@@ -83,7 +83,7 @@ AS $$
   ),
 
   events AS (
-    -- 1) 정정·철회 — `0027`에서 그대로 온다.
+    -- 1) corrections·revocations — carried over unchanged from `0027`.
     SELECT
       v.id AS event_id,
       CASE WHEN v.status = 'revoked' THEN 'revocation' ELSE 'source_correction' END AS event_kind,
@@ -106,7 +106,7 @@ AS $$
 
     UNION ALL
 
-    -- 2) suspension — 멈춤과 복귀 양쪽. `reason`·`actor_subject_id`는 안 나간다.
+    -- 2) suspension — both suspend and reinstate. `reason`·`actor_subject_id` are not exposed.
     SELECT
       t.id,
       'suspension',
@@ -124,11 +124,11 @@ AS $$
     UNION ALL
 
     /**
-     * 3) pause — 공시 제한(material-information blackout).
+     * 3) pause — disclosure restriction (material-information blackout).
      *
-     * `draft`는 아직 발효되지 않았고 `superseded`는 다른 행으로 대체됐다.
-     * 발효된 적 있는 것만 나간다. `legal_basis`·`authority`·`subject_scope`·
-     * `restricted_action_types`는 **내용과 당사자**라 나가지 않는다.
+     * `draft` has not taken effect yet and `superseded` was replaced by another row.
+     * Only those that have taken effect are exposed. `legal_basis`·`authority`·`subject_scope`·
+     * `restricted_action_types` are **content and parties**, so they are not exposed.
      */
     SELECT
       r.id,
@@ -146,12 +146,12 @@ AS $$
     UNION ALL
 
     /**
-     * 4) dispute — attestation에 붙은 이의.
+     * 4) dispute — a dispute attached to an attestation.
      *
-     * attestation은 공개 registry entry에 직접 매이지 않는다(verification
-     * entry의 `subject_id`가 case를 가리킨다는 보장이 없다). case가 갖는
-     * `project_id`로 공개된 project entry에 붙인다 — 그것이 이 규칙의
-     * "어느 기록"이다. `reason_code`·`detail`·`raised_by_subject_id`는 빠진다.
+     * An attestation is not bound directly to a public registry entry (nothing guarantees that a
+     * verification entry's `subject_id` points to a case). It is attached to the public project
+     * entry via the case's `project_id` — that is "which record" under this
+     * rule. `reason_code`·`detail`·`raised_by_subject_id` are omitted.
      */
     SELECT
       d.id,

@@ -1,10 +1,10 @@
-# 액션은 **커밋 SHA로 고정**한다.
+# Actions are **pinned to commit SHAs**.
 #
-# `@v4` 같은 태그는 옮길 수 있는 참조다. 태그가 다른 커밋을 가리키게 되면 우리
-# 저장소의 자격증명을 쥔 채로 다른 코드가 돈다. 뒤의 `# v4`는 사람이 읽기 위한
-# 것이며 판정에는 쓰이지 않는다.
+# A tag like `@v4` is a movable reference. If the tag is repointed to another commit, different
+# code runs while holding this repository's credentials. The trailing `# v4` is for human
+# readers and plays no part in resolution.
 #
-# 갱신은 SHA를 바꾸는 것으로 한다 — 그러면 무엇이 바뀌었는지 diff에 남는다.
+# Update by changing the SHA — that way what changed stays in the diff.
 name: ci
 
 on:
@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   verify:
-    name: 타입체크·테스트·계약
+    name: Typecheck · tests · contracts
     runs-on: ubuntu-latest
 
     services:
@@ -40,14 +40,14 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/mpc_test
 
-      # 성능 통과 기준.
+      # Performance pass criteria.
       #
-      # **값을 여기 박지 않는다.** SLA 수치가 정해지지 않았고, 임의의 숫자를
-      # 넣으면 그것이 결정이 되어 버린다. 저장소 변수(`vars.PERF_MAX_P95_MS`)로
-      # 받으므로 값이 정해지면 **코드 변경 없이** 게이트가 켜진다.
+      # **The value is not hard-coded here.** No SLA figure has been decided, and putting in an
+      # arbitrary number would turn it into a decision. It comes from a repository variable
+      # (`vars.PERF_MAX_P95_MS`), so once a value is set the gate turns on **with no code change**.
       #
-      # 비어 있으면 `throughput.test.ts`가 측정만 하고 통과시킨다. 그 사실을
-      # 출력에 적으므로 "게이지가 켜져 있다고 착각하는" 상태가 생기지 않는다.
+      # When empty, `throughput.test.ts` only measures and passes. It says so in its output, so
+      # there is no state of "mistakenly believing the gauge is on".
       PERF_MAX_P95_MS: ${{ vars.PERF_MAX_P95_MS }}
 
     steps:
@@ -55,92 +55,92 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
-          # package.json의 packageManager와 같은 값이다. 다르면 pnpm이 스스로 그
-          # 버전을 다시 받아 설치가 두 번 일어난다.
+          # Same value as packageManager in package.json. If they differ, pnpm downloads that
+          # version again itself and installs twice.
           version: 10.33.0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
-      - name: 설치
+        name: Install
         run: pnpm install --frozen-lockfile
 
-      # 알려진 취약점이 있는 의존성을 들고 배포하지 않는다.
+      # Do not ship dependencies with known vulnerabilities.
       #
-      # `--prod`인 이유: 배포 이미지에 들어가는 것만 본다. 개발 도구의 권고까지
-      # 게이트로 삼으면 우리가 통제하지 못하는 이유로 배포가 멈춘다.
-      # `high` 이상만 막는다 — 상한 없는 기준은 결국 무시된다.
-      - name: 의존성 취약점 검사
+      # Why `--prod`: only what goes into the deployment image is checked. Gating on advisories
+      # for dev tooling would block deploys for reasons outside our control.
+      # Only `high` and above block — a criterion with no ceiling ends up ignored.
+      - name: Dependency vulnerability audit
         run: pnpm audit --prod --audit-level high
 
-      # 검사 대상 목록은 `tsconfig.json`의 references가 갖는다. 여기에 다시 적으면
-      # 패키지를 추가할 때 한쪽만 갱신되고, 빠진 패키지는 조용히 통과한다.
-      # 웹은 그 references에 없다 — `next typegen`이 만든 타입이 있어야 검사가
-      # 성립하므로 루트 스크립트가 `@mpc/web`의 자체 typecheck를 이어 부른다.
-      - name: 타입체크
+      # The list of checked projects lives in the references of `tsconfig.json`. Repeating it
+      # here means adding a package updates only one side, and a missed package silently passes.
+      # Web is not in those references — its check needs the types `next typegen` generates,
+      # so the root script chains into `@mpc/web`'s own typecheck.
+      - name: Typecheck
         run: pnpm typecheck
 
-      # 웹 빌드. `design-system/dist` 누락 같은 CSS·자산 해석 실패는 타입체크와
-      # 테스트로 드러나지 않고 배포 이미지 빌드에서야 깨진다.
-      - name: 웹 빌드
+      # Web build. CSS and asset resolution failures such as a missing `design-system/dist`
+      # do not surface in typecheck or tests; they only break in the deployment image build.
+      - name: Web build
         run: pnpm --filter @mpc/web build
 
-      # DATABASE_URL이 없으면 DB 테스트가 조용히 skip된다. tenant 격리와
-      # append-only 보장이 검증되지 않은 채 통과하므로 CI에서는 반드시 설정한다.
-      - name: 단위·통합 테스트
+      # Without DATABASE_URL, DB tests are silently skipped. Tenant isolation and append-only
+      # guarantees would pass unverified, so CI always sets it.
+      - name: Unit and integration tests
         run: pnpm vitest run
 
-      - name: DB 테스트가 skip되지 않았는지 확인
+      - name: Check DB tests were not skipped
         run: |
           output=$(pnpm vitest run --project @mpc/db --reporter=json 2>/dev/null || true)
           echo "$output" | grep -q '"numPendingTests":0' || {
-            echo "DB 테스트가 skip됐다. DATABASE_URL을 확인한다."
+            echo "DB tests were skipped. Check DATABASE_URL."
             exit 1
           }
 
-      - name: OpenAPI 드리프트
+      - name: OpenAPI drift
         run: |
           pnpm --filter @mpc/api-contract build
           git diff --exit-code -- packages/api-contract/openapi.json
 
-      # R-04 금지어는 화면 문구에 걸어야 의미가 있다. 패키지 테스트는 자기 상수만
-      # 검사하므로 이 스텝이 실제 UI copy·API message를 훑는다.
-      - name: R-04 금지어
+      # R-04 banned terms only matter when applied to on-screen copy. Package tests check only
+      # their own constants, so this step scans the actual UI copy and API messages.
+      - name: R-04 banned terms
         run: pnpm check:copy
 
-      # public/의 로고 사본은 원본이 바뀌어도 조용히 옛 아트워크를 내보낸다.
-      - name: 브랜드 자산 동기
+      # Logo copies in public/ silently keep serving old artwork when the original changes.
+      - name: Brand asset sync
         run: pnpm check:brand
 
-      # README의 테스트 수치는 두 번 어긋났다 — 테스트를 늘린 커밋이 README를 같이
-      # 고치지 않았다. 사람의 규율로 막히지 않으므로 게이트로 둔다.
-      - name: README 테스트 수치
+      # The README test counts drifted twice — commits that added tests did not update the
+      # README. Human discipline did not prevent it, so it is a gate.
+      - name: README test counts
         run: pnpm check:counts
 
-      # 배포 플랫폼이 볼륨 경로의 `${`를 거절하고 배포 전체를 멈추는 일이 있었다.
-      # 로컬 compose는 그것을 받아들이므로 이 검사가 없으면 CI는 초록인 채로
-      # 배포만 깨진다.
-      - name: Compose 볼륨 경로
+      # The deploy platform once rejected `${` in a volume path and halted the whole deploy.
+      # Local compose accepts it, so without this check CI stays green while only the deploy
+      # breaks.
+      - name: Compose volume paths
         run: pnpm check:compose
 
-      # design-system은 웹이 link로 참조하는 런타임 의존이다. 여기서 돌지 않으면
-      # 토큰을 고치고 dist를 재생성하지 않은 변경이 그대로 통과한다.
-      - name: 디자인 시스템 검증
+      # design-system is a runtime dependency the web app references via link. If it is not
+      # checked here, a change that edits tokens without regenerating dist passes as is.
+      - name: Design system checks
         working-directory: design-system
         run: |
           npm ci
           npm run check
           npm test
 
-      # MVP E2E가 DID method와 ZK prover 없이 통과해야 한다(AC-28).
-      - name: DID·ZK 비의존 확인
+      # MVP E2E must pass without a DID method or ZK prover (AC-28).
+      - name: Check no DID/ZK dependency
         run: |
           if pnpm ls -r --depth 0 --json 2>/dev/null | grep -Eiq '"(did-|@digitalbazaar|snarkjs|circomlib|@iden3)'; then
-            echo "AC-28 위반: DID 또는 ZK 라이브러리가 의존성에 있다"
+            echo "AC-28 violation: a DID or ZK library is among the dependencies"
             exit 1
           fi
-          echo "DID·ZK 의존성 없음"
+          echo "No DID/ZK dependencies"
 
       - name: SBOM
         run: pnpm licenses list --json > licenses.json || true
@@ -152,7 +152,7 @@ jobs:
           if-no-files-found: ignore
 
   e2e:
-    name: 브라우저 E2E
+    name: Browser E2E
     runs-on: ubuntu-latest
 
     services:
@@ -181,17 +181,17 @@ jobs:
         with:
           node-version: 22
 
-      - name: 설치
+        name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Playwright 브라우저
+      - name: Playwright browsers
         run: pnpm --filter @mpc/web exec playwright install --with-deps chromium
 
       - name: E2E
         run: pnpm --filter @mpc/web test:e2e
 
   contracts:
-    name: 스마트컨트랙트
+    name: Smart contracts
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -202,45 +202,45 @@ jobs:
 
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
         with:
-          # **버전을 고정한다** — 기본값 `stable`은 그날의 최신을 받는다. 도구가
-          # 바뀌면 테스트 수치 대조가 코드 변경 없이 깨진다. 올릴 때는 여기와
-          # README 수치를 함께 고친다.
+          # **Pin the version** — the default `stable` fetches whatever is latest that day. A
+          # tool change would break the test count comparison with no code change. When
+          # upgrading, update this and the README count together.
           version: v1.7.1
 
-      - name: 빌드
+        name: Build
         run: forge build --sizes
 
-      - name: 테스트 (fuzz·invariant 포함)
+      - name: Tests (incl. fuzz and invariant)
         run: forge test -vv
 
-      # check:counts는 foundry 없이 `.t.sol`의 함수를 세어 README와 대조한다.
-      # 그 정적 계수가 실제 실행값과 같은지는 여기에서만 확인할 수 있다.
-      - name: README Foundry 수치가 실행값과 같은지
+      # check:counts counts `.t.sol` functions without foundry and compares them to README.
+      # Whether that static count matches the actual run can only be checked here.
+      - name: README Foundry count matches the run
         run: |
           actual=$(forge test --json | python3 -c 'import json,sys;print(sum(len(s["test_results"]) for s in json.load(sys.stdin).values()))')
           stated=$(grep -oE '[0-9]+ Foundry tests' ../README.md | grep -oE '[0-9]+')
           test "$actual" = "$stated" || {
-            echo "README는 Foundry $stated개, 실행은 $actual개다. README.md를 고친다."
+            echo "README states $stated Foundry tests, the run has $actual. Fix README.md."
             exit 1
           }
-          echo "Foundry $actual개 일치"
+          echo "Foundry count matches: $actual"
 
   image:
-    name: 컨테이너 이미지
+    name: Container image
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      # 알림 설정은 **공식 amtool로** 검사한다. 이 job에 붙이는 이유는 여기에만
-      # Docker가 있기 때문이다. 배포와 같은 이미지로 돌지 않으면 다른 버전의
-      # amtool이 다른 것을 통과시킨다.
-      - name: Alertmanager 설정
+      # Alert config is checked **with the official amtool**. It sits in this job because only
+      # this job has Docker. If it does not run on the same image as the deploy, a different
+      # amtool version would pass different things.
+      - name: Alertmanager config
         run: ./scripts/ops/check-alertmanager.sh
 
-      # 빌드만 하고 push하지 않는다. Dockerfile이 깨진 것을 배포 시점에 알면 늦다.
-      - name: 빌드
+      # Build only, no push. Finding a broken Dockerfile at deploy time is too late.
+      - name: Build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .

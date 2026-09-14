@@ -1,21 +1,21 @@
--- 무인증 공개 거버넌스와 공개 이력 — spec 11 §11.2·§11.3.
+-- Unauthenticated public governance and public history — spec 11 §11.2·§11.3.
 --
--- 경계는 0009·0026과 같다. 다른 것은 **무엇을 공개로 볼 것인가**이므로 그
--- 판단 근거를 여기 적는다.
+-- The boundary is the same as 0009·0026. What differs is **what counts as public**, so
+-- the reasoning is recorded here.
 
 -- ---------------------------------------------------------------------------
--- 공개 거버넌스
+-- Public governance
 -- ---------------------------------------------------------------------------
 --
--- **protocol space만 공개한다.** `project` space의 제안은 특정 프로젝트의 내부
--- 의사결정이며 공개 대상이라는 근거가 없다. protocol space는 프로토콜 자체의
--- 규칙을 바꾸는 것이고, 그것이 공개되지 않으면 거버넌스라고 부를 수 없다.
+-- **Only protocol space is public.** Proposals in `project` space are internal decisions
+-- of a specific project, with no basis for disclosure. Protocol space changes the rules of the
+-- protocol itself; if that is not public it cannot be called governance.
 --
--- **`draft`는 내지 않는다.** 아직 제안되지 않은 초안이다 — Registry의 draft를
--- 내지 않는 것과 같은 이유다.
+-- **No `draft`.** A draft is not yet proposed — the same reason Registry drafts
+-- are not exposed.
 --
--- **투표자를 내지 않는다.** 집계만 낸다. 개별 투표자는 subject이고 자연인
--- 식별자로 이어진다(AC-32). 집계는 판정 근거이지만 명단은 아니다.
+-- **No voters.** Aggregates only. Individual voters are subjects and link to natural-person
+-- identifiers (AC-32). Aggregates are the basis of the outcome; a voter list is not.
 
 CREATE FUNCTION core.public_protocol_proposals(
   p_limit            INTEGER,
@@ -71,8 +71,8 @@ AS $$
   LIMIT LEAST(GREATEST(COALESCE(p_limit, 20), 1), 100)
 $$;
 
--- 지나온 경로. 현재 상태만으로는 "정족수 미달로 끝났다"와 "취소됐다"가 결과만
--- 같아 보인다(0017의 같은 이유). `actor_subject_id`는 내지 않는다.
+-- Path taken. The current state alone makes "ended without quorum" and "cancelled" look
+-- the same (same reason as 0017). `actor_subject_id` is not exposed.
 CREATE FUNCTION core.public_protocol_proposal_transitions(p_proposal_id UUID)
 RETURNS TABLE (
   from_state     core.proposal_state,
@@ -96,16 +96,16 @@ AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- 공개 이력 — 정정과 철회
+-- Public history — corrections and revocations
 -- ---------------------------------------------------------------------------
 --
--- **이미 공개된 사실만 시계열로 다시 낸다.** 여기서 새로 공개되는 것은 없다 —
--- `revoked`·`superseded`인 공개 version은 0009가 이미 상세 조회로 반환한다.
--- 다른 것은 "어느 기록에서" 대신 "언제 무슨 일이"로 정렬한다는 점뿐이다.
+-- **Re-exposes only already-public facts as a time series.** Nothing new becomes public here —
+-- 0009 already returns `revoked`·`superseded` public versions in the detail lookup.
+-- The only difference is ordering by "what happened when" instead of "in which record".
 --
--- **credential 철회·suspension·pause·dispute는 여기 없다.** 그 넷은 공개
--- projection 밖의 테이블에 있고, 무엇을 어느 입도로 공개할지가 정해진 바 없다.
--- 정해지지 않은 것을 여기서 정하지 않는다(D-41).
+-- **Credential revocation, suspension, pause, and dispute are not here.** Those four live in
+-- tables outside the public projection, and what to disclose at what granularity is undecided.
+-- Undecided matters are not decided here (D-41).
 
 CREATE FUNCTION core.public_disclosure_events(
   p_limit       INTEGER,
@@ -130,7 +130,7 @@ AS $$
   WITH events AS (
     SELECT
       CASE WHEN v.status = 'revoked' THEN 'revocation' ELSE 'source_correction' END AS event_kind,
-      -- 철회는 revoked_at, 대체는 후속 version의 게시 시각이 사건 시각이다.
+      -- For a revocation the event time is revoked_at; for a supersede, the successor version's publish time.
       COALESCE(v.revoked_at, next_version.published_at, v.published_at, v.created_at) AS occurred_at,
       e.registry_type,
       e.public_key,
