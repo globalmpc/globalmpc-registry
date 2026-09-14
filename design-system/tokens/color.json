@@ -1,0 +1,439 @@
+{
+  "$description": "MPC colour tokens. Screen values are authored in oklch; print stops are hex literals because no on-screen token corresponds to them.",
+  "color": {
+    "background": {
+      "$value": "oklch(0.13 0.02 265)",
+      "$type": "color",
+      "$description": "Page background. Every route sits on this.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Page background. Every route sits on this."
+        }
+      }
+    },
+    "foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Body text on any dark surface.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Body text on any dark surface."
+        }
+      }
+    },
+    "surface": {
+      "$value": "oklch(0.16 0.018 260)",
+      "$type": "color",
+      "$description": "Section blocks that need to separate from the page.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Section blocks that need to separate from the page."
+        },
+        "mpc.note": {
+          "en": "Often used at partial opacity (`bg-surface/40`) to soften the step between sections."
+        }
+      }
+    },
+    "surface-elevated": {
+      "$value": "oklch(0.19 0.02 260)",
+      "$type": "color",
+      "$description": "The topmost surface: raised panels inside a section.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "The topmost surface: raised panels inside a section."
+        }
+      }
+    },
+    "card": {
+      "$value": "oklch(0.17 0.018 260)",
+      "$type": "color",
+      "$description": "shadcn card background.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "shadcn card background."
+        },
+        "mpc.note": {
+          "en": "Darker than --surface-elevated despite both describing cards. Site sections use --surface-elevated; only shadcn primitives read this token."
+        }
+      }
+    },
+    "card-foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Text inside a shadcn card.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Text inside a shadcn card."
+        }
+      }
+    },
+    "popover": {
+      "$value": "oklch(0.17 0.018 260)",
+      "$type": "color",
+      "$description": "Floating surfaces: dropdown, popover, command, tooltip panels.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Floating surfaces: dropdown, popover, command, tooltip panels."
+        }
+      }
+    },
+    "popover-foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Text on floating surfaces.",
+      "$extensions": {
+        "mpc.group": "surface",
+        "mpc.use": {
+          "en": "Text on floating surfaces."
+        }
+      }
+    },
+    "primary": {
+      "$value": "oklch(0.72 0.12 55)",
+      "$type": "color",
+      "$description": "shadcn's primary slot — what `Button`, `Switch`, and friends render.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "shadcn's primary slot — what `Button`, `Switch`, and friends render."
+        },
+        "mpc.note": {
+          "en": "A third copper, lighter than --copper and not part of the published scale. Site components should reach for --copper; --primary exists so unmodified shadcn primitives stay on-brand. Worth reconciling."
+        }
+      }
+    },
+    "primary-foreground": {
+      "$value": "oklch(0.13 0.02 265)",
+      "$type": "color",
+      "$description": "Text on a copper fill. Near-black, not white — copper is too light to carry white text at AA.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "Text on a copper fill. Near-black, not white — copper is too light to carry white text at AA."
+        }
+      }
+    },
+    "secondary": {
+      "$value": "oklch(0.22 0.02 260)",
+      "$type": "color",
+      "$description": "Secondary button and badge fills.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Secondary button and badge fills."
+        }
+      }
+    },
+    "secondary-foreground": {
+      "$value": "oklch(0.92 0.005 250)",
+      "$type": "color",
+      "$description": "Text on --secondary.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Text on --secondary."
+        }
+      }
+    },
+    "muted": {
+      "$value": "oklch(0.2 0.018 260)",
+      "$type": "color",
+      "$description": "Recessed blocks: table headers, skeletons, disabled fills.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Recessed blocks: table headers, skeletons, disabled fills."
+        }
+      }
+    },
+    "muted-foreground": {
+      "$value": "oklch(0.65 0.015 255)",
+      "$type": "color",
+      "$description": "Secondary text. Carries most body copy on this site — the sections lead with foreground headlines and muted paragraphs.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Secondary text. Carries most body copy on this site — the sections lead with foreground headlines and muted paragraphs."
+        }
+      }
+    },
+    "accent": {
+      "$value": "oklch(0.25 0.025 260)",
+      "$type": "color",
+      "$description": "Hover fill for menu and list items.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Hover fill for menu and list items."
+        },
+        "mpc.note": {
+          "en": "Not a brand colour despite the name — it is shadcn's neutral hover slot. Brand accent is --copper."
+        }
+      }
+    },
+    "accent-foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Text on --accent.",
+      "$extensions": {
+        "mpc.group": "support",
+        "mpc.use": {
+          "en": "Text on --accent."
+        }
+      }
+    },
+    "copper": {
+      "$value": "oklch(0.68 0.13 50)",
+      "$type": "color",
+      "$description": "The brand accent in the interface: eyebrow labels, links, emphasis, primary buttons.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "The brand accent in the interface: eyebrow labels, links, emphasis, primary buttons."
+        },
+        "mpc.note": {
+          "en": "Published as Copper Light in the media kit. This is the value site components use directly (`bg-copper`, `text-copper`)."
+        }
+      }
+    },
+    "copper-glow": {
+      "$value": "oklch(0.78 0.14 60)",
+      "$type": "color",
+      "$description": "Hover and active states only. Never a resting colour and never a large fill.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "Hover and active states only. Never a resting colour and never a large fill."
+        }
+      }
+    },
+    "gold": {
+      "$value": "oklch(0.82 0.11 80)",
+      "$type": "color",
+      "$description": "Figure emphasis — the number in a stat, not the label around it.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Figure emphasis — the number in a stat, not the label around it."
+        }
+      }
+    },
+    "steppe": {
+      "$value": "oklch(0.42 0.06 155)",
+      "$type": "color",
+      "$description": "Mongolian asset context. The only green that is not a status.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Mongolian asset context. The only green that is not a status."
+        }
+      }
+    },
+    "sand": {
+      "$value": "oklch(0.78 0.07 75)",
+      "$type": "color",
+      "$description": "Secondary backgrounds in asset-context artwork.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Secondary backgrounds in asset-context artwork."
+        }
+      }
+    },
+    "positive": {
+      "$value": "oklch(0.62 0.1 155)",
+      "$type": "color",
+      "$description": "Confirmed state — secured, verified, on-chain. Also the live-dot pulse.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Confirmed state — secured, verified, on-chain. Also the live-dot pulse."
+        }
+      }
+    },
+    "alert": {
+      "$value": "oklch(0.62 0.12 45)",
+      "$type": "color",
+      "$description": "Attention, not failure. Provisional and in-progress states.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Attention, not failure. Provisional and in-progress states."
+        }
+      }
+    },
+    "destructive": {
+      "$value": "oklch(0.55 0.18 25)",
+      "$type": "color",
+      "$description": "Irreversible actions and hard errors.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Irreversible actions and hard errors."
+        },
+        "mpc.note": {
+          "en": "Red, and the only token outside the warm/neutral system. That is the point: it should look foreign."
+        }
+      }
+    },
+    "destructive-text": {
+      "$value": "oklch(0.64 0.15 25)",
+      "$type": "color",
+      "$description": "Destructive meaning as text on a dark surface.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Destructive meaning as text on a dark surface."
+        },
+        "mpc.note": {
+          "en": "A fill colour and a text colour cannot be the same swatch here. `destructive` is dark enough to carry near-white text on top of it (4.72:1), which is exactly why it fails as text on our dark surfaces (3.80:1 on background). This token is the lighter twin, and it is the one to reach for whenever the red is a word rather than a shape."
+        }
+      }
+    },
+    "destructive-foreground": {
+      "$value": "oklch(0.96 0.005 250)",
+      "$type": "color",
+      "$description": "Text on a destructive fill.",
+      "$extensions": {
+        "mpc.group": "signal",
+        "mpc.use": {
+          "en": "Text on a destructive fill."
+        }
+      }
+    },
+    "border": {
+      "$value": "oklch(1 0 0 / 8%)",
+      "$type": "color",
+      "$description": "Default hairline. Applied globally to every element in @layer base.",
+      "$extensions": {
+        "mpc.group": "line",
+        "mpc.use": {
+          "en": "Default hairline. Applied globally to every element in @layer base."
+        },
+        "mpc.note": {
+          "en": "Alpha-channel white, so it never appeared in the generated hex palette. Use the .hairline-t / .hairline-b utilities rather than a raw border."
+        }
+      }
+    },
+    "border-strong": {
+      "$value": "oklch(1 0 0 / 16%)",
+      "$type": "color",
+      "$description": "Emphasised divider where the default hairline disappears.",
+      "$extensions": {
+        "mpc.group": "line",
+        "mpc.use": {
+          "en": "Emphasised divider where the default hairline disappears."
+        }
+      }
+    },
+    "input": {
+      "$value": "oklch(1 0 0 / 12%)",
+      "$type": "color",
+      "$description": "Form field borders. Brighter than --border so an input reads as interactive.",
+      "$extensions": {
+        "mpc.group": "line",
+        "mpc.use": {
+          "en": "Form field borders. Brighter than --border so an input reads as interactive."
+        }
+      }
+    },
+    "ring": {
+      "$value": "oklch(0.72 0.12 55)",
+      "$type": "color",
+      "$description": "Focus ring. Identical to --primary, so keyboard focus is unmistakably the brand accent.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "Focus ring. Identical to --primary, so keyboard focus is unmistakably the brand accent."
+        }
+      }
+    }
+  },
+  "print": {
+    "print-copper-deep": {
+      "$value": "#B06A3B",
+      "$type": "color",
+      "$description": "Light backgrounds and print. Whitepaper covers, rules, callout borders.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Light backgrounds and print. Whitepaper covers, rules, callout borders."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Copper Deep"
+      }
+    },
+    "print-copper": {
+      "$value": "#C2773F",
+      "$type": "color",
+      "$description": "The mark itself, plus icons and social artwork. Not a text colour.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "The mark itself, plus icons and social artwork. Not a text colour."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Copper"
+      }
+    },
+    "print-paper": {
+      "$value": "#F6F6F4",
+      "$type": "color",
+      "$description": "Print background.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Print background."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Paper"
+      }
+    },
+    "print-ink": {
+      "$value": "#1C1C1C",
+      "$type": "color",
+      "$description": "Print body text.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Print body text."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Ink"
+      }
+    },
+    "print-ink-muted": {
+      "$value": "#6B6B6B",
+      "$type": "color",
+      "$description": "Print secondary text.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Print secondary text."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Ink Muted"
+      }
+    },
+    "print-rule": {
+      "$value": "#CFCFCF",
+      "$type": "color",
+      "$description": "Print dividers.",
+      "$extensions": {
+        "mpc.group": "print",
+        "mpc.use": {
+          "en": "Print dividers."
+        },
+        "mpc.cssVar": false,
+        "mpc.displayName": "Rule"
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+
+# Dependency versions are pinned because of the supply-chain policy (minimumReleaseAge).
+# With ranges, versions that fail the policy can enter the lockfile depending on install time,
+# and local passes on cache while only a clean install breaks.
+# When upgrading, check the publish time with `npm view <pkg> time --json`.
+overrides:
+  viem: 2.55.13
+  "@smithy/core": 3.32.0
+  "@smithy/node-http-handler": 4.10.0
+  # An optional dependency of next. Even after upgrading next, the lockfile may hold on to
+  # the old version, so it is pinned here — GHSA-rgj7-g3m4-5g8c (libheif).
+  sharp: 0.35.4
+  # fastify → @fastify/ajv-compiler (direct) and the ajv beneath it pull in different
+  # majors. Both lines must be pinned separately for audit to go quiet —
+  # GHSA-5jgf-p345-68v8 · GHSA-f65p-4m7j-42xc · GHSA-fph4-wmhf-6fwf · GHSA-jqff-g426-hqxp.
+  "fast-uri@^3.0.0": 3.1.6
+  "fast-uri@^4.0.0": 4.1.3
+

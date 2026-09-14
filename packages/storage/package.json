@@ -1,0 +1,20 @@
+{
+  "name": "@mpc/storage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Object storage for evidence artifacts — key rules, quarantine state machine, memory and S3 implementations.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1109.0",
+    "@aws-sdk/lib-storage": "3.1109.0",
+    "@aws-sdk/s3-request-presigner": "3.1109.0",
+    "@mpc/canonical": "workspace:*"
+  }
+}

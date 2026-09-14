@@ -1,0 +1,18 @@
+# The build context is the repository root. Exclude only what the image does not need.
+.git
+.github
+**/node_modules
+**/.next
+**/test-results
+**/playwright-report
+apps/*/dist
+packages/*/dist
+contracts/out
+contracts/cache
+contracts/lib
+
+# Local secrets are not put into the image. compose mounts them at runtime.
+deploy/local-secrets
+
+# design-system/dist is **not excluded.** It is a committed artifact and the exports of
+# `@mpc/design` point to it; excluding it leaves the web build unable to find the CSS.

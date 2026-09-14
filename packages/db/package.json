@@ -1,0 +1,19 @@
+{
+  "name": "@mpc/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PostgreSQL schema, RLS policies, and append-only guards for the MPC dApp.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "migrate": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "login-roles": "tsx src/login-roles-cli.ts"
+  },
+  "dependencies": {
+    "postgres": "^3.4.5"
+  }
+}

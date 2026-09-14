@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+._*
+
+# Editor
+.vscode/
+.idea/
+
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# Next.js build output and Playwright run artifacts
+.next/
+playwright-report/
+test-results/
+
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Environment files. Only the example is committed.
+.env
+.env.*
+!.env.example
+
+# Real secrets never enter the repository. deploy/local-secrets/ is an exception because it
+# holds only anvil and MinIO defaults, as stated in the README in that directory.
+deploy/secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+!deploy/local-secrets/*
+
+# design-system/dist is a committed artifact. The exports of `@mpc/design` point to it, so
+# without it the web build cannot find `@mpc/design/tokens.css`.
+!design-system/dist/

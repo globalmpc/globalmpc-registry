@@ -1,0 +1,44 @@
+{
+  "name": "@mpc/design",
+  "version": "0.1.0",
+  "description": "MPC design system — tokens, logo assets, and the rules that keep a project on brand.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "files": [
+    "dist",
+    "assets",
+    "docs",
+    "ai",
+    "tokens",
+    "content",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./tokens.css": "./dist/tokens.css",
+    "./utilities.css": "./dist/utilities.css",
+    "./tokens.json": "./dist/tokens.json",
+    "./tokens.scss": "./dist/tokens.scss",
+    "./tokens.dart": "./dist/tokens.dart",
+    "./ai": "./ai/CLAUDE.md",
+    "./assets/*": "./assets/*",
+    "./docs/*": "./docs/*"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs && node scripts/docs.mjs",
+    "sync-assets": "node scripts/sync-assets.mjs",
+    "check": "node scripts/build.mjs && node scripts/docs.mjs && git diff --exit-code -- dist docs ai",
+    "test": "vitest run test"
+  },
+  "devDependencies": {
+    "@types/node": "22.12.0",
+    "vitest": "4.1.10"
+  }
+}

@@ -1,0 +1,109 @@
+# Minimal alert rules.
+#
+# **That this is all of them is intentional.** Many rules get ignored, and an ignored alert is
+# worse than none — it makes people believe it exists. Each rule must answer "when this fires,
+# what does a person do right now?"
+
+groups:
+  - name: mpc-availability
+    rules:
+      # Learn first that collection itself has stopped. Every rule below assumes data is
+      # coming in; if it stops, they all go quiet.
+      - alert: MpcApiDown
+        expr: up{job="mpc-api"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "API scrape has failed for 2 minutes"
+
+      # When gauge queries fail, the anchor/outbox/quarantine values stay **un-updated**.
+      # They do not drop to 0, so no other alert fires, and that is the danger.
+      - alert: MpcGaugeScrapeFailing
+        expr: increase(mpc_gauge_scrape_failed_total[10m]) > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Operational gauge queries are failing — the metrics below cannot be trusted"
+
+  - name: mpc-public-surface
+    rules:
+      # Share of requests hitting the rate limit. 4xx in `http_requests_total` cannot tell
+      # "rate limited" from "bad request", so it is counted separately.
+      - alert: MpcRateLimitedShare
+        expr: |
+          sum(rate(mpc_rate_limited_total[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "5% or more of requests are hitting the rate limit"
+
+      # A rising login failure rate may be credential attempts rather than typos.
+      # SIWE is signature verification, so normal use produces almost no failures.
+      - alert: MpcSiweFailureRate
+        expr: sum(rate(mpc_siwe_verify_failed_total[5m])) > 0.2
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "SIWE verification failures exceed 12 per minute"
+
+  - name: mpc-workers
+    rules:
+      # Is the worker alive?
+      #
+      # The rules below that count accumulated rows **stay quiet when the queue is empty.** In
+      # a deployment with no uploads yet, `mpc_uploads_quarantined` is 0 and that 0 cannot be told
+      # apart from healthy. The signal a worker emits itself does not depend on the queue.
+      - alert: MpcWorkerHeartbeatStale
+        expr: mpc_worker_seconds_since_heartbeat > 300
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.state }} worker has not signalled for over 5 minutes"
+
+      # A worker that has never signalled **has no time series at all.** Something absent
+      # cannot be caught with `> 0`, so `absent()` is needed separately.
+      - alert: MpcScanWorkerNeverSeen
+        expr: absent(mpc_worker_seconds_since_heartbeat{state="scan"})
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "Scan worker has never reported — uploads get stuck in quarantine"
+
+  - name: mpc-anchor
+    rules:
+      # Anchor submission failures. Counted from the DB without adding an HTTP surface to the
+      # worker — a dead worker does not report its own counters, but accumulated rows stay visible.
+      - alert: MpcAnchorSubmissionFailed
+        expr: |
+          sum(mpc_anchor_transactions{state=~"failed|reverted|reconciliation_required"}) > 0
+        for: 15m
+        labels: { severity: page }
+        annotations:
+          summary: "There are anchor transactions that failed to finalize"
+
+      # Undelivered notifications. They remain in the app, so no information is lost, but a
+      # state of "believing they were sent" arises.
+      - alert: MpcNotificationDeliveryFailed
+        expr: sum(mpc_notification_deliveries{state="failed"}) > 0
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Some notification deliveries hit the retry limit and are stuck"
+
+      # Unpublished outbox. This value separates "lost" from "delayed".
+      - alert: MpcOutboxBacklog
+        expr: sum(mpc_outbox_pending) > 500
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Unpublished events exceed 500"
+
+      # In a deployment with the `scan` profile off, uploads stop here and the evidence golden
+      # path never completes.
+      - alert: MpcUploadsStuckInQuarantine
+        expr: sum(mpc_uploads_quarantined) > 20
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: "More than 20 uploads are sitting in quarantine — scan may be off"

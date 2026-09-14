@@ -1,0 +1,39 @@
+# Alertmanager — default config (no receivers).
+#
+# **The deployment decides receivers.** No Slack webhook or email address goes in the repo —
+# it would become a secret and stay in commits even after removal.
+#
+# The `url: "${ALERTMANAGER_WEBHOOK_URL:-...}"` that used to be here **did not work**
+# (2026-09-10 audit A4). Compose does not substitute the **contents** of mounted files, and
+# this deployment has no rendering step. So Alertmanager tried to read that string as a URL
+# and loading the config itself failed:
+#
+#   FAILED: parse "${ALERTMANAGER_WEBHOOK_URL:-http://localhost:9093/-/void}":
+#   first path segment in URL cannot contain colon
+#
+# Even with rules and runbooks, this file did not produce a working alert setup. With the
+# observability profile off, not even that was visible.
+#
+# **No-receiver mode is expressed as a receiver with no integrations.** That is a valid config
+# and passes `amtool check-config`. Even with nowhere to send, the Alertmanager UI keeps the
+# firing history, so "rules existed but nobody received them" can be told apart from "the
+# rules never fired".
+#
+# Deployments with a receiver start with `alertmanager.webhook.yml` instead of this file —
+# `start.sh` picks it when `ALERTMANAGER_WEBHOOK_URL` is set.
+
+route:
+  receiver: default
+  group_by: ["alertname"]
+  group_wait: 30s
+  group_interval: 5m
+  # Pages re-notify every 4 hours. Silence gets mistaken for resolution.
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="page"]
+      receiver: default
+      repeat_interval: 1h
+
+receivers:
+  # No integrations = send nowhere. This is the explicit form of no-receiver mode.
+  - name: default

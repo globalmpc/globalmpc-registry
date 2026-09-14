@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  // Solution file. It has no sources of its own and only gathers the sub-projects.
+  //
+  // `tsc --build` uses this as its entry point. Without this file, the root
+  // `pnpm typecheck` fails to find tsconfig.json — running per package was possible,
+  // but that list lived only in CI and diverged from the root script.
+  //
+  // `apps/web` is not here. Its check needs Next's generated types (`next typegen`),
+  // so `@mpc/web`'s own typecheck script handles it. The root script chains
+  // the two.
+  "files": [],
+  "references": [
+    { "path": "./packages/canonical" },
+    { "path": "./packages/domain" },
+    { "path": "./packages/policy" },
+    { "path": "./packages/db" },
+    { "path": "./packages/api-contract" },
+    { "path": "./packages/ui" },
+    { "path": "./packages/config" },
+    { "path": "./packages/storage" },
+    { "path": "./apps/api" },
+    { "path": "./apps/worker" }
+  ]
+}

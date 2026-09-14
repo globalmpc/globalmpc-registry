@@ -1,0 +1,21 @@
+{
+  "name": "@mpc/api-contract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zod-defined API contract, generated OpenAPI 3.1 document, SIWE and authorization models.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsx src/build-openapi.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mpc/domain": "workspace:*",
+    "@mpc/policy": "workspace:*",
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "^3.24.1"
+  }
+}

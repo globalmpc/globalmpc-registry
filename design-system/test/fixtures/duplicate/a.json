@@ -1,0 +1,4 @@
+{
+  "$description": "Fixture: first declaration of a name.",
+  "color": { "copper": { "$value": "oklch(0.68 0.13 50)", "$type": "color" } }
+}

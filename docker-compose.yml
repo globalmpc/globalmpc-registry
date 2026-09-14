@@ -1,0 +1,238 @@
+# Full local stack
+#
+# This file is **local and demo only**. Not for prod deployment — region and key ownership
+# are undecided (OD-17·OD-18), and every credential here is a known value.
+#
+# Passing secrets as `file:` references rather than env var values is intentional. Going
+# through the same code path as deployment avoids "works locally, fails in deployment" gaps.
+
+name: mpc-dapp
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mpc_dev
+    # PostgreSQL may already be running on the host. Expose on a different port.
+    ports: ["55432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # S3-compatible storage. Real deployments use managed S3, with the region set by OD-17.
+  minio:
+    # Pulls of `minio/*` from Docker Hub are refused — pull from the official registry (quay.io).
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Bucket creation. MinIO does not create buckets automatically.
+  minio-init:
+    image: quay.io/minio/mc:latest
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/mpc-evidence &&
+      echo 'bucket ready'
+      "
+
+  # Virus scanning. The first start takes a few minutes while the signature DB downloads.
+  #
+  # The official `clamav/clamav` is **amd64 only**, so on Apple Silicon it ran under emulation.
+  # Slow scans stop being checked, and an unchecked scanner cannot be told apart from a
+  # deployment with `scan` off. So it is built here on Alpine —
+  # `deploy/clamav/`. Local and deployment use the same image.
+  clamav:
+    build: ./deploy/clamav
+    healthcheck:
+      # The Alpine package has no `clamdcheck.sh`. `--ping` checks the same thing —
+      # whether clamd responds. It does not respond while downloading the signature DB,
+      # so it keeps retrying within `start_period`.
+      test: ["CMD", "clamdscan", "--config-file=/etc/clamav/clamd.conf", "--ping", "1"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 300s
+
+  # Observability — enable with `--profile observability`.
+  #
+  # Ports are not exposed. `/metrics` has no auth (instead it carries no identifying data),
+  # so the network forms the boundary. To view locally, temporarily open ports here.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: ["observability"]
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    profiles: ["observability"]
+    volumes:
+      - ./deploy/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    # Match the chain id with the whole stack. Otherwise the chain_id the API records and the
+    # chain the worker queries diverge, and transactions are never picked up.
+    entrypoint: ["anvil", "--host", "0.0.0.0", "--port", "8545", "--chain-id", "97", "--block-time", "1"]
+    ports: ["8545:8545"]
+
+  migrate:
+    build: &build
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/mpc_dev
+    command: ["pnpm", "--filter", "@mpc/db", "migrate"]
+
+  # login role creation. The SQL lives in a file because `$$` in a compose command string
+  # is substituted with the PID by the shell, breaking the PL/pgSQL block.
+  login-roles:
+    image: postgres:17-alpine
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./deploy/sql:/sql:ro
+    command: ["psql", "-h", "postgres", "-U", "postgres", "-d", "mpc_dev", "-v", "ON_ERROR_STOP=1", "-f", "/sql/login-roles.sql"]
+
+  api:
+    build: *build
+    depends_on:
+      postgres: { condition: service_healthy }
+      login-roles: { condition: service_completed_successfully }
+      minio-init: { condition: service_completed_successfully }
+    environment:
+      # References, not values. No secrets remain in the process env or `docker inspect`.
+      DATABASE_URL: file:/run/secrets/database_url
+      SESSION_SECRET: file:/run/secrets/session_secret
+      OBJECT_SECRET_ACCESS_KEY: file:/run/secrets/object_secret_key
+      PORT: "3001"
+      SIWE_DOMAIN: localhost:3000
+      SIWE_URI: http://localhost:3000
+      CHAIN_ID: "97"
+      NODE_ENV: development
+      OBJECT_STORE: s3
+      OBJECT_BUCKET: mpc-evidence
+      # Local MinIO has no notion of region. The real deployment's region is set by OD-17.
+      OBJECT_REGION: us-east-1
+      OBJECT_ENDPOINT: http://minio:9000
+      # The browser cannot resolve the `minio` hostname. Signatures include the host, so the
+      # public address must be used at signing time.
+      OBJECT_PUBLIC_ENDPOINT: http://localhost:9000
+      OBJECT_FORCE_PATH_STYLE: "true"
+      # MinIO rejects SSE requests without KMS. Local only; in production loadConfig
+      # blocks this value.
+      OBJECT_SSE: none
+      OBJECT_ACCESS_KEY_ID: minioadmin
+    secrets: [database_url, session_secret, object_secret_key]
+    ports: ["3001:3001"]
+    command: ["pnpm", "--filter", "@mpc/api", "start"]
+
+  anchor-worker:
+    build: *build
+    depends_on:
+      login-roles: { condition: service_completed_successfully }
+      anvil: { condition: service_started }
+    environment:
+      # The worker spans multiple tenants, so it connects with a dedicated role (0012).
+      DATABASE_URL: file:/run/secrets/worker_database_url
+      ANCHOR_SIGNER_PRIVATE_KEY: file:/run/secrets/anchor_signer_key
+      CHAIN_RPC_URL: http://anvil:8545
+      CHAIN_ID: "97"
+      ANCHOR_CONTRACT_ADDRESS: "${ANCHOR_CONTRACT_ADDRESS:-0x5FbDB2315678afecb367f032d93F642f64180aa3}"
+      ANCHOR_CONFIRMATIONS: "2"
+      ANCHOR_POLL_MS: "2000"
+      ANCHOR_RECHECK_MS: "5000"
+      # Local anvil value only. anvil accounts hold no real assets. How to set the production
+      # value is in `deploy/README.md`.
+      ANCHOR_DAILY_SPEND_CAP_WEI: "1000000000000000000"
+    secrets: [worker_database_url, anchor_signer_key]
+    command: ["pnpm", "--filter", "@mpc/worker", "start:anchor"]
+
+  # Scan worker. Kept separate so infected file bytes never pass through the API process.
+  scan-worker:
+    build: *build
+    depends_on:
+      login-roles: { condition: service_completed_successfully }
+      minio-init: { condition: service_completed_successfully }
+      clamav: { condition: service_healthy }
+    environment:
+      DATABASE_URL: file:/run/secrets/worker_database_url
+      OBJECT_SECRET_ACCESS_KEY: file:/run/secrets/object_secret_key
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      SCAN_POLL_MS: "3000"
+      # Results are reported through the API. The worker takes the same SIWE path as a person.
+      API_BASE_URL: http://api:3001
+      SCAN_SERVICE_PRIVATE_KEY: file:/run/secrets/scan_service_key
+      CHAIN_ID: "97"
+      SIWE_DOMAIN: localhost:3000
+      SIWE_URI: http://localhost:3000
+      # Uses the **same storage settings** as the API. Otherwise the worker looks at a different
+      # bucket and the scan backlog grows with no visible cause.
+      OBJECT_STORE: s3
+      OBJECT_BUCKET: mpc-evidence
+      OBJECT_REGION: us-east-1
+      OBJECT_ENDPOINT: http://minio:9000
+      OBJECT_FORCE_PATH_STYLE: "true"
+      OBJECT_SSE: none
+      OBJECT_ACCESS_KEY_ID: minioadmin
+    secrets: [worker_database_url, object_secret_key, scan_service_key]
+    command: ["pnpm", "--filter", "@mpc/worker", "start:scan"]
+
+  web:
+    build: *build
+    depends_on:
+      api: { condition: service_started }
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      # Inside a container, localhost is the container itself. Call by service name.
+      API_ORIGIN: http://api:3001
+    ports: ["3000:3000"]
+    command: ["pnpm", "--filter", "@mpc/web", "exec", "next", "start", "--port", "3000"]
+
+# Local-only values. Mounting them as files is the point; the values are meaningless.
+secrets:
+  database_url:
+    file: ./deploy/local-secrets/database_url
+  worker_database_url:
+    file: ./deploy/local-secrets/worker_database_url
+  session_secret:
+    file: ./deploy/local-secrets/session_secret
+  object_secret_key:
+    file: ./deploy/local-secrets/object_secret_key
+  anchor_signer_key:
+    file: ./deploy/local-secrets/anchor_signer_key
+  scan_service_key:
+    file: ./deploy/local-secrets/scan_service_key
+
+volumes:
+  pgdata:
+  miniodata:

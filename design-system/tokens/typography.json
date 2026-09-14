@@ -1,0 +1,62 @@
+{
+  "$description": "Three open-licensed faces, self-hosted via @fontsource. Fallbacks matter: they are what renders before the webfont resolves.",
+  "font": {
+    "font-sans": {
+      "$value": "\"Inter\", system-ui, sans-serif",
+      "$type": "fontFamily",
+      "$description": "Body copy and interface text. The document default.",
+      "$extensions": {
+        "mpc.group": "type",
+        "mpc.use": {
+          "en": "Body copy and interface text. The document default."
+        },
+        "mpc.family": "Inter",
+        "mpc.weights": "400 · 500 · 600",
+        "mpc.license": "SIL Open Font License 1.1",
+        "mpc.role": {
+          "en": "Sans — body copy and interface text."
+        },
+        "mpc.sample": "Institutional-grade real-world assets, on-chain."
+      }
+    },
+    "font-display": {
+      "$value": "\"Space Grotesk\", \"Inter\", sans-serif",
+      "$type": "fontFamily",
+      "$description": "Headlines and figures. Always with -0.02em tracking via .font-display.",
+      "$extensions": {
+        "mpc.group": "type",
+        "mpc.use": {
+          "en": "Headlines and figures. Always with -0.02em tracking via .font-display."
+        },
+        "mpc.note": {
+          "en": "Falls back to Inter, not a system serif — a headline that loses its webfont should still look like this site."
+        },
+        "mpc.family": "Space Grotesk",
+        "mpc.weights": "400 · 500 · 600 · 700",
+        "mpc.license": "SIL Open Font License 1.1",
+        "mpc.role": {
+          "en": "Display — headlines, the wordmark, and figures."
+        },
+        "mpc.sample": "Mining RWA Issuance Infrastructure"
+      }
+    },
+    "font-mono": {
+      "$value": "\"JetBrains Mono\", ui-monospace, monospace",
+      "$type": "fontFamily",
+      "$description": "Eyebrow labels and data. Never body copy.",
+      "$extensions": {
+        "mpc.group": "type",
+        "mpc.use": {
+          "en": "Eyebrow labels and data. Never body copy."
+        },
+        "mpc.family": "JetBrains Mono",
+        "mpc.weights": "400 · 500",
+        "mpc.license": "SIL Open Font License 1.1",
+        "mpc.role": {
+          "en": "Mono — eyebrow labels (11px, 0.18em tracking, uppercase) and data."
+        },
+        "mpc.sample": "MINING RWA REGISTRY · BNB CHAIN · 2026"
+      }
+    }
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "$description": "How MPC is allowed to speak. These are not style preferences: MPC describes a pre-issuance financial product, and most of these exist because the wrong sentence is a compliance problem.",
+  "positioning": {
+    "statement": {
+      "en": "MPC is the mining RWA issuance standard infrastructure operating on blockchain."
+    },
+    "expansion": {
+      "en": "It standardises verification across the mining-asset lifecycle: every published record carries its source, its reviewer, that reviewer\u2019s authority scope, and the limitations of the check. Reference cases are not named until the counterparty has agreed to be named."
+    }
+  },
+  "boundaries": [
+    {
+      "claim": {
+        "en": "Not a technology platform."
+      },
+      "instead": {
+        "en": "Four operated layers — resource, structuring, tokenization, capital markets — as one standard stack."
+      }
+    },
+    {
+      "claim": {
+        "en": "Not a single mine deal."
+      },
+      "instead": {
+        "en": "Infrastructure that standardises verification across the mining-asset lifecycle. Any single project is a case, not the business."
+      }
+    },
+    {
+      "claim": {
+        "en": "Not in issuance. Design & build stage."
+      },
+      "instead": {
+        "en": "Readiness is disclosed item by item, including what is only provisionally selected. Never write in the present tense about a stage not reached."
+      }
+    },
+    {
+      "claim": {
+        "en": "Not an offering or a solicitation."
+      },
+      "instead": {
+        "en": "Institutional review briefs, due-diligence packages, and meetings. The disclaimer travels with every request surface."
+      }
+    }
+  ],
+  "tone": [
+    {
+      "rule": {
+        "en": "State the stage in the same breath as the ambition."
+      },
+      "why": {
+        "en": "MPC has not issued. A sentence that reads as though it has is a misrepresentation, not enthusiasm."
+      },
+      "example": {
+        "en": "'Issuance Readiness — Design & Build Stage', not 'Now issuing'."
+      }
+    },
+    {
+      "rule": {
+        "en": "Every figure is verifiable or it does not appear."
+      },
+      "why": {
+        "en": "The on-chain section's whole value is that a reader can check it on a public explorer. One unverifiable number beside those rows costs the page its function."
+      }
+    },
+    {
+      "rule": {
+        "en": "Name risks next to the structure that addresses them."
+      },
+      "why": {
+        "en": "An institutional reader has already thought of the risk. Omitting it signals either ignorance or concealment."
+      }
+    },
+    {
+      "rule": {
+        "en": "Write for allocators: infrastructure vocabulary, not crypto vocabulary."
+      },
+      "why": {
+        "en": "The audience is institutional capital. 'Issuance standard', 'risk/return profile', 'value chain' land; 'moon', 'gem', 'community' do not."
+      }
+    },
+    {
+      "rule": {
+        "en": "No superlatives and no urgency devices."
+      },
+      "why": {
+        "en": "'Revolutionary', 'don't miss out', countdowns — these read as retail solicitation and undercut the institutional framing everything else is doing."
+      }
+    },
+    {
+      "rule": {
+        "en": "Fixed vocabulary: layer names, status words, and asset names are reused verbatim."
+      },
+      "why": {
+        "en": "The site, the whitepaper, and the brief have to describe one thing. A synonym reads as a second, slightly different thing."
+      },
+      "example": {
+        "en": "Resource → Structuring → Tokenization → Capital Markets. Not 'sourcing → packaging → minting → distribution'."
+      }
+    },
+    {
+      "rule": {
+        "en": "Disclaimers are copy, not fine print. They sit in the paragraph."
+      },
+      "why": {
+        "en": "A disclaimer a reader has to look for is a disclaimer that did not disclaim."
+      }
+    }
+  ],
+  "locale": [
+    {
+      "rule": {
+        "en": "Copy lives in a `const COPY = { en: {...} } as const` beside its component, read with `useT`."
+      },
+      "why": {
+        "en": "One shape for every string keeps copy reviewable in one place instead of scattered through markup."
+      }
+    },
+    {
+      "rule": {
+        "en": "State each fact in one wording — never let two surfaces phrase the same fact differently."
+      },
+      "why": {
+        "en": "A hedge that survives on one surface and disappears on another is a different disclosure on each."
+      }
+    },
+    {
+      "rule": {
+        "en": "Pages render `locale=\"en\"`. English is the product language."
+      },
+      "why": {
+        "en": "Every surface states the same facts in the same words, so there is no second copy to drift."
+      }
+    },
+    {
+      "rule": {
+        "en": "Navigation labels come from a single registry that requires a label per locale."
+      },
+      "why": {
+        "en": "A destination cannot ship with one language filled in — the registry type will not allow it."
+      }
+    }
+  ]
+}

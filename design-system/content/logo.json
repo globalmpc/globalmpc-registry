@@ -1,0 +1,105 @@
+{
+  "$description": "Logo geometry constraints, typefaces, and the do-not list.",
+  "typefaces": [
+    {
+      "family": "Space Grotesk",
+      "role": {
+        "en": "Display — headlines, the wordmark, and figures."
+      },
+      "weights": "400 · 500 · 600 · 700",
+      "sample": "Mining RWA Issuance Infrastructure",
+      "license": "SIL Open Font License 1.1"
+    },
+    {
+      "family": "Inter",
+      "role": {
+        "en": "Sans — body copy and interface text."
+      },
+      "weights": "400 · 500 · 600",
+      "sample": "Institutional-grade real-world assets, on-chain.",
+      "license": "SIL Open Font License 1.1"
+    },
+    {
+      "family": "JetBrains Mono",
+      "role": {
+        "en": "Mono — eyebrow labels (11px, 0.18em tracking, uppercase) and data."
+      },
+      "weights": "400 · 500",
+      "sample": "MINING RWA REGISTRY · BNB CHAIN · 2026",
+      "license": "SIL Open Font License 1.1"
+    }
+  ],
+  "constraints": [
+    {
+      "label": {
+        "en": "Clearspace"
+      },
+      "value": {
+        "en": "0.5× the mark's height on all sides"
+      },
+      "why": {
+        "en": "The crystal's facets are thin lines; anything closer starts competing with them."
+      }
+    },
+    {
+      "label": {
+        "en": "Minimum size — mark"
+      },
+      "value": {
+        "en": "24px digital · 10mm print"
+      },
+      "why": {
+        "en": "Below this the interior facets close up and the mark reads as a solid diamond."
+      }
+    },
+    {
+      "label": {
+        "en": "Minimum size — horizontal lockup"
+      },
+      "value": {
+        "en": "120px wide digital · 32mm print"
+      },
+      "why": {
+        "en": "The wordmark's counters fill in below this width."
+      }
+    },
+    {
+      "label": {
+        "en": "Stacked lockup"
+      },
+      "value": {
+        "en": "Use above 96px wide only"
+      },
+      "why": {
+        "en": "Two elements at small sizes lose the relationship the lockup exists to show."
+      }
+    }
+  ],
+  "donts": [
+    {
+      "en": "Rotate, skew, or otherwise distort the mark."
+    },
+    {
+      "en": "Change stroke weights or redraw the interior facets."
+    },
+    {
+      "en": "Add shadows, glows, outlines, or bevels."
+    },
+    {
+      "en": "Recolour the mark outside the copper scale."
+    },
+    {
+      "en": "Place the full-colour mark on photography — use a mono variant."
+    },
+    {
+      "en": "Rearrange, resize, or re-space the mark against the wordmark."
+    },
+    {
+      "en": "Set the wordmark in a substitute typeface."
+    }
+  ],
+  "trademark": {
+    "en": "The MPC name and mark may be reproduced unaltered in news coverage, research, exchange listings, and partner material. Any modified, combined, or product-branded use — or any use implying endorsement or a partnership that does not exist — requires prior written permission.",
+    "status": "pending legal review"
+  }
+}
