@@ -134,15 +134,15 @@ function withRowCount(text: string, cell: string, count: number, prefix = ""): s
 /** 수치만 바꾸는 치환들. 합계 줄의 **날짜는 건드리지 않는다.** */
 const numericFixes = [
   ...ROWS.map((row) => (text: string) => withRowCount(text, pathFor(row.label), row.count)),
-  // web 칸은 `단위 N · E2E M` 또는 `E2E M`이다. 다른 행과 형태가 다르므로
+  // web 칸은 `unit N · E2E M` 또는 `E2E M`이다. 다른 행과 형태가 다르므로
   // 셀 전체를 바꾼다.
   (text: string) => {
-    const cell = webUnitCount > 0 ? `단위 ${webUnitCount} · E2E ${counts.playwright}` : `E2E ${counts.playwright}`;
-    const pattern = /(^\| `apps\/web` \|[^|]*\| )(?:단위 \d+ · )?E2E \d+( \|$)/m;
+    const cell = webUnitCount > 0 ? `unit ${webUnitCount} · E2E ${counts.playwright}` : `E2E ${counts.playwright}`;
+    const pattern = /(^\| `apps\/web` \|[^|]*\| )(?:unit \d+ · )?E2E \d+( \|$)/m;
     if (!pattern.test(text)) throw new Error("README에서 `apps/web` 행을 찾지 못했다");
     return text.replace(pattern, `$1${cell}$2`);
   },
-  (text: string) => text.replace(/(\| `apps\/api` \|[^|]*?)\d+개 route/, `$1${counts.routes}개 route`),
+  (text: string) => text.replace(/(\| `apps\/api` \|[^|]*?)\d+ routes/, `$1${counts.routes} routes`),
   /**
    * 표 밖의 route 수치 — 2026-09-10 실사.
    *
@@ -151,11 +151,11 @@ const numericFixes = [
    * 초록이었다. **한 곳만 검사하는 게이트는 나머지를 보증하지 않는다.**
    */
   (text: string) =>
-    text.replace(/`ROUTES`\)의 \d+개 route/g, `\`ROUTES\`)의 ${counts.routes}개 route`),
-  (text: string) => text.replace(/Foundry 테스트 \d+개/, `Foundry 테스트 ${counts.foundry}개`),
+    text.replace(/\d+ routes in the contract \(`ROUTES`\)/g, `${counts.routes} routes in the contract (\`ROUTES\`)`),
+  (text: string) => text.replace(/\d+ Foundry tests/, `${counts.foundry} Foundry tests`),
 ];
 
-const SUMMARY = /^합계: vitest \d+ \+ Playwright \d+ \+ Foundry \d+(?: \+ route \d+)?\. \((\d{4}-\d{2}-\d{2}) .*?\)$/m;
+const SUMMARY = /^Total: vitest \d+ \+ Playwright \d+ \+ Foundry \d+(?: \+ route \d+)?\. \(measured (\d{4}-\d{2}-\d{2})\)$/m;
 
 /** 합계 줄을 실측값으로 바꾼다. 날짜는 호출자가 정한다. */
 const withSummary =
@@ -163,7 +163,7 @@ const withSummary =
   (text: string): string =>
     text.replace(
       SUMMARY,
-      `합계: vitest ${counts.vitestTotal} + Playwright ${counts.playwright} + Foundry ${counts.foundry} + route ${counts.routes}. (${date} 실측)`,
+      `Total: vitest ${counts.vitestTotal} + Playwright ${counts.playwright} + Foundry ${counts.foundry} + route ${counts.routes}. (measured ${date})`,
     );
 
 /**

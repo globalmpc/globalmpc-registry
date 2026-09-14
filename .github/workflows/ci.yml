@@ -218,7 +218,7 @@ jobs:
       - name: README Foundry 수치가 실행값과 같은지
         run: |
           actual=$(forge test --json | python3 -c 'import json,sys;print(sum(len(s["test_results"]) for s in json.load(sys.stdin).values()))')
-          stated=$(grep -oE 'Foundry 테스트 [0-9]+개' ../README.md | grep -oE '[0-9]+')
+          stated=$(grep -oE '[0-9]+ Foundry tests' ../README.md | grep -oE '[0-9]+')
           test "$actual" = "$stated" || {
             echo "README는 Foundry $stated개, 실행은 $actual개다. README.md를 고친다."
             exit 1

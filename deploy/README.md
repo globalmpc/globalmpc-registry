@@ -1,80 +1,84 @@
-# 배포 구성
+# Deployment configuration
 
-이 디렉터리는 `docker-compose.yml`이 로컬 스택을 띄우는 데 필요한 것을 담는다.
-운영 환경의 값(호스트·도메인·자격증명·실제 상한)은 저장소에 들어가지 않는다.
+This directory holds what `docker-compose.yml` needs to bring up the local stack.
+Production values (hosts, domains, credentials, actual caps) never enter the repository.
 
-| 경로 | 내용 |
+| Path | Contents |
 |---|---|
-| `clamav/` | 검사 worker가 쓰는 ClamAV 이미지. 공식 이미지가 amd64 전용이라 직접 만든다 |
-| `sql/login-roles.sql` | RLS를 적용받는 접속 role. superuser로 앱을 돌리지 않기 위한 것이다 |
-| `local-secrets/` | **로컬 전용 공개 기본값.** 이유는 같은 디렉터리의 `README.md` |
-| `observability/*.yml` | Prometheus 스크레이프 설정과 알림 규칙 |
+| `clamav/` | ClamAV image used by the scan worker. Built here because the official image is amd64-only |
+| `sql/login-roles.sql` | Login roles subject to RLS. Exists so the app never runs as superuser |
+| `local-secrets/` | **Public defaults, local use only.** See `README.md` in that directory for why |
+| `observability/*.yml` | Prometheus scrape configuration and alert rules |
 
-## 시크릿 주입
+## Secret injection
 
-값이 아니라 **참조**를 환경변수에 넣는다(`file:/run/secrets/...` · `env:NAME`).
-프로세스 환경과 `docker inspect`에 비밀이 남지 않고, 로컬과 배포가 같은 코드
-경로(`packages/config`)로 읽는다. 실제 배포에서는 Docker secret·Kubernetes
-projected volume·secret manager가 같은 자리에 파일을 놓는다.
+Environment variables carry a **reference**, not the value (`file:/run/secrets/...` · `env:NAME`).
+No secret remains in the process environment or in `docker inspect`, and local and
+deployed environments read through the same code path (`packages/config`). In a real
+deployment, Docker secrets, Kubernetes projected volumes, or a secret manager place the
+file at the same location.
 
-## anchor 지갑의 손실 상한
+## Loss cap for the anchor wallet
 
-anchor signer의 가스 지갑은 이 시스템에서 **자금이 나가는 유일한 경로**다.
-상한은 두 개여야 성립한다.
+The anchor signer's gas wallet is the **only path by which funds leave** this system.
+The cap holds only when there are two of them.
 
-| 상한 | 무엇을 막나 | 어디에 있나 |
+| Cap | What it limits | Where it lives |
 |---|---|---|
-| 충전 상한 | 지갑에 들어 있는 총액. 키가 새면 이만큼만 잃는다 | 재무·운영 절차. 코드가 강제하지 못한다 |
-| 소진 상한 | 하루에 태우는 총액. worker가 스스로 지갑을 비우지 못한다 | `ANCHOR_DAILY_SPEND_CAP_WEI` |
+| Funding cap | Total held in the wallet. A leaked key loses at most this much | Finance and operations procedure. Code cannot enforce it |
+| Spend cap | Total burned per day. The worker cannot drain the wallet on its own | `ANCHOR_DAILY_SPEND_CAP_WEI` |
 
-충전 상한만 두면 하루 만에 다 태우고, 소진 상한만 두면 지갑에 넣어 둔 잔액
-전체가 노출된다.
+With only a funding cap, the whole balance can burn in one day. With only a spend cap,
+the entire balance held in the wallet is exposed.
 
-### 값을 정하는 법
+### Choosing the values
 
 ```
-예상 소진(wei) = 하루 제출 건수 × 건당 gas × ANCHOR_FEE_CAP_GWEI × 1e9
-일일 소진 상한 = 예상 소진 × 1.5
-충전 상한      = 일일 소진 상한 (하루치만 넣어 둔다)
+expected spend (wei) = submissions per day × gas per submission × ANCHOR_FEE_CAP_GWEI × 1e9
+daily spend cap      = expected spend × 1.5
+funding cap          = daily spend cap (hold only one day's worth)
 ```
 
-- **건당 gas** — `forge test --gas-report`의 `submitRoot` max에 트랜잭션 기본
-  비용(21,000)과 calldata 여유를 더한다.
-- **하루 제출 건수** — 운영 환경의 사실이다. 저장소가 정하지 않는다. batch는
-  게시를 모아 한 번에 올리므로 제출 건수는 게시 건수보다 **적다**.
-- **가스 가격 상한** — `ANCHOR_FEE_CAP_GWEI`(기본 100). 이 값을 넘으면 worker가
-  제출하지 않으므로 최악의 경우가 그대로 이 값이다. 둘 중 하나만 고치면 상한이
-  의도한 배수에서 벗어난다.
+- **Gas per submission** — the `submitRoot` max from `forge test --gas-report`, plus the
+  base transaction cost (21,000) and a calldata margin.
+- **Submissions per day** — a fact of the production environment. The repository does
+  not set it. Batching collects publications and submits them together, so submissions
+  are **fewer** than publications.
+- **Gas price cap** — `ANCHOR_FEE_CAP_GWEI` (default 100). Above this value the worker
+  does not submit, so this value is exactly the worst case. Changing only one of the two
+  moves the cap off its intended multiple.
 
-`ANCHOR_DAILY_SPEND_CAP_WEI`에 **wei 단위 정수**로 넣는다. `0.05`나 `1e17` 같은
-표기는 거절한다. **기본값이 없다** — 비우고 기동하면 anchor worker가 거절한다.
-기본값이 있으면 아무도 상한을 정하지 않은 채 배포된다.
+Set `ANCHOR_DAILY_SPEND_CAP_WEI` as an **integer in wei**. Notations such as `0.05` or
+`1e17` are rejected. **There is no default** — starting with it empty makes the anchor
+worker refuse to run. A default would let a deployment ship with no one having chosen a cap.
 
-곱셈은 `apps/worker/test/anchor-config.test.ts`가 다시 검산한다.
+`apps/worker/test/anchor-config.test.ts` re-checks the multiplication.
 
-### 이 상한이 세지 않는 것
+### What this cap does not count
 
-- **아직 영수증이 오지 않은 제출.** 실제 비용은 블록에 들어가야 알 수 있다. 그
-  구간의 노출은 `ANCHOR_FEE_CAP_GWEI × ANCHOR_MAX_ATTEMPTS`가 막는다.
-- **reorg로 뒤집힌 시도에서 태운 가스.** 같은 행에 마지막 영수증만 남는다.
-- **multisig 제안 경로.** 제안은 이 지갑의 가스를 쓰지 않는다. 실행하는 것은
-  multisig owner이며, 그쪽 손실 상한은 소유자 구성과 threshold다.
+- **Submissions whose receipt has not arrived yet.** The actual cost is known only once
+  the transaction is in a block. Exposure in that window is bounded by
+  `ANCHOR_FEE_CAP_GWEI × ANCHOR_MAX_ATTEMPTS`.
+- **Gas burned by attempts reverted by a reorg.** Only the last receipt remains on the row.
+- **The multisig proposal path.** Proposals do not spend this wallet's gas. Multisig
+  owners execute them, and the loss cap on that side is the owner set and the threshold.
 
-세지 않는 것이 있으므로 **충전 상한이 최종 방어선**이다.
+Because some things go uncounted, **the funding cap is the last line of defense**.
 
-하루 경계는 **UTC 자정**이다. 서버 timezone을 따르면 배포 위치가 바뀔 때 상한이
-열리는 시각이 조용히 이동한다.
+The day boundary is **UTC midnight**. Following the server timezone would silently shift
+the time the cap resets whenever the deployment location changes.
 
-## 관측
+## Observability
 
 ```sh
 docker compose --profile observability up -d
 ```
 
-Prometheus는 `:9090`, Alertmanager는 `:9093`이다. **둘 다 포트를 밖으로 열지 않는
-것이 기본이다** — `/metrics`에 인증이 없으므로(대신 식별 정보를 담지 않는다)
-경계는 네트워크가 만든다. 알림 수신처는 저장소에 두지 않는다. 넣으면 그것이
-시크릿이 되고, 지운 뒤에도 커밋에 남는다.
+Prometheus is on `:9090` and Alertmanager on `:9093`. **By default neither port is
+exposed externally** — `/metrics` has no authentication (and in exchange carries no
+identifying information), so the network forms the boundary. Alert receivers are not
+kept in the repository. Adding them would make them a secret, and they would stay in
+the commit history even after removal.
 
-설정은 배포와 같은 이미지의 공식 `amtool`로 검사한다 —
-`scripts/ops/check-alertmanager.sh`.
+The configuration is checked with the official `amtool` from the same image used in
+deployment — `scripts/ops/check-alertmanager.sh`.

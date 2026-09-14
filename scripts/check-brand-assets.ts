@@ -9,7 +9,7 @@
  * 로고를 다시 그리면 이 검사가 실패하고, 실패가 사본을 갱신하라는 신호다.
  *
  * 아트워크를 여기서 고치지 않는다. 원본은 design-system이며 생성기는 호스트
- * 저장소에 있다(`design-system/README.md` "로고를 고치려면").
+ * 저장소에 있다(`design-system/README.md` "To change the logo").
  */
 
 import { readFileSync } from "node:fs";
