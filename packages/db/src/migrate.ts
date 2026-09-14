@@ -3,16 +3,21 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
+import { LEGACY_CHECKSUMS, type LegacyChecksum } from "./legacy-checksums.js";
 
 /**
- * 마이그레이션 러너.
+ * Migration runner.
  *
- * 각 파일은 하나의 트랜잭션에서 실행되고 `core.schema_migrations`에 기록된다.
- * 이미 적용된 파일은 건너뛴다. 적용 순서는 파일명 오름차순이다.
+ * Each file runs in one transaction and is recorded in `core.schema_migrations`. Files that
+ * were already applied are skipped. Files are applied in ascending file-name order.
  *
- * 건너뛸 때 **이름만 보지 않는다.** 이름만 비교하면 이미 적용된 파일을 나중에
- * 고쳐도 그대로 통과하고, 환경마다 스키마가 갈린 채 아무 데도 드러나지 않는다.
- * 그래서 본문 해시를 함께 적어 두고 재실행 때 대조한다.
+ * Skipping **does not look at the name alone.** Comparing names only would let an applied file
+ * be edited later without anyone noticing, and schemas would drift per environment. So the
+ * checksum is recorded too and compared on every run.
+ *
+ * The checksum covers what the migration does, not how it is commented: it hashes the SQL with
+ * comments removed and whitespace collapsed. Rewording or translating a comment therefore does
+ * not stop a database that already applied the file; changing code or a string literal does.
  */
 
 export interface Migration {
@@ -20,9 +25,118 @@ export interface Migration {
   readonly sql: string;
 }
 
-/** 마이그레이션 본문 해시. 적용 시점의 내용을 고정한다. */
+/**
+ * SQL with comments removed and whitespace runs collapsed to one space.
+ *
+ * Single-quoted literals (including `E''` strings) and double-quoted identifiers are kept
+ * verbatim, so comment markers inside them are not comments. Comments inside dollar-quoted
+ * function bodies are removed too — they do not change what the function does.
+ */
+export function normalizeMigrationSql(sql: string): string {
+  let out = "";
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    const next = sql[i + 1];
+    if (ch === "'" || ch === '"') {
+      const end = endOfQuoted(sql, i);
+      out += sql.slice(i, end);
+      i = end;
+    } else if (ch === "-" && next === "-") {
+      const eol = sql.indexOf("\n", i);
+      i = eol === -1 ? sql.length : eol;
+      out += " ";
+    } else if (ch === "/" && next === "*") {
+      i = endOfBlockComment(sql, i);
+      out += " ";
+    } else {
+      out += ch;
+      i += 1;
+    }
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
+/** Index just past the quoted token that starts at `start`. Unterminated runs to the end. */
+function endOfQuoted(sql: string, start: number): number {
+  const quote = sql[start];
+  const backslashEscapes =
+    quote === "'" && /[eE]/.test(sql[start - 1] ?? "") && !/\w/.test(sql[start - 2] ?? "");
+  let j = start + 1;
+  while (j < sql.length) {
+    const ch = sql[j];
+    if (backslashEscapes && ch === "\\") {
+      j += 2;
+    } else if (ch === quote) {
+      if (sql[j + 1] === quote) {
+        j += 2;
+      } else {
+        return j + 1;
+      }
+    } else {
+      j += 1;
+    }
+  }
+  return sql.length;
+}
+
+/** Index just past the block comment that starts at `start`. PostgreSQL nests block comments. */
+function endOfBlockComment(sql: string, start: number): number {
+  let depth = 0;
+  let j = start;
+  while (j < sql.length) {
+    if (sql[j] === "/" && sql[j + 1] === "*") {
+      depth += 1;
+      j += 2;
+    } else if (sql[j] === "*" && sql[j + 1] === "/") {
+      depth -= 1;
+      j += 2;
+      if (depth === 0) return j;
+    } else {
+      j += 1;
+    }
+  }
+  return sql.length;
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** Checksum of what a migration does. Pins the applied content; ignores comments. */
 export function migrationChecksum(sql: string): string {
-  return createHash("sha256").update(sql, "utf8").digest("hex");
+  return sha256(normalizeMigrationSql(sql));
+}
+
+/** Checksum of the whole file text — the scheme used before comments were ignored. */
+export function fullTextChecksum(sql: string): string {
+  return sha256(sql);
+}
+
+export type ChecksumVerdict = "match" | "upgrade" | "mismatch";
+
+/**
+ * Compares a recorded checksum with the file on disk.
+ *
+ * - `match`: recorded with the current scheme and the code is unchanged.
+ * - `upgrade`: recorded with the full-text scheme, and the file still does the same thing —
+ *   either it is the same text, or it is a known earlier text whose normalized form equals the
+ *   current one (only comments changed). The caller rewrites the recorded checksum.
+ * - `mismatch`: the migration's code or literals changed after it was applied.
+ */
+export function judgeChecksum(input: {
+  readonly recorded: string;
+  readonly sql: string;
+  readonly legacy?: LegacyChecksum;
+}): ChecksumVerdict {
+  const current = migrationChecksum(input.sql);
+  if (input.recorded === current) return "match";
+  if (input.recorded === fullTextChecksum(input.sql)) return "upgrade";
+  const { legacy } = input;
+  if (legacy && legacy.full.includes(input.recorded) && legacy.normalized === current) {
+    return "upgrade";
+  }
+  return "mismatch";
 }
 
 export const MIGRATIONS_DIR = path.join(
@@ -66,8 +180,8 @@ export async function runMigrations(
     if (appliedChecksums.has(migration.name)) {
       const recorded = appliedChecksums.get(migration.name) ?? null;
 
-      // checksum 컬럼이 없던 시절에 적용된 행이다. 그때의 본문을 알 수 없으므로
-      // 지금 것을 기준으로 삼는다 — 여기서 막으면 기존 DB가 전부 못 올라온다.
+      // Applied before the checksum column existed. The text at that time is unknown, so the
+      // current one becomes the reference — rejecting here would stop every existing database.
       if (recorded === null) {
         await sql`
           UPDATE core.schema_migrations SET checksum = ${checksum} WHERE name = ${migration.name}
@@ -75,12 +189,23 @@ export async function runMigrations(
         continue;
       }
 
-      if (recorded !== checksum) {
+      const legacy = LEGACY_CHECKSUMS[migration.name];
+      const verdict = judgeChecksum({
+        recorded,
+        sql: migration.sql,
+        ...(legacy ? { legacy } : {}),
+      });
+      if (verdict === "mismatch") {
         throw new Error(
-          `마이그레이션 ${migration.name}의 체크섬이 적용 시점과 다르다 `
-            + `(기록 ${recorded.slice(0, 12)}…, 현재 ${checksum.slice(0, 12)}…). `
-            + "적용된 마이그레이션은 고치지 않는다 — 새 파일을 추가한다.",
+          `Migration ${migration.name} checksum differs from when it was applied `
+            + `(recorded ${recorded.slice(0, 12)}…, current ${checksum.slice(0, 12)}…). `
+            + "Applied migrations are not edited — add a new file.",
         );
+      }
+      if (verdict === "upgrade") {
+        await sql`
+          UPDATE core.schema_migrations SET checksum = ${checksum} WHERE name = ${migration.name}
+        `;
       }
       continue;
     }
@@ -98,5 +223,5 @@ export async function runMigrations(
   return executed;
 }
 
-// CLI 진입점은 `cli.ts`에 있다. 이 모듈은 CJS로 로드될 수 있으므로
-// (예: Playwright globalSetup) `import.meta`를 쓰지 않는다.
+// The CLI entry point is `cli.ts`. This module can be loaded as CJS (e.g. by the Playwright
+// globalSetup), so it does not use `import.meta` beyond `MIGRATIONS_DIR`.
