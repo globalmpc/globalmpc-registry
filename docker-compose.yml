@@ -8,14 +8,21 @@
 
 name: mpc-dapp
 
+# Images are pinned as `tag@sha256:<index digest>`. A tag can be repointed; the digest cannot.
+# Update both together — `docker buildx imagetools inspect <image>:<tag>` prints the multi-arch
+# index digest.
+#
+# Every published port is bound to `127.0.0.1`. The credentials here are known values
+# (`postgres/postgres`, `minioadmin`), so nothing may be reachable from another host.
+
 services:
   postgres:
-    image: postgres:17-alpine
+    image: &postgres_image postgres:17.11-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: mpc_dev
     # PostgreSQL may already be running on the host. Expose on a different port.
-    ports: ["55432:5432"]
+    ports: ["127.0.0.1:55432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -27,12 +34,12 @@ services:
   # S3-compatible storage. Real deployments use managed S3, with the region set by OD-17.
   minio:
     # Pulls of `minio/*` from Docker Hub are refused — pull from the official registry (quay.io).
-    image: quay.io/minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-    ports: ["9000:9000", "9001:9001"]
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
     volumes:
       - miniodata:/data
     healthcheck:
@@ -43,7 +50,7 @@ services:
 
   # Bucket creation. MinIO does not create buckets automatically.
   minio-init:
-    image: quay.io/minio/mc:latest
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     depends_on:
       minio: { condition: service_healthy }
     entrypoint: >
@@ -73,31 +80,32 @@ services:
 
   # Observability — enable with `--profile observability`.
   #
-  # Ports are not exposed. `/metrics` has no auth (instead it carries no identifying data),
-  # so the network forms the boundary. To view locally, temporarily open ports here.
+  # Ports are published on loopback (`127.0.0.1`) only — not reachable from other hosts.
+  # `/metrics` has no auth (instead it carries no identifying data), so the network forms the
+  # boundary.
   prometheus:
-    image: prom/prometheus:v3.1.0
+    image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
     profiles: ["observability"]
     volumes:
       - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./deploy/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
 
   alertmanager:
-    image: prom/alertmanager:v0.28.0
+    image: prom/alertmanager:v0.28.0@sha256:d5155cfac40a6d9250ffc97c19db2c5e190c7bc57c6b67125c94903358f8c7d8
     profiles: ["observability"]
     volumes:
       - ./deploy/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
 
   anvil:
-    image: ghcr.io/foundry-rs/foundry:latest
+    image: ghcr.io/foundry-rs/foundry:v1.7.1@sha256:8347b728d5d393dac1c018691b36f506d23b9dcd78341d40ea0fcb11c3a19cdd
     # Match the chain id with the whole stack. Otherwise the chain_id the API records and the
     # chain the worker queries diverge, and transactions are never picked up.
     entrypoint: ["anvil", "--host", "0.0.0.0", "--port", "8545", "--chain-id", "97", "--block-time", "1"]
-    ports: ["8545:8545"]
+    ports: ["127.0.0.1:8545:8545"]
 
   migrate:
     build: &build
@@ -112,7 +120,7 @@ services:
   # login role creation. The SQL lives in a file because `$$` in a compose command string
   # is substituted with the PID by the shell, breaking the PL/pgSQL block.
   login-roles:
-    image: postgres:17-alpine
+    image: *postgres_image
     depends_on:
       migrate: { condition: service_completed_successfully }
     environment:
@@ -151,7 +159,7 @@ services:
       OBJECT_SSE: none
       OBJECT_ACCESS_KEY_ID: minioadmin
     secrets: [database_url, session_secret, object_secret_key]
-    ports: ["3001:3001"]
+    ports: ["127.0.0.1:3001:3001"]
     command: ["pnpm", "--filter", "@mpc/api", "start"]
 
   anchor-worker:
@@ -215,7 +223,7 @@ services:
       NODE_ENV: production
       # Inside a container, localhost is the container itself. Call by service name.
       API_ORIGIN: http://api:3001
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     command: ["pnpm", "--filter", "@mpc/web", "exec", "next", "start", "--port", "3000"]
 
 # Local-only values. Mounting them as files is the point; the values are meaningless.

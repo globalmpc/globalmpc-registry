@@ -395,6 +395,11 @@ export async function registerRegistryRoutes(
 
     return withTenant(sql, { tenantId }, (tx) =>
       withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+        // One batch build per tenant at a time. Two concurrent requests would read the same
+        // unanchored versions and anchor each of them in two roots. The second waits here and,
+        // with a fresh snapshot, finds them taken. The unique index on
+        // `anchor_batch_leaves.entry_version_id` (0041) holds even if this lock is skipped.
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`anchor-batch:${tenantId}`}::TEXT, 0))`;
         const batch = await buildAnchorBatch(tx, tenantId);
         const batchRowId = randomUUID();
 

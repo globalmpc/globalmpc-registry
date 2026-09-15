@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { listRegistryEntries, type RegistryEntrySummary } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { ReviewRegistryPanel } from "@/components/ReviewRegistryPanel";
 
 /**
  * Registries — spec 11 §11.2.
@@ -134,6 +135,9 @@ export default function RegistriesPage() {
           </div>
         )}
       </div>
+
+      {/* Credentials, schemas and policy sets — proposed by one person, approved by another. */}
+      <ReviewRegistryPanel />
     </>
   );
 }

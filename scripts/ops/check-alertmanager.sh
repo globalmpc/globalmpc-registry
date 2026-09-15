@@ -13,7 +13,8 @@
 
 set -euo pipefail
 
-image="${ALERTMANAGER_IMAGE:-prom/alertmanager:v0.28.0}"
+# Same pinned reference as `docker-compose.yml` — change the two together.
+image="${ALERTMANAGER_IMAGE:-prom/alertmanager:v0.28.0@sha256:d5155cfac40a6d9250ffc97c19db2c5e190c7bc57c6b67125c94903358f8c7d8}"
 here="$(cd "$(dirname "$0")/../.." && pwd)"
 config_dir="$here/deploy/observability"
 

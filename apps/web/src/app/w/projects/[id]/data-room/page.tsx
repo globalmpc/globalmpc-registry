@@ -331,7 +331,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                     <td className="meta">{upload.nextActions.join(", ") || "—"}</td>
                     <td>
                       <div className="row" style={{ gap: 6 }}>
-                        {upload.state === "quarantined" ? (
+                        {upload.state === "received" || upload.state === "quarantined" ? (
                           // A separate worker performs the scan. If the screen could
                           // produce a result, quarantine would be a formality.
                           <span className="meta">Awaiting scan</span>
@@ -357,7 +357,8 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                           </button>
                         ) : null}
 
-                        {upload.state !== "scanned_infected" ? (
+                        {/* Only scanned files get a link (Q-033). The server refuses the rest. */}
+                        {upload.state === "scanned_clean" || upload.state === "promoted" ? (
                           <button
                             data-testid={`download-${upload.id}`}
                             disabled={busy}
@@ -388,7 +389,8 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
           {/* No path reverses an infected verdict — enforced by the state machine, not permissions. */}
           A separate worker runs the scan; this screen cannot produce the result. A file judged
           infected cannot be rescanned and is never promoted to evidence — upload it again as a
-          new file. Download links expire after five minutes, and anyone holding one can fetch
+          new file. Only a file that passed the scan can be downloaded. Download links expire
+          after five minutes, and anyone holding one can fetch
           the file without signing in.
         </p>
       </div>

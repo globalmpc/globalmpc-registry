@@ -27,10 +27,23 @@ import {
 export interface ChainClient {
   /** Current head block number. */
   headBlockNumber(): Promise<number>;
-  /** Estimated gas fee. Used for the cap check. */
-  estimateMaxFeePerGas(): Promise<bigint>;
-  /** Calls `submitRoot`. Returns the transaction hash. */
-  submitRoot(input: SubmitRootInput): Promise<string>;
+  /** Current fee quote. Checked against the cap, then sent unchanged. */
+  estimateFees(): Promise<FeeQuote>;
+  /**
+   * Calls `submitRoot`. Returns the transaction hash.
+   *
+   * Sends with `fees` as given — the quote that passed the cap check. Estimating again at send
+   * time would let a fee spike between the check and the send slip past the cap.
+   */
+  submitRoot(input: SendRootInput): Promise<string>;
+  /**
+   * What the chain already holds for `batchId` (`getBatch`), with the hash of the transaction
+   * that stored it when its `RootSubmitted` log can be found. null if the batch is not on chain.
+   *
+   * The answer to a lost send result: a timeout or crash after the node accepted the transaction
+   * leaves no hash in the DB, and sending again would anchor nothing new and burn gas.
+   */
+  anchoredBatch(batchId: string): Promise<AnchoredBatch | null>;
   /**
    * Builds `submitRoot` calldata. Used when proposing to Safe.
    *
@@ -48,6 +61,34 @@ export interface SubmitRootInput {
   readonly manifestHash: string;
   readonly schemaVersion: string;
   readonly recordCount: number;
+}
+
+/**
+ * Fee quote (wei per gas).
+ *
+ * Carries the transaction type with the numbers. Nodes without EIP-1559 quote a single gas
+ * price; sending that as `maxFeePerGas` would build an EIP-1559 transaction, which viem refuses
+ * on such a node (`Eip1559FeesNotSupportedError`). The EIP-1559 pair is sent whole, so what goes
+ * out is exactly what the cap judged.
+ */
+export type FeeQuote =
+  | { readonly type: "eip1559"; readonly maxFeePerGas: bigint; readonly maxPriorityFeePerGas: bigint }
+  | { readonly type: "legacy"; readonly gasPrice: bigint };
+
+/** The most one gas unit can cost under this quote — what the per-tx fee cap judges. */
+export function feeCeilingOf(quote: FeeQuote): bigint {
+  return quote.type === "eip1559" ? quote.maxFeePerGas : quote.gasPrice;
+}
+
+export interface SendRootInput extends SubmitRootInput {
+  /** Already checked against `feeCapWei`. */
+  readonly fees: FeeQuote;
+}
+
+export interface AnchoredBatch {
+  readonly root: string;
+  /** null when the `RootSubmitted` log is outside the searched range or the node refused it. */
+  readonly txHash: string | null;
 }
 
 export interface SubmitterConfig {
@@ -91,6 +132,7 @@ export interface SafeProposer {
     | { kind: "pending"; confirmations: number; threshold: number }
     | { kind: "executed"; transactionHash: string }
     | { kind: "rejected" }
+    | { kind: "replaced"; replacedBy: string }
     | { kind: "unknown" }
   >;
 }
@@ -168,6 +210,23 @@ export interface StepResult {
   readonly from?: TransactionState;
   readonly to?: TransactionState;
   readonly reason?: string;
+  /**
+   * A row was looked at but nothing moved: the step waits on an outside condition — a cap, the
+   * chain, the Safe service. Retrying at once changes nothing and only repeats RPC calls and
+   * UPDATEs, so the loop backs off.
+   */
+  readonly waiting?: boolean;
+}
+
+/**
+ * Whether the loop should sleep before the next step.
+ *
+ * Only a step that moved something runs the next one at once. Blocked outcomes — daily cap, fee
+ * cap, a failed send or proposal, a transaction still pending — would otherwise spin until the
+ * condition clears (for the daily cap, until UTC midnight).
+ */
+export function shouldBackOff(result: StepResult): boolean {
+  return !result.handled || result.waiting === true;
 }
 
 /**
@@ -205,12 +264,25 @@ export async function stepOnce(
   }) as Promise<StepResult>;
 }
 
+/** Proposals read back per pass. Bounded so one pass stays short; the rest rotate in next. */
+const PROPOSALS_PER_PASS = 10;
+
+interface OpenProposal {
+  readonly id: string;
+  readonly transaction_id: string;
+  readonly safe_tx_hash: string;
+}
+
 /**
- * Checks whether an uploaded proposal has been executed.
+ * Checks whether uploaded proposals have been executed.
  *
  * Once Safe owners sign and execute, the result appears as a chain transaction. From then on it
  * follows the same tracking path as any transaction — confirmation depth and reorg watch apply
  * equally.
+ *
+ * **Every open proposal is read back, not only the oldest.** The oldest can wait for signatures
+ * indefinitely; reading only it would never notice that a later one was executed. Each proposal is
+ * asked about at most once per `recheckIntervalMs` — the service is external and rate-limited.
  */
 async function trackProposals(
   sql: postgres.Sql,
@@ -218,21 +290,36 @@ async function trackProposals(
   safe: SafeProposer,
   log: Log,
 ): Promise<StepResult> {
-  const [proposal] = await sql<
-    { id: string; transaction_id: string; safe_tx_hash: string | null }[]
-  >`
+  const proposals = await sql<OpenProposal[]>`
     SELECT p.id, p.transaction_id, p.safe_tx_hash
     FROM chain.anchor_proposals p
     JOIN chain.transactions t ON t.id = p.transaction_id
     WHERE p.state = 'proposed' AND p.chain_id = ${config.chainId}
       AND p.safe_tx_hash IS NOT NULL
-    ORDER BY p.created_at
-    LIMIT 1
+      AND (
+        p.checked_at IS NULL
+        OR p.checked_at < now() - ${`${Math.round(config.recheckIntervalMs / 1000)} seconds`}::interval
+      )
+    -- Never-checked first, then least recently checked: every proposal gets its turn.
+    ORDER BY p.checked_at NULLS FIRST, p.created_at
+    LIMIT ${PROPOSALS_PER_PASS}
   `;
 
-  if (!proposal?.safe_tx_hash) return { handled: false };
+  const results: StepResult[] = [];
+  for (const proposal of proposals) {
+    results.push(await trackProposal(sql, safe, log, proposal));
+  }
+  return results.find((result) => result.handled) ?? { handled: false };
+}
 
+async function trackProposal(
+  sql: postgres.Sql,
+  safe: SafeProposer,
+  log: Log,
+  proposal: OpenProposal,
+): Promise<StepResult> {
   const status = await safe.status(proposal.safe_tx_hash);
+  await sql`UPDATE chain.anchor_proposals SET checked_at = now() WHERE id = ${proposal.id}`;
 
   if (status.kind === "executed") {
     await sql.begin(async (tx) => {
@@ -266,25 +353,51 @@ async function trackProposals(
   }
 
   if (status.kind === "rejected") {
-    await sql`
+    return closeUnexecutable(sql, log, proposal, "safe_proposal_rejected");
+  }
+
+  if (status.kind === "replaced") {
+    // Another transaction executed at this nonce — a rejection in the Safe UI, or another
+    // proposal. This one can never execute; waiting on it would block forever.
+    return closeUnexecutable(sql, log, proposal, "safe_proposal_replaced", {
+      replacedBy: status.replacedBy,
+    });
+  }
+
+  // pending and unknown are left as is. Signatures are still being collected or the service has
+  // not propagated yet; either way there is nothing for us to do. A proposal that stays here too
+  // long surfaces through the `anchor_proposal_oldest_age_seconds` gauge.
+  return { handled: false };
+}
+
+/**
+ * Ends a proposal that will never execute.
+ *
+ * The transaction does not go back to created. Re-uploading without checking why it was rejected
+ * gets it rejected again for the same reason. `failed` raises the anchor failure alert, and an
+ * operator resubmits through the API.
+ */
+async function closeUnexecutable(
+  sql: postgres.Sql,
+  log: Log,
+  proposal: OpenProposal,
+  reason: "safe_proposal_rejected" | "safe_proposal_replaced",
+  detail: Record<string, unknown> = {},
+): Promise<StepResult> {
+  await sql.begin(async (tx) => {
+    await tx`
       UPDATE chain.anchor_proposals
       SET state = 'rejected', resolved_at = now()
       WHERE id = ${proposal.id}
     `;
-    // The transaction does not go back to created. Re-uploading without checking why it was
-    // rejected gets it rejected again for the same reason.
-    await sql`
+    await tx`
       UPDATE chain.transactions
-      SET state = 'failed', last_error = 'safe_proposal_rejected', updated_at = now()
+      SET state = 'failed', last_error = ${reason}, updated_at = now()
       WHERE id = ${proposal.transaction_id}
     `;
-    log({ level: "warn", msg: "anchor.proposal.rejected", proposalId: proposal.id });
-    return { handled: true, transactionId: proposal.transaction_id, from: "proposed", to: "failed" };
-  }
-
-  // pending and unknown are left as is. Signatures are still being collected or the service has
-  // not propagated yet; either way there is nothing for us to do.
-  return { handled: false };
+  });
+  log({ level: "warn", msg: "anchor.proposal.rejected", proposalId: proposal.id, reason, ...detail });
+  return { handled: true, transactionId: proposal.transaction_id, from: "proposed", to: "failed" };
 }
 
 /**
@@ -293,22 +406,24 @@ async function trackProposals(
  * **Counts only transactions with a receipt.** A submitted transaction not yet in a block has no
  * known cost — exposure in that window is bounded by `feeCapWei` × `maxAttempts`.
  *
+ * **Summed from the `chain.gas_spend` ledger, one row per mined transaction hash.** The columns on
+ * `chain.transactions` describe only the latest attempt: a resubmission clears the row and the
+ * next receipt overwrites it, so an earlier attempt's gas would drop out of the total.
+ *
  * Counts across tenants. The wallet is one, not split per tenant.
  *
- * The day boundary is UTC. Following the server timezone would silently shift when the cap
- * reopens whenever the deployment location changes.
+ * The day boundary is UTC and the day is the one the receipt was first seen. Following the server
+ * timezone would silently shift when the cap reopens whenever the deployment location changes.
  */
 export async function spentTodayWei(
   sql: postgres.Sql | postgres.TransactionSql,
   chainId: number,
 ): Promise<bigint> {
   const [row] = await sql<{ spent: string }[]>`
-    SELECT COALESCE(SUM(gas_used::NUMERIC * effective_gas_price), 0)::TEXT AS spent
-    FROM chain.transactions
+    SELECT COALESCE(SUM(gas_used * effective_gas_price), 0)::TEXT AS spent
+    FROM chain.gas_spend
     WHERE chain_id = ${chainId}
-      AND gas_used IS NOT NULL
-      AND effective_gas_price IS NOT NULL
-      AND submitted_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+      AND observed_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
   `;
   return BigInt(row?.spent ?? "0");
 }
@@ -327,13 +442,20 @@ async function submitPending(
     return { handled: true, transactionId: row.id, from: row.state, to: "failed" };
   }
 
-  const [maxFeePerGas, spentToday] = await Promise.all([
-    chain.estimateMaxFeePerGas(),
+  const [feeResult, spentToday] = await Promise.all([
+    chain.estimateFees().then(
+      (quote) => ({ quote }),
+      (error: unknown) => ({ error }),
+    ),
     spentTodayWei(tx, config.chainId),
   ]);
+  if ("error" in feeResult) {
+    return recordFailedRead(tx, log, row, "fee_estimate_failed", feeResult.error);
+  }
+  const fees = feeResult.quote;
   const guard = checkSubmitAllowed({
     chainId: config.chainId,
-    maxFeePerGas,
+    maxFeePerGas: feeCeilingOf(fees),
     feeCapWei: config.feeCapWei,
     attempts: row.attempts,
     maxAttempts: config.maxAttempts,
@@ -357,16 +479,28 @@ async function submitPending(
       WHERE id = ${row.id}
     `;
     log({ level: "warn", msg: "anchor.submit.blocked", transactionId: row.id, reason: guard.reason });
-    return { handled: true, transactionId: row.id, from: row.state, to: row.state, reason: guard.reason };
+    return {
+      handled: true,
+      transactionId: row.id,
+      from: row.state,
+      to: row.state,
+      reason: guard.reason,
+      waiting: true,
+    };
   }
 
   if (guard.via === "safe_proposal") {
     return proposeToSafe(tx, chain, config, log, row, safe);
   }
 
-  // Increment attempts **before** submitting. If the process crashes after submission, the count
-  // survives and prevents endless retries. One attempt too few is safer than mistaking a
-  // successful submission for a failure — a duplicate submission of the same root burns gas.
+  // An earlier attempt may be on chain although no hash was recorded: the send answer was lost
+  // (timeout), or the process died before this transaction committed — the attempt count below
+  // is rolled back with it. Ask the chain before sending again.
+  const reconciled = await reconcileBeforeSend(tx, chain, config, log, row);
+  if (reconciled) return reconciled;
+
+  // Counts attempts that ended with an error. Commits with this step's outcome; the chain check
+  // above covers attempts whose outcome was never recorded.
   await tx`
     UPDATE chain.transactions
     SET attempts = attempts + 1, updated_at = now()
@@ -380,6 +514,7 @@ async function submitPending(
       manifestHash: row.manifest_hash,
       schemaVersion: row.schema_version ?? "1",
       recordCount: row.record_count,
+      fees,
     });
 
     await tx`
@@ -401,8 +536,160 @@ async function submitPending(
       WHERE id = ${row.id}
     `;
     log({ level: "error", msg: "anchor.submit.failed", transactionId: row.id, error: message });
-    return { handled: true, transactionId: row.id, from: "created", to: "created", reason: "submit_failed" };
+    // Back off before the retry. Retrying at once spends every attempt within milliseconds,
+    // before a transient RPC failure has had a chance to clear.
+    return {
+      handled: true,
+      transactionId: row.id,
+      from: "created",
+      to: "created",
+      reason: "submit_failed",
+      waiting: true,
+    };
   }
+}
+
+/**
+ * Checks the chain for this batch before a send.
+ *
+ * - Not on chain: null — send as usual.
+ * - On chain with our root and a findable transaction: adopt that hash and track it like any
+ *   submitted transaction. No second send.
+ * - Anything else: `reconciliation_required`. The batch is on chain but we cannot say by which
+ *   transaction, or the batch id holds another root. A person decides; sending cannot fix either.
+ */
+async function reconcileBeforeSend(
+  tx: postgres.TransactionSql,
+  chain: ChainClient,
+  config: SubmitterConfig,
+  log: Log,
+  row: PendingRow,
+): Promise<StepResult | null> {
+  let anchored: AnchoredBatch | null;
+  try {
+    anchored = await chain.anchoredBatch(row.external_batch_id!);
+  } catch (error) {
+    // Without an answer the worker must not send. Record why the row waits and back off, the
+    // same way a failed send does, instead of surfacing only as a loop error.
+    const message = `reconciliation_check_failed: ${String(error)}`.slice(0, 500);
+    await tx`
+      UPDATE chain.transactions
+      SET last_error = ${message}, updated_at = now()
+      WHERE id = ${row.id}
+    `;
+    log({ level: "warn", msg: "anchor.reconcile.check_failed", transactionId: row.id, error: message });
+    return {
+      handled: true,
+      transactionId: row.id,
+      from: row.state,
+      to: row.state,
+      reason: "reconciliation_check_failed",
+      waiting: true,
+    };
+  }
+  if (!anchored) return null;
+
+  if (anchored.root !== row.merkle_root) {
+    return requireReconciliation(tx, log, row, "batch_on_chain_with_different_root");
+  }
+  if (!anchored.txHash) {
+    return requireReconciliation(tx, log, row, "batch_on_chain_transaction_unknown");
+  }
+
+  await tx`
+    UPDATE chain.transactions
+    SET state = 'submitted', tx_hash = ${anchored.txHash},
+        contract_address = ${config.contractAddress.toLowerCase()},
+        submitted_at = COALESCE(submitted_at, now()),
+        last_error = 'reconciled_from_chain', updated_at = now()
+    WHERE id = ${row.id}
+  `;
+  log({ level: "warn", msg: "anchor.reconciled", transactionId: row.id, txHash: anchored.txHash });
+  return {
+    handled: true,
+    transactionId: row.id,
+    from: row.state,
+    to: "submitted",
+    reason: "reconciled_from_chain",
+  };
+}
+
+async function requireReconciliation(
+  tx: postgres.TransactionSql,
+  log: Log,
+  row: PendingRow,
+  reason: string,
+): Promise<StepResult> {
+  await tx`
+    UPDATE chain.transactions
+    SET state = 'reconciliation_required', last_error = ${reason}, updated_at = now()
+    WHERE id = ${row.id}
+  `;
+  log({ level: "warn", msg: "anchor.reconciliation_required", transactionId: row.id, reason });
+  return { handled: true, transactionId: row.id, from: row.state, to: "reconciliation_required", reason };
+}
+
+/**
+ * A reverted receipt for a batch that is on chain anyway.
+ *
+ * The retry went out while the first send was still in the mempool; both were mined and ours
+ * reverted with `BatchAlreadyExists`. The batch is anchored — by the first transaction. Follow
+ * that one instead of marking the batch reverted. The reverted one's gas is already in the ledger.
+ */
+async function followAnchoringTransaction(
+  tx: postgres.TransactionSql,
+  chain: ChainClient,
+  log: Log,
+  row: PendingRow,
+): Promise<StepResult | null> {
+  if (!row.external_batch_id) return null;
+  let anchored: AnchoredBatch | null;
+  try {
+    anchored = await chain.anchoredBatch(row.external_batch_id);
+  } catch (error) {
+    // Without an answer a duplicate cannot be told from a real revert. Keep the state, record why
+    // the row waits and back off, instead of surfacing only as a loop error.
+    const message = `duplicate_check_failed: ${String(error)}`.slice(0, 500);
+    await tx`
+      UPDATE chain.transactions
+      SET last_error = ${message}, updated_at = now()
+      WHERE id = ${row.id}
+    `;
+    log({ level: "warn", msg: "anchor.duplicate.check_failed", transactionId: row.id, error: message });
+    return {
+      handled: true,
+      transactionId: row.id,
+      from: row.state,
+      to: row.state,
+      reason: "duplicate_check_failed",
+      waiting: true,
+    };
+  }
+  if (!anchored?.txHash || anchored.root !== row.merkle_root || anchored.txHash === row.tx_hash) {
+    return null;
+  }
+
+  await tx`
+    UPDATE chain.transactions
+    SET state = 'submitted', tx_hash = ${anchored.txHash},
+        block_number = NULL, block_hash = NULL, confirmations = 0, confirmed_at = NULL,
+        last_error = 'duplicate_send_reverted', updated_at = now()
+    WHERE id = ${row.id}
+  `;
+  log({
+    level: "warn",
+    msg: "anchor.duplicate_reverted",
+    transactionId: row.id,
+    revertedTxHash: row.tx_hash,
+    txHash: anchored.txHash,
+  });
+  return {
+    handled: true,
+    transactionId: row.id,
+    from: row.state,
+    to: "submitted",
+    reason: "duplicate_send_reverted",
+  };
 }
 
 /**
@@ -436,7 +723,14 @@ async function proposeToSafe(
   `;
 
   if (existing) {
-    return { handled: true, transactionId: row.id, from: row.state, to: "proposed", reason: "already_proposed" };
+    return {
+      handled: true,
+      transactionId: row.id,
+      from: row.state,
+      to: "proposed",
+      reason: "already_proposed",
+      waiting: true,
+    };
   }
 
   // Actually upload to the Safe service. On failure nothing is written to the DB either — a
@@ -460,7 +754,14 @@ async function proposeToSafe(
         WHERE id = ${row.id}
       `;
       log({ level: "error", msg: "anchor.propose.failed", transactionId: row.id, error: message });
-      return { handled: true, transactionId: row.id, from: row.state, to: row.state, reason: "propose_failed" };
+      return {
+        handled: true,
+        transactionId: row.id,
+        from: row.state,
+        to: row.state,
+        reason: "propose_failed",
+        waiting: true,
+      };
     }
   }
 
@@ -510,24 +811,45 @@ async function trackPending(
     return { handled: true, transactionId: row.id, from: row.state, to: "failed" };
   }
 
-  const [observation, headBlockNumber] = await Promise.all([
-    chain.observe(row.tx_hash),
-    chain.headBlockNumber(),
-  ]);
+  let observation: Observation;
+  let headBlockNumber: number;
+  try {
+    [observation, headBlockNumber] = await Promise.all([
+      chain.observe(row.tx_hash),
+      chain.headBlockNumber(),
+    ]);
+  } catch (error) {
+    return recordFailedRead(tx, log, row, "observation_failed", error);
+  }
 
   if (observation.kind === "receipt") {
     // Record the cost even when the observation does not change the state. A branch below
     // ("nothing changed: stamp the time and return") would otherwise skip recording the cost
     // despite a receipt, and the daily cap would see 0 and stay open forever.
     //
-    // When a resubmission yields a new receipt, the last value wins — gas burned by an
-    // overturned attempt is not in this sum. That window is bounded by the retry cap.
+    // The row's columns hold the latest attempt only. The daily cap sums the ledger, which
+    // keeps one row per mined hash — a resubmission or reorg re-observation does not erase an
+    // earlier attempt's gas, and seeing the same hash again does not count it twice.
     await tx`
       UPDATE chain.transactions
       SET gas_used = ${observation.gasUsed.toString()},
           effective_gas_price = ${observation.effectiveGasPrice.toString()}
       WHERE id = ${row.id}
     `;
+    await tx`
+      INSERT INTO chain.gas_spend (
+        chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price
+      ) VALUES (
+        ${config.chainId}, ${row.tx_hash}, ${row.id}, ${row.tenant_id},
+        ${observation.gasUsed.toString()}, ${observation.effectiveGasPrice.toString()}
+      )
+      ON CONFLICT (chain_id, tx_hash) DO NOTHING
+    `;
+  }
+
+  if (observation.kind === "receipt" && observation.status === "reverted") {
+    const followed = await followAnchoringTransaction(tx, chain, log, row);
+    if (followed) return followed;
   }
 
   const result = trackTransaction({
@@ -566,7 +888,16 @@ async function trackPending(
     // Stamp the check time even when nothing changed. Otherwise the same row is re-picked
     // immediately and pending rows behind it never progress.
     await tx`UPDATE chain.transactions SET updated_at = now() WHERE id = ${row.id}`;
-    return { handled: true, transactionId: row.id, from: row.state, to: row.state, reason: result.reason };
+    return {
+      handled: true,
+      transactionId: row.id,
+      from: row.state,
+      to: row.state,
+      reason: result.reason,
+      // A pending transaction is picked again at once; without a back-off the loop polls the
+      // node as fast as it answers. Confirmed rows are already spaced by `recheckIntervalMs`.
+      waiting: row.state !== "confirmed",
+    };
   }
 
   await tx`
@@ -596,6 +927,34 @@ async function trackPending(
     from: row.state,
     to: result.nextState,
     reason: result.reason,
+  };
+}
+
+/**
+ * A chain read failed (node restart, rate limit). Keep the state, record why the row waits and
+ * back off, instead of surfacing only as a loop error with nothing on the row.
+ */
+async function recordFailedRead(
+  tx: postgres.TransactionSql,
+  log: Log,
+  row: PendingRow,
+  reason: string,
+  error: unknown,
+): Promise<StepResult> {
+  const message = `${reason}: ${String(error)}`.slice(0, 500);
+  await tx`
+    UPDATE chain.transactions
+    SET last_error = ${message}, updated_at = now()
+    WHERE id = ${row.id}
+  `;
+  log({ level: "warn", msg: "anchor.chain_read.failed", transactionId: row.id, reason, error: message });
+  return {
+    handled: true,
+    transactionId: row.id,
+    from: row.state,
+    to: row.state,
+    reason,
+    waiting: true,
   };
 }
 

@@ -14,7 +14,10 @@
 # The signature DB is not baked into the image. Baking it in freezes the DB at image build
 # date, and a scanner running on a stale DB makes a pass look like a guarantee. It downloads at
 # startup — meanwhile uploads stay `quarantined`, and showing that on screen is by design.
-FROM alpine:3.22
+#
+# The base is pinned by digest — a tag can be repointed, and this image decides what is clean.
+# To update, change the tag and digest together (`docker buildx imagetools inspect alpine:<tag>`).
+FROM alpine:3.22.5@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 
 RUN apk add --no-cache clamav clamav-libunrar tini \
  && mkdir -p /run/clamav /var/lib/clamav \
@@ -24,6 +27,13 @@ RUN apk add --no-cache clamav clamav-libunrar tini \
 # `LogFile /dev/stdout` is not used — clamav follows that symlink and refuses to start with
 # "Symbolic link loop". In foreground mode logs already go to stdout, so no file is
 # needed.
+#
+# **What clamd cannot look inside is not clean.** By default an encrypted archive and a file
+# over a scan limit (`MaxFileSize` · `MaxScanSize` · `MaxRecursion`) come back `OK` — a malicious file in a
+# password-protected zip would be promoted as scanned clean. The `Alert*` options turn both into
+# `Heuristics.Encrypted.*` / `Heuristics.Limits.Exceeded.*` `FOUND`, which the worker records as
+# infected. `HeuristicAlerts` is already the default; it is set so the alerts cannot be switched
+# off by a changed default.
 RUN printf '%s\n' \
       'LogTime yes' \
       'DatabaseDirectory /var/lib/clamav' \
@@ -34,6 +44,11 @@ RUN printf '%s\n' \
       'MaxFileSize 2000M' \
       'MaxScanSize 2000M' \
       'StreamMaxLength 2000M' \
+      'HeuristicAlerts yes' \
+      'AlertEncrypted yes' \
+      'AlertEncryptedArchive yes' \
+      'AlertEncryptedDoc yes' \
+      'AlertExceedsMax yes' \
     > /etc/clamav/clamd.conf \
  && printf '%s\n' \
       'DatabaseDirectory /var/lib/clamav' \

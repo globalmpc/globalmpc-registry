@@ -1184,6 +1184,60 @@ export const myActivity = z.object({
   asOf: isoDateTime,
 });
 
+// --- Organizations -------------------------------------------------------
+
+/**
+ * An organization the caller may name as a project's owner.
+ *
+ * Only what the registration form shows. The list follows the owner rule of `project.create`,
+ * so it is a list of choices, not a tenant directory.
+ */
+export const organizationSummary = z.object({
+  id: z.string(),
+  legalName: z.string(),
+  jurisdiction: z.string(),
+});
+
+/**
+ * What a review assignment on one project can use.
+ *
+ * - `reviewers`: subjects whose reviewer-role binding reaches this project and whose active
+ *   wallet meets that role's minimum assurance. `roles` lists only the roles they can exercise.
+ *   Someone listed without a credential still appears, so the gap is visible rather than silent.
+ * - `credentials`: each reviewer's currently valid credentials (not revoked, not expired).
+ * - `schemas`: active attestation schemas. A draft schema cannot be signed.
+ */
+export const reviewAssignmentOptions = z.object({
+  reviewers: z.array(
+    z.object({
+      subjectId: z.string(),
+      displayName: z.string(),
+      roles: z.array(z.string()),
+      credentials: z.array(
+        z.object({
+          id: z.string(),
+          credentialType: z.string(),
+          issuerReference: z.string(),
+          scope: z.array(z.string()),
+          jurisdiction: z.array(z.string()),
+          expiresAt: isoDateTime.nullable(),
+        }),
+      ),
+    }),
+  ),
+  schemas: z.array(
+    z.object({
+      id: z.string(),
+      schemaKey: z.string(),
+      schemaVersion: z.string(),
+      attestationType: z.string(),
+      jurisdictionProfile: z.string(),
+    }),
+  ),
+  requestId: z.string(),
+  asOf: isoDateTime,
+});
+
 // --- Platform administration -------------------------------------------
 
 /**
@@ -1228,10 +1282,18 @@ export const createSubjectRequest = z.object({
   kind: z.enum(["person", "service"]).default("person"),
 });
 
+/**
+ * Wallet bind.
+ *
+ * The operator chooses the assurance level, and must say why. The level decides which roles
+ * the wallet can exercise (`ROLE_MINIMUM_ASSURANCE`), so a level without a stated basis is a
+ * grant nobody can later explain. The justification is kept in the audit record.
+ */
 export const bindWalletRequest = z.object({
   walletAddress: walletAddress,
   chainId: z.number().int().refine((value) => value === 56 || value === 97),
   assuranceLevel: z.enum(["wallet_only", "identity_bound", "high_assurance"]),
+  justification: z.string().trim().min(1).max(1000),
 });
 
 /**
@@ -1274,6 +1336,130 @@ export const createRoleGrantRequest = z.object({
 export const decideRoleGrantRequest = z.object({
   decision: z.enum(["approve", "reject"]),
   reason: z.string().min(1).max(1000),
+});
+
+/**
+ * Role revocation — the mirror of the grant flow (02 §2.8).
+ *
+ * Requires a reason code for the same reason wallet disable does: offboarding, a changed duty,
+ * a security concern, and a mistaken grant end the role the same way but call for different
+ * readings of what the person did while holding it.
+ */
+export const ROLE_REVOCATION_REASON_CODES = [
+  "offboarding",
+  "duty_change",
+  "security_concern",
+  "granted_in_error",
+] as const;
+
+export const roleRevocationRequest = z.object({
+  id: z.string(),
+  roleBindingId: z.string(),
+  subjectId: z.string(),
+  subjectName: z.string(),
+  role: z.string(),
+  projectId: z.string().nullable(),
+  reasonCode: z.enum(ROLE_REVOCATION_REASON_CODES),
+  reason: z.string(),
+  requestedBySubjectId: z.string(),
+  requestedAt: isoDateTime,
+  state: z.enum(["pending", "approved", "rejected", "withdrawn"]),
+  decidedBySubjectId: z.string().nullable(),
+  decidedAt: isoDateTime.nullable(),
+  decisionReason: z.string().nullable(),
+  version: z.number().int().positive(),
+});
+
+export const createRoleRevocationRequest = z.object({
+  roleBindingId: z.string().uuid(),
+  reasonCode: z.enum(ROLE_REVOCATION_REASON_CODES),
+  reason: z.string().min(1).max(1000),
+});
+
+/** Approve or reject. Rejected if the decider is the proposer — the DB blocks this too. */
+export const decideRoleRevocationRequest = z.object({
+  decision: z.enum(["approve", "reject"]),
+  reason: z.string().min(1).max(1000),
+});
+
+// --- Review registries (02 §2.8) ---------------------------------------
+
+export const REGISTRY_KINDS = ["credential", "attestation_schema", "policy_set"] as const;
+
+/** Blank is not a reason. The DB rejects it too; this says so before the insert fails. */
+const nonBlank = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .refine((value) => value.trim().length > 0, "must not be blank");
+
+/**
+ * A proposal to add one version of a review registry item.
+ *
+ * `itemVersion` counts versions of one logical item (a rule set, a schema key, a holder's
+ * credential); `version` is this record's own version for If-Match. `payload` is what approval
+ * writes, as validated at proposal time.
+ */
+export const registryProposal = z.object({
+  id: z.string(),
+  kind: z.enum(REGISTRY_KINDS),
+  itemKey: z.string(),
+  itemVersion: z.number().int().positive(),
+  payload: z.record(z.unknown()),
+  rationale: z.string(),
+  effectiveFrom: isoDateTime,
+  proposedBySubjectId: z.string(),
+  proposedAt: isoDateTime,
+  state: z.enum(["pending", "approved", "rejected"]),
+  decidedBySubjectId: z.string().nullable(),
+  decidedAt: isoDateTime.nullable(),
+  decisionReason: z.string().nullable(),
+  /** The registry row approval created. Null until approved. */
+  materializedId: z.string().nullable(),
+  version: z.number().int().positive(),
+});
+
+/**
+ * Propose a credential. The holder's organization is resolved by the server, the same way the
+ * bootstrap CLI resolves it. Effective from `issuedAt`.
+ */
+export const proposeCredentialRequest = z.object({
+  subjectId: z.string().uuid(),
+  issuerReference: z.string().min(1).max(500),
+  credentialType: z.string().min(1).max(200),
+  credentialScope: z.array(z.string().min(1)).max(100),
+  jurisdiction: z.array(z.string().min(1)).max(50),
+  issuedAt: isoDateTime,
+  expiresAt: isoDateTime.nullable(),
+  rationale: nonBlank(2000),
+});
+
+export const proposeAttestationSchemaRequest = z.object({
+  schemaKey: z.string().min(1).max(200),
+  schemaVersion: z.string().min(1).max(50),
+  attestationType: z.enum(ATTESTATION_TYPES),
+  requiredEvidence: z.array(z.string().min(1)).max(100),
+  acceptedAuthorityTypes: z.array(z.string().min(1)).max(100),
+  mandatoryLimitations: z.array(z.string().min(1)).max(100),
+  jurisdictionProfile: z.string().min(1).max(50),
+  effectiveFrom: isoDateTime,
+  rationale: nonBlank(2000),
+});
+
+/**
+ * Propose a compliance policy set. `definition` is a rule set from `packages/policy`, validated
+ * against its schema (OD-15); version and effective date come from the definition itself.
+ */
+export const proposePolicySetRequest = z.object({
+  definition: z.record(z.unknown()),
+  rationale: nonBlank(2000),
+});
+
+/** Approve or reject. Rejected if the decider is the proposer — the DB blocks this too. */
+export const decideRegistryProposalRequest = z.object({
+  decision: z.enum(["approve", "reject"]),
+  reason: nonBlank(1000),
 });
 
 // --- Workspace aggregates ---------------------------------------
@@ -1414,6 +1600,20 @@ export const projectLifecycle = z.object({
  * `file:/run/secrets/x` is itself information about the deployment layout. Only
  * whether one is configured is returned.
  */
+/**
+ * What a failed delivery records — a category, never the receiver's status code or error text
+ * (W-087). The URL is operator-set, so per-URL answers on the admin screen would make delivery
+ * a probe of the internal network. Mirrors the CHECK in migration 0044.
+ */
+export const notificationDeliveryError = z.enum([
+  "rejected_destination",
+  "secret_unavailable",
+  "http_error",
+  "timeout",
+  "network_error",
+  "response_too_large",
+]);
+
 export const notificationSink = z
   .object({
     id: z.string(),
@@ -1427,16 +1627,20 @@ export const notificationSink = z
       pending: z.number().int().nonnegative(),
       delivered: z.number().int().nonnegative(),
       failed: z.number().int().nonnegative(),
-      lastError: z.string().nullable(),
+      lastError: notificationDeliveryError.nullable(),
     }),
   })
   .strict();
 
 export const createNotificationSinkRequest = z.object({
-  // https only. Notification bodies contain project identifiers.
+  // https only. Notification bodies contain project identifiers. Private and internal
+  // destinations are refused by the route and again by the worker (W-087).
   url: z.string().regex(/^https:\/\/[^@\s]+$/, "Must be an https URL"),
-  /** A `file:` or `env:` reference. Never the value itself (05 §5.12). */
-  secretReference: z.string().min(1),
+  /** A reference in the webhook namespace. Never the value itself (05 §5.12, W-087). */
+  secretReference: z
+    .string()
+    .min(1)
+    .describe("env:WEBHOOK_SECRET_<NAME> or file:/run/secrets/webhook_<name>"),
 });
 
 export const updateNotificationSinkRequest = z.object({

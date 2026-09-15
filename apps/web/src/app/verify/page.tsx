@@ -19,8 +19,14 @@ import { ErrorNotice } from "@/components/ErrorNotice";
  * sent `merkleVerified: true`, that screen copied it verbatim. That is quotation,
  * not verification.
  *
- * Here **the browser recomputes the Merkle path.** It does not use the verdict flag
- * the server sent — the point of a proof is not having to trust the server.
+ * Here **the browser recomputes the Merkle path** from the leaf, proof, and root the server
+ * returned. It does not copy the server's `merkleVerified` flag.
+ *
+ * **What it does not do (W-089).** The root and the confirmation state come from the server
+ * too — nothing on this page reads the chain. A match shows the leaf sits under the root the
+ * server reports; whether that root is the one anchored on chain is for the reader to check on
+ * the block explorer, which the transaction link opens. The copy says exactly that. Saying
+ * "matches the anchored root" or "confirmed" would claim a chain check that never ran.
  *
  * **It also states what is not confirmed here.** Besides the public projection content hash,
  * the leaf binds `subjectId`, `policyVersion`, and `schemaVersion`, and
@@ -120,8 +126,10 @@ export default function ProofVerifierPage() {
         <div>
           <h1>Proof Verifier</h1>
           <p className="sub">
-            Check an integrity proof yourself. The Merkle path is recomputed in your browser from
-            the values the server returned — the server&rsquo;s own verdict is not used.
+            Check an inclusion proof. The Merkle path is recomputed in your browser from the leaf,
+            proof, and root the server returned, and compared with that root. The chain status
+            shown here is as the server reports it — this page does not read the chain. To check
+            the root on chain yourself, open the anchoring transaction on the block explorer.
           </p>
         </div>
       </div>
@@ -245,8 +253,8 @@ export default function ProofVerifierPage() {
         <p className="meta" style={{ marginBottom: 0 }}>
           A content hash is one input to the anchored leaf, not the leaf itself. The remaining
           inputs — subject id, policy version, and schema version — are not part of the public
-          projection, so a matching content hash confirms the record bytes you hold, and inclusion is
-          established by the Merkle check above.
+          projection, so a matching content hash confirms the record bytes you hold. Inclusion under
+          the reported root is what the Merkle check above recomputes.
         </p>
       </div>
 
@@ -283,25 +291,27 @@ export default function ProofVerifierPage() {
           <div className="panel" data-testid="verify-result">
             <h2>Result</h2>
             <dl className="dl">
-              <dt>Merkle path (recomputed here)</dt>
+              <dt>Merkle path (recomputed in this browser)</dt>
               <dd data-testid="verify-merkle">
                 {outcome.recomputed ? (
-                  <span style={{ color: "var(--positive)" }}>Matches the anchored root</span>
+                  <span style={{ color: "var(--positive)" }}>
+                    Leads to the root the server reported
+                  </span>
                 ) : (
                   <span style={{ color: "var(--destructive-text)" }}>
-                    Does not match — the leaf is not in this root
+                    Does not lead to the root the server reported — the leaf is not under it
                   </span>
                 )}
               </dd>
-              <dt>Chain confirmation</dt>
+              <dt>Chain status (as reported by the server)</dt>
               <dd className="mono">{outcome.proof.confirmationState}</dd>
-              <dt>Inclusion confirmed</dt>
+              <dt>Inclusion on chain (as reported by the server)</dt>
               <dd data-testid="verify-included">
                 {outcome.proof.included ? (
-                  <span style={{ color: "var(--positive)" }}>Confirmed</span>
+                  <span style={{ color: "var(--positive)" }}>Reported as confirmed</span>
                 ) : (
                   <span style={{ color: "var(--alert)" }}>
-                    Not confirmed yet — shown once the chain confirms
+                    Not reported as confirmed yet
                   </span>
                 )}
               </dd>
@@ -310,10 +320,10 @@ export default function ProofVerifierPage() {
                   <dt>Your expected leaf hash</dt>
                   <dd data-testid="verify-expected">
                     {outcome.expectedLeafMatch ? (
-                      <span style={{ color: "var(--positive)" }}>Same as the anchored leaf</span>
+                      <span style={{ color: "var(--positive)" }}>Same as the leaf in this proof</span>
                     ) : (
                       <span style={{ color: "var(--destructive-text)" }}>
-                        Different from the anchored leaf
+                        Different from the leaf in this proof
                       </span>
                     )}
                   </dd>
@@ -323,13 +333,19 @@ export default function ProofVerifierPage() {
               <dd className="mono" style={{ wordBreak: "break-all" }}>
                 {outcome.proof.leafHash}
               </dd>
-              <dt>Root</dt>
+              <dt>Root (as reported by the server)</dt>
               <dd className="mono" style={{ wordBreak: "break-all" }}>
                 {outcome.proof.root}
               </dd>
-              <dt>Transaction</dt>
+              <dt>Anchoring transaction</dt>
               <dd>
                 <TxLink chainId={outcome.proof.chainId} hash={outcome.proof.transactionHash} />
+                {outcome.proof.transactionHash ? (
+                  <div className="meta" data-testid="verify-explorer-hint" style={{ marginTop: 4 }}>
+                    Open it on the block explorer and compare the root it anchored with the root
+                    above. This page does not make that comparison.
+                  </div>
+                ) : null}
               </dd>
             </dl>
 

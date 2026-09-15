@@ -25,22 +25,22 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 | `packages/db` | Schema, RLS, append-only guards, composite FKs, migration checksums | 61 |
 | `packages/api-contract` | Zod contract → OpenAPI 3.1, SIWE, authorization | 43 |
 | `packages/ui` | Status display mapping, R-04 forbidden-term lint, three-depth consistency | 37 |
-| `packages/config` | Secret reference resolution (`file:`, `env:`), audit fingerprints that do not expose values | 14 |
+| `packages/config` | Secret reference resolution (`file:`, `env:`), audit fingerprints that do not expose values | 39 |
 | `packages/storage` | Object storage — key rules, quarantine state machine, memory and S3 implementations | 17 |
 
 **Apps**
 
 | App | Contents | Tests |
 |---|---|---|
-| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 81 routes | 674 |
-| `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 20 · E2E 88 |
-| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 92 |
+| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 98 routes | 757 |
+| `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 20 · E2E 95 |
+| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 143 |
 
 **Contracts**
 
-`contracts/` — `RegistryAnchorV1` + 10 deferred interfaces, 29 Foundry tests (including fuzz and invariant).
+`contracts/` — `RegistryAnchorV1` + 10 deferred interfaces, 33 Foundry tests (including fuzz and invariant).
 
-Total: vitest 1303 + Playwright 88 + Foundry 29 + route 81. (measured 2026-09-14)
+Total: vitest 1462 + Playwright 95 + Foundry 33 + route 98. (measured 2026-09-15)
 
 ## Running
 
@@ -134,7 +134,10 @@ NEXT_PUBLIC_DEMO_ACCOUNT_KEYS="$MPC_DEMO_KEYS" pnpm --filter @mpc/web dev
 anvil --port 8545 --chain-id 97 --block-time 1 &
 
 cd contracts
+# Every role holder is named; the script has no fallback to the deployer. Locally one address
+# may hold all three — the script prints a single-key warning for that layout.
 ANCHOR_DEPLOYER_KEY=<local-only key> \
+ANCHOR_ADMIN=<deployer address> ANCHOR_SUBMITTER=<deployer address> ANCHOR_PAUSER=<deployer address> \
   forge script script/DeployRegistryAnchor.s.sol:DeployRegistryAnchor \
   --rpc-url http://localhost:8545 --broadcast
 
@@ -315,7 +318,7 @@ Bypassing them breaks tests or gets rejected by the DB.
 
 ## What does not exist yet
 
-**API**: all 81 routes in the contract (`ROUTES`) are implemented. `plannedRoutes()` is empty.
+**API**: all 98 routes in the contract (`ROUTES`) are implemented. `plannedRoutes()` is empty.
 
 **Unimplemented gaps**
 

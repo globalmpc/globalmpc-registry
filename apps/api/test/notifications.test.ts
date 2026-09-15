@@ -167,6 +167,79 @@ describeDb("notifications", () => {
     }
   });
 
+  /**
+   * Marking read applies the list's visibility filter (W-086).
+   *
+   * The response carries the summary and link. Without the filter, a notification the list
+   * hides — another project's, another role's — came back in full to anyone holding its id.
+   */
+  describe("mark as read visibility", () => {
+    function markRead(token: string, notificationId: string) {
+      return app.inject({
+        method: "POST",
+        url: `/api/v1/notifications/${notificationId}/read`,
+        headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
+      });
+    }
+
+    async function staleNotification(projectId: string): Promise<{ id: string; reason: string }> {
+      const reason = `hidden-${randomUUID().slice(0, 8)}`;
+      await fx.sql`
+        INSERT INTO core.evidence_stale_signals (
+          id, tenant_id, project_id, target_type, target_id, reason
+        ) VALUES (
+          ${randomUUID()}, ${fx.tenantA}, ${projectId}, 'registry_entry_version',
+          ${randomUUID()}, ${reason}
+        )
+      `;
+      const [row] = await fx.sql<{ id: string }[]>`
+        SELECT id FROM core.notifications
+        WHERE tenant_id = ${fx.tenantA} AND summary LIKE ${`%${reason}%`}
+      `;
+      return { id: row!.id, reason };
+    }
+
+    async function readRows(notificationId: string): Promise<number> {
+      const [row] = await fx.sql<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM core.notification_reads
+        WHERE notification_id = ${notificationId}
+      `;
+      return Number(row!.count);
+    }
+
+    it("returns 404 without a body for another project's role notification", async () => {
+      const scopedToken = await signIn(app, fx.scopedStewardA);
+      const hidden = await staleNotification(fx.otherProjectA);
+
+      // Same role, but the binding reaches only projectA — the list does not show it.
+      const listed = (await list(scopedToken)).json().items as { id: string }[];
+      expect(listed.some((item) => item.id === hidden.id)).toBe(false);
+
+      const response = await markRead(scopedToken, hidden.id);
+      expect(response.statusCode).toBe(404);
+      expect(response.body).not.toContain(hidden.reason);
+      expect(await readRows(hidden.id)).toBe(0);
+    });
+
+    it("returns 404 for a role notification of a role the caller does not hold", async () => {
+      const hidden = await staleNotification(fx.projectA);
+
+      // mpc_operator does not hold data_steward.
+      const response = await markRead(operatorToken, hidden.id);
+      expect(response.statusCode).toBe(404);
+      expect(response.body).not.toContain(hidden.reason);
+      expect(await readRows(hidden.id)).toBe(0);
+    });
+
+    it("still marks a visible notification as read", async () => {
+      const visible = await staleNotification(fx.projectA);
+
+      const response = await markRead(stewardToken, visible.id);
+      expect(response.statusCode).toBe(200);
+      expect(response.json().summary).toContain(visible.reason);
+    });
+  });
+
   it("does not mark a nonexistent notification as read", async () => {
     const response = await app.inject({
       method: "POST",

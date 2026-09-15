@@ -234,6 +234,22 @@ const GOVERNANCE_READERS = [
 ] as const;
 
 /**
+ * Who approves review registry proposals — credentials, attestation schemas and compliance
+ * policy sets (02 §2.8, "the Protocol's designated review role").
+ *
+ * **No role in 02 §2.2 carries that name, and none is called "Credential Verifier" either.**
+ * `reviewer_assurance` is the closest existing role: it reviews procedures and controls
+ * independently, and it is not a subject-matter reviewer (resource, lab, legal) whose own
+ * attestations would rest on the schemas and credentials being approved. `auditor` is left out
+ * because 02 §2.2 forbids it mutating operational data, and approving writes a registry row.
+ * `mpc_operator` is left out because 02 §2.3 limits it to "rule deployment only" — it proposes.
+ *
+ * **Pending confirmation by the decision owner.** Kept as one constant so that the decision,
+ * once made, changes one line.
+ */
+export const REGISTRY_APPROVER_ROLES: readonly string[] = ["reviewer_assurance"];
+
+/**
  * Allowed roles per action — 02 §2.3 permission table.
  *
  * `readiness.override` is absent by design. No role may modify a readiness
@@ -473,6 +489,30 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   "admin.notification.manage": {
     action: "admin.notification.manage",
     allowedRoles: ["mpc_operator", "security_operator"],
+  },
+
+  /**
+   * Review registries — credentials, attestation schemas, compliance policy sets (02 §2.8).
+   *
+   * **Proposing and approving are different roles and different people.** The operator deploys
+   * rules (02 §2.3 "rule deployment only") by proposing them; the designated review role
+   * approves. Holding both roles does not help — the DB rejects a decision by the proposer
+   * (`registry_proposal_two_person`).
+   *
+   * Reading is narrower than `registry.read`: pending credential proposals name people and their
+   * issuer references, which project parties have no reason to see.
+   */
+  "review_registry.read": {
+    action: "review_registry.read",
+    allowedRoles: ["mpc_operator", "security_operator", "auditor", ...REGISTRY_APPROVER_ROLES],
+  },
+  "review_registry.propose": {
+    action: "review_registry.propose",
+    allowedRoles: ["mpc_operator"],
+  },
+  "review_registry.approve": {
+    action: "review_registry.approve",
+    allowedRoles: REGISTRY_APPROVER_ROLES,
   },
 
   /**

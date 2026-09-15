@@ -444,6 +444,19 @@ describeDb("Registry publication and public lookup", () => {
     });
   });
 
+  /** Waits until `count` sessions of this database are waiting on a lock. */
+  async function waitForBlockedSessions(count: number): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const [row] = await fx.sql<{ blocked: number }[]>`
+        SELECT count(*)::INT AS blocked FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock'
+      `;
+      if (row!.blocked >= count) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`fewer than ${count} sessions blocked within 5s`);
+  }
+
   describe("anchor and inclusion proof", () => {
     it("builds a batch from published versions", async () => {
       await publish(tokens.operatorA);
@@ -473,6 +486,65 @@ describeDb("Registry publication and public lookup", () => {
       });
       expect(response.statusCode).toBe(422);
       expect(response.json().code).toBe("ANCHOR_BATCH_EMPTY");
+    });
+
+    it("concurrent batch requests do not anchor the same version twice", async () => {
+      // Both requests see the same unanchored versions. Without serialization both build a batch
+      // from them, and one version ends up in two roots — its inclusion becomes ambiguous.
+      const published = (await publish(tokens.operatorA, { publicKey: `CON-${randomUUID().slice(0, 8)}` })).json();
+      const create = () =>
+        app.inject({
+          method: "POST",
+          url: "/api/v1/anchor-batches",
+          headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
+          payload: {},
+        });
+
+      // Force the overlap. Holding a lock on chain.transactions stops each request just before
+      // its last insert — after it has read the unanchored versions. Without it the two requests
+      // happen to run one after the other and the race never shows.
+      const blocker = await fx.sql.reserve();
+      let pending: ReturnType<typeof create>[] = [];
+      try {
+        await blocker`BEGIN`;
+        await blocker`LOCK TABLE chain.transactions IN SHARE MODE`;
+        pending = [create(), create()];
+        await waitForBlockedSessions(2);
+      } finally {
+        await blocker`COMMIT`;
+        blocker.release();
+      }
+      const responses = await Promise.all(pending);
+
+      expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 422]);
+      const leaves = await fx.sql`
+        SELECT batch_id FROM chain.anchor_batch_leaves WHERE entry_version_id = ${published.id}
+      `;
+      expect(leaves).toHaveLength(1);
+    });
+
+    it("the database refuses a version in two batches", async () => {
+      // The invariant does not rest on the route alone. Any other writer hits the same wall.
+      const [leaf] = await fx.sql<{ entry_version_id: string; leaf_hash: string }[]>`
+        SELECT entry_version_id, leaf_hash FROM chain.anchor_batch_leaves LIMIT 1
+      `;
+      const otherBatch = randomUUID();
+      await fx.sql`
+        INSERT INTO chain.anchor_batches (
+          id, tenant_id, batch_id, merkle_root, manifest_hash,
+          manifest_object_key, schema_version, record_count
+        ) VALUES (
+          ${otherBatch}, ${fx.tenantA}, ${`0x${otherBatch.replace(/-/g, "").repeat(2)}`},
+          ${`0x${"11".repeat(32)}`}, ${`0x${"22".repeat(32)}`}, 'manifests/dup.json', '1', 1
+        )
+      `;
+
+      await expect(
+        fx.sql`
+          INSERT INTO chain.anchor_batch_leaves (batch_id, leaf_hash, entry_version_id, leaf_index)
+          VALUES (${otherBatch}, ${leaf!.leaf_hash}, ${leaf!.entry_version_id}, 0)
+        `,
+      ).rejects.toMatchObject({ code: "23505" });
     });
 
     it("verifies the proof off-chain", async () => {

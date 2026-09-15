@@ -96,6 +96,25 @@ test.describe("project registration", () => {
   });
 });
 
+test.describe("owner organization", () => {
+  test("is picked from the organizations this account may register for", async ({ page }) => {
+    // Q-032 — the form used to find the organization in a table of demo tenant ids. It now
+    // reads the organizations the server would accept for this account.
+    await page.goto("/connect");
+    await page.getByRole("button", { name: /Operator A/ }).click();
+    await expect(page).toHaveURL(/\/w\/projects$/);
+    await page.goto("/w/projects/new");
+
+    const picker = page.getByRole("combobox", { name: "Owning organization" });
+    // Tenant A has one organization, so it is preselected.
+    await expect(picker).toHaveValue("aaaaaaaa-0000-0000-0000-000000000001");
+    await expect(picker).toContainText("MPC Operations tenant-a");
+    // Tenant B's organization is never offered.
+    await expect(picker).not.toContainText("tenant-b");
+    await expect(page.getByRole("button", { name: "Register" })).toBeEnabled();
+  });
+});
+
 test.describe("permission denial", () => {
   test("an account without a role sees 403 and the required role on screen", async ({ page }) => {
     await page.goto("/connect");
@@ -104,11 +123,10 @@ test.describe("permission denial", () => {
     await expect(page).toHaveURL(/\/w\/projects$/);
     await page.goto("/w/projects/new");
 
-    await page.getByRole("textbox", { name: "Project key" }).fill("DENIED-E2E");
-    await page.getByRole("textbox", { name: "Name" }).fill("Should be denied");
-    await page.getByRole("button", { name: "Register" }).click();
-
+    // The owner organization lookup is authorized with `project.create`, so the denial
+    // arrives when the form opens — before anything is typed — and Register stays disabled.
     const alert = page.getByTestId("error-notice");
+    await expect(page.getByRole("button", { name: "Register" })).toBeDisabled();
     await expect(alert).toBeVisible();
     // Checks that the server envelope reaches the screen intact.
     await expect(alert).toContainText("403");

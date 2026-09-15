@@ -18,6 +18,14 @@ deployed environments read through the same code path (`packages/config`). In a 
 deployment, Docker secrets, Kubernetes projected volumes, or a secret manager place the
 file at the same location.
 
+**Notification webhook signing secrets** are references too, but only inside a namespace
+that holds nothing else: `env:WEBHOOK_SECRET_<NAME>` (`NAME` is `[A-Z0-9_]`, 1–64 characters)
+or `file:/run/secrets/webhook_<name>` (`name` is `[A-Za-z0-9_-]`, 1–64 characters, no
+subdirectories). The API refuses any other reference when a sink is registered, and the
+worker refuses it again before reading — so a sink cannot point the worker at its database
+URL or the signer key. Provision each tenant's signing secret under one of those names
+(for Docker secrets, name the secret `webhook_<name>`).
+
 ## Loss cap for the anchor wallet
 
 The anchor signer's gas wallet is the **only path by which funds leave** this system.

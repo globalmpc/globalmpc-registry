@@ -1,20 +1,35 @@
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
-import { parseRuleSet } from "@mpc/policy";
 import { ROLE_DEPLOY_BOUND } from "./audit.js";
+import {
+  findAttestationSchema,
+  findCredential,
+  findPolicySet,
+  holderOrganization,
+  materializeAttestationSchema,
+  materializeCredential,
+  materializePolicySet,
+  validateAttestationSchema,
+  validateCredential,
+  validatePolicySet,
+  type CredentialFields,
+} from "./services/review-registry.js";
 
 /**
  * Inserts the three things needed to start review into a deployed system.
  *
  * When `bootstrap.ts` inserts people, login and project registration work. It stops there —
  * review assignment requires the reviewer's **credential** and an **attestation schema**, and
- * readiness evaluation requires a **policy rule set**. The only path creating the three was the
- * E2E seed, which drops the schema and so cannot be used in deployment.
+ * readiness evaluation requires a **policy rule set**.
  *
- * **This is not an API.** 02 §2.8 defines credential verification and schema/policy approval
- * as work for separate roles, and those screens and routes do not exist yet. This is a path
- * operators run directly in the deployment environment, and it does not hide that gap by
- * **recording in audit who was stated to have approved**.
+ * **This is the seed path, not the approval path.** 02 §2.8 separates proposal from approval;
+ * that separation lives in the review-registry API (`routes/review-registry.ts`), where the
+ * proposer and the approver are different identified people. This CLI exists for a fresh
+ * environment where nobody can approve yet, and it does not hide that: it records in audit **who
+ * was stated to have approved**, as a statement.
+ *
+ * Both paths validate and write through `services/review-registry.ts`, so a row seeded here and
+ * a row approved through the API are the same row.
  *
  * Rules:
  *
@@ -86,20 +101,10 @@ async function requireTenant(tx: postgres.TransactionSql, slug: string): Promise
 
 // --- credential -------------------------------------------------------------
 
-export interface CredentialInput {
+export interface CredentialInput extends CredentialFields {
   readonly tenantSlug: string;
   /** Wallet of the credential holder. Must already be in via `bootstrap`. */
   readonly walletAddress: string;
-  /** Issuing body and credential number. Must be strings a human can cross-check. */
-  readonly issuerReference: string;
-  /** `competent_person`·`laboratory`·`legal_practitioner`, etc. */
-  readonly credentialType: string;
-  /** Claim types this credential covers. Empty blocks signing. */
-  readonly credentialScope: readonly string[];
-  readonly jurisdiction: readonly string[];
-  readonly issuedAt: string;
-  /** Absent means a credential without expiry. If present it must be in the future. */
-  readonly expiresAt: string | null;
 }
 
 export interface BootstrapRegistryResult {
@@ -114,79 +119,36 @@ export async function bootstrapCredential(
 ): Promise<BootstrapRegistryResult> {
   const wallet = input.walletAddress.toLowerCase();
 
-  if (input.credentialScope.length === 0) {
-    throw new BootstrapRegistryError(
-      "credentialScope is empty. Signing with an unscoped credential is rejected (02 §2.5)",
-    );
-  }
-  if (input.issuerReference.trim() === "" || input.credentialType.trim() === "") {
-    throw new BootstrapRegistryError("issuerReference and credentialType are required");
-  }
-
-  const issuedAt = new Date(input.issuedAt);
-  if (Number.isNaN(issuedAt.getTime())) {
-    throw new BootstrapRegistryError(`Cannot parse issuedAt — ${input.issuedAt}`);
-  }
-
-  let expiresAt: Date | null = null;
-  if (input.expiresAt !== null) {
-    expiresAt = new Date(input.expiresAt);
-    if (Number.isNaN(expiresAt.getTime())) {
-      throw new BootstrapRegistryError(`Cannot parse expiresAt — ${input.expiresAt}`);
-    }
-    // Do not insert an already-expired credential as `valid`. The signing-time check would pass,
-    // and a false status would remain in the attestation's credential snapshot (AC-12·AC-17).
-    if (expiresAt.getTime() <= Date.now()) {
-      throw new BootstrapRegistryError(
-        `expiresAt is in the past — ${input.expiresAt}. Expired credentials are not registered as valid`,
-      );
-    }
-  }
+  const checked = validateCredential(input, new Date());
+  if (!checked.ok) throw new BootstrapRegistryError(checked.message);
 
   return sql.begin(async (tx) => {
     const tenantId = await requireTenant(tx, input.tenantSlug);
 
-    // The organization comes from the earliest-created role binding. LIMIT 1 without ordering
-    // returns a different organization each time for people bound to several — if the credential's
-    // organization changes per run, the basis for independence judgments shifts.
-    const [identity] = await tx<{ subject_id: string | null; organization_id: string | null }[]>`
-      SELECT w.subject_id, rb.organization_id
-      FROM core.wallet_identities w
-      LEFT JOIN core.role_bindings rb
-        ON rb.subject_id = w.subject_id AND rb.revoked_at IS NULL
-      WHERE w.wallet_address = ${wallet} AND w.tenant_id = ${tenantId}
-        AND w.disabled_at IS NULL
-      ORDER BY rb.granted_at NULLS LAST, rb.id
+    const [identity] = await tx<{ subject_id: string | null }[]>`
+      SELECT subject_id FROM core.wallet_identities
+      WHERE wallet_address = ${wallet} AND tenant_id = ${tenantId}
+        AND disabled_at IS NULL
+      ORDER BY created_at
       LIMIT 1
     `;
-
     if (!identity?.subject_id) {
       throw new BootstrapRegistryError(
         `Wallet ${wallet} is not in this tenant. Insert people first`,
       );
     }
 
-    const existing = await tx<{ id: string; current_status: string }[]>`
-      SELECT id, current_status FROM core.credentials
-      WHERE tenant_id = ${tenantId} AND subject_id = ${identity.subject_id}
-        AND issuer_reference = ${input.issuerReference}
-    `;
-    const found = existing[0];
-    if (found) return { id: found.id, created: false, state: found.current_status };
+    const found = await findCredential(tx, tenantId, identity.subject_id, input.issuerReference);
+    if (found) return { id: found.id, created: false, state: found.currentStatus };
 
     const id = randomUUID();
-    await tx`
-      INSERT INTO core.credentials (
-        id, tenant_id, subject_id, organization_id, issuer_reference,
-        credential_type, credential_scope, jurisdiction, issued_at, expires_at,
-        current_status
-      ) VALUES (
-        ${id}, ${tenantId}, ${identity.subject_id}, ${identity.organization_id},
-        ${input.issuerReference}, ${input.credentialType},
-        ${input.credentialScope as string[]}, ${input.jurisdiction as string[]},
-        ${issuedAt}, ${expiresAt}, 'valid'
-      )
-    `;
+    await materializeCredential(tx, {
+      id,
+      tenantId,
+      subjectId: identity.subject_id,
+      organizationId: await holderOrganization(tx, tenantId, identity.subject_id),
+      credential: checked.value,
+    });
 
     await recordBootstrapAudit(tx, {
       tenantId,
@@ -222,7 +184,7 @@ export interface AttestationSchemaInput {
    *
    * Absent means `draft` — signing is rejected in that state. Present means `active`, and the
    * name is recorded in audit. It is **a statement by the operator**, not a fact the app
-   * verified, and is recorded as such (a limitation until the 02 §2.8 approval path exists).
+   * verified, and is recorded as such. The verified path is the review-registry API.
    */
   readonly approvedBy: string | null;
 }
@@ -231,23 +193,15 @@ export async function bootstrapAttestationSchema(
   sql: postgres.Sql,
   input: AttestationSchemaInput,
 ): Promise<BootstrapRegistryResult> {
-  if (input.mandatoryLimitations.length === 0) {
-    throw new BootstrapRegistryError(
-      "mandatoryLimitations is empty. Review schemas without limitations are not created (AC-01)",
-    );
-  }
+  const checked = validateAttestationSchema(input);
+  if (!checked.ok) throw new BootstrapRegistryError(checked.message);
 
   const state = input.approvedBy === null ? "draft" : "active";
 
   return sql.begin(async (tx) => {
     const tenantId = await requireTenant(tx, input.tenantSlug);
 
-    const existing = await tx<{ id: string; state: string }[]>`
-      SELECT id, state FROM core.attestation_schemas
-      WHERE tenant_id = ${tenantId} AND schema_key = ${input.schemaKey}
-        AND schema_version = ${input.schemaVersion}
-    `;
-    const found = existing[0];
+    const found = await findAttestationSchema(tx, tenantId, input.schemaKey, input.schemaVersion);
     if (found) {
       // Registration and approval must be splittable into two steps (02 §2.8). Without a path to
       // approve a draft later, the only option is one person doing everything at once.
@@ -269,18 +223,7 @@ export async function bootstrapAttestationSchema(
     }
 
     const id = randomUUID();
-    await tx`
-      INSERT INTO core.attestation_schemas (
-        id, tenant_id, schema_key, schema_version, attestation_type,
-        required_evidence, accepted_authority_types, mandatory_limitations,
-        jurisdiction_profile, state
-      ) VALUES (
-        ${id}, ${tenantId}, ${input.schemaKey}, ${input.schemaVersion},
-        ${input.attestationType}::core.attestation_type,
-        ${input.requiredEvidence as string[]}, ${input.acceptedAuthorityTypes as string[]},
-        ${input.mandatoryLimitations as string[]}, ${input.jurisdictionProfile}, ${state}
-      )
-    `;
+    await materializeAttestationSchema(tx, { id, tenantId, schema: checked.value, state });
 
     await recordBootstrapAudit(tx, {
       tenantId,
@@ -314,28 +257,16 @@ export async function bootstrapPolicySet(
   sql: postgres.Sql,
   input: PolicySetInput,
 ): Promise<BootstrapRegistryResult> {
-  // Rules being data means they are validated (OD-15). Inserting without parsing breaks only at
-  // evaluation time, when the problem shows up only as an error on the gate screen.
-  let ruleSet;
-  try {
-    ruleSet = parseRuleSet(input.definition);
-  } catch (error) {
-    throw new BootstrapRegistryError(
-      `Rule set failed schema validation — ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+  const checked = validatePolicySet(input.definition);
+  if (!checked.ok) throw new BootstrapRegistryError(checked.message);
+  const ruleSet = checked.value;
 
   const state = input.approvedBy === null ? "draft" : "effective";
 
   return sql.begin(async (tx) => {
     const tenantId = await requireTenant(tx, input.tenantSlug);
 
-    const existing = await tx<{ id: string; state: string }[]>`
-      SELECT id, state FROM core.compliance_policy_sets
-      WHERE tenant_id = ${tenantId} AND rule_set_id = ${ruleSet.ruleSetId}
-        AND rule_set_version = ${ruleSet.version}
-    `;
-    const found = existing[0];
+    const found = await findPolicySet(tx, tenantId, ruleSet.ruleSetId, ruleSet.version);
     if (found) {
       // Same as schema — inserting and approving must be separable.
       if (found.state === "draft" && input.approvedBy !== null) {
@@ -356,16 +287,7 @@ export async function bootstrapPolicySet(
     }
 
     const id = randomUUID();
-    await tx`
-      INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id,
-        jurisdiction_profile, effective_from, retroactive, definition, state
-      ) VALUES (
-        ${id}, ${tenantId}, ${ruleSet.ruleSetId}, ${ruleSet.version}, ${ruleSet.gateId},
-        ${ruleSet.jurisdictionProfile}, ${new Date(ruleSet.effectiveFrom)},
-        ${ruleSet.retroactive}, ${tx.json(input.definition as never)}, ${state}
-      )
-    `;
+    await materializePolicySet(tx, { id, tenantId, ruleSet, definition: input.definition, state });
 
     await recordBootstrapAudit(tx, {
       tenantId,

@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { loadAnchorConfig } from "./anchor-config.js";
 import { createHeartbeat } from "./heartbeat.js";
-import { chainBacklog, stepOnce } from "./anchor-submitter.js";
+import { chainBacklog, shouldBackOff, stepOnce } from "./anchor-submitter.js";
 import { createViemChainClient, signerAddress } from "./viem-chain-client.js";
 import { createSafeClient } from "./safe-client.js";
 
@@ -90,12 +90,17 @@ while (running) {
     // apart from "worker is dead".
     await heartbeat({ handled: result.handled });
 
-    if (!result.handled) {
-      const backlog = await chainBacklog(sql, config.chainId);
-      if (backlog.needsAttention > 0) {
-        // Do not stay silent on what needs a human. reverted, dropped, and
-        // reconciliation-required do not resolve on their own.
-        emit({ level: "warn", msg: "anchor.needs_attention", ...backlog });
+    // Only a step that moved something runs the next one at once. A blocked step (cap reached,
+    // send or proposal failed, transaction still pending) sleeps like an empty queue does —
+    // otherwise it repeats the same RPC calls and UPDATEs until the condition clears.
+    if (shouldBackOff(result)) {
+      if (!result.handled) {
+        const backlog = await chainBacklog(sql, config.chainId);
+        if (backlog.needsAttention > 0) {
+          // Do not stay silent on what needs a human. reverted, dropped, and
+          // reconciliation-required do not resolve on their own.
+          emit({ level: "warn", msg: "anchor.needs_attention", ...backlog });
+        }
       }
       await sleep(config.pollIntervalMs);
     }

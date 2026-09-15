@@ -138,6 +138,22 @@ test.describe("golden path", () => {
 
     // --- 3. Review assignment (data_steward) ------------------------------
     await page.goto(`/w/projects/${projectId}/verification`);
+    // Q-032 — reviewer, credential, and schema come from this tenant's rows, not fixed ids.
+    // The seed has one reviewer with one valid credential and one active schema, so each is
+    // preselected with those rows.
+    await expect(page.getByRole("combobox", { name: "Reviewer" })).toHaveValue(
+      "aaaaaaaa-0000-0000-0000-000000000006",
+    );
+    await expect(page.getByRole("combobox", { name: "Reviewer" })).toContainText("Reviewer A");
+    await expect(page.getByRole("combobox", { name: "Credential" })).toHaveValue(
+      "eeeeeeee-0000-0000-0000-000000000001",
+    );
+    await expect(page.getByRole("combobox", { name: "Attestation schema" })).toHaveValue(
+      "eeeeeeee-0000-0000-0000-000000000002",
+    );
+    await expect(page.getByRole("combobox", { name: "Attestation schema" })).toContainText(
+      "mining-right-signoff",
+    );
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Assign the review" }).click();
     await expect(page.getByTestId("selected-case")).toContainText("assigned");

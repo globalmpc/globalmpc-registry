@@ -7,6 +7,7 @@ import {
   createSignatureRequest,
   createVerificationCase,
   disputeAttestation,
+  getReviewAssignmentOptions,
   listClaims,
   listDisputes,
   resolveDispute,
@@ -18,6 +19,7 @@ import {
   type Claim,
   type SignatureRequest,
   type AttestationDispute,
+  type ReviewAssignmentOptions,
   type SignedAttestation,
   type VerificationCase,
 } from "@/lib/api";
@@ -59,6 +61,12 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
   );
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [options, setOptions] = useState<ReviewAssignmentOptions | null>(null);
+  const [reviewerId, setReviewerId] = useState("");
+  const [credentialId, setCredentialId] = useState("");
+  const [schemaId, setSchemaId] = useState("");
+  // Only the assigner reads the options. The server decides; this only avoids a certain 403.
+  const canAssign = session?.actions?.includes("claim.curate") ?? false;
 
   const load = useCallback(async (): Promise<VerificationCase[]> => {
     if (!token) return [];
@@ -79,6 +87,32 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Reviewer, credential, and schema come from this tenant's rows (Q-032). Fixed seed ids made
+   * every assignment fail outside the demo tenant. The first reviewer who holds a valid
+   * credential is preselected, with that credential and the first active schema.
+   */
+  useEffect(() => {
+    if (!token || !canAssign) return;
+    let cancelled = false;
+    getReviewAssignmentOptions(token, id)
+      .then((value) => {
+        if (cancelled) return;
+        const reviewer =
+          value.reviewers.find((item) => item.credentials.length > 0) ?? value.reviewers[0];
+        setOptions(value);
+        setReviewerId(reviewer?.subjectId ?? "");
+        setCredentialId(reviewer?.credentials[0]?.id ?? "");
+        setSchemaId(value.schemas[0]?.id ?? "");
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setError(caught);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, id, canAssign]);
 
   async function run(step: () => Promise<void>) {
     setBusy(true);
@@ -102,6 +136,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
 
   const roles = session?.roleBindings?.map((binding) => binding.role) ?? [];
   const isReviewer = roles.some((role) => role.startsWith("reviewer_"));
+  const chosenReviewer = options?.reviewers.find((item) => item.subjectId === reviewerId);
 
   return (
     <>
@@ -165,18 +200,109 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
           </ul>
         )}
 
+        {canAssign ? (
+          <div data-testid="assignment-options">
+            {options && options.reviewers.length === 0 ? (
+              <p className="meta" data-testid="no-reviewer">
+                No reviewer can sign on this project yet. A reviewer needs a reviewer role that
+                reaches this project, a wallet bound at high assurance, and a valid credential.
+              </p>
+            ) : null}
+            {options && options.schemas.length === 0 ? (
+              <p className="meta" data-testid="no-schema">
+                No attestation schema is active in this workspace. An operator adds one with{" "}
+                <span className="mono">bootstrap-registry schema</span>.
+              </p>
+            ) : null}
+
+            <div className="field">
+              <label htmlFor="assign-reviewer">Reviewer</label>
+              <select
+                id="assign-reviewer"
+                value={reviewerId}
+                disabled={!options || options.reviewers.length === 0}
+                onChange={(event) => {
+                  const next = options?.reviewers.find(
+                    (item) => item.subjectId === event.target.value,
+                  );
+                  setReviewerId(event.target.value);
+                  setCredentialId(next?.credentials[0]?.id ?? "");
+                }}
+              >
+                {!options || options.reviewers.length === 0 ? (
+                  <option value="">{options ? "None available" : "Loading…"}</option>
+                ) : null}
+                {options?.reviewers.map((reviewer) => (
+                  <option key={reviewer.subjectId} value={reviewer.subjectId}>
+                    {`${reviewer.displayName} · ${reviewer.roles.join(", ")}${
+                      reviewer.credentials.length === 0 ? " · no valid credential" : ""
+                    }`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="assign-credential">Credential</label>
+              <select
+                id="assign-credential"
+                value={credentialId}
+                disabled={!chosenReviewer || chosenReviewer.credentials.length === 0}
+                onChange={(event) => setCredentialId(event.target.value)}
+              >
+                {!chosenReviewer || chosenReviewer.credentials.length === 0 ? (
+                  <option value="">No valid credential</option>
+                ) : null}
+                {chosenReviewer?.credentials.map((credential) => (
+                  <option key={credential.id} value={credential.id}>
+                    {`${credential.credentialType} · ${credential.issuerReference}${
+                      credential.expiresAt ? ` · until ${credential.expiresAt.slice(0, 10)}` : ""
+                    }`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="assign-schema">Attestation schema</label>
+              <select
+                id="assign-schema"
+                value={schemaId}
+                disabled={!options || options.schemas.length === 0}
+                onChange={(event) => setSchemaId(event.target.value)}
+              >
+                {!options || options.schemas.length === 0 ? (
+                  <option value="">{options ? "None available" : "Loading…"}</option>
+                ) : null}
+                {options?.schemas.map((schema) => (
+                  <option key={schema.id} value={schema.id}>
+                    {`${schema.schemaKey} v${schema.schemaVersion} · ${schema.attestationType} · ${schema.jurisdictionProfile}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        ) : null}
+
         <button
-          disabled={busy || selected.length === 0}
+          disabled={
+            busy ||
+            selected.length === 0 ||
+            !canAssign ||
+            reviewerId === "" ||
+            credentialId === "" ||
+            schemaId === ""
+          }
           onClick={() =>
             void run(async () => {
               const created = await createVerificationCase(
                 token,
                 {
                   projectId: id,
-                  schemaId: DEMO_SCHEMA_ID,
+                  schemaId,
                   claimIds: selected,
-                  reviewerSubjectId: DEMO_REVIEWER_SUBJECT_ID,
-                  credentialId: DEMO_CREDENTIAL_ID,
+                  reviewerSubjectId: reviewerId,
+                  credentialId,
                   conflictStatus: "none",
                 },
                 newIdempotencyKey(),
@@ -579,8 +705,3 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
     </>
   );
 }
-
-/** Demo reviewer, credential, and schema created by seed. Replaced by the real assignment flow in R5. */
-const DEMO_REVIEWER_SUBJECT_ID = "aaaaaaaa-0000-0000-0000-000000000006";
-const DEMO_CREDENTIAL_ID = "eeeeeeee-0000-0000-0000-000000000001";
-const DEMO_SCHEMA_ID = "eeeeeeee-0000-0000-0000-000000000002";

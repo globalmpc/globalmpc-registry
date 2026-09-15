@@ -51,6 +51,8 @@ export function parseClamResponse(raw: string): ScanVerdict {
 
   if (line.endsWith("OK")) return { kind: "clean" };
 
+  // Every FOUND is infected, including `Heuristics.*`. The encrypted-archive and scan-limit
+  // alerts arrive this way — a file clamd could not look inside must not be promoted.
   const found = /^stream:\s*(.+?)\s+FOUND$/.exec(line);
   if (found) return { kind: "infected", signature: found[1]! };
 

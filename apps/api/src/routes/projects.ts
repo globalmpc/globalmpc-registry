@@ -5,6 +5,7 @@ import { withTenant } from "@mpc/db";
 import { createProjectRequest } from "@mpc/api-contract";
 import { badRequest, forbidden, unauthorized } from "../errors.js";
 import {
+  actableOrganizations,
   canActForOrganization,
   assertAuthorized,
   projectResource,
@@ -135,6 +136,47 @@ export async function registerProjectRoutes(
         return toSummary(project!, requestId, asOf);
       }),
     );
+  });
+
+  /**
+   * Organizations this session may name as a project's owner — Q-032.
+   *
+   * The registration form used to look the organization up in a table of demo tenant ids, so on
+   * any other tenant it had nothing to submit. The list follows the same rule as the create check
+   * above (`actableOrganizations`); a wider list would offer choices the server then refuses.
+   *
+   * Authorized with `project.create` itself: someone who cannot register a project has no reason
+   * to read the tenant's organizations, and the denial tells them which role they would need.
+   */
+  app.get("/api/v1/organizations", async (request) => {
+    const { session, tenantId } = requireReadContext(request);
+    assertAuthorized(
+      session,
+      "project.create",
+      tenantResource(tenantId, { state: "new", statesAllowingAction: ["new"] }),
+      sessionFacts(session),
+    );
+
+    const scope = actableOrganizations(session, "project.create");
+    const rows = await withTenant(sql, { tenantId }, (tx) =>
+      tx<{ id: string; legal_name: string; jurisdiction: string }[]>`
+        SELECT id, legal_name, jurisdiction
+        FROM core.organizations
+        WHERE tenant_id = ${tenantId}
+          AND ${scope === "all" ? tx`TRUE` : tx`id = ANY(${scope as string[]}::uuid[])`}
+        ORDER BY legal_name, id
+      `,
+    );
+
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        legalName: row.legal_name,
+        jurisdiction: row.jurisdiction,
+      })),
+      requestId: request.context.requestId,
+      asOf: request.context.asOf,
+    };
   });
 
   app.get<{ Params: { projectId: string } }>(

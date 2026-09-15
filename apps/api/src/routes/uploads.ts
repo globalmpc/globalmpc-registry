@@ -55,6 +55,9 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 /** Multipart cap. It streams to storage, so it can accept more. */
 const MAX_STREAM_BYTES = 2 * 1024 * 1024 * 1024;
 
+/** States that passed the malware scan. Only these get a download link (Q-033). */
+const DOWNLOADABLE_STATES: ReadonlySet<UploadState> = new Set(["scanned_clean", "promoted"]);
+
 /**
  * Accepted content types — 06 §6.7.
  *
@@ -701,6 +704,21 @@ export async function registerUploadRoutes(
           // No link is issued for an infected file. A reviewer has no reason to open it.
           if (row.state === "scanned_infected") {
             throw unprocessable("UPLOAD_INFECTED", "An infected file cannot be downloaded");
+          }
+
+          /**
+           * Allowlist, not blocklist (Q-033, option 1).
+           *
+           * Blocking only `scanned_infected` handed out links for quarantined files the scanner
+           * had not seen yet — a malicious file reached the project's users before the scan.
+           * Only states that passed the scan get a link; every other state waits.
+           */
+          if (!DOWNLOADABLE_STATES.has(row.state)) {
+            throw conflict(
+              "UPLOAD_NOT_SCANNED",
+              "This file has not passed the malware scan yet and cannot be downloaded",
+              { requiredAction: "Wait for the scan result" },
+            );
           }
 
           const url = await store.presignGet(row.object_key, ttlSeconds);

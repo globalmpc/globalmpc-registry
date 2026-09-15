@@ -125,6 +125,78 @@ async function attestationProjectId(
   return row.project_id;
 }
 
+/**
+ * The drafting checks for a signature request (W-085), outside the idempotency block.
+ *
+ * The response carries the draft's typed data and human-readable payload, and the request row is
+ * the only way to sign. Inside the block a replay of the assignee's key would return that response
+ * to anyone in the tenant without running these checks.
+ *
+ * Ownership comes first, so a non-assignee cannot learn whether someone else's draft is signed.
+ */
+async function authorizeSignatureRequest(
+  sql: postgres.Sql,
+  tenantId: string,
+  attestationId: string,
+  session: ReturnType<typeof requireMutationContext>["session"],
+): Promise<ReturnType<typeof assertAuthorized>> {
+  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+    tx<
+      {
+        state: string;
+        project_id: string;
+        case_state: string;
+        assignment_subject: string;
+        conflict_status: ConflictStatus;
+        assignment_revoked: Date | null;
+        credential_status: CredentialCurrentStatus;
+      }[]
+    >`
+      SELECT a.state, vc.project_id, vc.state AS case_state,
+             asg.subject_id AS assignment_subject, asg.conflict_status,
+             asg.revoked_at AS assignment_revoked,
+             c.current_status AS credential_status
+      FROM core.verification_attestations a
+      JOIN core.verification_cases vc ON vc.id = a.case_id
+      JOIN core.assignments asg ON asg.id = a.assignment_id
+      JOIN core.credentials c ON c.id = a.credential_id
+      WHERE a.id = ${attestationId}
+    `,
+  );
+  if (!row) throw notFound("Attestation not found");
+
+  if (row.assignment_subject !== session.subjectId) {
+    throw forbidden(
+      "ASSIGNMENT_NOT_OWNED",
+      "This assignment belongs to another reviewer",
+      { requiredAction: "Request a signature on a case assigned to you" },
+    );
+  }
+
+  // The same order as before the move: a signed draft answers 409 before the case state, which
+  // signing moved on, is judged.
+  if (row.state !== "draft") {
+    throw conflict("ATTESTATION_ALREADY_SIGNED", "Attestation is already signed");
+  }
+
+  return assertAuthorized(
+    session,
+    "attestation.sign",
+    projectResource(tenantId, row.project_id, {
+      state: row.case_state,
+      statesAllowingAction: ["assigned", "in_review", "changes_requested"],
+      requiresCredential: true,
+      requiresAssignment: true,
+      separationSensitive: true,
+    }),
+    sessionFacts(session, {
+      hasRequiredCredential: row.credential_status === "valid",
+      hasRequiredAssignment: row.assignment_revoked === null,
+      conflictStatus: row.conflict_status,
+    }),
+  );
+}
+
 async function disputeProjectId(
   sql: postgres.Sql,
   tenantId: string,
@@ -919,6 +991,12 @@ export async function registerVerificationRoutes(
       const { session, tenantId, idempotencyKey } = requireMutationContext(request);
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request.body ?? {});
+      const effectiveRole = await authorizeSignatureRequest(
+        sql,
+        tenantId,
+        request.params.attestationId,
+        session,
+      );
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -937,17 +1015,31 @@ export async function registerVerificationRoutes(
               evidence_snapshot_hash: string;
               project_key: string;
               current_snapshot: string;
+              project_id: string;
+              case_state: string;
+              assignment_subject: string;
+              conflict_status: ConflictStatus;
+              assignment_revoked: Date | null;
+              credential_status: CredentialCurrentStatus;
             }[]
           >`
             SELECT a.*, p.project_key,
-                   vc.evidence_snapshot_hash AS current_snapshot
+                   vc.evidence_snapshot_hash AS current_snapshot,
+                   vc.project_id, vc.state AS case_state,
+                   asg.subject_id AS assignment_subject, asg.conflict_status,
+                   asg.revoked_at AS assignment_revoked,
+                   c.current_status AS credential_status
             FROM core.verification_attestations a
             JOIN core.verification_cases vc ON vc.id = a.case_id
             JOIN core.projects p ON p.id = vc.project_id
+            JOIN core.assignments asg ON asg.id = a.assignment_id
+            JOIN core.credentials c ON c.id = a.credential_id
             WHERE a.id = ${request.params.attestationId}
           `;
 
           if (!attestation) throw notFound("Attestation not found");
+
+          // Ownership and authorization ran before the idempotency block (W-085).
           if (attestation.state !== "draft") {
             throw conflict("ATTESTATION_ALREADY_SIGNED", "Attestation is already signed");
           }
@@ -982,8 +1074,9 @@ export async function registerVerificationRoutes(
           `;
 
           await recordAudit(tx, {
-            effectiveRole: ROLE_ASSIGNMENT_BOUND,
+            effectiveRole,
             tenantId,
+            projectId: attestation.project_id,
             session,
             command: "verification.signature_request.created",
             resourceType: "verification_attestation",

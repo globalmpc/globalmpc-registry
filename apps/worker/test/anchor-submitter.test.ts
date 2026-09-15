@@ -4,8 +4,10 @@ import postgres from "postgres";
 import { runMigrations } from "@mpc/db";
 import {
   chainBacklog,
+  shouldBackOff,
   stepOnce,
   type ChainClient,
+  type FeeQuote,
   type SafeProposer,
   type SubmitterConfig,
 } from "../src/anchor-submitter.js";
@@ -44,6 +46,8 @@ const config: SubmitterConfig = {
   dailySpendCapWei: 10n ** 18n,
 };
 
+const PRIORITY_FEE = 1_000_000n;
+
 /** Gas cost of one receipt = 100_000 × 1 gwei = 1e14 wei. */
 const GAS_USED = 100_000n;
 const GAS_PRICE = 1_000_000_000n;
@@ -69,13 +73,30 @@ class FakeChain implements ChainClient {
   submitError: Error | null = null;
   submitted: unknown[] = [];
   encoded: unknown[] = [];
+  /** What `getBatch` and the RootSubmitted log say about the batch. null = not on chain. */
+  anchored: { root: string; txHash: string | null } | null = null;
+  /** Set to make the chain read fail, as a node restart or rate limit would. */
+  anchoredError: Error | null = null;
+
+  async anchoredBatch(): Promise<{ root: string; txHash: string | null } | null> {
+    if (this.anchoredError) throw this.anchoredError;
+    return this.anchored;
+  }
 
   async headBlockNumber(): Promise<number> {
     return this.head;
   }
 
-  async estimateMaxFeePerGas(): Promise<bigint> {
-    return this.fee;
+  /** Overrides the default EIP-1559 quote built from `fee`. */
+  quote: FeeQuote | null = null;
+
+  /** Set to make the fee quote or the transaction lookup fail. */
+  feeError: Error | null = null;
+  observeError: Error | null = null;
+
+  async estimateFees(): Promise<FeeQuote> {
+    if (this.feeError) throw this.feeError;
+    return this.quote ?? { type: "eip1559", maxFeePerGas: this.fee, maxPriorityFeePerGas: PRIORITY_FEE };
   }
 
   async submitRoot(input: unknown): Promise<string> {
@@ -90,6 +111,7 @@ class FakeChain implements ChainClient {
   }
 
   async observe(): Promise<Observation> {
+    if (this.observeError) throw this.observeError;
     return this.observation;
   }
 }
@@ -126,6 +148,7 @@ describeDb("anchor submission and finality", () => {
     // reorg_events references transactions. The application has no delete path (append-only);
     // only tests clean up, as superuser.
     await sql`DELETE FROM chain.reorg_events`;
+    await sql`DELETE FROM chain.gas_spend`;
     await sql`DELETE FROM chain.anchor_proposals`;
     await sql`DELETE FROM chain.transactions WHERE chain_id = ${CHAIN_ID}`;
     await sql`
@@ -180,7 +203,14 @@ describeDb("anchor submission and finality", () => {
 
     expect(result.to).toBe("submitted");
     expect(chain.submitted).toEqual([
-      { batchId: batchExternalId, root: ROOT, manifestHash: MANIFEST, schemaVersion: "1", recordCount: 2 },
+      {
+        batchId: batchExternalId,
+        root: ROOT,
+        manifestHash: MANIFEST,
+        schemaVersion: "1",
+        recordCount: 2,
+        fees: { type: "eip1559", maxFeePerGas: chain.fee, maxPriorityFeePerGas: PRIORITY_FEE },
+      },
     ]);
 
     const row = await stateOf();
@@ -292,6 +322,192 @@ describeDb("anchor submission and finality", () => {
     expect(chain.submitted).toHaveLength(0);
   });
 
+  it("sends with the fee quote that passed the cap check", async () => {
+    // Letting the send estimate the fee again opens a window where a spike slips past the cap.
+    // The whole quote travels, so what is sent is exactly what the cap judged.
+    chain.fee = 42_000_000_000n;
+    await step();
+
+    expect(chain.submitted).toHaveLength(1);
+    expect((chain.submitted[0] as { fees?: FeeQuote }).fees).toEqual({
+      type: "eip1559",
+      maxFeePerGas: 42_000_000_000n,
+      maxPriorityFeePerGas: PRIORITY_FEE,
+    });
+  });
+
+  it("checks and sends a legacy gas price the same way", async () => {
+    // Nodes without EIP-1559 quote one gas price. It is the ceiling the cap judges.
+    chain.quote = { type: "legacy", gasPrice: 500_000_000_000n };
+    await step();
+    expect((await stateOf()).last_error).toBe("FEE_ABOVE_CAP");
+
+    chain.quote = { type: "legacy", gasPrice: 3_000_000_000n };
+    await step();
+    expect((chain.submitted[0] as { fees?: FeeQuote }).fees).toEqual(chain.quote);
+  });
+
+  it("revokes finality when a confirmed transaction is back in the mempool", async () => {
+    await step();
+    chain.observation = receipt(100, BLOCK_A);
+    chain.head = 102;
+    await step();
+    expect((await stateOf()).state).toBe("confirmed");
+
+    chain.observation = { kind: "pending" };
+    await step();
+
+    const row = await stateOf();
+    expect(row.state).toBe("submitted");
+    expect(row.confirmed_at).toBeNull();
+    const events = await sql`
+      SELECT detected_state FROM chain.reorg_events WHERE transaction_id = ${transactionId}
+    `;
+    expect(events).toHaveLength(1);
+  });
+
+  describe("reconciling with the chain when a send result was lost", () => {
+    const LOST_HASH = `0x${"3d".repeat(32)}`;
+
+    it("recovers the hash of an earlier attempt that anchored the batch instead of sending again", async () => {
+      // The node accepted the first send but the answer never arrived (timeout, crash). A second
+      // send would burn gas on BatchAlreadyExists and the proof would track the wrong transaction.
+      chain.submitError = new Error("request timed out");
+      await step();
+      expect((await stateOf()).state).toBe("created");
+
+      chain.submitError = null;
+      chain.anchored = { root: ROOT, txHash: LOST_HASH };
+      const result = await step();
+
+      expect(result.to).toBe("submitted");
+      expect(chain.submitted).toHaveLength(0);
+      const row = await stateOf();
+      expect(row.state).toBe("submitted");
+      expect(row.tx_hash).toBe(LOST_HASH);
+    });
+
+    it("backs off with a recorded reason when the chain cannot be asked, and does not send", async () => {
+      // Without an answer the worker must not send — and the row should say why it is waiting.
+      chain.anchoredError = new Error("rpc unavailable");
+      const result = await step();
+
+      expect(shouldBackOff(result)).toBe(true);
+      expect(result.reason).toBe("reconciliation_check_failed");
+      expect(chain.submitted).toHaveLength(0);
+      const row = await stateOf();
+      expect(row.state).toBe("created");
+      expect(row.last_error).toContain("reconciliation_check_failed");
+    });
+
+    it("stops for a person when the batch is on chain but its transaction is not found", async () => {
+      chain.anchored = { root: ROOT, txHash: null };
+      await step();
+
+      const row = await stateOf();
+      expect(row.state).toBe("reconciliation_required");
+      expect(row.last_error).toBe("batch_on_chain_transaction_unknown");
+      expect(chain.submitted).toHaveLength(0);
+    });
+
+    it("stops for a person when the batch id is on chain with a different root", async () => {
+      chain.anchored = { root: `0x${"99".repeat(32)}`, txHash: LOST_HASH };
+      await step();
+
+      const row = await stateOf();
+      expect(row.state).toBe("reconciliation_required");
+      expect(row.last_error).toBe("batch_on_chain_with_different_root");
+      expect(chain.submitted).toHaveLength(0);
+    });
+
+    it("follows the transaction that anchored the batch when a duplicate send reverts", async () => {
+      // The first send was still in the mempool when the retry went out. Both were mined; ours
+      // reverted with BatchAlreadyExists. The batch is anchored — by the first transaction.
+      await step();
+      chain.observation = receipt(100, BLOCK_A, "reverted");
+      chain.anchored = { root: ROOT, txHash: LOST_HASH };
+      await step();
+
+      const row = await stateOf();
+      expect(row.state).toBe("submitted");
+      expect(row.tx_hash).toBe(LOST_HASH);
+      expect(row.block_hash).toBeNull();
+      // The reverted duplicate still burned gas. It stays in today's total.
+      const [spent] = await sql<{ tx_hash: string }[]>`
+        SELECT tx_hash FROM chain.gas_spend WHERE transaction_id = ${transactionId}
+      `;
+      expect(spent!.tx_hash).toBe(TX_HASH);
+    });
+
+    it("backs off with a recorded reason when a reverted send cannot be checked against the chain", async () => {
+      // Without an answer the worker cannot tell a duplicate from a real revert. It must not
+      // mark the batch reverted, and the row should say why it is waiting.
+      await step();
+      chain.observation = receipt(100, BLOCK_A, "reverted");
+      chain.anchoredError = new Error("rpc unavailable");
+      const result = await step();
+
+      expect(shouldBackOff(result)).toBe(true);
+      expect(result.reason).toBe("duplicate_check_failed");
+      const row = await stateOf();
+      expect(row.state).toBe("submitted");
+      expect(row.last_error).toContain("duplicate_check_failed");
+    });
+  });
+
+  describe("failed chain reads are recorded on the row", () => {
+    it("backs off with a recorded reason when the fee quote fails, and does not send", async () => {
+      chain.feeError = new Error("rpc unavailable");
+      const result = await step();
+
+      expect(shouldBackOff(result)).toBe(true);
+      expect(result.reason).toBe("fee_estimate_failed");
+      expect(chain.submitted).toHaveLength(0);
+      const row = await stateOf();
+      expect(row.state).toBe("created");
+      expect(row.last_error).toContain("fee_estimate_failed");
+    });
+
+    it("backs off with a recorded reason when the transaction cannot be looked up", async () => {
+      await step();
+      chain.observeError = new Error("rpc unavailable");
+      const result = await step();
+
+      expect(shouldBackOff(result)).toBe(true);
+      expect(result.reason).toBe("observation_failed");
+      const row = await stateOf();
+      expect(row.state).toBe("submitted");
+      expect(row.last_error).toContain("observation_failed");
+    });
+  });
+
+  describe("loop back-off (blocked outcomes do not spin)", () => {
+    it("backs off when the submission is blocked by a cap", async () => {
+      chain.fee = 500_000_000_000n;
+      expect(shouldBackOff(await step())).toBe(true);
+    });
+
+    it("backs off while a submitted transaction is still pending", async () => {
+      await step();
+      chain.observation = { kind: "pending" };
+      expect(shouldBackOff(await step())).toBe(true);
+    });
+
+    it("backs off after a failed send instead of spending every attempt at once", async () => {
+      chain.submitError = new Error("rpc timeout");
+      expect(shouldBackOff(await step())).toBe(true);
+    });
+
+    it("does not back off after progress", async () => {
+      expect(shouldBackOff(await step())).toBe(false);
+    });
+
+    it("backs off when nothing is left to do", async () => {
+      await sql`UPDATE chain.transactions SET state = 'failed' WHERE id = ${transactionId}`;
+      expect(shouldBackOff(await step())).toBe(true);
+    });
+  });
+
   /** Safe service double. The real service cannot reproduce execution or rejection. */
   function fakeSafe(overrides: Partial<SafeProposer> = {}): SafeProposer {
     return {
@@ -391,6 +607,97 @@ describeDb("anchor submission and finality", () => {
     expect(result.to).toBe("failed");
     // Reposting without checking why it was rejected gets it rejected again for the same reason.
     expect((await stateOf()).last_error).toBe("safe_proposal_rejected");
+  });
+
+  /** Adds another batch waiting in `created`. */
+  async function addCreatedTransaction(): Promise<string> {
+    const rowId = randomUUID();
+    const externalId = `0x${rowId.replace(/-/g, "").repeat(2)}`;
+    const id = randomUUID();
+    await sql`
+      INSERT INTO chain.anchor_batches (
+        id, tenant_id, batch_id, merkle_root, manifest_hash,
+        manifest_object_key, schema_version, record_count
+      ) VALUES (
+        ${rowId}, ${tenantId}, ${externalId}, ${ROOT}, ${MANIFEST}, 'manifests/more.json', '1', 1
+      )
+    `;
+    await sql`
+      INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state)
+      VALUES (${id}, ${tenantId}, ${rowId}, ${`anchor:${externalId}`}, ${CHAIN_ID}, 'created')
+    `;
+    return id;
+  }
+
+  /** A Safe double that hands out nonces in order and a distinct hash per nonce. */
+  function sequentialSafe(statusOf: SafeProposer["status"]): SafeProposer {
+    let nonce = 7;
+    return {
+      async nextNonce() {
+        return nonce++;
+      },
+      async propose(input) {
+        return { safeTxHash: `0x${input.nonce.toString(16).padStart(64, "0")}`, nonce: input.nonce };
+      },
+      status: statusOf,
+    };
+  }
+
+  const hashOfNonce = (nonce: number) => `0x${nonce.toString(16).padStart(64, "0")}`;
+
+  it("reads back every open proposal, not only the oldest", async () => {
+    // The oldest proposal can wait for signatures indefinitely. A later one that was executed
+    // must still reach the chain-tracking path.
+    const laterId = await addCreatedTransaction();
+    const executedHash = `0x${"7c".repeat(32)}`;
+    const safe = sequentialSafe(async (safeTxHash) =>
+      safeTxHash === hashOfNonce(8)
+        ? { kind: "executed", transactionHash: executedHash }
+        : { kind: "pending", confirmations: 1, threshold: 3 },
+    );
+
+    await stepOnce(sql, chain, safeConfigOf(), log, safe);
+    await stepOnce(sql, chain, safeConfigOf(), log, safe);
+    const result = await stepOnce(sql, chain, safeConfigOf(), log, safe);
+
+    expect(result.transactionId).toBe(laterId);
+    expect(result.to).toBe("submitted");
+    expect((await stateOf()).state).toBe("proposed");
+  });
+
+  it("ends a proposal replaced on the Safe as failed, so it can be resubmitted", async () => {
+    // A rejection in the Safe UI executes another transaction at the same nonce. Ours can never
+    // execute; left as proposed it would wait forever without an alert.
+    const safe = sequentialSafe(async () => ({ kind: "replaced", replacedBy: `0x${"99".repeat(32)}` }));
+
+    await stepOnce(sql, chain, safeConfigOf(), log, safe);
+    const result = await stepOnce(sql, chain, safeConfigOf(), log, safe);
+
+    expect(result.to).toBe("failed");
+    const row = await stateOf();
+    expect(row.state).toBe("failed");
+    expect(row.last_error).toBe("safe_proposal_replaced");
+    const [proposal] = await sql<{ state: string }[]>`
+      SELECT state FROM chain.anchor_proposals WHERE transaction_id = ${transactionId}
+    `;
+    expect(proposal!.state).toBe("rejected");
+  });
+
+  it("does not ask the Safe service about the same proposal within the recheck interval", async () => {
+    // Every open proposal is read back now; unthrottled, that is one service call per proposal
+    // per loop.
+    let calls = 0;
+    const safe = sequentialSafe(async () => {
+      calls += 1;
+      return { kind: "pending", confirmations: 1, threshold: 3 };
+    });
+    const throttled = { ...safeConfigOf(), recheckIntervalMs: 60_000 };
+
+    await stepOnce(sql, chain, throttled, log, safe);
+    await stepOnce(sql, chain, throttled, log, safe);
+    await stepOnce(sql, chain, throttled, log, safe);
+
+    expect(calls).toBe(1);
   });
 
   it("creates a Safe proposal instead of submitting on a chain where EOA is blocked", async () => {
@@ -509,20 +816,28 @@ describeDb("anchor submission and finality", () => {
     /**
       * Seeds gas already burned.
      *
-      * `gas_used` and `effective_gas_price` in `chain.transactions` were columns nobody used until now.
-      * The daily cap is judged on their sum, so the cap only means something once we confirm the values
-      * are recorded when the receipt arrives.
+      * The daily cap is judged on the `chain.gas_spend` ledger, so the cap only means something once
+      * we confirm a row lands there when the receipt arrives.
      */
-    async function seedSpend(gasUsed: bigint, price: bigint, submittedAt: string) {
+    async function seedSpend(gasUsed: bigint, price: bigint, observedAt: string, chainId = CHAIN_ID) {
       const id = randomUUID();
+      const txHash = `0x${id.replace(/-/g, "").repeat(2)}`;
       await sql`
         INSERT INTO chain.transactions (
           id, tenant_id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
           submitted_at, gas_used, effective_gas_price
         ) VALUES (
-          ${id}, ${tenantId}, ${`spent:${id}`}, ${CHAIN_ID}, 'confirmed',
-          ${`0x${"77".repeat(32)}`}, 90, ${BLOCK_A},
-          ${sql.unsafe(submittedAt)}, ${gasUsed.toString()}, ${price.toString()}
+          ${id}, ${tenantId}, ${`spent:${id}`}, ${chainId}, 'confirmed',
+          ${txHash}, 90, ${BLOCK_A},
+          ${sql.unsafe(observedAt)}, ${gasUsed.toString()}, ${price.toString()}
+        )
+      `;
+      await sql`
+        INSERT INTO chain.gas_spend (
+          chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price, observed_at
+        ) VALUES (
+          ${chainId}, ${txHash}, ${id}, ${tenantId}, ${gasUsed.toString()}, ${price.toString()},
+          ${sql.unsafe(observedAt)}
         )
       `;
       return id;
@@ -557,6 +872,34 @@ describeDb("anchor submission and finality", () => {
       expect(row.last_error).toBe("DAILY_SPEND_CAP_REACHED");
     });
 
+    it("gas burned by an earlier attempt still counts after a resubmission", async () => {
+      // A reverted attempt burned gas. The operator resubmits; the API resets the row the same
+      // way as below. That reset must not make the burned gas disappear from today's total.
+      await step();
+      chain.observation = receipt(100, BLOCK_A, "reverted");
+      await step();
+      expect((await stateOf()).state).toBe("reverted");
+
+      await sql`
+        UPDATE chain.transactions
+        SET state = 'created', attempts = 0,
+            tx_hash = NULL, block_number = NULL, block_hash = NULL,
+            confirmations = 0, confirmed_at = NULL, submitted_at = NULL,
+            last_error = 'resubmitted_from_reverted', updated_at = now()
+        WHERE id = ${transactionId}
+      `;
+
+      const result = await stepOnce(
+        sql,
+        chain,
+        { ...config, dailySpendCapWei: RECEIPT_COST_WEI },
+        log,
+      );
+
+      expect(result.reason).toBe("DAILY_SPEND_CAP_REACHED");
+      expect(chain.submitted).toHaveLength(1);
+    });
+
     it("gas burned yesterday does not count toward today's cap", async () => {
       // The cap reopens daily. Counting cumulatively would block forever.
       await seedSpend(GAS_USED, GAS_PRICE, "now() - interval '2 days'");
@@ -575,17 +918,7 @@ describeDb("anchor submission and finality", () => {
     it("does not count gas burned on another chain", async () => {
       // The cap guards one wallet per chain. Mixing chains would let one chain's usage halt the
       // other.
-      const id = randomUUID();
-      await sql`
-        INSERT INTO chain.transactions (
-          id, tenant_id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
-          submitted_at, gas_used, effective_gas_price
-        ) VALUES (
-          ${id}, ${tenantId}, ${`other:${id}`}, ${CHAIN_ID + 1}, 'confirmed',
-          ${`0x${"88".repeat(32)}`}, 90, ${BLOCK_A},
-          now(), ${(GAS_USED * 100n).toString()}, ${GAS_PRICE.toString()}
-        )
-      `;
+      await seedSpend(GAS_USED * 100n, GAS_PRICE, "now()", CHAIN_ID + 1);
 
       const result = await stepOnce(
         sql,

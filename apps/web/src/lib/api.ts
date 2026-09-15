@@ -171,6 +171,27 @@ export async function getProject(token: string, id: string): Promise<ProjectSumm
   return parse<ProjectSummary>(response);
 }
 
+/** An organization this account may name as a project owner. */
+export interface OrganizationOption {
+  id: string;
+  legalName: string;
+  jurisdiction: string;
+}
+
+/**
+ * Organizations the registration form may offer.
+ *
+ * The server applies the same rule as project creation, so every option is one it accepts.
+ * A session without a project creation role gets the 403 envelope with the required roles.
+ */
+export async function listOrganizations(token: string): Promise<{ items: OrganizationOption[] }> {
+  const response = await apiFetch("/api/v1/organizations", {
+    headers: authHeader(token),
+    cache: "no-store",
+  });
+  return parse<{ items: OrganizationOption[] }>(response);
+}
+
 export interface CreateProjectInput {
   projectKey: string;
   name: string;
@@ -564,6 +585,46 @@ export async function listVerificationCases(
     cache: "no-store",
   });
   return parse<{ items: VerificationCase[] }>(response);
+}
+
+/** What a review assignment on one project can use — real rows, not seed ids. */
+export interface ReviewAssignmentOptions {
+  reviewers: {
+    subjectId: string;
+    displayName: string;
+    roles: string[];
+    credentials: {
+      id: string;
+      credentialType: string;
+      issuerReference: string;
+      scope: string[];
+      jurisdiction: string[];
+      expiresAt: string | null;
+    }[];
+  }[];
+  schemas: {
+    id: string;
+    schemaKey: string;
+    schemaVersion: string;
+    attestationType: string;
+    jurisdictionProfile: string;
+  }[];
+}
+
+/**
+ * Reviewers who can sign on this project, their valid credentials, and active schemas.
+ *
+ * Authorized with the same action as creating the assignment, so only the assigner reads it.
+ */
+export async function getReviewAssignmentOptions(
+  token: string,
+  projectId: string,
+): Promise<ReviewAssignmentOptions> {
+  const response = await apiFetch(`/api/v1/projects/${projectId}/review-assignment-options`, {
+    headers: authHeader(token),
+    cache: "no-store",
+  });
+  return parse<ReviewAssignmentOptions>(response);
 }
 
 export async function createVerificationCase(
@@ -1309,7 +1370,7 @@ export async function bindAdminWallet(
   token: string,
   key: string,
   subjectId: string,
-  input: { walletAddress: string; chainId: number; assuranceLevel: string },
+  input: { walletAddress: string; chainId: number; assuranceLevel: string; justification: string },
 ): Promise<AdminSubject> {
   const response = await apiFetch(`/api/v1/admin/subjects/${subjectId}/wallets`, {
     method: "POST",
@@ -1337,6 +1398,85 @@ export async function disableAdminWallet(
     body: JSON.stringify(input),
   });
   return parse<AdminSubject>(response);
+}
+
+// --- Review registries (02 §2.8) -------------------------------------------
+
+/** Path segment of one review registry under `/api/v1/review-registry/`. */
+export type RegistrySegment = "credentials" | "attestation-schemas" | "policy-sets";
+
+/**
+ * A proposal to add one version of a credential, attestation schema or policy set.
+ *
+ * `itemVersion` counts versions of the item; `version` is this record's own version, sent back
+ * as If-Match when deciding.
+ */
+export interface RegistryProposal {
+  id: string;
+  kind: "credential" | "attestation_schema" | "policy_set";
+  itemKey: string;
+  itemVersion: number;
+  payload: Record<string, unknown>;
+  rationale: string;
+  effectiveFrom: string;
+  proposedBySubjectId: string;
+  proposedAt: string;
+  state: "pending" | "approved" | "rejected";
+  decidedBySubjectId: string | null;
+  decidedAt: string | null;
+  decisionReason: string | null;
+  /** The registry record approval created. Null until approved. */
+  materializedId: string | null;
+  version: number;
+}
+
+export async function listRegistryProposals(
+  token: string,
+  segment: RegistrySegment,
+): Promise<{ items: RegistryProposal[] }> {
+  const response = await apiFetch(`/api/v1/review-registry/${segment}/proposals`, {
+    headers: authHeader(token),
+    cache: "no-store",
+  });
+  return parse<{ items: RegistryProposal[] }>(response);
+}
+
+export async function proposeRegistryItem(
+  token: string,
+  key: string,
+  segment: RegistrySegment,
+  input: Record<string, unknown>,
+): Promise<RegistryProposal> {
+  const response = await apiFetch(`/api/v1/review-registry/${segment}/proposals`, {
+    method: "POST",
+    headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+    body: JSON.stringify(input),
+  });
+  return parse<RegistryProposal>(response);
+}
+
+export async function decideRegistryProposal(
+  token: string,
+  key: string,
+  segment: RegistrySegment,
+  proposalId: string,
+  version: number,
+  input: { decision: "approve" | "reject"; reason: string },
+): Promise<RegistryProposal> {
+  const response = await apiFetch(
+    `/api/v1/review-registry/${segment}/proposals/${proposalId}/decision`,
+    {
+      method: "POST",
+      headers: {
+        ...authHeader(token),
+        "content-type": "application/json",
+        "idempotency-key": key,
+        "if-match": `"${version}"`,
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return parse<RegistryProposal>(response);
 }
 
 export async function listRoleGrants(token: string): Promise<{ items: RoleGrant[] }> {
@@ -1378,6 +1518,72 @@ export async function decideRoleGrant(
     body: JSON.stringify(input),
   });
   return parse<RoleGrant>(response);
+}
+
+/** Revocation reason codes. Same list as the server's `ROLE_REVOCATION_REASON_CODES`. */
+export type RoleRevocationReasonCode =
+  | "offboarding"
+  | "duty_change"
+  | "security_concern"
+  | "granted_in_error";
+
+export interface RoleRevocation {
+  id: string;
+  roleBindingId: string;
+  subjectId: string;
+  subjectName: string;
+  role: string;
+  projectId: string | null;
+  reasonCode: RoleRevocationReasonCode;
+  reason: string;
+  requestedBySubjectId: string;
+  requestedAt: string;
+  state: "pending" | "approved" | "rejected" | "withdrawn";
+  decidedBySubjectId: string | null;
+  decidedAt: string | null;
+  decisionReason: string | null;
+  version: number;
+}
+
+export async function listRoleRevocations(token: string): Promise<{ items: RoleRevocation[] }> {
+  const response = await apiFetch("/api/v1/admin/role-revocations", {
+    headers: authHeader(token),
+    cache: "no-store",
+  });
+  return parse<{ items: RoleRevocation[] }>(response);
+}
+
+export async function createRoleRevocation(
+  token: string,
+  key: string,
+  input: { roleBindingId: string; reasonCode: RoleRevocationReasonCode; reason: string },
+): Promise<RoleRevocation> {
+  const response = await apiFetch("/api/v1/admin/role-revocations", {
+    method: "POST",
+    headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+    body: JSON.stringify(input),
+  });
+  return parse<RoleRevocation>(response);
+}
+
+export async function decideRoleRevocation(
+  token: string,
+  key: string,
+  revocationId: string,
+  version: number,
+  input: { decision: "approve" | "reject"; reason: string },
+): Promise<RoleRevocation> {
+  const response = await apiFetch(`/api/v1/admin/role-revocations/${revocationId}/decision`, {
+    method: "POST",
+    headers: {
+      ...authHeader(token),
+      "content-type": "application/json",
+      "idempotency-key": key,
+      "if-match": `"${version}"`,
+    },
+    body: JSON.stringify(input),
+  });
+  return parse<RoleRevocation>(response);
 }
 
 // --- Workspace summary -------------------------------------------
@@ -1535,8 +1741,32 @@ export interface NotificationSink {
   hasSecret: boolean;
   createdAt: string;
   version: number;
-  delivery: { pending: number; delivered: number; failed: number; lastError: string | null };
+  delivery: {
+    pending: number;
+    delivered: number;
+    failed: number;
+    lastError: NotificationDeliveryError | null;
+  };
 }
+
+/** A failed delivery's category. The server never returns the receiver's own answer (W-087). */
+export type NotificationDeliveryError =
+  | "rejected_destination"
+  | "secret_unavailable"
+  | "http_error"
+  | "timeout"
+  | "network_error"
+  | "response_too_large";
+
+export const NOTIFICATION_DELIVERY_ERROR_TEXT: Readonly<Record<NotificationDeliveryError, string>> = {
+  rejected_destination:
+    "Destination refused — the address is not public, or the name did not resolve",
+  secret_unavailable: "The signing secret is not available to the worker",
+  http_error: "The receiver answered with an error",
+  timeout: "The receiver did not answer in time",
+  network_error: "Could not connect to the receiver",
+  response_too_large: "The receiver's reply was too large",
+};
 
 export async function listNotificationSinks(
   token: string,

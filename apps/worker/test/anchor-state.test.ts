@@ -112,6 +112,33 @@ describe("reorg", () => {
     expect(result.reorged).toBe(true);
   });
 
+  it("revokes finality when a confirmed transaction is back in the mempool", () => {
+    // Its block was reorged out and the transaction waits to be mined again. Keeping
+    // "confirmed" would show a proof as final while no block holds it.
+    const result = track({
+      state: "confirmed",
+      recordedBlockNumber: 100,
+      recordedBlockHash: BLOCK_A,
+      observation: { kind: "pending" },
+      headBlockNumber: 200,
+    });
+    expect(result.nextState).toBe("submitted");
+    expect(result.reorged).toBe(true);
+    expect(result.blockHash).toBeNull();
+  });
+
+  it("an included transaction back in the mempool also returns to submitted", () => {
+    const result = track({
+      state: "included",
+      recordedBlockNumber: 100,
+      recordedBlockHash: BLOCK_A,
+      observation: { kind: "pending" },
+      headBlockNumber: 101,
+    });
+    expect(result.nextState).toBe("submitted");
+    expect(result.reorged).toBe(true);
+  });
+
   it("does not auto-recover when a transaction seen as confirmed disappears", () => {
     const result = track({
       state: "confirmed",

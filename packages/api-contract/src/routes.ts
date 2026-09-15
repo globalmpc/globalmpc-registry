@@ -35,7 +35,15 @@ import {
   createNotificationSinkRequest,
   createSubjectRequest,
   decideRoleGrantRequest,
+  createRoleRevocationRequest,
+  decideRoleRevocationRequest,
+  roleRevocationRequest,
+  decideRegistryProposalRequest,
   disableWalletRequest,
+  proposeAttestationSchemaRequest,
+  proposeCredentialRequest,
+  proposePolicySetRequest,
+  registryProposal,
   createProposalRequest,
   castVoteRequest,
   disputeAttestationRequest,
@@ -60,6 +68,8 @@ import {
   myWork,
   notification,
   notificationSink,
+  organizationSummary,
+  reviewAssignmentOptions,
   updateNotificationSinkRequest,
   outboxBacklog,
   resolveDisputeRequest,
@@ -213,6 +223,18 @@ export const ROUTES: readonly RouteDefinition[] = [
     action: null,
     implemented: true,
     responseSchema: projectSummary,
+  },
+  {
+    method: "get",
+    path: "/api/v1/organizations",
+    summary: "Organizations this account may name as a project owner — the same rule project creation enforces",
+    operationId: "listOrganizations",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: "project.create",
+    implemented: true,
+    responseSchema: organizationSummary.array(),
   },
 
   // --- Evidence -----------------------------------------------------------
@@ -369,6 +391,19 @@ export const ROUTES: readonly RouteDefinition[] = [
     action: null,
     implemented: true,
     responseSchema: verificationCaseSummary.array(),
+  },
+  {
+    method: "get",
+    path: "/api/v1/projects/{projectId}/review-assignment-options",
+    summary: "Reviewers, credentials, and schemas a review assignment on this project can use",
+    operationId: "getReviewAssignmentOptions",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    // Same action as creating the assignment — only the assigner needs the candidates.
+    action: "claim.curate",
+    implemented: true,
+    responseSchema: reviewAssignmentOptions,
   },
   {
     method: "post",
@@ -1057,6 +1092,56 @@ export const ROUTES: readonly RouteDefinition[] = [
     requestSchema: decideRoleGrantRequest,
     responseSchema: roleGrantRequest,
   },
+  // Revocation reuses the grant actions: both change who holds which role, and what the
+  // two-person rule separates is people, not roles. See `apps/api/src/routes/role-revocations.ts`.
+  {
+    method: "get",
+    path: "/api/v1/admin/role-revocations",
+    summary: "List role revocation proposals — who is waiting on what",
+    operationId: "listRoleRevocations",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: "admin.read",
+    implemented: true,
+    responseSchema: roleRevocationRequest.array(),
+  },
+  {
+    method: "post",
+    path: "/api/v1/admin/role-revocations",
+    summary: "Propose revoking a role binding — approved by someone else (02 §2.8)",
+    operationId: "createRoleRevocation",
+    public: false,
+    mutation: true,
+    requiresIfMatch: false,
+    action: "admin.role.propose",
+    implemented: true,
+    requestSchema: createRoleRevocationRequest,
+    responseSchema: roleRevocationRequest,
+  },
+  {
+    method: "post",
+    path: "/api/v1/admin/role-revocations/{revocationId}/decision",
+    summary: "Approve or reject a role revocation — not by the proposer",
+    operationId: "decideRoleRevocation",
+    public: false,
+    mutation: true,
+    requiresIfMatch: true,
+    action: "admin.role.approve",
+    implemented: true,
+    requestSchema: decideRoleRevocationRequest,
+    responseSchema: roleRevocationRequest,
+  },
+
+  // --- Review registries (02 §2.8) ---------------------------------------------------------
+  ...reviewRegistryRoutes("credentials", "Credential", "credential", proposeCredentialRequest),
+  ...reviewRegistryRoutes(
+    "attestation-schemas",
+    "AttestationSchema",
+    "attestation schema",
+    proposeAttestationSchemaRequest,
+  ),
+  ...reviewRegistryRoutes("policy-sets", "PolicySet", "compliance policy set", proposePolicySetRequest),
 
   // --- Observability ---------------------------------------------------------------
   {
@@ -1186,6 +1271,70 @@ export const ROUTES: readonly RouteDefinition[] = [
     responseSchema: publicDisclosureList,
   },
 ];
+
+/**
+ * Proposal routes for one review registry — 02 §2.8.
+ *
+ * One set per registry so each propose route documents its own payload. Nothing is written to
+ * the registry until someone other than the proposer approves.
+ */
+function reviewRegistryRoutes(
+  segment: string,
+  noun: string,
+  label: string,
+  requestSchema: z.ZodTypeAny,
+): RouteDefinition[] {
+  const base = `/api/v1/review-registry/${segment}/proposals`;
+  const shared = { public: false, implemented: true } as const;
+  return [
+    {
+      ...shared,
+      method: "get",
+      path: base,
+      summary: `List ${label} proposals — pending and decided`,
+      operationId: `list${noun}Proposals`,
+      mutation: false,
+      requiresIfMatch: false,
+      action: "review_registry.read",
+      responseSchema: registryProposal.array(),
+    },
+    {
+      ...shared,
+      method: "post",
+      path: base,
+      summary: `Propose a ${label} — nothing is created until another person approves`,
+      operationId: `propose${noun}`,
+      mutation: true,
+      requiresIfMatch: false,
+      action: "review_registry.propose",
+      requestSchema,
+      responseSchema: registryProposal,
+    },
+    {
+      ...shared,
+      method: "get",
+      path: `${base}/{proposalId}`,
+      summary: `Get one ${label} proposal`,
+      operationId: `get${noun}Proposal`,
+      mutation: false,
+      requiresIfMatch: false,
+      action: "review_registry.read",
+      responseSchema: registryProposal,
+    },
+    {
+      ...shared,
+      method: "post",
+      path: `${base}/{proposalId}/decision`,
+      summary: `Approve or reject a ${label} proposal — not by the proposer`,
+      operationId: `decide${noun}Proposal`,
+      mutation: true,
+      requiresIfMatch: true,
+      action: "review_registry.approve",
+      requestSchema: decideRegistryProposalRequest,
+      responseSchema: registryProposal,
+    },
+  ];
+}
 
 /** Every mutation route must have an action. A missing one means authorization was skipped. */
 export function findRoutesWithoutAction(): RouteDefinition[] {

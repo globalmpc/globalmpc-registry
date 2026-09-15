@@ -11,7 +11,12 @@ export {
 export {
   stepOnce,
   chainBacklog,
+  shouldBackOff,
+  feeCeilingOf,
+  type AnchoredBatch,
   type ChainClient,
+  type FeeQuote,
+  type SendRootInput,
   type SubmitRootInput,
   type SubmitterConfig,
   type StepResult,

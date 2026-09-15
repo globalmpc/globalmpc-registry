@@ -5,17 +5,23 @@ import {
   bindAdminWallet,
   createNotificationSink,
   listNotificationSinks,
+  NOTIFICATION_DELIVERY_ERROR_TEXT,
   updateNotificationSinkState,
   type NotificationSink,
   createAdminSubject,
   createRoleGrant,
+  createRoleRevocation,
   decideRoleGrant,
+  decideRoleRevocation,
   disableAdminWallet,
   listAdminSubjects,
   listRoleGrants,
+  listRoleRevocations,
   newIdempotencyKey,
   type AdminSubject,
   type RoleGrant,
+  type RoleRevocation,
+  type RoleRevocationReasonCode,
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
@@ -43,13 +49,41 @@ const REASON_CODES = [
   { value: "offboarding", label: "Offboarding" },
 ] as const;
 
+/** Why a role is taken back. Same codes as the server's `ROLE_REVOCATION_REASON_CODES`. */
+const REVOCATION_REASONS: readonly { value: RoleRevocationReasonCode; label: string }[] = [
+  { value: "offboarding", label: "Offboarding" },
+  { value: "duty_change", label: "Duty changed" },
+  { value: "security_concern", label: "Security concern" },
+  { value: "granted_in_error", label: "Granted in error" },
+];
+
 /** Roles that can approve a role grant. Same list as the server's `admin.role.approve`. */
 const ADMIN_ROLES: readonly string[] = ["mpc_operator", "security_operator"];
+
+/**
+ * Assurance levels a bind may carry. Same values as the server's `bindWalletRequest`.
+ *
+ * No default is preselected. The level decides which roles the wallet can exercise, so it is a
+ * deliberate choice with a stated basis, not a value that rides along with the address.
+ */
+const ASSURANCE_OPTIONS = [
+  { value: "wallet_only", label: "Wallet only — public read and voting" },
+  { value: "identity_bound", label: "Identity bound — steward, proposer, project roles" },
+  { value: "high_assurance", label: "High assurance — reviewer, gate approver, operator roles" },
+] as const;
+
+/** A binding someone is about to propose revoking. */
+interface RevokeTarget {
+  readonly bindingId: string;
+  readonly subjectName: string;
+  readonly role: string;
+}
 
 export default function AdminPage() {
   const { token, session, loading: sessionLoading } = useSession();
   const [subjects, setSubjects] = useState<AdminSubject[]>([]);
   const [grants, setGrants] = useState<RoleGrant[]>([]);
+  const [revocations, setRevocations] = useState<RoleRevocation[]>([]);
   const [sinks, setSinks] = useState<NotificationSink[]>([]);
   const [sinkUrl, setSinkUrl] = useState("");
   const [sinkSecret, setSinkSecret] = useState("");
@@ -59,24 +93,31 @@ export default function AdminPage() {
   const [newName, setNewName] = useState("");
   const [walletFor, setWalletFor] = useState<string | null>(null);
   const [walletAddress, setWalletAddress] = useState("");
+  const [walletLevel, setWalletLevel] = useState("");
+  const [walletJustification, setWalletJustification] = useState("");
   const [disableFor, setDisableFor] = useState<{ id: string; version: number } | null>(null);
   const [reasonCode, setReasonCode] = useState<string>("key_lost");
   const [detail, setDetail] = useState("");
   const [grantFor, setGrantFor] = useState<string | null>(null);
   const [grantRole, setGrantRole] = useState("");
   const [grantReason, setGrantReason] = useState("");
+  const [revokeFor, setRevokeFor] = useState<RevokeTarget | null>(null);
+  const [revokeCode, setRevokeCode] = useState<RoleRevocationReasonCode>("offboarding");
+  const [revokeReason, setRevokeReason] = useState("");
 
   const reload = useCallback(async () => {
     if (!token) return;
     setBusy(true);
     try {
-      const [subjectPage, grantPage, sinkPage] = await Promise.all([
+      const [subjectPage, grantPage, revocationPage, sinkPage] = await Promise.all([
         listAdminSubjects(token),
         listRoleGrants(token),
+        listRoleRevocations(token),
         listNotificationSinks(token),
       ]);
       setSubjects(subjectPage.items);
       setGrants(grantPage.items);
+      setRevocations(revocationPage.items);
       setSinks(sinkPage.items);
       setError(null);
     } catch (caught) {
@@ -103,6 +144,9 @@ export default function AdminPage() {
 
   const locked = subjects.filter((subject) => subject.locked);
   const pending = grants.filter((grant) => grant.state === "pending");
+  const pendingRevocations = revocations.filter((revocation) => revocation.state === "pending");
+  // A binding with an open proposal gets no second button — the server would refuse it (409).
+  const bindingsUnderRevocation = new Set(pendingRevocations.map((item) => item.roleBindingId));
 
   if (!sessionLoading && !session?.authenticated) {
     return <p className="sub">No account is connected.</p>;
@@ -114,8 +158,9 @@ export default function AdminPage() {
         <div>
           <h1>Administration</h1>
           <p className="sub">
-            People, wallets, and roles for this tenant. Granting a role takes two people: one
-            proposes, another decides. The server enforces that — hiding a button is not a control.
+            People, wallets, and roles for this tenant. Granting or revoking a role takes two
+            people: one proposes, another decides. The server enforces that — hiding a button is
+            not a control.
           </p>
         </div>
       </div>
@@ -190,6 +235,7 @@ export default function AdminPage() {
                     {subject.wallets.map((wallet) => (
                       <div key={wallet.id}>
                         <Address value={wallet.walletAddress} />{" "}
+                        <span data-testid="wallet-assurance">{wallet.assuranceLevel}</span>{" "}
                         {wallet.disabledAt ? (
                           <span style={{ color: "var(--destructive-text)" }}>disabled</span>
                         ) : wallet.walletAddress === session?.walletAddress?.toLowerCase() ? (
@@ -206,13 +252,36 @@ export default function AdminPage() {
                     ))}
                   </td>
                   <td className="mono meta">
-                    {subject.roles.length === 0
-                      ? "none"
-                      : subject.roles.map((role) => role.role).join(", ")}
+                    {subject.roles.length === 0 ? "none" : null}
+                    {subject.roles.map((role) => (
+                      <div key={role.id}>
+                        {role.role}{" "}
+                        {role.revokedAt ? (
+                          // Ended, not deleted — the history of who held what stays visible.
+                          <span style={{ color: "var(--destructive-text)" }}>revoked</span>
+                        ) : bindingsUnderRevocation.has(role.id) ? (
+                          <span>revocation pending</span>
+                        ) : (
+                          <button
+                            onClick={() =>
+                              setRevokeFor({
+                                bindingId: role.id,
+                                subjectName: subject.displayName,
+                                role: role.role,
+                              })
+                            }
+                          >
+                            Propose revocation
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </td>
                   <td>
                     {/* Operator-level holders do not get wallets attached from the screen. Key rotation goes through bootstrap. */}
-                    {subject.roles.some((role) => ADMIN_ROLES.includes(role.role)) ? (
+                    {subject.roles.some(
+                      (role) => role.revokedAt === null && ADMIN_ROLES.includes(role.role),
+                    ) ? (
                       <span className="meta">Wallet changes via bootstrap</span>
                     ) : (
                       <button onClick={() => setWalletFor(subject.id)}>Bind wallet</button>
@@ -234,9 +303,11 @@ export default function AdminPage() {
             address already bound elsewhere is refused rather than moved — moving it would make that
             address&rsquo;s past signatures read as someone else&rsquo;s.
           </p>
+          <p className="sub" style={{ marginTop: 0 }}>
+            The assurance level decides which roles this wallet can exercise. Choose it from what you
+            checked about the person, and say what that was — it is kept in the audit record.
+          </p>
           <form
-            className="row"
-            style={{ alignItems: "flex-end" }}
             onSubmit={(event) => {
               event.preventDefault();
               void run(async () => {
@@ -245,14 +316,17 @@ export default function AdminPage() {
                 await bindAdminWallet(token!, newIdempotencyKey(), walletFor, {
                   walletAddress: walletAddress.trim().toLowerCase(),
                   chainId: session.chainId,
-                  assuranceLevel: "identity_bound",
+                  assuranceLevel: walletLevel,
+                  justification: walletJustification.trim(),
                 });
                 setWalletFor(null);
                 setWalletAddress("");
+                setWalletLevel("");
+                setWalletJustification("");
               });
             }}
           >
-            <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 260 }}>
+            <div className="field">
               <label htmlFor="wallet-address">Wallet address</label>
               <input
                 id="wallet-address"
@@ -262,9 +336,41 @@ export default function AdminPage() {
                 placeholder="0x…"
               />
             </div>
-            <button className="primary" type="submit">
+            <div className="field">
+              <label htmlFor="wallet-assurance">Assurance level</label>
+              <select
+                id="wallet-assurance"
+                value={walletLevel}
+                onChange={(event) => setWalletLevel(event.target.value)}
+              >
+                <option value="">Choose a level</option>
+                {ASSURANCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="wallet-justification">What you checked (required)</label>
+              <input
+                id="wallet-justification"
+                value={walletJustification}
+                onChange={(event) => setWalletJustification(event.target.value)}
+                placeholder="e.g. ID document checked in person"
+              />
+            </div>
+            <button
+              className="primary"
+              type="submit"
+              disabled={
+                walletAddress.trim() === "" ||
+                walletLevel === "" ||
+                walletJustification.trim() === ""
+              }
+            >
               Bind
-            </button>
+            </button>{" "}
             <button type="button" onClick={() => setWalletFor(null)}>
               Cancel
             </button>
@@ -381,6 +487,60 @@ export default function AdminPage() {
         </div>
       ) : null}
 
+      {revokeFor ? (
+        <div className="panel">
+          <h2>Propose a revocation</h2>
+          <p className="sub" style={{ marginTop: 0 }}>
+            Revoke <span className="mono">{revokeFor.role}</span> from {revokeFor.subjectName}.
+            Proposing does not revoke. Someone else has to decide, and it cannot be you. The role
+            is ended, not deleted: the record of who held it stays.
+          </p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(async () => {
+                await createRoleRevocation(token!, newIdempotencyKey(), {
+                  roleBindingId: revokeFor.bindingId,
+                  reasonCode: revokeCode,
+                  reason: revokeReason,
+                });
+                setRevokeFor(null);
+                setRevokeReason("");
+              });
+            }}
+          >
+            <div className="field">
+              <label htmlFor="revoke-reason-code">Revocation reason</label>
+              <select
+                id="revoke-reason-code"
+                value={revokeCode}
+                onChange={(event) => setRevokeCode(event.target.value as RoleRevocationReasonCode)}
+              >
+                {REVOCATION_REASONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="revoke-detail">What changed</label>
+              <input
+                id="revoke-detail"
+                value={revokeReason}
+                onChange={(event) => setRevokeReason(event.target.value)}
+              />
+            </div>
+            <button className="primary" type="submit" disabled={revokeReason.trim() === ""}>
+              Submit revocation
+            </button>{" "}
+            <button type="button" onClick={() => setRevokeFor(null)}>
+              Cancel
+            </button>
+          </form>
+        </div>
+      ) : null}
+
       {/*
         Notification sinks.
 
@@ -427,7 +587,7 @@ export default function AdminPage() {
               id="sink-secret"
               className="mono"
               value={sinkSecret}
-              placeholder="file:/run/secrets/notify_hmac"
+              placeholder="file:/run/secrets/webhook_hmac"
               onChange={(event) => setSinkSecret(event.target.value)}
             />
           </div>
@@ -441,8 +601,9 @@ export default function AdminPage() {
         </form>
         <p className="meta">
           {/* A pasted value would stay in the DB. Accept only a reference (05 §5.12). */}
-          A reference, not the secret itself. The worker resolves `file:` and `env:` references at
-          send time; the value never enters this database.
+          A reference, not the secret itself — `env:WEBHOOK_SECRET_&lt;NAME&gt;` or
+          `file:/run/secrets/webhook_&lt;name&gt;`. The worker resolves it at send time; the value
+          never enters this database. Private and internal addresses are refused.
         </p>
 
         {sinks.length === 0 ? (
@@ -476,7 +637,9 @@ export default function AdminPage() {
                         0
                       )}
                       {sink.delivery.lastError ? (
-                        <div className="meta">{sink.delivery.lastError}</div>
+                        <div className="meta">
+                          {NOTIFICATION_DELIVERY_ERROR_TEXT[sink.delivery.lastError]}
+                        </div>
                       ) : null}
                     </td>
                     <td>
@@ -577,6 +740,82 @@ export default function AdminPage() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="panel">
+        <h2>Role revocations waiting on a decision</h2>
+        {pendingRevocations.length === 0 ? (
+          <p className="sub" style={{ margin: 0 }}>
+            Nothing is waiting. This is not a permission problem.
+          </p>
+        ) : (
+          <div className="table-scroll">
+            <table data-testid="admin-role-revocations">
+              <thead>
+                <tr>
+                  <th>Who</th>
+                  <th>Role</th>
+                  <th>Reason</th>
+                  <th>Why</th>
+                  <th>Decision</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingRevocations.map((revocation) => (
+                  <tr key={revocation.id}>
+                    <td>{revocation.subjectName}</td>
+                    <td className="mono">{revocation.role}</td>
+                    <td className="meta">
+                      {REVOCATION_REASONS.find((option) => option.value === revocation.reasonCode)
+                        ?.label ?? revocation.reasonCode}
+                    </td>
+                    <td style={{ color: "var(--muted-foreground)" }}>{revocation.reason}</td>
+                    <td>
+                      {/* Same as grants: the proposer gets no decision buttons. The server blocks it too. */}
+                      {revocation.requestedBySubjectId === session?.subjectId ? (
+                        <span className="meta">You proposed this — someone else decides.</span>
+                      ) : (
+                        <>
+                          <button
+                            className="primary"
+                            onClick={() =>
+                              void run(() =>
+                                decideRoleRevocation(
+                                  token!,
+                                  newIdempotencyKey(),
+                                  revocation.id,
+                                  revocation.version,
+                                  { decision: "approve", reason: "Reviewed and approved" },
+                                ),
+                              )
+                            }
+                          >
+                            Approve
+                          </button>{" "}
+                          <button
+                            onClick={() =>
+                              void run(() =>
+                                decideRoleRevocation(
+                                  token!,
+                                  newIdempotencyKey(),
+                                  revocation.id,
+                                  revocation.version,
+                                  { decision: "reject", reason: "The role is still needed" },
+                                ),
+                              )
+                            }
+                          >
+                            Reject
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

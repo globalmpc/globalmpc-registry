@@ -55,9 +55,10 @@ function list(name: string): string[] {
 /**
  * Approver.
  *
- * Empty means `draft`. **That being the default is intentional** — the app has no approval
- * path yet (02 §2.8), so it becomes active only when given the name of the person stated to
- * have approved. That name is a statement, not a fact the app verified, and audit records it so.
+ * Empty means `draft`. **That being the default is intentional** — the separated approval path
+ * (02 §2.8) is the review-registry API, where a second identified person approves. Here it
+ * becomes active only when given the name of the person stated to have approved. That name is a
+ * statement, not a fact the app verified, and audit records it so.
  */
 function approvedBy(): string | null {
   const value = (process.env["BOOTSTRAP_APPROVED_BY"] ?? "").trim();

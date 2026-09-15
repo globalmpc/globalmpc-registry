@@ -167,6 +167,20 @@ export function trackTransaction(input: TrackInput): TrackResult {
     return keep("not_found_yet");
   }
 
+  // pending: the node knows the transaction but no block holds it.
+  if (input.state === "confirmed" || input.state === "included") {
+    // Its block was reorged out and it waits in the mempool to be mined again. Finality is
+    // revoked and the reorg recorded; once mined again it climbs back through included.
+    return {
+      nextState: "submitted",
+      confirmations: 0,
+      blockNumber: null,
+      blockHash: null,
+      reorged: true,
+      reason: "returned_to_mempool",
+    };
+  }
+
   return keep("pending");
 }
 
