@@ -82,6 +82,16 @@ groups:
         annotations:
           summary: "There are anchor transactions that failed to finalize"
 
+      # A Safe proposal still waiting for signatures. `proposed` is not a failure state, so the
+      # rule above never sees it — a proposal nobody signs stalls anchoring without a sound.
+      # Replaced or rejected proposals already end as failed; what remains here waits on people.
+      - alert: MpcAnchorProposalStale
+        expr: max(mpc_anchor_proposal_oldest_age_seconds) > 86400
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "A Safe anchor proposal has waited for signatures for over 24 hours"
+
       # Undelivered notifications. They remain in the app, so no information is lost, but a
       # state of "believing they were sent" arises.
       - alert: MpcNotificationDeliveryFailed

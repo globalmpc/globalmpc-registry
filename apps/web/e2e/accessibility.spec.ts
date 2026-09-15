@@ -127,11 +127,9 @@ test.describe("accessibility (WCAG 2.2 AA)", () => {
 
   test("error display", async ({ page }) => {
     // Errors must be read as role=alert and must not be distinguished by color alone.
+    // The organization lookup is denied when the form opens, so the notice is there on load.
     await connectAs(page, "Reader A");
     await page.goto("/w/projects/new");
-    await page.getByRole("textbox", { name: "Project key" }).fill("A11Y-DENIED");
-    await page.getByRole("textbox", { name: "Name" }).fill("Should be denied");
-    await page.getByRole("button", { name: "Register" }).click();
     await expect(page.getByTestId("error-notice")).toBeVisible();
 
     const result = await analyze(page);

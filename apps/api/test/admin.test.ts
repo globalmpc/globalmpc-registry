@@ -201,7 +201,12 @@ describeDb("platform administration", () => {
       const response = await post(
         operatorBToken,
         `/api/v1/admin/subjects/${fx.operatorSubjectA}/wallets`,
-        { walletAddress: newAccount().address, chainId: 97, assuranceLevel: "high_assurance" },
+        {
+          walletAddress: newAccount().address,
+          chainId: 97,
+          assuranceLevel: "high_assurance",
+          justification: "attempt to take over another operator",
+        },
       );
 
       expect(response.statusCode).toBe(403);
@@ -236,7 +241,7 @@ describeDb("platform administration", () => {
       const bound = await post(
         operatorAToken,
         `/api/v1/admin/subjects/${subject.id}/wallets`,
-        { walletAddress: lost.address, chainId: 97, assuranceLevel: "identity_bound" },
+        { walletAddress: lost.address, chainId: 97, assuranceLevel: "identity_bound", justification: "recovery after a reported loss" },
       );
       expect(bound.statusCode).toBe(200);
       expect(bound.json().locked).toBe(false);
@@ -291,7 +296,7 @@ describeDb("platform administration", () => {
       const rebound = await post(
         operatorAToken,
         `/api/v1/admin/subjects/${subject.id}/wallets`,
-        { walletAddress: replacement.address, chainId: 97, assuranceLevel: "identity_bound" },
+        { walletAddress: replacement.address, chainId: 97, assuranceLevel: "identity_bound", justification: "recovery after a reported loss" },
       );
       expect(rebound.statusCode).toBe(200);
       expect(rebound.json().locked).toBe(false);
@@ -310,6 +315,7 @@ describeDb("platform administration", () => {
           walletAddress: key.address,
           chainId: 97,
           assuranceLevel: "wallet_only",
+          justification: "test binding",
         })
       ).json();
 
@@ -340,6 +346,7 @@ describeDb("platform administration", () => {
           walletAddress: key.address,
           chainId: 97,
           assuranceLevel: "wallet_only",
+          justification: "test binding",
         })
       ).json();
       const wallet = bound.wallets[0];
@@ -374,6 +381,7 @@ describeDb("platform administration", () => {
         walletAddress: key.address,
         chainId: 97,
         assuranceLevel: "wallet_only",
+        justification: "test binding",
       });
 
       // Moving it would make the address's past signatures read as someone else's.
@@ -381,10 +389,79 @@ describeDb("platform administration", () => {
         walletAddress: key.address,
         chainId: 97,
         assuranceLevel: "wallet_only",
+        justification: "test binding",
       });
 
       expect(moved.statusCode).toBe(409);
       expect(moved.json().code).toBe("WALLET_ALREADY_BOUND");
+    });
+  });
+
+  /**
+   * Q-032 — the operator chooses the assurance level and says why.
+   *
+   * A fixed level left reviewer, gate approver, and issuance roles below their minimum on any
+   * wallet bound from the screen. Letting the operator choose widens what one person can grant,
+   * so the choice must carry a stated basis, and that basis is kept in the audit record.
+   */
+  describe("assurance level chosen with a justification", () => {
+    async function subject(name: string): Promise<{ id: string }> {
+      return (await post(operatorAToken, "/api/v1/admin/subjects", { displayName: name })).json();
+    }
+
+    it("requires a justification", async () => {
+      const target = await subject("justification target");
+      const missing = await post(operatorAToken, `/api/v1/admin/subjects/${target.id}/wallets`, {
+        walletAddress: newAccount().address,
+        chainId: 97,
+        assuranceLevel: "high_assurance",
+      });
+      expect(missing.statusCode).toBe(400);
+      expect(missing.json().code).toBe("REQUEST_INVALID");
+      expect(JSON.stringify(missing.json().details.issues)).toContain("justification");
+
+      const blank = await post(operatorAToken, `/api/v1/admin/subjects/${target.id}/wallets`, {
+        walletAddress: newAccount().address,
+        chainId: 97,
+        assuranceLevel: "high_assurance",
+        justification: "   ",
+      });
+      expect(blank.statusCode).toBe(400);
+    });
+
+    it("rejects a level outside the assurance table with 422", async () => {
+      const target = await subject("invalid level target");
+      const response = await post(operatorAToken, `/api/v1/admin/subjects/${target.id}/wallets`, {
+        walletAddress: newAccount().address,
+        chainId: 97,
+        assuranceLevel: "super_admin",
+        justification: "not a real level",
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("ASSURANCE_LEVEL_INVALID");
+    });
+
+    it("records the chosen level and the justification in the audit event", async () => {
+      const target = await subject("audited level target");
+      const justification = "Passport checked in person on 2026-09-14";
+      const bound = await post(operatorAToken, `/api/v1/admin/subjects/${target.id}/wallets`, {
+        walletAddress: newAccount().address,
+        chainId: 97,
+        assuranceLevel: "high_assurance",
+        justification,
+      });
+
+      expect(bound.statusCode).toBe(200);
+      const wallet = bound.json().wallets[0];
+      expect(wallet.assuranceLevel).toBe("high_assurance");
+
+      const [event] = await fx.sql<{ detail: { assuranceLevel?: string; justification?: string } }[]>`
+        SELECT detail FROM audit.events
+        WHERE command = 'admin.wallet.bound' AND resource_id = ${wallet.id}
+      `;
+      expect(event!.detail.assuranceLevel).toBe("high_assurance");
+      expect(event!.detail.justification).toBe(justification);
     });
   });
 });

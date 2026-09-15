@@ -1,53 +1,67 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { createProject, newIdempotencyKey } from "@/lib/api";
+import { useEffect, useState } from "react";
+import {
+  createProject,
+  listOrganizations,
+  newIdempotencyKey,
+  type OrganizationOption,
+} from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
- * Organization IDs come from seed data. The real product picks from the session's organization
- * list, but R0 has no organization lookup API yet.
+ * Project registration.
+ *
+ * The owner organization comes from `GET /api/v1/organizations`, which applies the same rule
+ * as project creation: a party role sees its own organization, a tenant operations role sees
+ * every organization in the tenant. One option is preselected; with several, the choice is left
+ * to the person — registering under the wrong organization makes another company a party.
  */
-/**
- * Organization per tenant. The real product picks from the session's organization list, but
- * R1 has no organization lookup API yet.
- */
-const DEMO_ORGS_BY_TENANT: Record<string, { label: string; id: string }> = {
-  "e0000000-0000-4000-8000-00000000000a": {
-    label: "MPC Operations A (tenant A)",
-    id: "aaaaaaaa-0000-0000-0000-000000000001",
-  },
-  "e0000000-0000-4000-8000-00000000000b": {
-    label: "MPC Operations B (tenant B)",
-    id: "bbbbbbbb-0000-0000-0000-000000000001",
-  },
-};
-
 export default function NewProjectPage() {
-  const { token, session } = useSession();
+  const { token } = useSession();
   const router = useRouter();
 
   const [projectKey, setProjectKey] = useState("");
   const [name, setName] = useState("");
   const [hostCountry, setHostCountry] = useState("MNG");
   const [minerals, setMinerals] = useState("copper");
+  const [organizations, setOrganizations] = useState<OrganizationOption[] | null>(null);
+  const [ownerOrganizationId, setOwnerOrganizationId] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
   // Keep one key per form instance. If the user clicks submit twice,
   // the same key is sent and the server blocks the duplicate (07 §7.1).
   const [idempotencyKey] = useState(() => newIdempotencyKey());
 
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    listOrganizations(token)
+      .then((page) => {
+        if (cancelled) return;
+        setOrganizations(page.items);
+        setOwnerOrganizationId(page.items.length === 1 ? page.items[0]!.id : "");
+      })
+      .catch((caught: unknown) => {
+        if (cancelled) return;
+        // A 403 here carries the required roles — shown before the form is filled in.
+        setOrganizations([]);
+        setError(caught);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
   if (!token) {
     return <p className="sub">No account is connected.</p>;
   }
 
-  const org = session?.tenantId ? DEMO_ORGS_BY_TENANT[session.tenantId] : undefined;
-
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!token || !org) return;
+    if (!token || ownerOrganizationId === "") return;
 
     setSubmitting(true);
     setError(null);
@@ -62,7 +76,7 @@ export default function NewProjectPage() {
             .split(",")
             .map((item) => item.trim())
             .filter(Boolean),
-          ownerOrganizationId: org.id,
+          ownerOrganizationId,
         },
         idempotencyKey,
       );
@@ -138,12 +152,37 @@ export default function NewProjectPage() {
         </div>
 
         <div className="field">
-          <label>Owning organization</label>
-          <div className="meta mono">{org ? `${org.label} · ${org.id}` : "No organization"}</div>
+          <label htmlFor="ownerOrganization">Owning organization</label>
+          <select
+            id="ownerOrganization"
+            value={ownerOrganizationId}
+            onChange={(event) => setOwnerOrganizationId(event.target.value)}
+            disabled={organizations === null || organizations.length === 0}
+            required
+          >
+            {organizations === null ? <option value="">Loading…</option> : null}
+            {organizations !== null && organizations.length !== 1 ? (
+              <option value="">
+                {organizations.length === 0 ? "No organization available" : "Choose an organization"}
+              </option>
+            ) : null}
+            {(organizations ?? []).map((organization) => (
+              <option key={organization.id} value={organization.id}>
+                {`${organization.legalName} · ${organization.jurisdiction}`}
+              </option>
+            ))}
+          </select>
+          <div className="meta mono" data-testid="owner-organization-id">
+            {ownerOrganizationId || "—"}
+          </div>
         </div>
 
         <div className="row">
-          <button type="submit" className="primary" disabled={submitting || !org}>
+          <button
+            type="submit"
+            className="primary"
+            disabled={submitting || ownerOrganizationId === ""}
+          >
             {submitting ? "Registering…" : "Register"}
           </button>
           <span className="meta">

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
@@ -139,5 +140,35 @@ describeDb("metrics endpoint", () => {
     // If scrapes show up as traffic, real load cannot be read.
     expect(output).not.toContain('route="/metrics"');
     expect(output).not.toContain('route="/health/ready"');
+  });
+
+  it("exposes how long the oldest Safe proposal has waited for signatures", async () => {
+    // `proposed` is not a failure state, so the failure alert never sees it. A proposal nobody
+    // signs stalls anchoring silently unless its age is visible.
+    const transactionId = randomUUID();
+    const proposalId = randomUUID();
+    await fx.sql`
+      INSERT INTO chain.transactions (id, tenant_id, intent_key, chain_id, state)
+      VALUES (${transactionId}, ${fx.tenantA}, ${`gauge:${transactionId}`}, 56, 'proposed')
+    `;
+    await fx.sql`
+      INSERT INTO chain.anchor_proposals (
+        id, tenant_id, transaction_id, chain_id, safe_address, contract_address,
+        calldata, calldata_hash, created_at
+      ) VALUES (
+        ${proposalId}, ${fx.tenantA}, ${transactionId}, 56, ${`0x${"ab".repeat(20)}`},
+        ${`0x${"cc".repeat(20)}`}, '0xdeadbeef', ${`0x${"ee".repeat(32)}`}, now() - interval '2 hours'
+      )
+    `;
+
+    try {
+      const output = (await app.inject({ method: "GET", url: "/metrics" })).body;
+      const line = /^mpc_anchor_proposal_oldest_age_seconds\{state="proposed"\} (\d+)$/m.exec(output);
+      expect(line).not.toBeNull();
+      expect(Number(line![1])).toBeGreaterThanOrEqual(7200);
+    } finally {
+      await fx.sql`DELETE FROM chain.anchor_proposals WHERE id = ${proposalId}`;
+      await fx.sql`DELETE FROM chain.transactions WHERE id = ${transactionId}`;
+    }
   });
 });

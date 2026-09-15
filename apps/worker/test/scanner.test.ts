@@ -29,6 +29,23 @@ describe("ClamAV response parsing", () => {
     });
   });
 
+  // clamd reports what it could not look inside as a heuristic `FOUND` (`AlertEncrypted*`,
+  // `AlertExceedsMax` in deploy/clamav/Dockerfile). Treating these as clean would let a malicious
+  // file in a password-protected or oversized archive be promoted.
+  it("reads an encrypted-archive heuristic as infected", () => {
+    expect(parseClamResponse("stream: Heuristics.Encrypted.Zip FOUND\0")).toEqual({
+      kind: "infected",
+      signature: "Heuristics.Encrypted.Zip",
+    });
+  });
+
+  it("reads a scan-limit heuristic as infected", () => {
+    expect(parseClamResponse("stream: Heuristics.Limits.Exceeded.MaxRecursion FOUND\0")).toEqual({
+      kind: "infected",
+      signature: "Heuristics.Limits.Exceeded.MaxRecursion",
+    });
+  });
+
   it("does not read an ERROR response as infected", () => {
     const verdict = parseClamResponse("INSTREAM size limit exceeded. ERROR\0");
     expect(verdict.kind).toBe("error");

@@ -1,9 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { buildServer } from "../src/server.js";
 import { loadConfig, type AppConfig } from "../src/config.js";
-import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
+import {
+  idempotencyKey,
+  newAccount,
+  setupFixture,
+  signIn,
+  testEnv,
+  type TestFixture,
+} from "./helpers/db.js";
 import { hashSnapshotInput } from "../src/services/evidence-snapshot.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
@@ -696,6 +704,114 @@ describeDb("Verification and EIP-712 signature", () => {
 
     expect(response.statusCode).toBe(403);
     expect((response.json() as { code: string }).code).toBe("ASSIGNMENT_NOT_OWNED");
+  });
+
+  /**
+   * Signature requests carry the same checks as drafting (W-085).
+   *
+   * The response holds the typed data and the human-readable payload of the draft — project key,
+   * type, claim count, limitations, snapshot hash. Without these checks anyone in the tenant
+   * could read another project's draft and create request rows against it.
+   */
+  describe("signature request authorization", () => {
+    async function requestSignatureAs(token: string, attestationId: string) {
+      return app.inject({
+        method: "POST",
+        url: `/api/v1/attestations/${attestationId}/signature-requests`,
+        headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
+        payload: {},
+      });
+    }
+
+    async function requestRowCount(attestationId: string): Promise<number> {
+      const [row] = await fx.sql<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM core.attestation_signature_requests
+        WHERE attestation_id = ${attestationId}
+      `;
+      return Number(row!.count);
+    }
+
+    /** A reviewer whose only binding is on another project in the same tenant. */
+    async function otherProjectReviewerToken(): Promise<string> {
+      const account = newAccount();
+      const subject = randomUUID();
+      await fx.sql`
+        INSERT INTO core.subjects (id, tenant_id, kind, display_name)
+        VALUES (${subject}, ${fx.tenantA}, 'person', 'Other Project Reviewer')
+      `;
+      await fx.sql`
+        INSERT INTO core.wallet_identities (
+          id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        ) VALUES (
+          ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 97, 'high_assurance', now()
+        )
+      `;
+      await fx.sql`
+        INSERT INTO core.role_bindings (
+          id, tenant_id, subject_id, organization_id, project_id, role
+        ) VALUES (
+          ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, ${fx.otherProjectA}, 'reviewer_cp_qp'
+        )
+      `;
+      return signIn(app, account);
+    }
+
+    it("rejects a user of another project", async () => {
+      const created = await createCase();
+      const draft = (await draftAttestation(created.id, created.assignmentId)).json();
+
+      const response = await requestSignatureAs(await otherProjectReviewerToken(), draft.id);
+
+      expect(response.statusCode).toBe(403);
+      expect(response.body).not.toContain("typedData");
+      expect(await requestRowCount(draft.id)).toBe(0);
+    });
+
+    it("rejects a subject that is not the assignee", async () => {
+      const created = await createCase();
+      const draft = (await draftAttestation(created.id, created.assignmentId)).json();
+
+      // Same tenant, organization-level role — still not the assigned reviewer.
+      const response = await requestSignatureAs(stewardToken, draft.id);
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json().code).toBe("ASSIGNMENT_NOT_OWNED");
+      expect(response.body).not.toContain("humanReadablePayload");
+      expect(await requestRowCount(draft.id)).toBe(0);
+    });
+
+    it("still issues the request to the assigned reviewer", async () => {
+      const created = await createCase();
+      const draft = (await draftAttestation(created.id, created.assignmentId)).json();
+
+      const response = await requestSignatureAs(reviewerToken, draft.id);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().typedData).toBeDefined();
+      expect(await requestRowCount(draft.id)).toBe(1);
+    });
+
+    it("does not hand the stored response to another user replaying the assignee's key", async () => {
+      // An idempotency key is scoped to the tenant and the body here is empty, so a replay
+      // matches. The checks must run before the stored response is returned.
+      const created = await createCase();
+      const draft = (await draftAttestation(created.id, created.assignmentId)).json();
+      const key = idempotencyKey();
+      const send = (token: string) =>
+        app.inject({
+          method: "POST",
+          url: `/api/v1/attestations/${draft.id}/signature-requests`,
+          headers: { authorization: `Bearer ${token}`, "idempotency-key": key },
+          payload: {},
+        });
+
+      expect((await send(reviewerToken)).statusCode).toBe(200);
+      const replayed = await send(stewardToken);
+
+      expect(replayed.statusCode).toBe(403);
+      expect(replayed.body).not.toContain("typedData");
+      expect(await requestRowCount(draft.id)).toBe(1);
+    });
   });
 
   it("signing writes audit and outbox records", async () => {

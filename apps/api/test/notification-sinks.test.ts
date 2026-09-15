@@ -55,7 +55,7 @@ describeDb("notification sinks", () => {
   it("registers a sink", async () => {
     const response = await create(operatorToken, {
       url: `https://hooks.example.test/${randomUUID().slice(0, 8)}`,
-      secretReference: "env:NOTIFY_TEST_SECRET",
+      secretReference: "env:WEBHOOK_SECRET_TEST",
     });
 
     expect(response.statusCode).toBe(200);
@@ -66,12 +66,12 @@ describeDb("notification sinks", () => {
   it("keeps the secret reference out of the response", async () => {
     await create(operatorToken, {
       url: `https://hooks.example.test/${randomUUID().slice(0, 8)}`,
-      secretReference: "file:/run/secrets/notify_hmac",
+      secretReference: "file:/run/secrets/webhook_notify_hmac",
     });
 
     const listed = await list(operatorToken);
     // The reference reveals the deployment layout. Only whether it is set is returned.
-    expect(listed.body).not.toContain("/run/secrets/notify_hmac");
+    expect(listed.body).not.toContain("/run/secrets/webhook_notify_hmac");
     expect(listed.body).not.toContain("secretReference");
   });
 
@@ -79,7 +79,7 @@ describeDb("notification sinks", () => {
     // Notification bodies carry project identifiers. They are not sent in plaintext.
     const response = await create(operatorToken, {
       url: "http://hooks.example.test/plain",
-      secretReference: "env:NOTIFY_TEST_SECRET",
+      secretReference: "env:WEBHOOK_SECRET_TEST",
     });
 
     expect(response.statusCode).toBe(400);
@@ -87,17 +87,59 @@ describeDb("notification sinks", () => {
 
   it("does not register the same address twice", async () => {
     const url = `https://hooks.example.test/${randomUUID().slice(0, 8)}`;
-    expect((await create(operatorToken, { url, secretReference: "env:A" })).statusCode).toBe(200);
+    expect((await create(operatorToken, { url, secretReference: "env:WEBHOOK_SECRET_A" })).statusCode).toBe(200);
 
-    const second = await create(operatorToken, { url, secretReference: "env:B" });
+    const second = await create(operatorToken, { url, secretReference: "env:WEBHOOK_SECRET_B" });
     expect(second.statusCode).toBe(409);
     expect(second.json().code).toBe("SINK_ALREADY_REGISTERED");
+  });
+
+  /**
+   * Registration refuses internal destinations (W-087).
+   *
+   * The worker checks again at send time, with the name resolved. This is the save-time
+   * rejection that tells the operator what is wrong on the spot.
+   */
+  it.each([
+    "https://10.0.0.1/hook",
+    "https://169.254.169.254/latest/meta-data/",
+    "https://localhost/hook",
+    "https://api.internal/hook",
+    "https://[fd00::1]/hook",
+    "https://[::ffff:127.0.0.1]/hook",
+  ])("refuses an internal destination at registration: %s", async (url) => {
+    const response = await create(operatorToken, { url, secretReference: "env:WEBHOOK_SECRET_A" });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe("SINK_URL_NOT_ALLOWED");
+  });
+
+  /**
+   * The signing-secret reference stays inside the webhook namespace (W-087).
+   *
+   * Otherwise it could point the worker at its own database URL or signer key.
+   */
+  it.each([
+    "env:DATABASE_URL",
+    "file:/run/secrets/worker_database_url",
+    "file:/etc/passwd",
+    "plain:literal-secret",
+    "literal-secret",
+  ])("refuses a secret reference outside the webhook namespace: %s", async (secretReference) => {
+    const response = await create(operatorToken, {
+      url: `https://hooks.example.test/${randomUUID().slice(0, 8)}`,
+      secretReference,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe("SINK_SECRET_REFERENCE_NOT_ALLOWED");
+    expect(response.body).not.toContain(secretReference);
   });
 
   it("rejects callers without admin rights", async () => {
     const response = await create(stewardToken, {
       url: "https://hooks.example.test/nope",
-      secretReference: "env:A",
+      secretReference: "env:WEBHOOK_SECRET_A",
     });
 
     // Changing a sink redirects notifications. A silent change leaves the original
@@ -107,7 +149,7 @@ describeDb("notification sinks", () => {
 
   it("queues deliveries for a registered sink", async () => {
     const url = `https://hooks.example.test/${randomUUID().slice(0, 8)}`;
-    const sink = (await create(operatorToken, { url, secretReference: "env:A" })).json();
+    const sink = (await create(operatorToken, { url, secretReference: "env:WEBHOOK_SECRET_A" })).json();
 
     // Notifications are created in four places. Checks the trigger covers all of them.
     const reason = `deliver-${randomUUID().slice(0, 8)}`;
@@ -127,7 +169,7 @@ describeDb("notification sinks", () => {
 
   it("queues no new deliveries for a paused sink", async () => {
     const url = `https://hooks.example.test/${randomUUID().slice(0, 8)}`;
-    const sink = (await create(operatorToken, { url, secretReference: "env:A" })).json();
+    const sink = (await create(operatorToken, { url, secretReference: "env:WEBHOOK_SECRET_A" })).json();
 
     const paused = await app.inject({
       method: "POST",

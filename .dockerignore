@@ -14,5 +14,15 @@ contracts/lib
 # Local secrets are not put into the image. compose mounts them at runtime.
 deploy/local-secrets
 
+# Secrets never enter the build context — `COPY . .` would bake them into a layer, and a layer
+# keeps them even after a later delete. `**/` also covers nested files such as
+# `apps/web/.env.local`. `.env.example` is excluded too: nothing in the build reads it.
+**/.env
+**/.env.*
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+
 # design-system/dist is **not excluded.** It is a committed artifact and the exports of
 # `@mpc/design` point to it; excluding it leaves the web build unable to find the CSS.

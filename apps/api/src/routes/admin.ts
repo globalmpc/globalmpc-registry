@@ -13,6 +13,12 @@ import {
   disableWalletRequest,
 } from "@mpc/api-contract";
 import { ACTION_POLICIES } from "@mpc/api-contract";
+import {
+  assertEndpointShape,
+  isAllowedWebhookSecretReference,
+  WEBHOOK_SECRET_ENV_PREFIX,
+  WEBHOOK_SECRET_FILE_PREFIX,
+} from "@mpc/config";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
@@ -111,6 +117,9 @@ function toGrant(row: GrantRow, requestId: string, asOf: string) {
     asOf,
   };
 }
+
+/** Levels a bind may carry. Read from the contract so the route and OpenAPI cannot diverge. */
+const ASSURANCE_LEVELS: readonly string[] = bindWalletRequest.shape.assuranceLevel.options;
 
 /** Roles that can approve role grants — their wallets are not bound from the UI. */
 const ADMIN_ROLES: readonly string[] = ACTION_POLICIES["admin.role.approve"]?.allowedRoles ?? [];
@@ -274,6 +283,15 @@ export async function registerAdminRoutes(
 
       const parsed = bindWalletRequest.safeParse(request.body);
       if (!parsed.success) {
+        /**
+         * A level outside the table is a value problem, not a format problem — same as
+         * `ROLE_UNKNOWN`. Answering 400 would send the client to fix the body shape.
+         */
+        if (parsed.error.issues.some((issue) => issue.path[0] === "assuranceLevel")) {
+          throw unprocessable("ASSURANCE_LEVEL_INVALID", "Assurance level is not in the assurance table", {
+            allowed: ASSURANCE_LEVELS,
+          });
+        }
         throw badRequest("REQUEST_INVALID", "Request format is invalid", {
           issues: parsed.error.issues,
         });
@@ -349,6 +367,14 @@ export async function registerAdminRoutes(
             afterVersion: 1,
             correlationId,
             requestIp: request.ip,
+            // The level decides which roles this wallet can exercise. Without the stated basis
+            // the record shows who granted it but not why.
+            detail: {
+              subjectId: request.params.subjectId,
+              chainId: parsed.data.chainId,
+              assuranceLevel: parsed.data.assuranceLevel,
+              justification: parsed.data.justification,
+            },
           });
 
           const [updated] = await readSubjects(tx, tenantId, request.params.subjectId);
@@ -763,6 +789,26 @@ export async function registerAdminRoutes(
       throw badRequest("REQUEST_INVALID", "Request format is invalid", {
         issues: parsed.error.issues,
       });
+    }
+
+    /**
+     * Where the worker will send, and which secret it will read, are checked on save (W-087).
+     *
+     * The worker checks both again at send time, with the name resolved — this is the rejection
+     * the operator sees on the spot. The reference is not echoed back in the error.
+     */
+    try {
+      assertEndpointShape(parsed.data.url);
+    } catch (error) {
+      throw badRequest("SINK_URL_NOT_ALLOWED", "This webhook URL is not allowed", {
+        reason: error instanceof Error ? error.message : "Endpoint cannot be used",
+      });
+    }
+    if (!isAllowedWebhookSecretReference(parsed.data.secretReference)) {
+      throw badRequest(
+        "SINK_SECRET_REFERENCE_NOT_ALLOWED",
+        `Secret reference must be env:${WEBHOOK_SECRET_ENV_PREFIX}<NAME> or file:${WEBHOOK_SECRET_FILE_PREFIX}<name>`,
+      );
     }
 
     const { requestId, asOf, correlationId } = request.context;

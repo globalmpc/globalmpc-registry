@@ -179,15 +179,43 @@ describeDb("uploads", () => {
     expect(link.json().code).toBe("UPLOAD_INFECTED");
   });
 
-  it("issues short-lived download links and states what they bypass", async () => {
-    const created = (await upload(stewardToken)).json();
-
-    const link = await app.inject({
+  function downloadLink(uploadId: string) {
+    return app.inject({
       method: "POST",
-      url: `/api/v1/uploads/${created.id}/download-link`,
+      url: `/api/v1/uploads/${uploadId}/download-link`,
       headers: { authorization: `Bearer ${stewardToken}`, "idempotency-key": idempotencyKey() },
       payload: {},
     });
+  }
+
+  it("does not issue download links for files not yet scanned (Q-033)", async () => {
+    // Quarantine means "not known to be safe". A link would deliver an unscanned file to the
+    // project's users before the scanner has seen it.
+    const created = (await upload(stewardToken)).json();
+    expect(created.state).toBe("quarantined");
+
+    const link = await downloadLink(created.id);
+    expect(link.statusCode).toBe(409);
+    expect(link.json().code).toBe("UPLOAD_NOT_SCANNED");
+    expect(link.body).not.toContain("url\"");
+  });
+
+  it("issues download links for promoted files", async () => {
+    const created = (await upload(stewardToken)).json();
+    const scanned = await scan(created.id, created.version, "clean");
+    const promoted = await promote(created.id, scanned.json().version);
+    expect(promoted.json().state).toBe("promoted");
+
+    const link = await downloadLink(created.id);
+    expect(link.statusCode).toBe(200);
+  });
+
+  it("issues short-lived download links and states what they bypass", async () => {
+    const created = (await upload(stewardToken)).json();
+    const scanned = await scan(created.id, created.version, "clean");
+    expect(scanned.json().state).toBe("scanned_clean");
+
+    const link = await downloadLink(created.id);
 
     expect(link.statusCode).toBe(200);
     // Never creates permanent URLs (06 §6.7).

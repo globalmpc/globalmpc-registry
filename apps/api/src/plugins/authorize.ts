@@ -94,10 +94,28 @@ export function canActForOrganization(
   action: string,
   organizationId: string,
 ): boolean {
-  return usableBindings(session, action).some(
-    (binding) =>
-      TENANT_WIDE_ROLES.includes(binding.role) || binding.organizationId === organizationId,
-  );
+  const scope = actableOrganizations(session, action);
+  return scope === "all" || scope.includes(organizationId);
+}
+
+/**
+ * Organizations the session may act for with this action.
+ *
+ * The owning-organization rule lives here once, so the organization lookup the registration form
+ * uses and the check on project creation cannot diverge — a listed organization the server then
+ * refuses is a dead end on screen.
+ *
+ * `"all"`: a tenant operations role holds the action. Otherwise the organizations named by the
+ * party bindings that hold it.
+ */
+export function actableOrganizations(session: Session, action: string): "all" | readonly string[] {
+  const bindings = usableBindings(session, action);
+  if (bindings.some((binding) => TENANT_WIDE_ROLES.includes(binding.role))) return "all";
+  return [
+    ...new Set(
+      bindings.flatMap((binding) => (binding.organizationId === null ? [] : [binding.organizationId])),
+    ),
+  ];
 }
 
 export function bindingToAuthorizationContext(

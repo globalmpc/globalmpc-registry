@@ -10,9 +10,9 @@ useDefault = true
 description = "Vendored external libraries — OpenZeppelin and forge-std's own test vectors"
 paths = ['''(^|/)contracts/lib/''']
 
-[[allowlists]]
-description = "Local-only public defaults — deploy/local-secrets/README.md"
-paths = ['''(^|/)deploy/local-secrets/''']
+# deploy/local-secrets/ has **no path allowlist.** Its tracked files trigger no finding without
+# one (checked with gitleaks 8.30.1, 2026-09-14). A path allowlist would also pass any real key
+# that someone drops there.
 
 [[allowlists]]
 description = "anvil default accounts #0 and #1 private keys — public values, no real assets"

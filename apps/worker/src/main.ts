@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import { resolveSecret } from "@mpc/config";
+import { resolveWebhookSecret } from "@mpc/config";
 import { createHeartbeat } from "./heartbeat.js";
 import { deliverOnce, deliveryBacklog } from "./notification-delivery.js";
 import { backlogStats, publishBatch, type OutboxRow } from "./outbox-publisher.js";
@@ -79,7 +79,7 @@ while (running) {
         maxAttempts: NOTIFY_MAX_ATTEMPTS,
         backoffMs: NOTIFY_BACKOFF_MS,
         timeoutMs: NOTIFY_TIMEOUT_MS,
-        resolveSecret: (reference) => resolveSecret("NOTIFY_SINK_SECRET", reference),
+        resolveSecret: (reference) => resolveWebhookSecret(reference),
       },
       emit,
     );
