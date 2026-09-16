@@ -98,6 +98,40 @@ const all = FILES.flatMap((file) =>
   findVolumeSubstitutions(file, readFileSync(path.isAbsolute(file) ? file : path.join(DAPP, file), "utf8")),
 );
 
+/**
+ * Every worker entrypoint has a service in the local stack — W-095.
+ *
+ * `apps/worker` has one process per `start*` script. The local stack once ran the anchor and
+ * scan workers but not `start` (outbox publishing and notification delivery), so events and
+ * webhooks silently piled up in a stack that looked complete. A service counts when its
+ * `command` runs that script through `pnpm --filter @mpc/worker`.
+ */
+export function findMissingWorkerServices(
+  composeText: string,
+  workerScripts: Readonly<Record<string, string>>,
+): string[] {
+  return Object.keys(workerScripts)
+    .filter((name) => name === "start" || name.startsWith("start:"))
+    .filter((name) => !composeText.includes(`"@mpc/worker", "${name}"`));
+}
+
+const LOCAL_STACK = "docker-compose.yml";
+const missingWorkers = FILES.includes(LOCAL_STACK)
+  ? findMissingWorkerServices(
+      readFileSync(path.join(DAPP, LOCAL_STACK), "utf8"),
+      (JSON.parse(readFileSync(path.join(DAPP, "apps/worker/package.json"), "utf8")) as {
+        scripts: Record<string, string>;
+      }).scripts,
+    )
+  : [];
+
+if (missingWorkers.length > 0) {
+  console.error(`${LOCAL_STACK} has no service for these worker scripts:\n`);
+  for (const name of missingWorkers) console.error(`  pnpm --filter @mpc/worker ${name}`);
+  console.error("\nAdd a service whose command runs the script, or the local stack skips that process.");
+  process.exit(1);
+}
+
 if (all.length > 0) {
   console.error("Volume paths contain Coolify-forbidden characters. The deploy will be rejected:\n");
   for (const violation of all) console.error(`  ${violation.file}:${violation.line}  ${violation.text}`);
