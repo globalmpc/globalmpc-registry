@@ -183,6 +183,21 @@ services:
     secrets: [worker_database_url, anchor_signer_key]
     command: ["pnpm", "--filter", "@mpc/worker", "start:anchor"]
 
+  # Outbox publishing and notification webhook delivery. Without it, events and webhooks pile
+  # up with no sign of why. With no notification sinks registered, delivery does nothing.
+  outbox-worker:
+    build: *build
+    depends_on:
+      login-roles: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: file:/run/secrets/worker_database_url
+      # Delivery retries. At the cap a delivery stops — a dead receiver is not retried forever.
+      NOTIFY_MAX_ATTEMPTS: "5"
+      NOTIFY_BACKOFF_MS: "30000"
+      NOTIFY_TIMEOUT_MS: "10000"
+    secrets: [worker_database_url]
+    command: ["pnpm", "--filter", "@mpc/worker", "start"]
+
   # Scan worker. Kept separate so infected file bytes never pass through the API process.
   scan-worker:
     build: *build

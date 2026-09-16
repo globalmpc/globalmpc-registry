@@ -11,9 +11,13 @@ import { backlogStats, publishBatch, type OutboxRow } from "./outbox-publisher.j
  * exists — attaching a queue with no consumer first piles up events with no known destination.
  */
 
-const databaseUrl = process.env["DATABASE_URL"];
-if (!databaseUrl) {
-  process.stderr.write("DATABASE_URL is required\n");
+// Accepts a `file:` reference like the other workers — the local stack passes the connection
+// string as a mounted secret, not as a value.
+let databaseUrl: string;
+try {
+  databaseUrl = resolveSecret("DATABASE_URL", process.env["DATABASE_URL"]);
+} catch (error) {
+  process.stderr.write(`${(error as Error).message}\n`);
   process.exit(1);
 }
 

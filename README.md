@@ -64,7 +64,7 @@ pnpm --filter @mpc/web test:e2e
 # Contracts
 cd contracts && forge test
 
-# Full stack in containers (Postgres, MinIO, ClamAV, anvil, API, two workers, web)
+# Full stack in containers (Postgres, MinIO, ClamAV, anvil, API, three workers, web)
 docker compose up --build
 
 # E2E including chain confirmation (requires anvil and the anchor worker)
