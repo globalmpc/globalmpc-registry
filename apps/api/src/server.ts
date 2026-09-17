@@ -25,6 +25,7 @@ import { registerSecondReviewRoute, registerSourceCollectRoutes } from "./routes
 import type { SourceFetch } from "./services/source-fetch.js";
 import { registerAuthorityAdminRoutes } from "./routes/authority-admin.js";
 import { registerStaleSignalRoutes } from "./routes/stale-signals.js";
+import { registerDocumentRoutes } from "./routes/documents.js";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import { createMetricsRegistry } from "./metrics.js";
@@ -298,6 +299,7 @@ export async function buildServer(
   await registerAuthorityAdminRoutes(app, sql);
   await registerSecondReviewRoute(app, sql);
   await registerStaleSignalRoutes(app, sql);
+  await registerDocumentRoutes(app, sql);
   // multipart is used only by the upload route. It is registered globally, but only one route
   // reads file parts, so body parsing for other routes is unaffected.
   await app.register(multipart);

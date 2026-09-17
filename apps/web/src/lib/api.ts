@@ -364,6 +364,12 @@ export interface ObjectUpload {
   scannedAt: string | null;
   promotedArtifactId: string | null;
   rejectionReason: string | null;
+  /** What the document is, in the uploader's words. Free text — there is no settled type list. */
+  documentType: string | null;
+  /** Last valid day, `YYYY-MM-DD`. */
+  validUntil: string | null;
+  /** The earlier upload this one replaces. Takes effect only when this one is promoted. */
+  supersedesUploadId: string | null;
   nextActions: string[];
   version: number;
 }
@@ -485,6 +491,243 @@ export async function createDownloadLink(
     body: JSON.stringify({}),
   });
   return parse<{ url: string; expiresInSeconds: number; warning: string }>(response);
+}
+
+// --- Document relations -------------------------------------------------------
+//
+// A replacement or an expiry travels along declared links as an impact — a request for a
+// second look, never an automatic change to the document.
+
+export type DocumentLinkKind = "depends_on" | "references";
+
+export interface DocumentNode {
+  uploadId: string;
+  originalFilename: string | null;
+  state: string;
+  documentType: string | null;
+  validUntil: string | null;
+  expired: boolean;
+  /** Negative once expired. The server applies no warning threshold, and neither does the UI. */
+  daysUntilExpiry: number | null;
+  supersedesUploadId: string | null;
+  supersededByUploadId: string | null;
+  openImpactCount: number;
+  version: number;
+}
+
+export interface DocumentLink {
+  id: string;
+  /** The document rested on. */
+  upstreamUploadId: string;
+  /** The document that rests on it — the one to look at again when upstream changes. */
+  downstreamUploadId: string;
+  kind: DocumentLinkKind;
+  origin: "user" | "rule" | "carried_over";
+  ruleId: string | null;
+  note: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  removedAt: string | null;
+  removalReason: string | null;
+}
+
+export interface DocumentGraph {
+  nodes: DocumentNode[];
+  links: DocumentLink[];
+}
+
+export interface DocumentImpactPreviewItem {
+  uploadId: string;
+  depth: number;
+  viaUploadId: string;
+  viaKind: DocumentLinkKind;
+}
+
+export interface DocumentImpactPreview {
+  uploadId: string;
+  items: DocumentImpactPreviewItem[];
+}
+
+export interface DocumentImpact {
+  id: string;
+  projectId: string;
+  uploadId: string;
+  originUploadId: string;
+  successorUploadId: string | null;
+  cause: "superseded" | "expired";
+  depth: number;
+  viaUploadId: string | null;
+  viaKind: DocumentLinkKind | null;
+  detectedAt: string;
+  resolution: "open" | "revised" | "no_change_needed" | "not_applicable";
+  resolvedAt: string | null;
+  /** `null` with `revised`: the database closed it when a new version took effect. */
+  resolvedBy: string | null;
+  revisedByUploadId: string | null;
+  resolutionNote: string | null;
+  nextActions: string[];
+}
+
+export interface DocumentLinkRule {
+  id: string;
+  upstreamType: string;
+  downstreamType: string;
+  kind: DocumentLinkKind;
+  note: string | null;
+  createdBy: string;
+  createdAt: string;
+  retiredAt: string | null;
+  retirementNote: string | null;
+}
+
+/**
+ * Change a document's type, validity date, or the document it replaces.
+ *
+ * Sends only what changed. The server bumps the version either way, so a blind resend of the
+ * same values would still cost the next person a 412.
+ */
+export async function updateDocumentProfile(
+  token: string,
+  uploadId: string,
+  version: number,
+  changes: { documentType?: string | null; validUntil?: string | null; supersedesUploadId?: string },
+  key: string,
+): Promise<ObjectUpload> {
+  const response = await apiFetch(`/api/v1/uploads/${uploadId}/document-profile`, {
+    method: "PATCH",
+    headers: {
+      ...authHeader(token),
+      "content-type": "application/json",
+      "idempotency-key": key,
+      "if-match": `"${version}"`,
+    },
+    body: JSON.stringify(changes),
+  });
+  return parse<ObjectUpload>(response);
+}
+
+export async function getDocumentGraph(token: string, projectId: string): Promise<DocumentGraph> {
+  const response = await apiFetch(`/api/v1/projects/${projectId}/document-graph`, {
+    headers: authHeader(token),
+    cache: "no-store",
+  });
+  return parse<DocumentGraph>(response);
+}
+
+export async function createDocumentLink(
+  token: string,
+  projectId: string,
+  input: {
+    upstreamUploadId: string;
+    downstreamUploadId: string;
+    kind: DocumentLinkKind;
+    note: string | null;
+  },
+  key: string,
+): Promise<DocumentLink> {
+  const response = await apiFetch(`/api/v1/projects/${projectId}/document-links`, {
+    method: "POST",
+    headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+    body: JSON.stringify(input),
+  });
+  return parse<DocumentLink>(response);
+}
+
+export async function removeDocumentLink(
+  token: string,
+  linkId: string,
+  reason: string,
+  key: string,
+): Promise<DocumentLink> {
+  const response = await apiFetch(`/api/v1/document-links/${linkId}/removal`, {
+    method: "POST",
+    headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+    body: JSON.stringify({ reason }),
+  });
+  return parse<DocumentLink>(response);
+}
+
+export async function getDocumentImpactPreview(
+  token: string,
+  uploadId: string,
+): Promise<DocumentImpactPreview> {
+  const response = await apiFetch(`/api/v1/uploads/${uploadId}/impact-preview`, {
+    headers: authHeader(token),
+    cache: "no-store",
+  });
+  return parse<DocumentImpactPreview>(response);
+}
+
+export async function listDocumentImpacts(
+  token: string,
+  projectId: string,
+): Promise<{ items: DocumentImpact[]; openCount: number }> {
+  const response = await apiFetch(`/api/v1/projects/${projectId}/document-impacts`, {
+    headers: authHeader(token),
+    cache: "no-store",
+  });
+  return parse<{ items: DocumentImpact[]; openCount: number }>(response);
+}
+
+/** All or nothing on the server: one closed or missing impact refuses the whole batch. */
+export async function resolveDocumentImpacts(
+  token: string,
+  projectId: string,
+  input: {
+    impactIds: string[];
+    resolution: "no_change_needed" | "not_applicable";
+    note: string;
+  },
+  key: string,
+): Promise<{ items: DocumentImpact[] }> {
+  const response = await apiFetch(`/api/v1/projects/${projectId}/document-impacts/resolutions`, {
+    method: "POST",
+    headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+    body: JSON.stringify(input),
+  });
+  return parse<{ items: DocumentImpact[] }>(response);
+}
+
+export async function listDocumentLinkRules(
+  token: string,
+): Promise<{ items: DocumentLinkRule[] }> {
+  const response = await apiFetch("/api/v1/document-link-rules", {
+    headers: authHeader(token),
+    cache: "no-store",
+  });
+  return parse<{ items: DocumentLinkRule[] }>(response);
+}
+
+export async function createDocumentLinkRule(
+  token: string,
+  input: {
+    upstreamType: string;
+    downstreamType: string;
+    kind: DocumentLinkKind;
+    note: string | null;
+  },
+  key: string,
+): Promise<DocumentLinkRule & { linksCreated: number }> {
+  const response = await apiFetch("/api/v1/document-link-rules", {
+    method: "POST",
+    headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+    body: JSON.stringify(input),
+  });
+  return parse<DocumentLinkRule & { linksCreated: number }>(response);
+}
+
+export async function retireDocumentLinkRule(
+  token: string,
+  ruleId: string,
+  note: string,
+  key: string,
+): Promise<DocumentLinkRule> {
+  const response = await apiFetch(`/api/v1/document-link-rules/${ruleId}/retirement`, {
+    method: "POST",
+    headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+    body: JSON.stringify({ note }),
+  });
+  return parse<DocumentLinkRule>(response);
 }
 
 // --- Readiness / Gate -------------------------------------------------------
@@ -1703,7 +1946,12 @@ export async function searchPublicRecords(q: string): Promise<PublicSearchResult
 
 export interface Notification {
   id: string;
-  kind: "review_assigned" | "readiness_gap" | "evidence_stale" | "registry_revoked";
+  kind:
+    | "review_assigned"
+    | "readiness_gap"
+    | "evidence_stale"
+    | "registry_revoked"
+    | "document_impact";
   /** Addressed to me, or to a role I hold? */
   audience: "you" | "role";
   audienceRole: string | null;

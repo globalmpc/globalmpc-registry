@@ -14,7 +14,9 @@ import {
   createUpload,
   listUploads,
   promoteUpload,
+  getDocumentGraph,
   type Claim,
+  type DocumentNode,
   type ObjectUpload,
   type ScannerStatus,
   type SourceReceipt,
@@ -22,6 +24,7 @@ import {
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { GradeBadge, SourceResultBadge } from "@/components/StatusBadge";
+import { validityText } from "@/lib/documents";
 import type { Grade, SourceResult } from "@mpc/domain";
 
 /**
@@ -42,6 +45,9 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
   const [claims, setClaims] = useState<Claim[]>([]);
   const [uploads, setUploads] = useState<ObjectUpload[]>([]);
   const [scanner, setScanner] = useState<ScannerStatus | null>(null);
+  // Open impacts and server-side day counts per document. The upload list itself does not
+  // carry them — they depend on links, not on the file.
+  const [nodes, setNodes] = useState<Record<string, DocumentNode>>({});
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -50,15 +56,17 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
     if (!token) return;
     setLoading(true);
     try {
-      const [receiptData, claimData, uploadData] = await Promise.all([
+      const [receiptData, claimData, uploadData, graphData] = await Promise.all([
         listSourceReceipts(token, id),
         listClaims(token, id),
         listUploads(token, id),
+        getDocumentGraph(token, id),
       ]);
       setReceipts(receiptData.items);
       setClaims(claimData.items);
       setUploads(uploadData.items);
       setScanner(uploadData.scanner);
+      setNodes(Object.fromEntries(graphData.nodes.map((node) => [node.uploadId, node])));
       setError(null);
     } catch (caught) {
       setError(caught);
@@ -276,7 +284,12 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
       ) : null}
 
       <div className="panel">
-        <h2>Files</h2>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+          <h2>Files</h2>
+          <Link href={`/w/projects/${id}/impacts`} data-testid="impacts-link">
+            Documents that need a second look →
+          </Link>
+        </div>
         <p className="sub" style={{ marginTop: 0 }}>
           {/* If uploads became evidence immediately, unscanned files would become review material. */}
           An uploaded file does not become evidence on arrival. It enters quarantine, and only
@@ -308,8 +321,11 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
               <thead>
                 <tr>
                   <th>File</th>
+                  <th>Type</th>
+                  <th>Valid until</th>
                   <th>State</th>
                   <th>Size</th>
+                  <th>Open impacts</th>
                   <th>Next action</th>
                   <th />
                 </tr>
@@ -318,6 +334,16 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                 {uploads.map((upload) => (
                   <tr key={upload.id}>
                     <td className="meta">{upload.originalFilename ?? "—"}</td>
+                    <td className="meta">{upload.documentType ?? "—"}</td>
+                    <td
+                      className="mono meta"
+                      data-testid={`upload-validity-${upload.id}`}
+                      style={
+                        nodes[upload.id]?.expired ? { color: "var(--destructive-text)" } : undefined
+                      }
+                    >
+                      {validityText(upload.validUntil, nodes[upload.id]?.daysUntilExpiry)}
+                    </td>
                     <td>
                       <span
                         className="mono"
@@ -328,10 +354,19 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                       </span>
                     </td>
                     <td className="mono meta">{Math.ceil(upload.byteSize / 1024)} KB</td>
+                    <td className="mono" data-testid={`upload-impacts-${upload.id}`}>
+                      {nodes[upload.id]?.openImpactCount ?? 0}
+                    </td>
                     <td className="meta">{upload.nextActions.join(", ") || "—"}</td>
                     <td>
                       <div className="row" style={{ gap: 6 }}>
-                        {upload.state === "received" || upload.state === "quarantined" ? (
+                        <Link
+                          href={`/w/projects/${id}/documents/${upload.id}`}
+                          data-testid={`relations-${upload.id}`}
+                        >
+                          Relations
+                        </Link>
+                                                {upload.state === "received" || upload.state === "quarantined" ? (
                           // A separate worker performs the scan. If the screen could
                           // produce a result, quarantine would be a formality.
                           <span className="meta">Awaiting scan</span>

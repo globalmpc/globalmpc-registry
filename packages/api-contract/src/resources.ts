@@ -174,6 +174,12 @@ export const objectUpload = z.object({
   scannedAt: isoDateTime.nullable(),
   promotedArtifactId: z.string().nullable(),
   rejectionReason: z.string().nullable(),
+  /** What the document is, in the uploader's words. Free text — there is no settled type list. */
+  documentType: z.string().nullable(),
+  /** Last valid day (`YYYY-MM-DD`), when the document has one. */
+  validUntil: z.string().nullable(),
+  /** The earlier upload this one replaces. Takes effect on promotion. */
+  supersedesUploadId: z.string().nullable(),
   /** What can be done next from this state. Not left to guesswork. */
   nextActions: z.array(z.string()),
   version: z.number().int().positive(),
@@ -1534,7 +1540,13 @@ export const myWork = z.object({
 export const notification = z
   .object({
     id: z.string(),
-    kind: z.enum(["review_assigned", "readiness_gap", "evidence_stale", "registry_revoked"]),
+    kind: z.enum([
+      "review_assigned",
+      "readiness_gap",
+      "evidence_stale",
+      "registry_revoked",
+      "document_impact",
+    ]),
     /** Sent to me, or to a role I hold. */
     audience: z.enum(["you", "role"]),
     audienceRole: z.string().nullable(),
@@ -1646,3 +1658,179 @@ export const createNotificationSinkRequest = z.object({
 export const updateNotificationSinkRequest = z.object({
   state: z.enum(["active", "paused"]),
 });
+
+// --- Document relations ------------------------------------------------------
+//
+// Documents rest on one another: a drilling report on the exploration license, an assay
+// certificate on the lab's accreditation. People declare those relations — a user links two
+// documents, or an operator declares a type rule — and a replacement or expiry travels along
+// them as an impact: a request for a second look, never an automatic change.
+
+/** A calendar day, `YYYY-MM-DD`. The route also rejects days that do not exist. */
+const calendarDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
+
+/** Free text: there is no settled list of document types, so none is imposed here. */
+const documentTypeText = z.string().trim().min(1).max(80);
+
+export const DOCUMENT_LINK_KINDS = ["depends_on", "references"] as const;
+
+/**
+ * `depends_on` — the downstream document rests on the upstream one; a change keeps travelling
+ * to whatever rests on the downstream document. `references` — it is flagged and the change
+ * stops there.
+ */
+export const documentLinkKind = z.enum(DOCUMENT_LINK_KINDS);
+
+/**
+ * Change what a document is, until when it holds, or which document it replaces.
+ *
+ * Send only the fields to change; `null` clears `documentType` or `validUntil`. Which document
+ * an upload replaces is set once — a different predecessor means a different upload.
+ */
+export const updateDocumentProfileRequest = z
+  .object({
+    documentType: documentTypeText.nullable().optional(),
+    validUntil: calendarDate.nullable().optional(),
+    supersedesUploadId: z.string().uuid().optional(),
+  })
+  .strict();
+
+export const documentNode = z.object({
+  uploadId: z.string(),
+  /** Restricted, as on the upload itself. Never reaches a public projection. */
+  originalFilename: z.string().nullable(),
+  state: objectUpload.shape.state,
+  documentType: z.string().nullable(),
+  validUntil: z.string().nullable(),
+  /** Past `validUntil` today. */
+  expired: z.boolean(),
+  /** Days from today to `validUntil`, negative once expired. No warning threshold is applied. */
+  daysUntilExpiry: z.number().int().nullable(),
+  supersedesUploadId: z.string().nullable(),
+  /** The promoted upload that replaced this one. A replaced document is kept, not deleted. */
+  supersededByUploadId: z.string().nullable(),
+  openImpactCount: z.number().int().nonnegative(),
+  version: z.number().int().positive(),
+});
+
+export const documentLink = z.object({
+  id: z.string(),
+  upstreamUploadId: z.string(),
+  downstreamUploadId: z.string(),
+  kind: documentLinkKind,
+  /** Who made it: a person, an operator's type rule, or the move to a new version. */
+  origin: z.enum(["user", "rule", "carried_over"]),
+  ruleId: z.string().nullable(),
+  note: z.string().nullable(),
+  createdBy: z.string().nullable(),
+  createdAt: isoDateTime,
+  removedAt: isoDateTime.nullable(),
+  removalReason: z.string().nullable(),
+});
+
+export const documentGraph = z.object({
+  nodes: documentNode.array(),
+  /** Active links only. Removed ones stay in the database for the record. */
+  links: documentLink.array(),
+});
+
+export const createDocumentLinkRequest = z
+  .object({
+    /** The document rested on. */
+    upstreamUploadId: z.string().uuid(),
+    /** The document that rests on it — the one to look at again when upstream changes. */
+    downstreamUploadId: z.string().uuid(),
+    kind: documentLinkKind,
+    note: z.string().trim().min(1).max(500).nullable().default(null),
+  })
+  .strict();
+
+export const removeDocumentLinkRequest = z
+  .object({ reason: z.string().trim().min(1).max(500) })
+  .strict();
+
+/** Documents that would need a second look if this one changed. Nothing is recorded. */
+export const documentImpactPreview = z.object({
+  uploadId: z.string(),
+  items: z.array(
+    z.object({
+      uploadId: z.string(),
+      depth: z.number().int().positive(),
+      /** The document just above on the shortest route — enough to draw the tree. */
+      viaUploadId: z.string(),
+      viaKind: documentLinkKind,
+    }),
+  ),
+});
+
+/**
+ * A document that needs a second look, and why.
+ *
+ * An open impact is a request to check, not a finding that the document is wrong.
+ */
+export const documentImpact = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  uploadId: z.string(),
+  originUploadId: z.string(),
+  successorUploadId: z.string().nullable(),
+  cause: z.enum(["superseded", "expired"]),
+  depth: z.number().int().nonnegative(),
+  viaUploadId: z.string().nullable(),
+  viaKind: documentLinkKind.nullable(),
+  detectedAt: isoDateTime,
+  resolution: z.enum(["open", "revised", "no_change_needed", "not_applicable"]),
+  resolvedAt: isoDateTime.nullable(),
+  /** `null` with `revised`: the database closes it when a new version takes effect. */
+  resolvedBy: z.string().nullable(),
+  revisedByUploadId: z.string().nullable(),
+  resolutionNote: z.string().nullable(),
+  /** What can be done with it. The server decides so the UI does not guess. */
+  nextActions: z.array(z.string()),
+});
+
+export const documentImpactList = z.object({
+  items: documentImpact.array(),
+  openCount: z.number().int().nonnegative(),
+});
+
+/**
+ * Close several impacts with one judgment. All or nothing — a partial success would leave the
+ * screen unsure which ones were judged.
+ *
+ * `revised` is not accepted: it comes only from promoting a new version of the document.
+ */
+export const resolveDocumentImpactsRequest = z
+  .object({
+    impactIds: z.array(z.string().uuid()).min(1).max(200),
+    resolution: z.enum(["no_change_needed", "not_applicable"]),
+    note: z.string().trim().min(1).max(1000),
+  })
+  .strict();
+
+export const documentLinkRule = z.object({
+  id: z.string(),
+  upstreamType: z.string(),
+  downstreamType: z.string(),
+  kind: documentLinkKind,
+  note: z.string().nullable(),
+  createdBy: z.string(),
+  createdAt: isoDateTime,
+  retiredAt: isoDateTime.nullable(),
+  retirementNote: z.string().nullable(),
+});
+
+/** "Documents of `downstreamType` rest on documents of `upstreamType`" across the tenant. */
+export const createDocumentLinkRuleRequest = z
+  .object({
+    upstreamType: documentTypeText,
+    downstreamType: documentTypeText,
+    kind: documentLinkKind,
+    note: z.string().trim().min(1).max(500).nullable().default(null),
+  })
+  .strict();
+
+/** Retiring a rule keeps the links it already made — people may have come to rely on them. */
+export const retireDocumentLinkRuleRequest = z
+  .object({ note: z.string().trim().min(1).max(500) })
+  .strict();
