@@ -30,6 +30,7 @@ const KIND_LABEL: Record<Notification["kind"], string> = {
   readiness_gap: "Readiness gap",
   evidence_stale: "Evidence shaken",
   registry_revoked: "Record revoked",
+  document_impact: "Document needs a second look",
 };
 
 export default function NotificationsPage() {

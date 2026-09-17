@@ -359,6 +359,18 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     allowedRoles: ["data_steward"],
   },
   /**
+   * Tenant-wide document type rules ("documents of type Y rest on documents of type X").
+   *
+   * Linking two documents is Data Room work and rides on `source.upload`. A rule is different:
+   * it writes links into every project of the tenant. A role narrowed to one organization's
+   * projects would reach into other organizations' Data Rooms through it, so only a tenant-wide
+   * role holds it.
+   */
+  "document.rule.manage": {
+    action: "document.rule.manage",
+    allowedRoles: ["mpc_operator"],
+  },
+  /**
    * Raise a dispute — 04 §4.2.
    *
    * Does not reuse `claim.curate` (data_steward only). Whoever finds a problem may

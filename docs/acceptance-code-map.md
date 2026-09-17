@@ -31,7 +31,7 @@ contract deliverables, so items that need an apps implementation are not closed 
 | AC-18 | No record ≠ unavailable ≠ N/A | `packages/domain/src/source-result.ts`<br>`packages/ui/src/status-display.ts` | `domain/test/source-result.test.ts`<br>`ui/test/ui-contract.test.ts` |
 | AC-19 | Schema drift | `packages/domain/src/source-result.ts`<br>`packages/domain/src/machines.ts` | `domain/test/source-result.test.ts`<br>`domain/test/machines.test.ts` |
 | AC-20 | Raw/normalized mismatch | `packages/db` artifacts.kind | When apps start |
-| AC-21 | Change propagation | `packages/db` lineage_edges | `db/test/schema.test.ts` |
+| AC-21 | Change propagation | `packages/db` lineage_edges<br>`packages/db/migrations/0045_document_impact.sql` (a replaced or expired document flags the documents resting on it and the claims verified against it)<br>`apps/api/src/routes/documents.ts` | `db/test/schema.test.ts`<br>`api/test/document-impact.test.ts`<br>`worker/test/document-expiry.test.ts` |
 | AC-22 | Public/private/on-chain separation | `packages/domain/src/disclosure.ts`<br>`packages/api-contract/src/resources.ts`<br>`packages/canonical/src/leaf.ts` | `domain/test/disclosure.test.ts`<br>`api-contract/test/contract.test.ts` |
 | AC-23 | Inclusion proof limitations | `packages/api-contract/src/resources.ts`<br>`packages/canonical/src/merkle.ts` | `api-contract/test/contract.test.ts`<br>`canonical/test/merkle.test.ts` |
 | AC-24 | Mongolia manual operation | `packages/domain/src/source-result.ts` (collection method) | When R5 starts |

@@ -32,15 +32,15 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 
 | App | Contents | Tests |
 |---|---|---|
-| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 98 routes | 757 |
-| `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 20 · E2E 95 |
-| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 143 |
+| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 108 routes | 780 |
+| `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 22 · E2E 96 |
+| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 145 |
 
 **Contracts**
 
 `contracts/` — `RegistryAnchorV1` + 10 deferred interfaces, 33 Foundry tests (including fuzz and invariant).
 
-Total: vitest 1462 + Playwright 95 + Foundry 33 + route 98. (measured 2026-09-15)
+Total: vitest 1489 + Playwright 96 + Foundry 33 + route 108. (measured 2026-09-15)
 
 ## Running
 
@@ -318,7 +318,7 @@ Bypassing them breaks tests or gets rejected by the DB.
 
 ## What does not exist yet
 
-**API**: all 98 routes in the contract (`ROUTES`) are implemented. `plannedRoutes()` is empty.
+**API**: all 108 routes in the contract (`ROUTES`) are implemented. `plannedRoutes()` is empty.
 
 **Unimplemented gaps**
 

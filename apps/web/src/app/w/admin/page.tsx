@@ -18,11 +18,17 @@ import {
   listRoleGrants,
   listRoleRevocations,
   newIdempotencyKey,
+  createDocumentLinkRule,
+  listDocumentLinkRules,
+  retireDocumentLinkRule,
   type AdminSubject,
+  type DocumentLinkKind,
+  type DocumentLinkRule,
   type RoleGrant,
   type RoleRevocation,
   type RoleRevocationReasonCode,
 } from "@/lib/api";
+import { KIND_EXPLANATION } from "@/lib/documents";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { Address } from "@/components/Address";
@@ -104,21 +110,31 @@ export default function AdminPage() {
   const [revokeFor, setRevokeFor] = useState<RevokeTarget | null>(null);
   const [revokeCode, setRevokeCode] = useState<RoleRevocationReasonCode>("offboarding");
   const [revokeReason, setRevokeReason] = useState("");
+  const [rules, setRules] = useState<DocumentLinkRule[]>([]);
+  const [ruleUpstream, setRuleUpstream] = useState("");
+  const [ruleDownstream, setRuleDownstream] = useState("");
+  const [ruleKind, setRuleKind] = useState<DocumentLinkKind>("depends_on");
+  const [ruleNote, setRuleNote] = useState("");
+  const [ruleResult, setRuleResult] = useState<string | null>(null);
+  const [retireFor, setRetireFor] = useState<string | null>(null);
+  const [retireNote, setRetireNote] = useState("");
 
   const reload = useCallback(async () => {
     if (!token) return;
     setBusy(true);
     try {
-      const [subjectPage, grantPage, revocationPage, sinkPage] = await Promise.all([
+      const [subjectPage, grantPage, revocationPage, sinkPage, rulePage] = await Promise.all([
         listAdminSubjects(token),
         listRoleGrants(token),
         listRoleRevocations(token),
         listNotificationSinks(token),
+        listDocumentLinkRules(token),
       ]);
       setSubjects(subjectPage.items);
       setGrants(grantPage.items);
       setRevocations(revocationPage.items);
       setSinks(sinkPage.items);
+      setRules(rulePage.items);
       setError(null);
     } catch (caught) {
       setError(caught);
@@ -540,6 +556,188 @@ export default function AdminPage() {
           </form>
         </div>
       ) : null}
+
+      {/*
+        Document type rules.
+
+        A rule writes links into every project of the tenant, which is why the server gives it
+        to a tenant-wide role only. Retiring keeps the links already made — people may have come
+        to rely on them — so the screen says that before the button, not after.
+      */}
+      <div className="panel" data-testid="admin-document-rules">
+        <h2>Document type rules</h2>
+        <p className="sub" style={{ marginTop: 0 }}>
+          &ldquo;Documents of one type rest on documents of another.&rdquo; A rule links the
+          current documents of every project now, and each document later given a matching type.
+          People can still add and remove links themselves; types match regardless of case.
+        </p>
+
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void run(async () => {
+              const created = await createDocumentLinkRule(
+                token!,
+                {
+                  upstreamType: ruleUpstream.trim(),
+                  downstreamType: ruleDownstream.trim(),
+                  kind: ruleKind,
+                  note: ruleNote.trim() === "" ? null : ruleNote.trim(),
+                },
+                newIdempotencyKey(),
+              );
+              setRuleResult(
+                `Rule added. It linked ${created.linksCreated} existing document pair${
+                  created.linksCreated === 1 ? "" : "s"
+                }.`,
+              );
+              setRuleUpstream("");
+              setRuleDownstream("");
+              setRuleNote("");
+            });
+          }}
+        >
+          <div className="row" style={{ alignItems: "flex-end" }}>
+            <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 200 }}>
+              <label htmlFor="rule-downstream">Documents of type</label>
+              <input
+                id="rule-downstream"
+                value={ruleDownstream}
+                maxLength={80}
+                placeholder="Drilling report"
+                onChange={(event) => setRuleDownstream(event.target.value)}
+              />
+            </div>
+            <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 200 }}>
+              <label htmlFor="rule-upstream">rest on documents of type</label>
+              <input
+                id="rule-upstream"
+                value={ruleUpstream}
+                maxLength={80}
+                placeholder="Exploration license"
+                onChange={(event) => setRuleUpstream(event.target.value)}
+              />
+            </div>
+          </div>
+          <div className="field" style={{ marginTop: 12 }}>
+            <label htmlFor="rule-kind">Kind</label>
+            <select
+              id="rule-kind"
+              value={ruleKind}
+              onChange={(event) => setRuleKind(event.target.value as DocumentLinkKind)}
+            >
+              <option value="depends_on">{KIND_EXPLANATION.depends_on}</option>
+              <option value="references">{KIND_EXPLANATION.references}</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="rule-note">Note (optional)</label>
+            <input
+              id="rule-note"
+              value={ruleNote}
+              maxLength={500}
+              onChange={(event) => setRuleNote(event.target.value)}
+            />
+          </div>
+          <button
+            className="primary"
+            type="submit"
+            disabled={busy || ruleUpstream.trim() === "" || ruleDownstream.trim() === ""}
+          >
+            Add rule
+          </button>
+        </form>
+        {ruleResult ? (
+          <p className="meta" data-testid="rule-result">
+            {ruleResult}
+          </p>
+        ) : null}
+
+        {rules.length === 0 ? (
+          <p className="sub" style={{ margin: "12px 0 0" }}>
+            No rule is declared. Documents are linked only by the people who work with them.
+          </p>
+        ) : (
+          <div className="table-scroll" style={{ marginTop: 12 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Documents of type</th>
+                  <th>Rest on type</th>
+                  <th>Kind</th>
+                  <th>Note</th>
+                  <th>State</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rules.map((rule) => (
+                  <tr key={rule.id}>
+                    <td>{rule.downstreamType}</td>
+                    <td>{rule.upstreamType}</td>
+                    <td className="mono meta">{rule.kind}</td>
+                    <td className="meta">{rule.note ?? "—"}</td>
+                    <td className="meta">
+                      {rule.retiredAt ? (
+                        <>
+                          retired {rule.retiredAt.slice(0, 10)}
+                          {rule.retirementNote ? <div>{rule.retirementNote}</div> : null}
+                        </>
+                      ) : (
+                        "active"
+                      )}
+                    </td>
+                    <td>
+                      {rule.retiredAt ? null : (
+                        <button onClick={() => setRetireFor(rule.id)}>Retire</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {retireFor ? (
+          <form
+            style={{ marginTop: 12 }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(async () => {
+                await retireDocumentLinkRule(
+                  token!,
+                  retireFor,
+                  retireNote.trim(),
+                  newIdempotencyKey(),
+                );
+                setRetireFor(null);
+                setRetireNote("");
+              });
+            }}
+          >
+            <p className="sub" style={{ marginTop: 0 }}>
+              Retiring stops new links. The links this rule already made stay, and people can
+              remove them one by one.
+            </p>
+            <div className="field">
+              <label htmlFor="retire-note">Why</label>
+              <input
+                id="retire-note"
+                value={retireNote}
+                maxLength={500}
+                onChange={(event) => setRetireNote(event.target.value)}
+              />
+            </div>
+            <button className="primary" type="submit" disabled={retireNote.trim() === ""}>
+              Retire rule
+            </button>{" "}
+            <button type="button" onClick={() => setRetireFor(null)}>
+              Cancel
+            </button>
+          </form>
+        ) : null}
+      </div>
 
       {/*
         Notification sinks.

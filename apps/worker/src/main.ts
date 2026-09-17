@@ -1,5 +1,6 @@
 import postgres from "postgres";
-import { resolveWebhookSecret } from "@mpc/config";
+import { resolveSecret, resolveWebhookSecret } from "@mpc/config";
+import { createExpirySweep, DEFAULT_EXPIRY_SWEEP_MS } from "./document-expiry.js";
 import { createHeartbeat } from "./heartbeat.js";
 import { deliverOnce, deliveryBacklog } from "./notification-delivery.js";
 import { backlogStats, publishBatch, type OutboxRow } from "./outbox-publisher.js";
@@ -38,6 +39,11 @@ const NOTIFY_MAX_ATTEMPTS = Number(process.env["NOTIFY_MAX_ATTEMPTS"] ?? "5");
 const NOTIFY_BACKOFF_MS = Number(process.env["NOTIFY_BACKOFF_MS"] ?? "30000");
 const NOTIFY_TIMEOUT_MS = Number(process.env["NOTIFY_TIMEOUT_MS"] ?? "10000");
 
+/** Document expiry sweep interval (`document-expiry.ts`). */
+const EXPIRY_SWEEP_MS = Number(
+  process.env["DOCUMENT_EXPIRY_SWEEP_MS"] ?? String(DEFAULT_EXPIRY_SWEEP_MS),
+);
+
 const sql = postgres(databaseUrl, { onnotice: () => {} });
 
 function emit(record: Record<string, unknown>): void {
@@ -71,10 +77,22 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 emit({ level: "info", msg: "outbox.worker.started", pollIntervalMs: POLL_INTERVAL_MS });
 
 const heartbeat = createHeartbeat(sql, "outbox");
+const sweepExpiry = createExpirySweep(sql, EXPIRY_SWEEP_MS);
 
 while (running) {
   try {
     const result = await publishBatch(sql, publish);
+
+    // A failing sweep must not hold up publishing. It is reported and retried on the next
+    // interval; the documents stay as they are meanwhile.
+    try {
+      const expiry = await sweepExpiry();
+      if (expiry.ran && expiry.flagged > 0) {
+        emit({ level: "info", msg: "document.expiry.flagged", flagged: expiry.flagged });
+      }
+    } catch (error) {
+      emit({ level: "error", msg: "document.expiry.sweep_failed", error: String(error) });
+    }
 
     // Notification delivery also handles one item per cycle.
     const delivery = await deliverOnce(

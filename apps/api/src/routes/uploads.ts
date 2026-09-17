@@ -114,7 +114,7 @@ const scanResultSchema = z.object({
   detail: z.string().optional(),
 });
 
-interface UploadRow {
+export interface UploadRow {
   readonly id: string;
   readonly project_id: string;
   readonly object_key: string;
@@ -128,7 +128,17 @@ interface UploadRow {
   readonly scanned_at: Date | null;
   readonly promoted_artifact_id: string | null;
   readonly rejection_reason: string | null;
+  readonly document_type: string | null;
+  /** A DATE column. The driver hands it over as a Date at UTC midnight. */
+  readonly valid_until: Date | string | null;
+  readonly supersedes_upload_id: string | null;
   readonly version: number;
+}
+
+/** `YYYY-MM-DD` from a DATE column, whichever form the driver used. */
+export function calendarDay(value: Date | string | null): string | null {
+  if (value === null) return null;
+  return value instanceof Date ? value.toISOString().slice(0, 10) : value.slice(0, 10);
 }
 
 /**
@@ -169,10 +179,16 @@ function toView(row: UploadRow) {
     scannedAt: row.scanned_at?.toISOString() ?? null,
     promotedArtifactId: row.promoted_artifact_id,
     rejectionReason: row.rejection_reason,
+    documentType: row.document_type,
+    validUntil: calendarDay(row.valid_until),
+    supersedesUploadId: row.supersedes_upload_id,
     nextActions: nextActions(row.state),
     version: row.version,
   };
 }
+
+/** The same view for the document-relations routes. One shape, so the screens agree. */
+export const toUploadView = toView;
 
 /**
  * The project an upload belongs to.
@@ -180,7 +196,7 @@ function toView(row: UploadRow) {
  * Authorization runs **first, outside the transaction**. An idempotent replay returns the
  * stored response as is, so inside the block a replay of someone else's key skips authorization.
  */
-async function uploadProjectId(
+export async function uploadProjectId(
   sql: postgres.Sql,
   tenantId: string,
   uploadId: string,

@@ -5516,6 +5516,24 @@
                                   "null"
                                 ]
                               },
+                              "documentType": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "validUntil": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "supersedesUploadId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
                               "nextActions": {
                                 "type": "array",
                                 "items": {
@@ -5541,6 +5559,9 @@
                               "scannedAt",
                               "promotedArtifactId",
                               "rejectionReason",
+                              "documentType",
+                              "validUntil",
+                              "supersedesUploadId",
                               "nextActions",
                               "version"
                             ],
@@ -5961,6 +5982,24 @@
                             "null"
                           ]
                         },
+                        "documentType": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "validUntil": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "supersedesUploadId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "nextActions": {
                           "type": "array",
                           "items": {
@@ -5986,6 +6025,9 @@
                         "scannedAt",
                         "promotedArtifactId",
                         "rejectionReason",
+                        "documentType",
+                        "validUntil",
+                        "supersedesUploadId",
                         "nextActions",
                         "version"
                       ],
@@ -6367,6 +6409,24 @@
                             "null"
                           ]
                         },
+                        "documentType": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "validUntil": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "supersedesUploadId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "nextActions": {
                           "type": "array",
                           "items": {
@@ -6392,6 +6452,9 @@
                         "scannedAt",
                         "promotedArtifactId",
                         "rejectionReason",
+                        "documentType",
+                        "validUntil",
+                        "supersedesUploadId",
                         "nextActions",
                         "version"
                       ],
@@ -6782,6 +6845,24 @@
                             "null"
                           ]
                         },
+                        "documentType": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "validUntil": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "supersedesUploadId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "nextActions": {
                           "type": "array",
                           "items": {
@@ -6807,6 +6888,9 @@
                         "scannedAt",
                         "promotedArtifactId",
                         "rejectionReason",
+                        "documentType",
+                        "validUntil",
+                        "supersedesUploadId",
                         "nextActions",
                         "version"
                       ],
@@ -7197,6 +7281,24 @@
                             "null"
                           ]
                         },
+                        "documentType": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "validUntil": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "supersedesUploadId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "nextActions": {
                           "type": "array",
                           "items": {
@@ -7222,6 +7324,9 @@
                         "scannedAt",
                         "promotedArtifactId",
                         "rejectionReason",
+                        "documentType",
+                        "validUntil",
+                        "supersedesUploadId",
                         "nextActions",
                         "version"
                       ],
@@ -17254,6 +17359,4272 @@
         }
       }
     },
+    "/api/v1/uploads/{uploadId}/document-profile": {
+      "patch": {
+        "operationId": "updateDocumentProfile",
+        "summary": "Set a document's type, validity date, or the document it replaces",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "uploadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Expected version of the versioned resource. Format: `\"3\"` (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/updateDocumentProfileResponse",
+                  "definitions": {
+                    "updateDocumentProfileResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "projectId": {
+                          "type": "string"
+                        },
+                        "contentHash": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "byteSize": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        },
+                        "contentType": {
+                          "type": "string"
+                        },
+                        "originalFilename": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "sensitivity": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "received",
+                            "quarantined",
+                            "scanned_clean",
+                            "scanned_infected",
+                            "promoted",
+                            "rejected"
+                          ]
+                        },
+                        "uploadedAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "scannedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "promotedArtifactId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "rejectionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "documentType": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "validUntil": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "supersedesUploadId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "nextActions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "version": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "projectId",
+                        "contentHash",
+                        "byteSize",
+                        "contentType",
+                        "originalFilename",
+                        "sensitivity",
+                        "state",
+                        "uploadedAt",
+                        "scannedAt",
+                        "promotedArtifactId",
+                        "rejectionReason",
+                        "documentType",
+                        "validUntil",
+                        "supersedesUploadId",
+                        "nextActions",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "source.upload",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/updateDocumentProfileRequest",
+                "definitions": {
+                  "updateDocumentProfileRequest": {
+                    "type": "object",
+                    "properties": {
+                      "documentType": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "validUntil": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "supersedesUploadId": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/document-graph": {
+      "get": {
+        "operationId": "getDocumentGraph",
+        "summary": "Documents of a project with their active links, validity, and open impacts",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/getDocumentGraphResponse",
+                  "definitions": {
+                    "getDocumentGraphResponse": {
+                      "type": "object",
+                      "properties": {
+                        "nodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "uploadId": {
+                                "type": "string"
+                              },
+                              "originalFilename": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "received",
+                                  "quarantined",
+                                  "scanned_clean",
+                                  "scanned_infected",
+                                  "promoted",
+                                  "rejected"
+                                ]
+                              },
+                              "documentType": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "validUntil": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "expired": {
+                                "type": "boolean"
+                              },
+                              "daysUntilExpiry": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "supersedesUploadId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "supersededByUploadId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "openImpactCount": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "version": {
+                                "type": "integer",
+                                "exclusiveMinimum": true,
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "uploadId",
+                              "originalFilename",
+                              "state",
+                              "documentType",
+                              "validUntil",
+                              "expired",
+                              "daysUntilExpiry",
+                              "supersedesUploadId",
+                              "supersededByUploadId",
+                              "openImpactCount",
+                              "version"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "links": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "upstreamUploadId": {
+                                "type": "string"
+                              },
+                              "downstreamUploadId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "depends_on",
+                                  "references"
+                                ]
+                              },
+                              "origin": {
+                                "type": "string",
+                                "enum": [
+                                  "user",
+                                  "rule",
+                                  "carried_over"
+                                ]
+                              },
+                              "ruleId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "note": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "createdBy": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              },
+                              "removedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "removalReason": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "upstreamUploadId",
+                              "downstreamUploadId",
+                              "kind",
+                              "origin",
+                              "ruleId",
+                              "note",
+                              "createdBy",
+                              "createdAt",
+                              "removedAt",
+                              "removalReason"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "nodes",
+                        "links"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/projects/{projectId}/document-links": {
+      "post": {
+        "operationId": "createDocumentLink",
+        "summary": "Link two documents — the downstream one rests on the upstream one",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/createDocumentLinkResponse",
+                  "definitions": {
+                    "createDocumentLinkResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "upstreamUploadId": {
+                          "type": "string"
+                        },
+                        "downstreamUploadId": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "depends_on",
+                            "references"
+                          ]
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "rule",
+                            "carried_over"
+                          ]
+                        },
+                        "ruleId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "note": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "removedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "removalReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "upstreamUploadId",
+                        "downstreamUploadId",
+                        "kind",
+                        "origin",
+                        "ruleId",
+                        "note",
+                        "createdBy",
+                        "createdAt",
+                        "removedAt",
+                        "removalReason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "source.upload",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/createDocumentLinkRequest",
+                "definitions": {
+                  "createDocumentLinkRequest": {
+                    "type": "object",
+                    "properties": {
+                      "upstreamUploadId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "downstreamUploadId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "depends_on",
+                          "references"
+                        ]
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      }
+                    },
+                    "required": [
+                      "upstreamUploadId",
+                      "downstreamUploadId",
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/document-links/{linkId}/removal": {
+      "post": {
+        "operationId": "removeDocumentLink",
+        "summary": "Remove a link with a reason — links are never deleted",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "linkId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/removeDocumentLinkResponse",
+                  "definitions": {
+                    "removeDocumentLinkResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "upstreamUploadId": {
+                          "type": "string"
+                        },
+                        "downstreamUploadId": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "depends_on",
+                            "references"
+                          ]
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "rule",
+                            "carried_over"
+                          ]
+                        },
+                        "ruleId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "note": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "removedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "removalReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "upstreamUploadId",
+                        "downstreamUploadId",
+                        "kind",
+                        "origin",
+                        "ruleId",
+                        "note",
+                        "createdBy",
+                        "createdAt",
+                        "removedAt",
+                        "removalReason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "source.upload",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/removeDocumentLinkRequest",
+                "definitions": {
+                  "removeDocumentLinkRequest": {
+                    "type": "object",
+                    "properties": {
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/uploads/{uploadId}/impact-preview": {
+      "get": {
+        "operationId": "getDocumentImpactPreview",
+        "summary": "Documents that would need a second look if this one changed — nothing is recorded",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "uploadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/getDocumentImpactPreviewResponse",
+                  "definitions": {
+                    "getDocumentImpactPreviewResponse": {
+                      "type": "object",
+                      "properties": {
+                        "uploadId": {
+                          "type": "string"
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "uploadId": {
+                                "type": "string"
+                              },
+                              "depth": {
+                                "type": "integer",
+                                "exclusiveMinimum": true,
+                                "minimum": 0
+                              },
+                              "viaUploadId": {
+                                "type": "string"
+                              },
+                              "viaKind": {
+                                "type": "string",
+                                "enum": [
+                                  "depends_on",
+                                  "references"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "uploadId",
+                              "depth",
+                              "viaUploadId",
+                              "viaKind"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "uploadId",
+                        "items"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/projects/{projectId}/document-impacts": {
+      "get": {
+        "operationId": "listDocumentImpacts",
+        "summary": "Documents that need a second look — open first, judged ones kept",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/listDocumentImpactsResponse",
+                  "definitions": {
+                    "listDocumentImpactsResponse": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "projectId": {
+                                "type": "string"
+                              },
+                              "uploadId": {
+                                "type": "string"
+                              },
+                              "originUploadId": {
+                                "type": "string"
+                              },
+                              "successorUploadId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "cause": {
+                                "type": "string",
+                                "enum": [
+                                  "superseded",
+                                  "expired"
+                                ]
+                              },
+                              "depth": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "viaUploadId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "viaKind": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "depends_on",
+                                      "references"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "detectedAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              },
+                              "resolution": {
+                                "type": "string",
+                                "enum": [
+                                  "open",
+                                  "revised",
+                                  "no_change_needed",
+                                  "not_applicable"
+                                ]
+                              },
+                              "resolvedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "resolvedBy": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "revisedByUploadId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "resolutionNote": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "nextActions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "projectId",
+                              "uploadId",
+                              "originUploadId",
+                              "successorUploadId",
+                              "cause",
+                              "depth",
+                              "viaUploadId",
+                              "viaKind",
+                              "detectedAt",
+                              "resolution",
+                              "resolvedAt",
+                              "resolvedBy",
+                              "revisedByUploadId",
+                              "resolutionNote",
+                              "nextActions"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "openCount": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "openCount"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/projects/{projectId}/document-impacts/resolutions": {
+      "post": {
+        "operationId": "resolveDocumentImpacts",
+        "summary": "Judge several impacts at once — all or nothing, a reason is required",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/resolveDocumentImpactsResponse",
+                  "definitions": {
+                    "resolveDocumentImpactsResponse": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "projectId": {
+                                "type": "string"
+                              },
+                              "uploadId": {
+                                "type": "string"
+                              },
+                              "originUploadId": {
+                                "type": "string"
+                              },
+                              "successorUploadId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "cause": {
+                                "type": "string",
+                                "enum": [
+                                  "superseded",
+                                  "expired"
+                                ]
+                              },
+                              "depth": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "viaUploadId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "viaKind": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "depends_on",
+                                      "references"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "detectedAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              },
+                              "resolution": {
+                                "type": "string",
+                                "enum": [
+                                  "open",
+                                  "revised",
+                                  "no_change_needed",
+                                  "not_applicable"
+                                ]
+                              },
+                              "resolvedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "resolvedBy": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "revisedByUploadId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "resolutionNote": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "nextActions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "projectId",
+                              "uploadId",
+                              "originUploadId",
+                              "successorUploadId",
+                              "cause",
+                              "depth",
+                              "viaUploadId",
+                              "viaKind",
+                              "detectedAt",
+                              "resolution",
+                              "resolvedAt",
+                              "resolvedBy",
+                              "revisedByUploadId",
+                              "resolutionNote",
+                              "nextActions"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "items"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "source.upload",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/resolveDocumentImpactsRequest",
+                "definitions": {
+                  "resolveDocumentImpactsRequest": {
+                    "type": "object",
+                    "properties": {
+                      "impactIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "minItems": 1,
+                        "maxItems": 200
+                      },
+                      "resolution": {
+                        "type": "string",
+                        "enum": [
+                          "no_change_needed",
+                          "not_applicable"
+                        ]
+                      },
+                      "note": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      }
+                    },
+                    "required": [
+                      "impactIds",
+                      "resolution",
+                      "note"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/document-link-rules": {
+      "get": {
+        "operationId": "listDocumentLinkRules",
+        "summary": "Operator type rules that link documents as they arrive",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/listDocumentLinkRulesResponse",
+                  "definitions": {
+                    "listDocumentLinkRulesResponse": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "upstreamType": {
+                                "type": "string"
+                              },
+                              "downstreamType": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "depends_on",
+                                  "references"
+                                ]
+                              },
+                              "note": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "createdBy": {
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              },
+                              "retiredAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "retirementNote": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "upstreamType",
+                              "downstreamType",
+                              "kind",
+                              "note",
+                              "createdBy",
+                              "createdAt",
+                              "retiredAt",
+                              "retirementNote"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "items"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createDocumentLinkRule",
+        "summary": "Declare a type rule — applied to current documents and to documents typed later",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/createDocumentLinkRuleResponse",
+                  "definitions": {
+                    "createDocumentLinkRuleResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "upstreamType": {
+                          "type": "string"
+                        },
+                        "downstreamType": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "depends_on",
+                            "references"
+                          ]
+                        },
+                        "note": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdBy": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "retiredAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "retirementNote": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "linksCreated": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "upstreamType",
+                        "downstreamType",
+                        "kind",
+                        "note",
+                        "createdBy",
+                        "createdAt",
+                        "retiredAt",
+                        "retirementNote",
+                        "linksCreated"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "document.rule.manage",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/createDocumentLinkRuleRequest",
+                "definitions": {
+                  "createDocumentLinkRuleRequest": {
+                    "type": "object",
+                    "properties": {
+                      "upstreamType": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "downstreamType": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "depends_on",
+                          "references"
+                        ]
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      }
+                    },
+                    "required": [
+                      "upstreamType",
+                      "downstreamType",
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/document-link-rules/{ruleId}/retirement": {
+      "post": {
+        "operationId": "retireDocumentLinkRule",
+        "summary": "Retire a type rule — the links it already made stay",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "ruleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/retireDocumentLinkRuleResponse",
+                  "definitions": {
+                    "retireDocumentLinkRuleResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "upstreamType": {
+                          "type": "string"
+                        },
+                        "downstreamType": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "depends_on",
+                            "references"
+                          ]
+                        },
+                        "note": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdBy": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "retiredAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "retirementNote": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "upstreamType",
+                        "downstreamType",
+                        "kind",
+                        "note",
+                        "createdBy",
+                        "createdAt",
+                        "retiredAt",
+                        "retirementNote"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "document.rule.manage",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/retireDocumentLinkRuleRequest",
+                "definitions": {
+                  "retireDocumentLinkRuleRequest": {
+                    "type": "object",
+                    "properties": {
+                      "note": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "note"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{projectId}/lifecycle": {
       "get": {
         "operationId": "getProjectLifecycle",
@@ -26363,7 +30734,8 @@
                               "review_assigned",
                               "readiness_gap",
                               "evidence_stale",
-                              "registry_revoked"
+                              "registry_revoked",
+                              "document_impact"
                             ]
                           },
                           "audience": {
@@ -26733,7 +31105,8 @@
                             "review_assigned",
                             "readiness_gap",
                             "evidence_stale",
-                            "registry_revoked"
+                            "registry_revoked",
+                            "document_impact"
                           ]
                         },
                         "audience": {

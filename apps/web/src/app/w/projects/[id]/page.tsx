@@ -126,6 +126,9 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               <Link href={`/w/projects/${project.id}/data-room`}>
                 <button>Data Room</button>
               </Link>
+              <Link href={`/w/projects/${project.id}/impacts`}>
+                <button>Documents to recheck</button>
+              </Link>
               <Link href={`/w/projects/${project.id}/verification`}>
                 <button>Verification</button>
               </Link>
