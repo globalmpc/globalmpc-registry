@@ -25,6 +25,7 @@ import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { GradeBadge, SourceResultBadge } from "@/components/StatusBadge";
 import { validityText } from "@/lib/documents";
+import { PHOTO_ACCEPT, UPLOAD_ACCEPT } from "@/lib/uploads";
 import type { Grade, SourceResult } from "@mpc/domain";
 
 /**
@@ -296,19 +297,40 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
           after the scan worker finishes can it be promoted to evidence.
         </p>
 
-        <div className="field">
-          <label htmlFor="upload">Choose a file</label>
-          <input
-            id="upload"
-            type="file"
-            data-testid="upload-input"
-            disabled={busy}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void addUpload(file);
-              event.target.value = "";
-            }}
-          />
+        {/* Two inputs, not one: the camera is offered only where a photo is meant. Forcing it on
+            the general picker would stop people on a phone from attaching a saved file. */}
+        <div className="upload-inputs">
+          <div className="field">
+            <label htmlFor="upload">Choose a file</label>
+            <input
+              id="upload"
+              type="file"
+              accept={UPLOAD_ACCEPT}
+              data-testid="upload-input"
+              disabled={busy}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void addUpload(file);
+                event.target.value = "";
+              }}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="upload-photo">Take a photo</label>
+            <input
+              id="upload-photo"
+              type="file"
+              accept={PHOTO_ACCEPT}
+              capture="environment"
+              data-testid="upload-photo-input"
+              disabled={busy}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void addUpload(file);
+                event.target.value = "";
+              }}
+            />
+          </div>
         </div>
 
         {uploads.length === 0 ? (

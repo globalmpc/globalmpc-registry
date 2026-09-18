@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { use, useCallback, useEffect, useMemo, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createDocumentLink,
   createUpload,
@@ -27,6 +27,7 @@ import {
   documentLabel,
   validityText,
 } from "@/lib/documents";
+import { PHOTO_ACCEPT, UPLOAD_ACCEPT } from "@/lib/uploads";
 
 /**
  * One document and the documents it rests on.
@@ -63,6 +64,10 @@ export default function DocumentPage({
   const [removeReason, setRemoveReason] = useState("");
 
   const [versionFile, setVersionFile] = useState<File | null>(null);
+  // Both pickers feed the one pending version. A file input keeps its own selection, so picking
+  // on one clears the other — otherwise the page shows two files while only the last is uploaded.
+  const versionFileInput = useRef<HTMLInputElement>(null);
+  const versionPhotoInput = useRef<HTMLInputElement>(null);
   const [versionValid, setVersionValid] = useState("");
   const [created, setCreated] = useState<ObjectUpload | null>(null);
 
@@ -481,6 +486,8 @@ export default function DocumentPage({
                 );
                 setCreated(marked);
                 setVersionFile(null);
+                if (versionFileInput.current) versionFileInput.current.value = "";
+                if (versionPhotoInput.current) versionPhotoInput.current.value = "";
                 setVersionValid("");
               });
             }}
@@ -490,9 +497,32 @@ export default function DocumentPage({
               <input
                 id="new-version-file"
                 type="file"
+                accept={UPLOAD_ACCEPT}
                 data-testid="new-version-input"
+                ref={versionFileInput}
                 disabled={busy}
-                onChange={(event) => setVersionFile(event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  if (versionPhotoInput.current) versionPhotoInput.current.value = "";
+                  setVersionFile(event.target.files?.[0] ?? null);
+                }}
+              />
+            </div>
+            {/* A renewed permit is often photographed on site. The camera stays on its own input
+                so the general picker still lets people attach a saved file. */}
+            <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
+              <label htmlFor="new-version-photo">Or take a photo</label>
+              <input
+                id="new-version-photo"
+                type="file"
+                accept={PHOTO_ACCEPT}
+                capture="environment"
+                data-testid="new-version-photo-input"
+                ref={versionPhotoInput}
+                disabled={busy}
+                onChange={(event) => {
+                  if (versionFileInput.current) versionFileInput.current.value = "";
+                  setVersionFile(event.target.files?.[0] ?? null);
+                }}
               />
             </div>
             <div className="field" style={{ marginBottom: 0 }}>
