@@ -108,7 +108,24 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
 
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  /**
+   * Desktop for everything, plus one phone project for field uploads — spec 11 §11.9.
+   *
+   * Only uploads are held to the phone: review and approval stay desktop-first, and running every
+   * spec twice would double the suite for screens that are not meant for a phone.
+   */
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: /mobile-upload\.spec\.ts/,
+    },
+    {
+      name: "mobile",
+      use: { ...devices["Pixel 7"] },
+      testMatch: /mobile-upload\.spec\.ts/,
+    },
+  ],
 
   webServer: [
     {

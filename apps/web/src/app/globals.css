@@ -409,6 +409,51 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+/* Field uploads — spec 11 §11.9. Side by side on a desk, stacked on a phone. */
+.upload-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+
+.upload-inputs .field {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+/* Phones upload from the site (§11.9). The desk-sized gutters left too little width for the
+   upload controls and let long names push the page sideways. Review screens are not reworked. */
+@media (max-width: 640px) {
+  .main {
+    padding: 20px 14px 48px;
+  }
+
+  .panel {
+    padding: 14px;
+  }
+
+  h1,
+  .notice {
+    overflow-wrap: anywhere;
+  }
+
+  /* The account line (address · roles · assurance) does not fit beside the menu on a phone. Kept
+     on one line it pushed the page sideways and slid "Disconnect" off screen, under the menu. */
+  .topbar-end {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    margin-left: 0;
+    min-width: 0;
+  }
+
+  .topbar-end .meta {
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
 .notice {
   border: 1px solid currentColor;
   border-radius: var(--radius-md);
