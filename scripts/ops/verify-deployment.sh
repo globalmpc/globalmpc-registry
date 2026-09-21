@@ -35,6 +35,18 @@ ok()    { printf '  [ok]      %s\n' "$*"; pass=$((pass + 1)); }
 bad()   { printf '  [problem] %s\n' "$*"; fail=$((fail + 1)); }
 dunno() { printf '  [unknown] %s\n' "$*"; unknown=$((unknown + 1)); }
 
+# Why a status other than 200 leaves the answer unknown. `/health/*` and `/metrics` sit outside
+# the web's `/api/*` proxy matcher, so a deployment that does not expose them answers with the
+# web's own 404 page — that page says nothing about the DB or the workers.
+unreadable_reason() {
+  case "$1" in
+    404)     printf 'the path is not exposed externally (the web answers it with its own 404 page)' ;;
+    401|403) printf 'the path is protected' ;;
+    000)     printf 'no response' ;;
+    *)       printf 'unexpected response' ;;
+  esac
+}
+
 say "Target: $BASE"
 say ""
 
@@ -46,7 +58,11 @@ say "1. Startup state"
 if ready="$("${CURL[@]}" -o /dev/null -w '%{http_code}' "$BASE/health/ready")"; then
   case "$ready" in
     200) ok "/health/ready 200" ;;
-    *)   bad "/health/ready $ready — the DB or object storage is not ready" ;;
+    # 503 is the API's own answer (routes/health.ts): it was reached and reports not ready.
+    503) bad "/health/ready 503 — the DB or object storage is not ready" ;;
+    # Any other 5xx is the stack failing to answer — typically the proxy cannot reach the API.
+    5??) bad "/health/ready $ready — the API did not answer (gateway or server error)" ;;
+    *)   dunno "/health/ready $ready — $(unreadable_reason "$ready"). Check readiness in the console" ;;
   esac
 else
   bad "Could not reach /health/ready"
@@ -62,10 +78,19 @@ say "   which appear in /metrics as mpc_worker_seconds_since_heartbeat."
 say "   A worker that never signalled has no row at all — emitting 0 would mean"
 say "   'just seen', so nothing is emitted. No row means that profile is off."
 
-metrics="$("${CURL[@]}" "$BASE/metrics" || true)"
+metrics_file="$(mktemp)"
+trap 'rm -f "$metrics_file"' EXIT
+metrics_status="$("${CURL[@]}" -o "$metrics_file" -w '%{http_code}' "$BASE/metrics" || true)"
+metrics_status="${metrics_status:-000}"
+metrics=""
+# Only a 200 body is the metrics text. Any other body (a 404 HTML page) has no heartbeat
+# lines, and reading it would report every worker as off.
+[[ "$metrics_status" == "200" ]] && metrics="$(cat "$metrics_file")"
 
-if [[ -z "$metrics" ]]; then
-  dunno "Could not read /metrics — normal if it is protected. Check in the console then"
+if [[ "$metrics_status" == 5?? ]]; then
+  bad "/metrics $metrics_status — the API did not answer (gateway or server error)"
+elif [[ -z "$metrics" ]]; then
+  dunno "Could not read /metrics (HTTP $metrics_status) — $(unreadable_reason "$metrics_status"). Check the workers in the console"
 else
   for kind in anchor scan outbox; do
     line="$(printf '%s\n' "$metrics" | grep -E "mpc_worker_seconds_since_heartbeat\{state=\"$kind\"\}" || true)"
