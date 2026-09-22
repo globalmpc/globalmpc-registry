@@ -158,3 +158,26 @@ describe("colour system claims", () => {
     expect(contrastRatio(swatch("copper"), swatch("print-paper"))).toBeLessThan(AA_LARGE);
   });
 });
+
+describe("brand copy carried by tokens", () => {
+  /**
+   * The platform is country-neutral; only a jurisdiction profile names a
+   * country. Token descriptions are republished verbatim — docs, dist, the
+   * public Media Kit — so a nationality here becomes the platform's framing.
+   * `--steppe` keeps its name: a landscape, not a nationality.
+   */
+  it("describes the steppe accent by what it marks, not by a country", () => {
+    const source = readFileSync(`${ROOT}/tokens/color.json`, "utf8");
+    const docs = readFileSync(`${ROOT}/docs/tokens.md`, "utf8");
+    for (const [where, text] of [
+      ["tokens/color.json", source],
+      ["dist/tokens.json", JSON.stringify(dist)],
+      ["docs/tokens.md", docs],
+    ]) {
+      expect(text, where).not.toMatch(/mongolia/i);
+    }
+    expect(dist.tokens.steppe.description).toBe(
+      "Resource and asset context. The only green that is not a status.",
+    );
+  });
+});

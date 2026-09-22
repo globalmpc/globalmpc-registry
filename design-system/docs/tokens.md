@@ -55,7 +55,7 @@ Each carries a fixed meaning. Reaching for one because it looks right is the mis
 | Token | Value | Hex | Use |
 | --- | --- | --- | --- |
 | `--gold` | `oklch(0.82 0.11 80)` | #EABC6E | Figure emphasis — the number in a stat, not the label around it. |
-| `--steppe` | `oklch(0.42 0.06 155)` | #31573F | Mongolian asset context. The only green that is not a status. |
+| `--steppe` | `oklch(0.42 0.06 155)` | #31573F | Resource and asset context. The only green that is not a status. |
 | `--sand` | `oklch(0.78 0.07 75)` | #D2B285 | Secondary backgrounds in asset-context artwork. |
 | `--positive` | `oklch(0.62 0.1 155)` | #50986B | Confirmed state — secured, verified, on-chain. Also the live-dot pulse. |
 | `--alert` | `oklch(0.62 0.12 45)` | #C16D45 | Attention, not failure. Provisional and in-progress states. |
