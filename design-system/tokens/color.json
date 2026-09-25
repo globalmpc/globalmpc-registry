@@ -228,11 +228,11 @@
     "steppe": {
       "$value": "oklch(0.42 0.06 155)",
       "$type": "color",
-      "$description": "Mongolian asset context. The only green that is not a status.",
+      "$description": "Resource and asset context. The only green that is not a status.",
       "$extensions": {
         "mpc.group": "signal",
         "mpc.use": {
-          "en": "Mongolian asset context. The only green that is not a status."
+          "en": "Resource and asset context. The only green that is not a status."
         }
       }
     },
