@@ -8,7 +8,7 @@ import {
 } from "../src/services/source-fetch.js";
 
 /**
- * Pins the connection to the validated address — 2026-09-10 audit A2.
+ * Pins the connection to the validated address.
  *
  * Even if `assertEndpointReachable` resolves the name and filters private addresses, a
  * connection that re-resolves can get a different answer (DNS rebinding). The check only

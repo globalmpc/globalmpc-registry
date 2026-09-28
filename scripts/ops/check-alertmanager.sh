@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Alertmanager config check — 2026-09-10 audit A4.
+# Alertmanager config check.
 #
 # These files **must pass the official amtool.** The old config wrote `${VAR:-...}` in a
 # mounted file, but Compose does not substitute file contents. So Alertmanager read that

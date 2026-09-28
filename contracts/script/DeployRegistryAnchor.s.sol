@@ -13,7 +13,7 @@ import {RegistryAnchorV1} from "../src/RegistryAnchorV1.sol";
 ///      hold. A fallback to the deployer would turn a forgotten variable into exactly that
 ///      layout, silently — so a missing or zero role variable stops the deployment instead.
 ///
-///      A single-key layout is still possible for local and testnet use, but only by naming
+///      A single-key layout is still possible on the local chain, but only by naming
 ///      the deployer address for all three; the script then prints a warning.
 ///
 ///      Environment variables:
@@ -37,7 +37,7 @@ contract DeployRegistryAnchor is Script {
         console.log("pauser", pauser);
 
         if (admin == submitter && submitter == pauser) {
-            console.log("WARNING: single-key deployment. Local/testnet only.");
+            console.log("WARNING: single-key deployment. Local chain only.");
         }
     }
 

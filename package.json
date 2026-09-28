@@ -18,7 +18,8 @@
     "check:brand": "tsx scripts/check-brand-assets.ts",
     "check:counts": "tsx scripts/check-test-counts.ts",
     "check:compose": "tsx scripts/check-compose.ts",
-    "check": "pnpm typecheck && pnpm test && pnpm check:openapi && pnpm check:copy && pnpm check:brand && pnpm check:counts && pnpm check:compose"
+    "check:public": "tsx scripts/check-public-hygiene.ts",
+    "check": "pnpm typecheck && pnpm test && pnpm check:openapi && pnpm check:copy && pnpm check:brand && pnpm check:counts && pnpm check:compose && pnpm check:public"
   },
   "devDependencies": {
     "@mpc/api-contract": "workspace:*",

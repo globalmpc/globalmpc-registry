@@ -1,8 +1,8 @@
 /**
- * Transport layer for source calls — 2026-09-10 audit A2·A7.
+ * Transport layer for source calls.
  *
  * Connections are pinned to the checked addresses and responses are capped. The implementation
- * lives in `@mpc/config` (W-087) so notification webhooks use the same transport. Re-exported
+ * lives in `@mpc/config` so notification webhooks use the same transport. Re-exported
  * here under the names existing API callers use.
  */
 export {

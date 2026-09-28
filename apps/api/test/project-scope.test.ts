@@ -94,7 +94,7 @@ describeDb("project scope and read authorization", () => {
       INSERT INTO core.wallet_identities (
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 97, 'identity_bound', now()
+        ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'identity_bound', now()
       )
     `;
     await fx.sql`

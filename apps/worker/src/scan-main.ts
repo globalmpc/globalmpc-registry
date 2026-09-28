@@ -53,7 +53,7 @@ const api = createApiClient({
     "SCAN_SERVICE_PRIVATE_KEY",
     process.env["SCAN_SERVICE_PRIVATE_KEY"],
   ) as `0x${string}`,
-  chainId: Number(process.env["CHAIN_ID"] ?? "97"),
+  chainId: Number(process.env["CHAIN_ID"] ?? "31337"),
   siweDomain: required("SIWE_DOMAIN"),
   siweUri: required("SIWE_URI"),
 });

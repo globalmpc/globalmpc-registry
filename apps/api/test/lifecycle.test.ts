@@ -56,7 +56,7 @@ describeDb("project lifecycle", () => {
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
         ${randomUUID()}, ${fx.tenantA}, ${subject.id},
-        ${account.address.toLowerCase()}, 97, 'high_assurance', now()
+        ${account.address.toLowerCase()}, 31337, 'high_assurance', now()
       )
     `;
     await fx.sql`

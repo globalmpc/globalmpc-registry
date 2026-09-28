@@ -6,7 +6,7 @@ import {
 } from "../src/webhook-secret.js";
 
 /**
- * Webhook signing-secret references — W-087.
+ * Webhook signing-secret references.
  *
  * A tenant operator sets the reference; the worker resolves it. Unrestricted, it could point
  * the worker at its own database URL, the anchor signer key, or any readable file.

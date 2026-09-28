@@ -13,7 +13,7 @@ import { assertAuthorized, projectResource, sessionFacts } from "../plugins/auth
 import { requireReadContext } from "./shared.js";
 
 /**
- * Review assignment options — Q-032.
+ * Review assignment options.
  *
  * The assignment form used to send one fixed reviewer, credential, and schema (the E2E seed's
  * ids), so on any real tenant every assignment failed. This read returns what an assignment on

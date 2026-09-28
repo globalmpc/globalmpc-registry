@@ -3,7 +3,7 @@ import { isIP } from "node:net";
 import type { ClientRequest, IncomingMessage } from "node:http";
 
 /**
- * Transport layer for outbound calls to operator-set URLs — 2026-09-10 audit A2·A7, W-087.
+ * Transport layer for outbound calls to operator-set URLs.
  *
  * Used for source calls (`apps/api`) and notification webhooks (`apps/worker`). Two reasons
  * not to use `fetch` directly.

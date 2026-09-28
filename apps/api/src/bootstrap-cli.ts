@@ -39,7 +39,7 @@ if (missing.length > 0) {
       "",
       "Optional:",
       "  BOOTSTRAP_JURISDICTION    3 uppercase ISO3 letters (default MNG)",
-      "  BOOTSTRAP_CHAIN_ID        56 or 97 (default 97)",
+      "  BOOTSTRAP_CHAIN_ID        56 or 31337 (default 31337)",
       "  BOOTSTRAP_ROLE            role (default mpc_operator)",
       "  BOOTSTRAP_ASSURANCE       wallet_only·identity_bound·high_assurance",
       "                            (default high_assurance)",
@@ -65,7 +65,7 @@ const input: BootstrapInput = {
   jurisdiction: process.env["BOOTSTRAP_JURISDICTION"] ?? "MNG",
   subjectName: process.env["BOOTSTRAP_SUBJECT_NAME"] as string,
   walletAddress: process.env["BOOTSTRAP_WALLET"] as string,
-  chainId: Number(process.env["BOOTSTRAP_CHAIN_ID"] ?? "97"),
+  chainId: Number(process.env["BOOTSTRAP_CHAIN_ID"] ?? "31337"),
   role: process.env["BOOTSTRAP_ROLE"] ?? "mpc_operator",
   assuranceLevel: (process.env["BOOTSTRAP_ASSURANCE"] ??
     "high_assurance") as BootstrapInput["assuranceLevel"],

@@ -176,7 +176,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
           id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
         ) VALUES (
           gen_random_uuid(), ${account.tenant}, ${account.subject}, ${account.wallet},
-          97, ${account.assurance}, now()
+          31337, ${account.assurance}, now()
         )
       `;
       await sql`
@@ -198,7 +198,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       INSERT INTO core.wallet_identities (
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        gen_random_uuid(), ${E2E_TENANT_A}, ${readerSubject}, ${READER_A}, 97, 'wallet_only', now()
+        gen_random_uuid(), ${E2E_TENANT_A}, ${readerSubject}, ${READER_A}, 31337, 'wallet_only', now()
       )
     `;
 
@@ -262,7 +262,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
           id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
         ) VALUES (
           gen_random_uuid(), ${E2E_TENANT_A}, ${extra.subject}, ${extra.wallet},
-          97, ${extra.assurance}, now()
+          31337, ${extra.assurance}, now()
         )
       `;
       await sql`

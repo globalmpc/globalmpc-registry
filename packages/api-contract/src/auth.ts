@@ -24,8 +24,8 @@ export const siweNonceRequest = z.object({
    *
    * Server configuration decides the chain to sign on and returns it as
    * `chainId` in the response. If the client decided, every login would end in
-   * `SIWE_CHAIN_MISMATCH` whenever web and server disagree (web 97 vs. stg/prod
-   * 56). Older clients send this value, so it is not rejected.
+   * `SIWE_CHAIN_MISMATCH` whenever web and server disagree (a hardcoded web value
+   * vs. stg/prod 56). Older clients send this value, so it is not rejected.
    */
   chainId: z.number().int().positive().optional(),
 });
@@ -46,7 +46,7 @@ export const siweNonceResponse = z.object({
    * The chain ID to sign on. **The server sets it and the server verifies it** —
    * for the same reason as `uri`.
    *
-   * When the web hardcoded this value (97), zero real-wallet logins succeeded on
+   * When the web hardcoded this value, zero real-wallet logins succeeded on
    * stg/prod (56). Returning it here makes both sides use the same number.
    */
   chainId: z.number().int().positive(),

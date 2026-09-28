@@ -61,7 +61,7 @@ test.describe("Administration", () => {
   });
 
   test("binds a wallet at the level the operator chose, only with what was checked", async ({ page }) => {
-    // Q-032 — a fixed level left reviewer and approver roles below their minimum on any
+    // A fixed level left reviewer and approver roles below their minimum on any
     // wallet bound here. The level is now a choice, and the choice needs a stated basis.
     const name = `Wallet target ${Date.now()}`;
     const address = `0x${randomBytes(20).toString("hex")}`;

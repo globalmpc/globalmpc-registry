@@ -139,7 +139,7 @@ export default defineConfig({
         PORT: "3001",
         SIWE_DOMAIN: "localhost:3000",
         SIWE_URI: "http://localhost:3000",
-        CHAIN_ID: "97",
+        CHAIN_ID: "31337",
         SESSION_SECRET: "e2e-session-secret-at-least-32-chars",
         NODE_ENV: "development",
         LOG_LEVEL: "warn",
@@ -153,7 +153,7 @@ export default defineConfig({
          */
         AUTH_RATE_LIMIT_MAX: "1000",
         /**
-         * Raise the general limit only during E2E as well — 2026-09-10 audit.
+         * Raise the general limit only during E2E as well.
          *
          * This was empty, so the default 300/min applied as-is. **Every E2E
          * request counts as one requester** — Playwright calls the API directly, so

@@ -34,7 +34,7 @@ describeDb("Source Receipt", () => {
       connectionId: fx.connectionA,
       authorityId: fx.authorityA,
       /**
-       * The default is a **non-confirmed result** — 2026-09-10 audit A1.
+       * The default is a **non-confirmed result**.
        *
        * This route is the entry where a person writes in a result; an `authenticated_api`
        * confirmation is created only on the server-called path (`/collect`). Defaulting to
@@ -80,7 +80,7 @@ describeDb("Source Receipt", () => {
   });
 
   /**
-   * A1 negative test — 2026-09-10 audit.
+   * Negative test: a client cannot supply confirmation evidence.
    *
    * An uploader sending `result: "confirmed_from_source"` was enough to create an API
    * collection confirmation. That record is indistinguishable from the server actually

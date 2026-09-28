@@ -168,7 +168,7 @@ describeDb("notifications", () => {
   });
 
   /**
-   * Marking read applies the list's visibility filter (W-086).
+   * Marking read applies the list's visibility filter.
    *
    * The response carries the summary and link. Without the filter, a notification the list
    * hides — another project's, another role's — came back in full to anyone holding its id.

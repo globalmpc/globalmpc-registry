@@ -55,7 +55,7 @@ describeDb("stale propagation", () => {
         'authenticated_api', 'confirmed_from_source', '{}'::jsonb, 'https://x.test/a',
         'none', ${`0x${"11".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
         now(), now(), 'fresh', 'test',
-        -- A confirmation from a server-initiated lookup — 2026-09-10 audit A1.
+        -- A confirmation from a server-initiated lookup.
         -- Without this flag the DB rejects it (api_confirmation_requires_server_collection).
         '{"collector":"server_adapter"}'::jsonb
       )

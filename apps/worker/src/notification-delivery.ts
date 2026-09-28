@@ -29,7 +29,7 @@ import {
  * **The body carries what the in-app notification carries.** Summary and link only — no
  * projection, no evidence. The endpoint is a system we do not control.
  *
- * **The receiver is judged like a source endpoint (W-087).** The URL is set by a tenant operator
+ * **The receiver is judged like a source endpoint.** The URL is set by a tenant operator
  * and called from inside our network, so it is resolved right before sending, refused if any
  * address is private or reserved, and the connection is pinned to the checked addresses with no
  * redirects followed. What is stored about a failure is a category — the admin screen shows it,

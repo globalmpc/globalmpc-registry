@@ -1,4 +1,4 @@
--- Source response profile — 2026-09-10 audit A7.
+-- Source response profile.
 --
 -- Until now the schema check for the `authenticated_api` channel was **successful JSON parsing**.
 -- So an HTTP 200 carrying `{"error":"unavailable"}` or `{}` still

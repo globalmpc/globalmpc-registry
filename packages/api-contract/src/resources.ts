@@ -1297,7 +1297,7 @@ export const createSubjectRequest = z.object({
  */
 export const bindWalletRequest = z.object({
   walletAddress: walletAddress,
-  chainId: z.number().int().refine((value) => value === 56 || value === 97),
+  chainId: z.number().int().refine((value) => value === 56 || value === 31337),
   assuranceLevel: z.enum(["wallet_only", "identity_bound", "high_assurance"]),
   justification: z.string().trim().min(1).max(1000),
 });
@@ -1613,8 +1613,8 @@ export const projectLifecycle = z.object({
  * whether one is configured is returned.
  */
 /**
- * What a failed delivery records — a category, never the receiver's status code or error text
- * (W-087). The URL is operator-set, so per-URL answers on the admin screen would make delivery
+ * What a failed delivery records — a category, never the receiver's status code or error text.
+ * The URL is operator-set, so per-URL answers on the admin screen would make delivery
  * a probe of the internal network. Mirrors the CHECK in migration 0044.
  */
 export const notificationDeliveryError = z.enum([
@@ -1646,9 +1646,9 @@ export const notificationSink = z
 
 export const createNotificationSinkRequest = z.object({
   // https only. Notification bodies contain project identifiers. Private and internal
-  // destinations are refused by the route and again by the worker (W-087).
+  // destinations are refused by the route and again by the worker.
   url: z.string().regex(/^https:\/\/[^@\s]+$/, "Must be an https URL"),
-  /** A reference in the webhook namespace. Never the value itself (05 §5.12, W-087). */
+  /** A reference in the webhook namespace. Never the value itself (05 §5.12). */
   secretReference: z
     .string()
     .min(1)

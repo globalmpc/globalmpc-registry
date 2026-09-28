@@ -98,7 +98,7 @@ test.describe("project registration", () => {
 
 test.describe("owner organization", () => {
   test("is picked from the organizations this account may register for", async ({ page }) => {
-    // Q-032 — the form used to find the organization in a table of demo tenant ids. It now
+    // The form used to find the organization in a table of demo tenant ids. It now
     // reads the organizations the server would accept for this account.
     await page.goto("/connect");
     await page.getByRole("button", { name: /Operator A/ }).click();

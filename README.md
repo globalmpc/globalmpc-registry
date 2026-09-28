@@ -25,7 +25,7 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 | `packages/db` | Schema, RLS, append-only guards, composite FKs, migration checksums | 61 |
 | `packages/api-contract` | Zod contract → OpenAPI 3.1, SIWE, authorization | 43 |
 | `packages/ui` | Status display mapping, R-04 forbidden-term lint, three-depth consistency | 37 |
-| `packages/config` | Secret reference resolution (`file:`, `env:`), audit fingerprints that do not expose values | 39 |
+| `packages/config` | Secret reference resolution (`file:`, `env:`), audit fingerprints that do not expose values, public release hygiene rules | 80 |
 | `packages/storage` | Object storage — key rules, quarantine state machine, memory and S3 implementations | 17 |
 
 **Apps**
@@ -34,13 +34,13 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 |---|---|---|
 | `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 108 routes | 780 |
 | `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 22 · E2E 97 |
-| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 145 |
+| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 149 |
 
 **Contracts**
 
 `contracts/` — `RegistryAnchorV1` + 10 deferred interfaces, 33 Foundry tests (including fuzz and invariant).
 
-Total: vitest 1489 + Playwright 97 + Foundry 33 + route 108. (measured 2026-09-17)
+Total: vitest 1534 + Playwright 97 + Foundry 33 + route 108. (measured 2026-09-17)
 
 ## Running
 
@@ -55,6 +55,9 @@ pnpm typecheck
 
 # Regenerate OpenAPI and check for drift
 pnpm check:openapi
+
+# Nothing unpublishable in tracked files (non-English text, internal ids, personal addresses)
+pnpm check:public
 
 # Browser E2E (starts the API and web app automatically)
 # E2E uses its own DB. compose does not create it, so create it once yourself.
@@ -120,7 +123,7 @@ E2E_DEMO_ACCOUNT_KEYS="$MPC_DEMO_KEYS" \
 # 5) API
 DATABASE_URL="postgres://mpc_app_login:app@localhost:5432/mpc_dev" \
 PORT=3001 SIWE_DOMAIN=localhost:3000 SIWE_URI=http://localhost:3000 \
-CHAIN_ID=97 SESSION_SECRET="local-dev-session-secret-32chars-min" \
+CHAIN_ID=31337 SESSION_SECRET="local-dev-session-secret-32chars-min" \
   pnpm --filter @mpc/api start
 
 # 6) Web
@@ -129,9 +132,9 @@ CHAIN_ID=97 SESSION_SECRET="local-dev-session-secret-32chars-min" \
 NEXT_PUBLIC_DEMO_ACCOUNT_KEYS="$MPC_DEMO_KEYS" pnpm --filter @mpc/web dev
 
 # 7) Local chain and anchor worker (optional)
-#    EOA submission is enabled only on local (31337) and BNB testnet (97). On any other
+#    EOA submission is enabled only on the local chain (31337). On any other
 #    chain, setting ANCHOR_SAFE_ADDRESS makes it only create proposals; otherwise it does nothing.
-anvil --port 8545 --chain-id 97 --block-time 1 &
+anvil --port 8545 --chain-id 31337 --block-time 1 &
 
 cd contracts
 # Every role holder is named; the script has no fallback to the deployer. Locally one address
@@ -148,7 +151,7 @@ psql "postgres://postgres@localhost:5432/mpc_dev" -c \
    ALTER ROLE mpc_worker_login BYPASSRLS;"
 
 DATABASE_URL="postgres://mpc_worker_login:worker@localhost:5432/mpc_dev" \
-CHAIN_RPC_URL=http://localhost:8545 CHAIN_ID=97 \
+CHAIN_RPC_URL=http://localhost:8545 CHAIN_ID=31337 \
 ANCHOR_CONTRACT_ADDRESS=<deployed address> \
 ANCHOR_SIGNER_PRIVATE_KEY=<local-only key> ANCHOR_CONFIRMATIONS=2 \
   pnpm --filter @mpc/worker start:anchor
@@ -221,8 +224,8 @@ Bypassing them breaks tests or gets rejected by the DB.
   the confirmation depth is reached, and a DB CHECK rejects `confirmed` without block information
 - **A reverted confirmation cannot be erased** → `chain.reorg_events` is append-only and persists
   even after reconfirmation. The worker role has no UPDATE or DELETE privilege
-- **An EOA cannot anchor alone on mainnet** → the allowed-chain list contains only local and
-  testnet. The contract's `ANCHOR_SUBMITTER_ROLE` belongs to the Safe multisig
+- **An EOA cannot anchor alone on mainnet** → the allowed-chain list contains only the local
+  chain. The contract's `ANCHOR_SUBMITTER_ROLE` belongs to the Safe multisig
 - **The gas wallet is not drained by endless retries** → submission stops once the fee cap or
   the attempt cap is exceeded (O1's loss cap)
 - **Review scope cannot be changed after the fact** → there is no UPDATE or DELETE privilege on
@@ -308,11 +311,11 @@ Bypassing them breaks tests or gets rejected by the DB.
 - **The uploader cannot fabricate the basis for confirmation** → the server verifies signatures
   against a registered public key, extracts bulk fields from the file itself, and API-collection
   confirmation comes only from a path the server called. DB constraints require `verifiedBy`,
-  `documentHash`, and the verifier version (2026-09-10 audit A1)
+  `documentHash`, and the verifier version
 - **A 200 with valid JSON is not a confirmation** → confirmation requires the fields the integration
-  declared. Without a declaration, a person reviews it. Responses have a size cap (A7)
+  declared. Without a declaration, a person reviews it. Responses have a size cap
 - **Connections go only to the address that was checked** → names are not re-resolved. All IPv6
-  outside the public range (2000::/3) is blocked (A2)
+  outside the public range (2000::/3) is blocked
 - **Confirmed transactions do not starve pending ones** → states that need progress are picked
   first, and confirmed rows are revisited only after the reorg-watch interval has passed
 

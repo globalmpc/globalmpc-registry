@@ -104,7 +104,7 @@ services:
     image: ghcr.io/foundry-rs/foundry:v1.7.1@sha256:8347b728d5d393dac1c018691b36f506d23b9dcd78341d40ea0fcb11c3a19cdd
     # Match the chain id with the whole stack. Otherwise the chain_id the API records and the
     # chain the worker queries diverge, and transactions are never picked up.
-    entrypoint: ["anvil", "--host", "0.0.0.0", "--port", "8545", "--chain-id", "97", "--block-time", "1"]
+    entrypoint: ["anvil", "--host", "0.0.0.0", "--port", "8545", "--chain-id", "31337", "--block-time", "1"]
     ports: ["127.0.0.1:8545:8545"]
 
   migrate:
@@ -143,7 +143,7 @@ services:
       PORT: "3001"
       SIWE_DOMAIN: localhost:3000
       SIWE_URI: http://localhost:3000
-      CHAIN_ID: "97"
+      CHAIN_ID: "31337"
       NODE_ENV: development
       OBJECT_STORE: s3
       OBJECT_BUCKET: mpc-evidence
@@ -172,7 +172,7 @@ services:
       DATABASE_URL: file:/run/secrets/worker_database_url
       ANCHOR_SIGNER_PRIVATE_KEY: file:/run/secrets/anchor_signer_key
       CHAIN_RPC_URL: http://anvil:8545
-      CHAIN_ID: "97"
+      CHAIN_ID: "31337"
       ANCHOR_CONTRACT_ADDRESS: "${ANCHOR_CONTRACT_ADDRESS:-0x5FbDB2315678afecb367f032d93F642f64180aa3}"
       ANCHOR_CONFIRMATIONS: "2"
       ANCHOR_POLL_MS: "2000"
@@ -214,7 +214,7 @@ services:
       # Results are reported through the API. The worker takes the same SIWE path as a person.
       API_BASE_URL: http://api:3001
       SCAN_SERVICE_PRIVATE_KEY: file:/run/secrets/scan_service_key
-      CHAIN_ID: "97"
+      CHAIN_ID: "31337"
       SIWE_DOMAIN: localhost:3000
       SIWE_URI: http://localhost:3000
       # Uses the **same storage settings** as the API. Otherwise the worker looks at a different

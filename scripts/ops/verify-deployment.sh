@@ -176,7 +176,7 @@ say ""
 say "4. Visible only in the console"
 cat <<'NOTE'
    - The actual COMPOSE_PROFILES value and the list of running containers (step 2 above sees only the effect)
-   - Whether Traefik/WAF classifies /api/* as the public API
+   - Whether the reverse proxy/WAF classifies /api/* as the public API
    - Replica count. The app rate limit is process-local, so this number sets the total allowance
    - Whether the real proxy hop count matches TRUSTED_PROXY_HOPS
    - Whether alerts on 429 share, SIWE failure rate, and request IP concentration are actually set

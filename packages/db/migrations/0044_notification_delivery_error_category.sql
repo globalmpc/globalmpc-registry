@@ -1,4 +1,4 @@
--- Notification delivery errors are stored as a category — W-087.
+-- Notification delivery errors are stored as a category.
 --
 -- `last_error` held the peer's answer verbatim ("HTTP 404", connection error text, the secret
 -- file path that failed to resolve) and the admin screen shows it. With an operator-set URL

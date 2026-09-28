@@ -6,7 +6,7 @@ const VALID = {
   DATABASE_URL: "postgres://postgres@localhost:5432/mpc_test",
   SIWE_DOMAIN: "localhost:3000",
   SIWE_URI: "http://localhost:3000",
-  CHAIN_ID: "97",
+  CHAIN_ID: "31337",
   SESSION_SECRET: "a".repeat(32),
 };
 
@@ -14,13 +14,13 @@ describe("loadConfig", () => {
   it("parses valid environment variables", () => {
     const config = loadConfig(VALID);
     expect(config.port).toBe(3001);
-    expect(config.chainId).toBe(97);
+    expect(config.chainId).toBe(31337);
     expect(config.siweDomain).toBe("localhost:3000");
   });
 
   /**
-   * Deploy platforms inject declared variables as empty strings even with no value. Coolify
-   * injects the variable list extracted from compose into every container, so the
+   * Deploy platforms inject declared variables as empty strings even with no value. A compose-based
+   * platform may inject the variable list extracted from compose into every container, so the
    * `CHAIN_RPC_URL` left empty for the anchor worker reached the API as `""` and killed it
    * right after startup.
    */
@@ -58,10 +58,11 @@ describe("loadConfig", () => {
     );
   });
 
-  it("rejects chain IDs other than BSC mainnet and testnet", () => {
+  it("accepts only BSC mainnet and the local chain", () => {
     expect(() => loadConfig({ ...VALID, CHAIN_ID: "1" })).toThrowError(/CHAIN_ID/);
+    expect(() => loadConfig({ ...VALID, CHAIN_ID: "97" })).toThrowError(/CHAIN_ID/);
     expect(loadConfig({ ...VALID, CHAIN_ID: "56" }).chainId).toBe(56);
-    expect(loadConfig({ ...VALID, CHAIN_ID: "97" }).chainId).toBe(97);
+    expect(loadConfig({ ...VALID, CHAIN_ID: "31337" }).chainId).toBe(31337);
   });
 
   /**
@@ -116,7 +117,7 @@ describe("loadConfig", () => {
   });
 
   describe("TRUSTED_PROXY_HOPS", () => {
-    it("defaults to 1 — assumes one proxy (Coolify) in front", () => {
+    it("defaults to 1 — assumes one reverse proxy in front", () => {
       expect(loadConfig(VALID).trustedProxyHops).toBe(1);
     });
 
@@ -182,7 +183,7 @@ describe("R1: the dev auth switch is removed", () => {
       DATABASE_URL: "postgres://localhost/x",
       SIWE_DOMAIN: "localhost:3000",
       SIWE_URI: "http://localhost:3000",
-      CHAIN_ID: "97",
+      CHAIN_ID: "31337",
       SESSION_SECRET: "s".repeat(32),
     };
 
@@ -240,7 +241,7 @@ describe("R1: the dev auth switch is removed", () => {
       DATABASE_URL: "postgres://localhost/x",
       SIWE_DOMAIN: "localhost:3000",
       SIWE_URI: "http://localhost:3000",
-      CHAIN_ID: "97",
+      CHAIN_ID: "31337",
       SESSION_SECRET: "s".repeat(32),
     };
 

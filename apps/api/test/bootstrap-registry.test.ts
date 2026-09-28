@@ -49,7 +49,7 @@ describeDb("review registry bootstrap", () => {
       jurisdiction: "MNG",
       subjectName: "Reviewer",
       walletAddress: wallet,
-      chainId: 97,
+      chainId: 31337,
       role: "reviewer_cp_qp",
       assuranceLevel: "high_assurance",
     });

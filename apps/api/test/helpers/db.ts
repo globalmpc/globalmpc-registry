@@ -95,7 +95,7 @@ export async function signIn(app: FastifyInstance, account: TestAccount): Promis
   const nonceResponse = await app.inject({
     method: "POST",
     url: "/api/v1/auth/siwe/nonce",
-    payload: { walletAddress: account.address, chainId: 97 },
+    payload: { walletAddress: account.address, chainId: 31337 },
   });
   const { nonce, statement, uri } = nonceResponse.json() as {
     nonce: string;
@@ -105,7 +105,7 @@ export async function signIn(app: FastifyInstance, account: TestAccount): Promis
 
   const message = createSiweMessage({
     address: account.account.address,
-    chainId: 97,
+    chainId: 31337,
     domain: "localhost:3000",
     nonce,
     statement,
@@ -184,7 +184,7 @@ export async function setupFixture(): Promise<TestFixture> {
       INSERT INTO core.wallet_identities (
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${tenant}, ${subject}, ${wallet.address}, 97, 'high_assurance', now()
+        ${randomUUID()}, ${tenant}, ${subject}, ${wallet.address}, 31337, 'high_assurance', now()
       )
     `;
     await sql`
@@ -204,7 +204,7 @@ export async function setupFixture(): Promise<TestFixture> {
     INSERT INTO core.wallet_identities (
       id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
     ) VALUES (
-      ${randomUUID()}, ${tenantA}, ${readerSubject}, ${readerA.address}, 97, 'wallet_only', now()
+      ${randomUUID()}, ${tenantA}, ${readerSubject}, ${readerA.address}, 31337, 'wallet_only', now()
     )
   `;
 
@@ -253,7 +253,7 @@ export async function setupFixture(): Promise<TestFixture> {
       INSERT INTO core.wallet_identities (
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${tenantA}, ${subject}, ${wallet.address}, 97, ${assurance}, now()
+        ${randomUUID()}, ${tenantA}, ${subject}, ${wallet.address}, 31337, ${assurance}, now()
       )
     `;
     await sql`
@@ -304,7 +304,7 @@ export async function setupFixture(): Promise<TestFixture> {
       id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
     ) VALUES (
       ${randomUUID()}, ${tenantA}, ${scopedStewardSubject}, ${scopedStewardA.address},
-      97, 'identity_bound', now()
+      31337, 'identity_bound', now()
     )
   `;
   await sql`
@@ -342,7 +342,7 @@ export async function setupFixture(): Promise<TestFixture> {
       -- .test is a reserved TLD and never resolves, so a test address is not mistaken for a real
       -- authority address. Tests inject fetch, so no request goes out.
       'https://registry.example.test/mineral/licenses', 'none', 'test', 'test',
-      -- Response profile — 2026-09-10 audit A7. Without a declaration nothing is confirmed, so
+      -- Response profile. Without a declaration nothing is confirmed, so
       -- happy-path tests need one.
       ARRAY['licenseId'], 'found', 'false', 'error'
     )
@@ -401,7 +401,7 @@ export function testEnv(overrides: Record<string, string> = {}): NodeJS.ProcessE
     ...process.env,
     SIWE_DOMAIN: "localhost:3000",
     SIWE_URI: "http://localhost:3000",
-    CHAIN_ID: "97",
+    CHAIN_ID: "31337",
     SESSION_SECRET: "test-session-secret-at-least-32-chars",
     NODE_ENV: "test",
     /**

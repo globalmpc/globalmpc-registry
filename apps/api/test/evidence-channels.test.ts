@@ -22,7 +22,7 @@ describeDb("Evidence channel", () => {
   let scanService: string;
 
   /**
-   * The authority's signing key pair — 2026-09-10 audit A1.
+   * The authority's signing key pair.
    *
    * The public key is registered on the integration; the private key is used only when **the
    * test acts as the authority**. The server never sees the private key — that is the point.
@@ -96,7 +96,7 @@ describeDb("Evidence channel", () => {
         authorityId: fx.authorityA,
         result: "confirmed_from_source",
         // overrides sets the channel. Confirmation for the default (authenticated_api) is now
-        // produced only by the server lookup path (A1).
+        // produced only by the server lookup path.
         collectionMethod: "authenticated_api",
         queryBasis: { licenseNumber: "MN-1" },
         endpointOrDocumentRef: "https://registry.example.test/x",
@@ -116,7 +116,7 @@ describeDb("Evidence channel", () => {
   }
 
   /**
-   * Signed document — 2026-09-10 audit A1.
+   * Signed document.
    *
    * Previously `signatureValid: true` in the request body alone confirmed it, without looking
    * at document bytes, the actual signature, or a trusted public key. The server now checks
@@ -149,7 +149,7 @@ describeDb("Evidence channel", () => {
     });
 
     it("cannot confirm by the uploader sending a verification result", async () => {
-      // The original A1 path. These fields are no longer in the schema nor used as evidence.
+      // The original client-supplied path. These fields are no longer in the schema nor used as evidence.
       const response = await createReceipt(steward, {
         collectionMethod: "verifiable_signed_document",
         signatureValid: true,
@@ -257,7 +257,7 @@ describeDb("Evidence channel", () => {
   });
 
   /**
-   * bulk export — 2026-09-10 audit A1.
+   * bulk export.
    *
    * The server extracts `observedFields` from the file instead of taking the requester's list.
    */
@@ -286,7 +286,7 @@ describeDb("Evidence channel", () => {
     });
 
     it("cannot confirm with a field list sent by the requester", async () => {
-      // The original A1 path: sending only a list, without a file.
+      // The original client-supplied path: sending only a list, without a file.
       const response = await createReceipt(steward, {
         collectionMethod: "official_bulk_export",
         observedFields: ["licenseId", "holder", "expiresAt"],
@@ -462,7 +462,7 @@ describeDb("Evidence channel", () => {
     });
 
     /**
-     * 2026-09-10 audit A1 — are paths that bypass the route also blocked?
+     * Are paths that bypass the route also blocked?
      *
      * The route rejects with 422 first, but **there is more than one route, and more will come.**
      * Blocking in one place silently opens the moment a path bypasses it.

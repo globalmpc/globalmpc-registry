@@ -107,7 +107,7 @@ test.describe("golden path", () => {
     await expect(page.getByTestId(`upload-state-${uploadId}`)).toHaveText("promoted");
 
     /**
-     * Confirmation is not typed in on screen — 2026-09-10 audit A1.
+     * Confirmation is not typed in on screen.
      *
      * This spot used to hold a `Record "confirmed"` button, and pressing it stored
      * `confirmed_from_source` as is. Now **the server calls the source.**
@@ -138,7 +138,7 @@ test.describe("golden path", () => {
 
     // --- 3. Review assignment (data_steward) ------------------------------
     await page.goto(`/w/projects/${projectId}/verification`);
-    // Q-032 — reviewer, credential, and schema come from this tenant's rows, not fixed ids.
+    // Reviewer, credential, and schema come from this tenant's rows, not fixed ids.
     // The seed has one reviewer with one valid credential and one active schema, so each is
     // preselected with those rows.
     await expect(page.getByRole("combobox", { name: "Reviewer" })).toHaveValue(

@@ -7,7 +7,7 @@ import type postgres from "postgres";
  * privilege boundary; the members that can connect are kept separate.
  *
  * **There is a reason this is code, not a SQL file.** Deployments cannot mount repository files
- * into containers — Coolify rewrites relative bind mounts in compose to absolute host paths,
+ * into containers — a compose-based deploy platform may rewrite relative bind mounts in compose to absolute host paths,
  * and the repository is not at that path. Code running inside the same image needs no mount,
  * and since the `$$` PL/pgSQL block never passes through a shell, quoting problems disappear too.
  *

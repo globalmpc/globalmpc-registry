@@ -216,7 +216,7 @@ export interface SubmitGuardInput {
 /**
  * Submission mode.
  *
- * - `eoa` — the worker signs and sends directly. Local and testnet only.
+ * - `eoa` — the worker signs and sends directly. Local chain only.
  * - `safe_proposal` — creates a proposal only; does not execute. Humans collect signatures and
  *   execute in Safe. **A created proposal is not a submission.**
  * - `blocked` — neither is possible.
@@ -229,7 +229,7 @@ export type SubmitGuard =
 export function checkSubmitAllowed(input: SubmitGuardInput): SubmitGuard {
   if (!input.eoaAllowedChainIds.includes(input.chainId)) {
     // The Safe multisig holds the contract's ANCHOR_SUBMITTER_ROLE. Direct EOA submission is
-    // local/testnet only and must never open in prod.
+    // local-chain only and must never open in prod.
     //
     // With a Safe address configured, create a proposal. Without one nothing can be done, and
     // that fact is not left silent.

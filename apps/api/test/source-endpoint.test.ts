@@ -29,7 +29,7 @@ describe("assertEndpointShape", () => {
   });
 
   it("rejects 6to4 relay anycast", () => {
-    // The one remaining case from 2026-09-10 audit A2. Blocking only IPv6 2002::/16 and not the
+    // The one remaining bypass case. Blocking only IPv6 2002::/16 and not the
     // IPv4 side leaves the same transition path open on one side.
     expect(isPrivateAddress("192.88.99.1")).toBe(true);
     expect(() => assertEndpointShape("https://192.88.99.1/")).toThrow(EndpointNotAllowedError);
@@ -100,7 +100,7 @@ describe("assertEndpointReachable", () => {
 });
 
 /**
- * Bypass input regressions — 2026-09-10 audit A2.
+ * Bypass input regressions.
  *
  * All twelve below are **inputs that once got past the blocking function**. There was more than
  * one cause: IPv4-mapped was matched only in dotted form (URL normalizes to `::ffff:7f00:1`),
@@ -159,7 +159,7 @@ describe("IPv6 bypass inputs", () => {
 });
 
 /**
- * Pins the connection to the checked address — 2026-09-10 audit A2.
+ * Pins the connection to the checked address.
  *
  * If the check and the connection resolve the name separately, the answer can change in
  * between (DNS rebinding). `assertEndpointReachable` **returns the addresses it checked** and
@@ -183,13 +183,13 @@ describe("returns verified addresses", () => {
 });
 
 /**
- * Pins the 11 reproductions from audit A2 as-is.
+ * Pins the 11 known bypass reproductions as-is.
  *
  * The first seven once passed; the last four were rejected from the start. Those four are
  * rejected by `new URL()` normalization, not our code (octal, integer, and shorthand forms come
  * back dotted). **If that premise changes, it must show up here** — hence kept together.
  */
-describe("audit A2 reproductions (11)", () => {
+describe("known bypass reproductions (11)", () => {
   const cases = [
     "https://[::ffff:7f00:1]/",
     "https://[::ffff:a9fe:a9fe]/",

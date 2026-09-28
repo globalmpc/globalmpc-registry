@@ -3,8 +3,8 @@
 # **The deployment decides receivers.** No Slack webhook or email address goes in the repo —
 # it would become a secret and stay in commits even after removal.
 #
-# The `url: "${ALERTMANAGER_WEBHOOK_URL:-...}"` that used to be here **did not work**
-# (2026-09-10 audit A4). Compose does not substitute the **contents** of mounted files, and
+# The `url: "${ALERTMANAGER_WEBHOOK_URL:-...}"` that used to be here **did not work**.
+# Compose does not substitute the **contents** of mounted files, and
 # this deployment has no rendering step. So Alertmanager tried to read that string as a URL
 # and loading the config itself failed:
 #

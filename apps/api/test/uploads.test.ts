@@ -188,7 +188,7 @@ describeDb("uploads", () => {
     });
   }
 
-  it("does not issue download links for files not yet scanned (Q-033)", async () => {
+  it("does not issue download links for files not yet scanned", async () => {
     // Quarantine means "not known to be safe". A link would deliver an unscanned file to the
     // project's users before the scanner has seen it.
     const created = (await upload(stewardToken)).json();

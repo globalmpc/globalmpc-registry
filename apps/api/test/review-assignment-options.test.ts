@@ -26,7 +26,7 @@ interface Options {
 }
 
 /**
- * Review assignment options — Q-032.
+ * Review assignment options.
  *
  * The assignment form used to send one fixed reviewer, credential, and schema — the E2E seed's
  * ids — so on any real tenant every assignment failed. The options must be the ones an
@@ -74,7 +74,7 @@ describeDb("review assignment options", () => {
       INSERT INTO core.wallet_identities (
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at, disabled_at
       ) VALUES (
-        ${randomUUID()}, ${input.tenantId}, ${input.subjectId}, ${newAccount().address}, 97,
+        ${randomUUID()}, ${input.tenantId}, ${input.subjectId}, ${newAccount().address}, 31337,
         ${input.assurance}, now(), ${input.walletDisabled ? new Date() : null}
       )
     `;

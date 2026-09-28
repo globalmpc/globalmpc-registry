@@ -183,8 +183,8 @@ async function claimPending(
            b.schema_version, b.record_count
     FROM chain.transactions t
     LEFT JOIN chain.anchor_batches b ON b.id = t.batch_id
-    -- Pick only this chain's transactions. Without the filter a testnet worker looks up
-    -- mainnet transactions on its own RPC and judges them "not found".
+    -- Pick only this chain's transactions. Without the filter a worker on one chain looks up
+    -- another chain's transactions on its own RPC and judges them "not found".
     -- proposed is not picked. Until Safe executes it there is no transaction on chain, and a
     -- lookup would judge it "not found" and wrongly mark it dropped.
     WHERE t.chain_id = ${chainId}

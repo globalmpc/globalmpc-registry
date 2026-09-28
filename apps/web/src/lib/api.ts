@@ -77,7 +77,7 @@ export interface SiweChallenge {
   /**
    * Chain to sign on. **The server decides it and the server verifies it**.
    *
-   * When 97 was hardcoded here, real-wallet login on stg/prod (56) succeeded zero times.
+   * When a chain was hardcoded here, real-wallet login on stg/prod (56) succeeded zero times.
    */
   chainId: number;
   expiresAt: string;
@@ -287,7 +287,7 @@ export async function createSourceReceipt(
 }
 
 /**
- * Official source lookup — 2026-09-10 audit A1.
+ * Official source lookup.
  *
  * **Confirmation comes only from this path.** A screen sending `confirmed_from_source`
  * directly records "the uploader said so" as "we checked".
@@ -1997,7 +1997,7 @@ export interface NotificationSink {
   };
 }
 
-/** A failed delivery's category. The server never returns the receiver's own answer (W-087). */
+/** A failed delivery's category. The server never returns the receiver's own answer. */
 export type NotificationDeliveryError =
   | "rejected_destination"
   | "secret_unavailable"

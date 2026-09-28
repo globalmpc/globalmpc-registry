@@ -95,7 +95,7 @@ const createReceiptSchema = z.object({
   effectiveAt: z.string().datetime().nullable().default(null),
   freshnessStatus: z.enum(["fresh", "aging", "stale", "unknown"]),
   /**
-   * Per-channel evidence **inputs** — AC-29, 2026-09-10 audit A1.
+   * Per-channel evidence **inputs** — AC-29.
    *
    * This used to accept `signatureValid` and `observedFields` **as results**.
    * That made the requester's statement the evidence for confirmation. Now it accepts only
@@ -326,7 +326,7 @@ async function claimProjectId(
 }
 
 /**
- * The server produces confirmation evidence — 2026-09-10 audit A1.
+ * The server produces confirmation evidence.
  *
  * Each of the four channels has its own confirmation condition, and **none is met by
  * an assertion in the request body.**
@@ -383,7 +383,7 @@ async function readUploadBytes(
 ): Promise<Uint8Array> {
   const bytes = await store.get(upload.object_key);
   if (!bytes) {
-    // The DB row exists but the object does not. Do not confirm — that state is exactly A5.
+    // The DB row exists but the object does not. Do not confirm — a record without its object is not evidence.
     throw unprocessable("UPLOAD_OBJECT_MISSING", "Uploaded original not found in storage", {
       nextAction: "Check the backup restore state and upload the file again",
     });
@@ -661,7 +661,7 @@ export async function registerEvidenceRoutes(
           const data = parsed.data;
 
           /**
-           * The server produces confirmation evidence — AC-29, 2026-09-10 audit A1.
+           * The server produces confirmation evidence — AC-29.
            *
            * Non-confirmed results do not pass through here. **A failure must be kept as a
            * failure** — otherwise the next person repeats the same attempt.

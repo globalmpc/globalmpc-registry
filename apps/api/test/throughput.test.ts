@@ -175,7 +175,7 @@ describeDb("throughput measurement", () => {
       app.inject({
         method: "POST",
         url: "/api/v1/auth/siwe/nonce",
-        payload: { walletAddress: fx.operatorA.address, chainId: 97 },
+        payload: { walletAddress: fx.operatorA.address, chainId: 31337 },
       }),
     );
 

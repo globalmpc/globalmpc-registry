@@ -73,7 +73,7 @@ describeDb("public unified search", () => {
     // The worker submits on-chain. Here only a submission row is written to open the tx hash path.
     await fx.sql`
       INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, tx_hash)
-      SELECT ${randomUUID()}, b.tenant_id, b.id, ${`search-${randomUUID()}`}, 97, ${txHash}
+      SELECT ${randomUUID()}, b.tenant_id, b.id, ${`search-${randomUUID()}`}, 31337, ${txHash}
       FROM chain.anchor_batches b
       WHERE b.merkle_root = ${anchored.root}
     `;

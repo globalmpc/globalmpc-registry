@@ -126,7 +126,7 @@ async function attestationProjectId(
 }
 
 /**
- * The drafting checks for a signature request (W-085), outside the idempotency block.
+ * The drafting checks for a signature request, outside the idempotency block.
  *
  * The response carries the draft's typed data and human-readable payload, and the request row is
  * the only way to sign. Inside the block a replay of the assignee's key would return that response
@@ -1039,7 +1039,7 @@ export async function registerVerificationRoutes(
 
           if (!attestation) throw notFound("Attestation not found");
 
-          // Ownership and authorization ran before the idempotency block (W-085).
+          // Ownership and authorization ran before the idempotency block.
           if (attestation.state !== "draft") {
             throw conflict("ATTESTATION_ALREADY_SIGNED", "Attestation is already signed");
           }

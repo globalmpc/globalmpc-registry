@@ -94,9 +94,9 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
     throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI must be greater than 0");
   }
 
-  // Defaults are local (31337) and BNB testnet (97) only. Solo EOA submission on mainnet must be
+  // The default is the local chain (31337) only. Solo EOA submission on mainnet must be
   // opened explicitly, and by contract design that is the Safe multisig's role.
-  const eoaAllowedChainIds = (env.ANCHOR_EOA_CHAIN_IDS ?? "31337,97")
+  const eoaAllowedChainIds = (env.ANCHOR_EOA_CHAIN_IDS ?? "31337")
     .split(",")
     .map((value) => Number(value.trim()))
     .filter((value) => Number.isInteger(value) && value > 0);

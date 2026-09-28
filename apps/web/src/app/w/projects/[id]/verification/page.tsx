@@ -89,7 +89,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
   }, [load]);
 
   /**
-   * Reviewer, credential, and schema come from this tenant's rows (Q-032). Fixed seed ids made
+   * Reviewer, credential, and schema come from this tenant's rows. Fixed seed ids made
    * every assignment fail outside the demo tenant. The first reviewer who holds a valid
    * credential is preselected, with that credential and the first active schema.
    */

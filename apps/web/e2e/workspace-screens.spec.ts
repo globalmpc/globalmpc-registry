@@ -193,7 +193,7 @@ test.describe("notification sinks", () => {
     await page.getByRole("textbox", { name: "Webhook URL" }).fill(url);
     await page
       .getByRole("textbox", { name: "Signing secret reference" })
-      // Webhook secrets live in their own namespace (W-087). Anything else is refused with 400.
+      // Webhook secrets live in their own namespace. Anything else is refused with 400.
       .fill("env:WEBHOOK_SECRET_E2E");
     await page.getByRole("button", { name: "Add sink" }).click();
 

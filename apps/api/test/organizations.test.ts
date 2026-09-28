@@ -16,7 +16,7 @@ import {
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * Organization lookup for project registration — Q-032.
+ * Organization lookup for project registration.
  *
  * The registration form used to find the owner organization in a table of demo tenant ids, so
  * on any other tenant it showed "No organization" and could not submit. The list must follow
@@ -41,7 +41,7 @@ describeDb("organization lookup", () => {
       INSERT INTO core.wallet_identities (
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 97, 'identity_bound', now()
+        ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'identity_bound', now()
       )
     `;
     await fx.sql`

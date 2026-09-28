@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * Review registry proposals E2E — spec 02 §2.8, W-066.
+ * Review registry proposals E2E — spec 02 §2.8.
  *
  * Credentials, attestation schemas and policy sets used to be created only by a CLI. What this
  * checks is that a proposal started in the browser reaches the server, comes back as pending, and

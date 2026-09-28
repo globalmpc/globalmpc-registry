@@ -792,7 +792,7 @@ export async function registerAdminRoutes(
     }
 
     /**
-     * Where the worker will send, and which secret it will read, are checked on save (W-087).
+     * Where the worker will send, and which secret it will read, are checked on save.
      *
      * The worker checks both again at send time, with the name resolved — this is the rejection
      * the operator sees on the spot. The reference is not echoed back in the error.

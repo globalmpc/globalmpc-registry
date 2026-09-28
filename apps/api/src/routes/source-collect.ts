@@ -147,7 +147,7 @@ export async function registerSourceCollectRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
   /**
-   * The default must not be global `fetch` — 2026-09-10 audit A2.
+   * The default must not be global `fetch`.
    *
    * Global `fetch` re-resolves the hostname itself, so the address `assertEndpointReachable`
    * checked can differ from the address actually connected to.
@@ -250,7 +250,7 @@ export async function registerSourceCollectRoutes(
         timeoutMs: connection.timeout_ms,
         effectiveAtField: connection.effective_at_field,
         /**
-         * What a normal response from this source looks like — 2026-09-10 audit A7.
+         * What a normal response from this source looks like.
          *
          * `schema_fingerprint` is **shared** with bulk export. A separate column would give
          * two answers to the same question, and if they diverged there would be no way to tell
@@ -310,7 +310,7 @@ export async function registerSourceCollectRoutes(
       const confirmed = result === "confirmed_from_source";
 
       /**
-       * Who produced this result — 2026-09-10 audit A1.
+       * Who produced this result.
        *
        * This marker lets the DB tell "an API confirmation a person typed in" from "a confirmation
        * the server fetched" (constraint api_confirmation_requires_server_collection).

@@ -1,7 +1,7 @@
 import { createPublicKey, verify as cryptoVerify, type KeyObject } from "node:crypto";
 
 /**
- * Server-side basis for source confirmation — 2026-09-10 audit A1.
+ * Server-side basis for source confirmation.
  *
  * What the audit found: when a person with `source.upload` created a receipt and
  * **sent `signatureValid: true` themselves**, the document was stored as `confirmed_from_source`.

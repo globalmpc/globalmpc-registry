@@ -23,7 +23,7 @@ import rulesFixture from "../../../packages/policy/test/fixtures/registry-gate.r
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * Review registry proposals — spec 02 §2.8, W-066 / Q-020.
+ * Review registry proposals — spec 02 §2.8.
  *
  * Credentials, attestation schemas and compliance policy sets used to be created only by an
  * operator CLI, where "approval" was a name the operator typed. This file guards the path that
@@ -74,7 +74,7 @@ describeDb("review registry proposals", () => {
       INSERT INTO core.wallet_identities (
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${account.address}, 97, 'high_assurance', now()
+        ${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${account.address}, 31337, 'high_assurance', now()
       )
     `;
     for (const role of roles) {
@@ -568,7 +568,7 @@ describeDb("review registry proposals", () => {
         jurisdiction: "MNG",
         subjectName: "Parity reviewer",
         walletAddress: bootstrapWallet,
-        chainId: 97,
+        chainId: 31337,
         role: "reviewer_cp_qp",
         assuranceLevel: "high_assurance",
       });

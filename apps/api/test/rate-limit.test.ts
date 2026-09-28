@@ -70,7 +70,7 @@ describe("pre-validation request cap", () => {
           authorization: `Bearer different-invalid-token-${attempt}`,
           "x-forwarded-for": "203.0.113.21",
         },
-        payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 97 },
+        payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 31337 },
       });
       statuses.push(response.statusCode);
     }
@@ -108,7 +108,7 @@ describeDb("request cap", () => {
     return app.inject({
       method: "POST",
       url: "/api/v1/auth/siwe/nonce",
-      payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 97 },
+      payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 31337 },
     });
   }
 
@@ -184,7 +184,7 @@ describeDb("request cap behind a proxy", () => {
       method: "POST",
       url: "/api/v1/auth/siwe/nonce",
       headers: forwardedFor ? { "x-forwarded-for": forwardedFor } : {},
-      payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 97 },
+      payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 31337 },
     });
   }
 
@@ -240,7 +240,7 @@ describeDb("requester address warning", () => {
       method: "POST",
       url: "/api/v1/auth/siwe/nonce",
       headers: forwardedFor ? { "x-forwarded-for": forwardedFor } : {},
-      payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 97 },
+      payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 31337 },
     });
     await app.close();
 

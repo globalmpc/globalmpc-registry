@@ -46,7 +46,7 @@ test.describe("review lifecycle", () => {
     await expect(page.getByText("mining_right_registration")).toBeVisible();
 
     await page.goto(`/w/projects/${projectId}/verification`);
-    // The assignee is picked from the tenant's reviewers (Q-032), not a fixed id.
+    // The assignee is picked from the tenant's reviewers, not a fixed id.
     await expect(page.getByRole("combobox", { name: "Reviewer" })).toHaveValue(
       "aaaaaaaa-0000-0000-0000-000000000006",
     );

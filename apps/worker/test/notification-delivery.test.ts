@@ -25,7 +25,7 @@ const PUBLIC_ADDRESS = "203.0.113.10";
  * 2. **Never retry forever** — at the cap the delivery is frozen, and that fact is recorded.
  * 3. **Never record an unsent delivery as a success.**
  *
- * And since W-087: the receiver is judged like a source endpoint (resolved, private ranges
+ * And the receiver is judged like a source endpoint (resolved, private ranges
  * refused, connection pinned, no redirects), and what is stored about a failure is a category,
  * never the peer's status or error text — the admin screen shows it.
  */
@@ -214,7 +214,7 @@ describeDb("notification delivery", () => {
     expect(result).toEqual({ handled: false, delivered: 0, failed: 0 });
   });
 
-  describe("destination checks at send time (W-087)", () => {
+  describe("destination checks at send time", () => {
     it.each([
       ["a private IPv4 literal", "https://10.0.0.5/hook"],
       ["the metadata address", "https://169.254.169.254/latest/meta-data/"],
@@ -302,7 +302,7 @@ describeDb("notification delivery", () => {
     });
   });
 
-  describe("stored errors are categories (W-087)", () => {
+  describe("stored errors are categories", () => {
     it("stores an HTTP failure without its status", async () => {
       const id = await makeNotification();
 
@@ -370,7 +370,7 @@ describeDb("notification delivery", () => {
     });
   });
 
-  describe("secret reference namespace at send time (W-087)", () => {
+  describe("secret reference namespace at send time", () => {
     it.each(["env:DATABASE_URL", "file:/run/secrets/worker_database_url", "plain:literal-secret"])(
       "refuses %s without resolving it",
       async (reference) => {
