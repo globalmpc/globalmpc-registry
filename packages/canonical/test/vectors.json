@@ -1,0 +1,151 @@
+{
+  "serializationVersion": "1",
+  "note": "MPC canonical serialization golden vectors. A changed value means the spec changed; bump serializationVersion.",
+  "keccak256": {
+    "empty": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+    "abc": "0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+  },
+  "canonicalize": [
+    {
+      "name": "empty-object",
+      "input": {},
+      "canonical": "{}",
+      "keccak256": "0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d"
+    },
+    {
+      "name": "empty-array",
+      "input": [],
+      "canonical": "[]",
+      "keccak256": "0x518674ab2b227e5f11e9084f615d57663cde47bce1ba168b4c19c7ee22a73d70"
+    },
+    {
+      "name": "key-ordering",
+      "input": {
+        "b": "1",
+        "a": "2",
+        "C": "3",
+        "": "4"
+      },
+      "canonical": "{\"\":\"4\",\"C\":\"3\",\"a\":\"2\",\"b\":\"1\"}",
+      "keccak256": "0x220a094f5b91328163a6002e9b2b36e8408928a91e45d8c7511ff4deac74b130"
+    },
+    {
+      "name": "nested",
+      "input": {
+        "z": {
+          "y": [
+            "1",
+            "2"
+          ],
+          "x": null
+        },
+        "a": true
+      },
+      "canonical": "{\"a\":true,\"z\":{\"x\":null,\"y\":[\"1\",\"2\"]}}",
+      "keccak256": "0x9fe1eac066e11d4c147b95e3495d62e6d763557252bc4cb4fc14c472cce94e5c"
+    },
+    {
+      "name": "escapes",
+      "input": {
+        "s": "line\nbreak\ttab\"quote\\slash\u0001"
+      },
+      "canonical": "{\"s\":\"line\\nbreak\\ttab\\\"quote\\\\slash\\u0001\"}",
+      "keccak256": "0xd837d99bced2433259bd2fb44285a5b2e9794b68a39279db70451190ce1a8e25"
+    },
+    {
+      "name": "non-ascii",
+      "input": {
+        "mn": "Монгол",
+        "ja": "モンゴル",
+        "emoji": "😀"
+      },
+      "canonical": "{\"emoji\":\"😀\",\"ja\":\"モンゴル\",\"mn\":\"Монгол\"}",
+      "keccak256": "0xf261a62313afc3a650bce281b840c8265cdb88736066b1d21eafe761617fe903"
+    },
+    {
+      "name": "decimal-strings",
+      "input": {
+        "amount": "10000000000",
+        "unit": "MPC",
+        "asOf": "2026-08-01"
+      },
+      "canonical": "{\"amount\":\"10000000000\",\"asOf\":\"2026-08-01\",\"unit\":\"MPC\"}",
+      "keccak256": "0x919a68ccab3e35b138b1e355514e76498d83d5a8350e78f267bce2f6b14cfc3e"
+    }
+  ],
+  "leaves": [
+    {
+      "leaf": {
+        "registryType": "project",
+        "entryVersionId": "01JZPROJECT0000000000000AA",
+        "subjectId": "01JZSUBJECT0000000000000AA",
+        "version": "1",
+        "status": "published",
+        "serializationVersion": "1",
+        "policyVersion": "mn-core-1.0.0",
+        "schemaVersion": "project-registry-1",
+        "contentHash": "0x8a763859277f764edf67dffa392d3eec76cde965a789233d15731441e01187f9"
+      },
+      "leafHash": "0x62a6f13e1a21498f57d53fa72f0e9dd0580bea3d1da2ef4ef79ac796cfdb1fa3"
+    },
+    {
+      "leaf": {
+        "registryType": "verification",
+        "entryVersionId": "01JZVERIFY00000000000000AA",
+        "subjectId": "01JZSUBJECT0000000000000AA",
+        "version": "2",
+        "status": "published",
+        "serializationVersion": "1",
+        "policyVersion": "mn-core-1.0.0",
+        "schemaVersion": "verification-registry-1",
+        "contentHash": "0x806cc025d19798defc05a10d7d062b242aaa1b7ff606ec76b9b33cce7342dd9f"
+      },
+      "leafHash": "0xd9223f2db4cc421d279c2043ce0da0a1f067648110e78d06b1dd9f2cd063e921"
+    },
+    {
+      "leaf": {
+        "registryType": "verification",
+        "entryVersionId": "01JZVERIFY00000000000000BB",
+        "subjectId": "01JZSUBJECT0000000000000BB",
+        "version": "1",
+        "status": "superseded",
+        "serializationVersion": "1",
+        "policyVersion": "mn-core-1.0.0",
+        "schemaVersion": "verification-registry-1",
+        "contentHash": "0x81f08954620d3ae470d635a349646b1ae33d12f358e07b2764835b410750ebd8"
+      },
+      "leafHash": "0xf459bb689062007f3aa1cc2b4f489828349789fce84ddc83c7bad5882feedfed"
+    }
+  ],
+  "merkle": {
+    "root": "0xf5017ce8e1264b5a597a8c1c0f21c7a29467d6aee85f062d0b55c6e640a6c5d1",
+    "leafCount": 3,
+    "sortedLeaves": [
+      "0x62a6f13e1a21498f57d53fa72f0e9dd0580bea3d1da2ef4ef79ac796cfdb1fa3",
+      "0xd9223f2db4cc421d279c2043ce0da0a1f067648110e78d06b1dd9f2cd063e921",
+      "0xf459bb689062007f3aa1cc2b4f489828349789fce84ddc83c7bad5882feedfed"
+    ],
+    "proofs": [
+      {
+        "leafHash": "0x62a6f13e1a21498f57d53fa72f0e9dd0580bea3d1da2ef4ef79ac796cfdb1fa3",
+        "proof": [
+          "0xd9223f2db4cc421d279c2043ce0da0a1f067648110e78d06b1dd9f2cd063e921",
+          "0xf459bb689062007f3aa1cc2b4f489828349789fce84ddc83c7bad5882feedfed"
+        ]
+      },
+      {
+        "leafHash": "0xd9223f2db4cc421d279c2043ce0da0a1f067648110e78d06b1dd9f2cd063e921",
+        "proof": [
+          "0x62a6f13e1a21498f57d53fa72f0e9dd0580bea3d1da2ef4ef79ac796cfdb1fa3",
+          "0xf459bb689062007f3aa1cc2b4f489828349789fce84ddc83c7bad5882feedfed"
+        ]
+      },
+      {
+        "leafHash": "0xf459bb689062007f3aa1cc2b4f489828349789fce84ddc83c7bad5882feedfed",
+        "proof": [
+          "0xa1f3ef96b937f329a88b5bda67acd9e18a8e280ac648d3a415cb643bd227c378"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@mpc/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Secret reference resolution and object storage configuration for the MPC dApp.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {}
+}

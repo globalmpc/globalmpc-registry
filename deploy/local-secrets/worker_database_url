@@ -1,0 +1,1 @@
+postgres://mpc_worker_login:worker@postgres:5432/mpc_dev

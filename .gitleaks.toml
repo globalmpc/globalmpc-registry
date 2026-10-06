@@ -1,0 +1,22 @@
+# Secret scan config — `.github/workflows/secrets.yml`
+#
+# Uses the default rules as is, allowing only published test values and vendored code.
+# Before widening the allowlist, confirm the value really is public (a well-known default key).
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Vendored external libraries — OpenZeppelin and forge-std's own test vectors"
+paths = ['''(^|/)contracts/lib/''']
+
+# deploy/local-secrets/ has **no path allowlist.** Its tracked files trigger no finding without
+# one (checked with gitleaks 8.30.1, 2026-09-14). A path allowlist would also pass any real key
+# that someone drops there.
+
+[[allowlists]]
+description = "anvil default accounts #0 and #1 private keys — public values, no real assets"
+regexes = [
+  '''0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''',
+  '''0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d''',
+]

@@ -1,0 +1,4 @@
+{
+  "$description": "Fixture: a colour syntax the build cannot resolve.",
+  "color": { "brand": { "$value": "rebeccapurple", "$type": "color" } }
+}

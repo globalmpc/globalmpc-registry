@@ -1,0 +1,84 @@
+{
+  "ruleSetId": "registry-publication-gate",
+  "version": "1.0.0",
+  "effectiveFrom": "2026-01-01T00:00:00Z",
+  "supersededBy": null,
+  "jurisdictionProfile": "MNG",
+  "gateId": "registry_publication",
+  "retroactive": false,
+  "requirements": [
+    {
+      "requirementId": "project-identity",
+      "label": "Project identity and accountable party",
+      "appliesWhen": { "op": "always" },
+      "requiredClaimTypes": ["project_identity", "host_country", "responsible_party"],
+      "minimumGrade": "self_reported",
+      "freshnessThresholdDays": null,
+      "requiredAttestations": [],
+      "blockingConflictTypes": ["identity_conflict"],
+      "notEvaluableWhen": { "op": "never" },
+      "watchWhen": null
+    },
+    {
+      "requirementId": "mining-right",
+      "label": "Mining right existence and validity period",
+      "appliesWhen": { "op": "always" },
+      "requiredClaimTypes": ["mining_right_registration"],
+      "minimumGrade": "partially_verified",
+      "freshnessThresholdDays": "180",
+      "requiredAttestations": ["legal_notarization"],
+      "blockingConflictTypes": ["rights_conflict", "registry_mismatch"],
+      "notEvaluableWhen": {
+        "op": "eq",
+        "path": "jurisdictionProfileState",
+        "value": "suspended"
+      },
+      "watchWhen": { "op": "eq", "path": "rightsExpiryWithin12Months", "value": "true" }
+    },
+    {
+      "requirementId": "resource-estimate",
+      "label": "Resource estimate and professional review",
+      "appliesWhen": { "op": "eq", "path": "projectStage", "value": "exploration_or_later" },
+      "requiredClaimTypes": ["resource_estimate"],
+      "minimumGrade": "partially_verified",
+      "freshnessThresholdDays": "1095",
+      "requiredAttestations": ["professional_signoff"],
+      "blockingConflictTypes": ["estimate_conflict"],
+      "notEvaluableWhen": {
+        "op": "not",
+        "operand": { "op": "exists", "path": "acceptedReportingStandard" }
+      },
+      "watchWhen": null
+    },
+    {
+      "requirementId": "environmental-baseline",
+      "label": "Environmental baseline study",
+      "appliesWhen": { "op": "always" },
+      "requiredClaimTypes": ["environmental_baseline"],
+      "minimumGrade": "partially_verified",
+      "freshnessThresholdDays": "730",
+      "requiredAttestations": ["laboratory_accreditation"],
+      "blockingConflictTypes": [],
+      "notEvaluableWhen": {
+        "op": "not",
+        "operand": { "op": "exists", "path": "environmentalRequirementBasis" }
+      },
+      "watchWhen": { "op": "gte", "path": "openFindingCount", "value": "1" }
+    },
+    {
+      "requirementId": "ersp-linkage",
+      "label": "ERSP linkage status per required function",
+      "appliesWhen": { "op": "eq", "path": "offeringIntent", "value": "true" },
+      "requiredClaimTypes": ["ersp_authorization_reference"],
+      "minimumGrade": "self_reported",
+      "freshnessThresholdDays": "365",
+      "requiredAttestations": [],
+      "blockingConflictTypes": ["ersp_scope_conflict"],
+      "notEvaluableWhen": {
+        "op": "not",
+        "operand": { "op": "exists", "path": "applicableJurisdiction" }
+      },
+      "watchWhen": null
+    }
+  ]
+}

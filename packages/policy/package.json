@@ -1,0 +1,19 @@
+{
+  "name": "@mpc/policy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Versioned readiness rule schema and the deterministic Compliance Policy Engine.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mpc/canonical": "workspace:*",
+    "@mpc/domain": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}

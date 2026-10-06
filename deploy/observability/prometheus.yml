@@ -1,0 +1,29 @@
+# Prometheus scrape config — spec 06 §6.9.
+#
+# `/metrics` was exposed and **nothing collected it.** Metrics that are only exposed are seen
+# by nobody, and unseen metrics are as good as absent.
+#
+# `/metrics` has no auth (`routes/health.ts`). Instead it carries no identifying data such
+# as tenant or path parameters, and exposing it only internally at the network level is the
+# deployment's job — in compose this stack shares a network with `api` and opens no ports
+# to the outside.
+
+global:
+  # Not tightened to 15s. Each scrape runs one DB aggregation (gauges), so the interval is
+  # that load. The alert rules' `for` values are far longer than 30s.
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: mpc-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:3001"]
