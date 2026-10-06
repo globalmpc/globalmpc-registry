@@ -234,8 +234,8 @@ const GOVERNANCE_READERS = [
 ] as const;
 
 /**
- * Who approves review registry proposals — credentials, attestation schemas and compliance
- * policy sets (02 §2.8, "the Protocol's designated review role").
+ * Who approves review registry proposals — credentials, attestation schemas, compliance policy
+ * sets and jurisdiction profile versions (02 §2.8, "the Protocol's designated review role").
  *
  * **No role in 02 §2.2 carries that name, and none is called "Credential Verifier" either.**
  * `reviewer_assurance` is the closest existing role: it reviews procedures and controls
@@ -504,7 +504,8 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   },
 
   /**
-   * Review registries — credentials, attestation schemas, compliance policy sets (02 §2.8).
+   * Review registries — credentials, attestation schemas, compliance policy sets and jurisdiction
+   * profile versions (02 §2.8, 04 §4.9).
    *
    * **Proposing and approving are different roles and different people.** The operator deploys
    * rules (02 §2.3 "rule deployment only") by proposing them; the designated review role

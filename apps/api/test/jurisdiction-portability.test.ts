@@ -95,6 +95,17 @@ describeDb("second-jurisdiction portability (AC-25)", () => {
         ${fx.sql.json(rulesFixture as never)}, 'effective'
       )
     `;
+    // The profile's state and environmental basis are data too (OD-43). Without this row the
+    // environmental requirement has no basis and readiness is not_evaluable.
+    await fx.sql`
+      INSERT INTO core.jurisdiction_profiles (
+        id, tenant_id, jurisdiction, profile_version, state,
+        environmental_requirement_basis, effective_from
+      ) VALUES (
+        ${randomUUID()}, ${fx.tenantA}, ${JURISDICTION}, 1, 'approved',
+        'Synthetic Environmental Code', '2026-01-01T00:00:00Z'
+      )
+    `;
   });
 
   afterAll(async () => {

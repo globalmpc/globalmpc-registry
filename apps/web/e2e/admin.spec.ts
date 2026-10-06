@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Administration E2E.
@@ -8,16 +9,6 @@ import { expect, test, type Page } from "@playwright/test";
  * run a CLI on the server. What this checks is not "the screen renders" but **whether a
  * change started in the browser reaches the DB and comes back to the screen**.
  */
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 test.describe("Administration", () => {
   test("adds a person without the CLI and sees them in the list", async ({ page }) => {

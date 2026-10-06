@@ -15,8 +15,8 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 /**
  * Review registry proposals — spec 02 §2.8.
  *
- * Credentials, attestation schemas and compliance policy sets are proposed by an operator and
- * approved by a different person holding the review role. Approval is what creates the record.
+ * Credentials, attestation schemas, compliance policy sets and jurisdiction profile versions are
+ * proposed by an operator and approved by a different person holding the review role. Approval is what creates the record.
  * Before this panel the only way in was a CLI where "approval" was a typed name.
  *
  * **Controls follow the session's actions, not role names copied here.** The server lists the
@@ -31,6 +31,7 @@ const KINDS: readonly { readonly segment: RegistrySegment; readonly label: strin
   { segment: "policy-sets", label: "Policy sets" },
   { segment: "attestation-schemas", label: "Attestation schemas" },
   { segment: "credentials", label: "Credentials" },
+  { segment: "jurisdiction-profiles", label: "Jurisdiction profiles" },
 ];
 
 /** Starting payload per registry. The rationale is a separate field. */
@@ -55,6 +56,13 @@ const TEMPLATES: Readonly<Record<RegistrySegment, unknown>> = {
     acceptedAuthorityTypes: [],
     mandatoryLimitations: [],
     jurisdictionProfile: "MNG",
+    effectiveFrom: "2026-01-01T00:00:00Z",
+  },
+  // The next version of a profile. A null basis records that none is confirmed (OD-43).
+  "jurisdiction-profiles": {
+    jurisdiction: "",
+    state: "approved",
+    environmentalRequirementBasis: null,
     effectiveFrom: "2026-01-01T00:00:00Z",
   },
   credentials: {

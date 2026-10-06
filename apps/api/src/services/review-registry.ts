@@ -1,9 +1,15 @@
 import type postgres from "postgres";
-import { ATTESTATION_TYPES, type AttestationType } from "@mpc/domain";
+import {
+  ATTESTATION_TYPES,
+  canTransition,
+  jurisdictionProfileMachine,
+  type AttestationType,
+} from "@mpc/domain";
 import { safeParseRuleSet, type RuleSet } from "@mpc/policy";
 
 /**
- * The three review registries — credentials, attestation schemas, compliance policy sets.
+ * The review registries — credentials, attestation schemas, compliance policy sets and
+ * jurisdiction profile versions.
  *
  * **One validation and one write path for both callers.** The API approval route
  * (`routes/review-registry.ts`) and the bootstrap CLI (`bootstrap-registry.ts`) both validate
@@ -320,6 +326,146 @@ export async function materializePolicySet(
       ${row.id}, ${row.tenantId}, ${ruleSet.ruleSetId}, ${ruleSet.version}, ${ruleSet.gateId},
       ${ruleSet.jurisdictionProfile}, ${new Date(ruleSet.effectiveFrom)},
       ${ruleSet.retroactive}, ${tx.json(row.definition as never)}, ${row.state}
+    )
+  `;
+}
+
+// --- jurisdiction profile ---------------------------------------------------
+
+/** Stored states — 04 §4.9 minus `drafting` and `review_ready`, which are the proposal itself. */
+export type JurisdictionProfileVersionState = "approved" | "stale" | "suspended";
+
+export interface JurisdictionProfileFields {
+  readonly jurisdiction: string;
+  readonly state: JurisdictionProfileVersionState;
+  readonly environmentalRequirementBasis: string | null;
+}
+
+export interface JurisdictionProfileVersion extends JurisdictionProfileFields {
+  readonly id: string;
+  readonly profileVersion: number;
+  readonly effectiveFrom: Date;
+}
+
+const PROFILE_TRANSITION_INVALID = "JURISDICTION_PROFILE_TRANSITION_INVALID";
+
+/**
+ * Checks a proposed version against the current one.
+ *
+ * The same rules as the DB trigger (0047), stated here so the proposer hears why before anyone
+ * reviews it. Keeping the state is a content revision; a proposal that changes nothing would
+ * give the approver nothing to review.
+ */
+export function validateJurisdictionProfile(
+  input: JurisdictionProfileFields,
+  effectiveFrom: Date,
+  current: JurisdictionProfileVersion | null,
+): Validated<JurisdictionProfileFields> {
+  if (input.jurisdiction.trim() === "") {
+    return invalid("JURISDICTION_PROFILE_INVALID", "jurisdiction is required");
+  }
+  if (input.environmentalRequirementBasis !== null && input.environmentalRequirementBasis.trim() === "") {
+    return invalid(
+      "JURISDICTION_PROFILE_INVALID",
+      "environmentalRequirementBasis must be null or a non-blank reference",
+    );
+  }
+
+  if (current === null) {
+    if (input.state !== "approved") {
+      return invalid(PROFILE_TRANSITION_INVALID, "The first version of a profile must be approved", {
+        from: null,
+        to: input.state,
+        allowed: ["approved"],
+      });
+    }
+    return valid({ ...input });
+  }
+
+  // Readiness reads the highest version in effect, which is the one in force only if versions
+  // take effect in order. A correction that took effect earlier is recorded as effective now.
+  if (effectiveFrom.getTime() < current.effectiveFrom.getTime()) {
+    return invalid(
+      "JURISDICTION_PROFILE_EFFECTIVE_BEFORE_CURRENT",
+      "A new version cannot take effect before the current version",
+      { currentVersion: current.profileVersion, currentEffectiveFrom: current.effectiveFrom.toISOString() },
+    );
+  }
+
+  if (input.state === current.state) {
+    if (input.environmentalRequirementBasis === current.environmentalRequirementBasis) {
+      return invalid("JURISDICTION_PROFILE_UNCHANGED", "The proposal matches the current version", {
+        currentVersion: current.profileVersion,
+      });
+    }
+    return valid({ ...input });
+  }
+
+  if (!canTransition(jurisdictionProfileMachine, current.state, input.state)) {
+    return invalid(
+      PROFILE_TRANSITION_INVALID,
+      `A profile cannot move from ${current.state} to ${input.state}`,
+      {
+        from: current.state,
+        to: input.state,
+        allowed: jurisdictionProfileMachine.transitions[current.state],
+      },
+    );
+  }
+  return valid({ ...input });
+}
+
+/** The latest version regardless of effective date — the one the next version follows. */
+export async function findLatestJurisdictionProfile(
+  tx: Tx,
+  tenantId: string,
+  jurisdiction: string,
+): Promise<JurisdictionProfileVersion | null> {
+  const [row] = await tx<
+    {
+      id: string;
+      profile_version: number;
+      state: JurisdictionProfileVersionState;
+      environmental_requirement_basis: string | null;
+      effective_from: Date;
+    }[]
+  >`
+    SELECT id, profile_version, state, environmental_requirement_basis, effective_from
+    FROM core.jurisdiction_profiles
+    WHERE tenant_id = ${tenantId} AND jurisdiction = ${jurisdiction}
+    ORDER BY profile_version DESC
+    LIMIT 1
+  `;
+  return row
+    ? {
+        id: row.id,
+        jurisdiction,
+        profileVersion: row.profile_version,
+        state: row.state,
+        environmentalRequirementBasis: row.environmental_requirement_basis,
+        effectiveFrom: row.effective_from,
+      }
+    : null;
+}
+
+export async function materializeJurisdictionProfile(
+  tx: Tx,
+  row: {
+    readonly id: string;
+    readonly tenantId: string;
+    readonly profileVersion: number;
+    readonly profile: JurisdictionProfileFields;
+    readonly effectiveFrom: Date;
+  },
+): Promise<void> {
+  const { profile } = row;
+  await tx`
+    INSERT INTO core.jurisdiction_profiles (
+      id, tenant_id, jurisdiction, profile_version, state,
+      environmental_requirement_basis, effective_from
+    ) VALUES (
+      ${row.id}, ${row.tenantId}, ${profile.jurisdiction}, ${row.profileVersion}, ${profile.state},
+      ${profile.environmentalRequirementBasis}, ${row.effectiveFrom}
     )
   `;
 }

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Field uploads on a phone — spec 11 §11.9.
@@ -10,16 +11,6 @@ import { expect, test, type Page } from "@playwright/test";
 
 // The narrowest common phone width. The device profile keeps touch and the mobile user agent.
 test.use({ viewport: { width: 390, height: 844 } });
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 /** A page wider than the screen hides controls off to the side on a phone. */
 async function expectNoSidewaysScroll(page: Page): Promise<void> {

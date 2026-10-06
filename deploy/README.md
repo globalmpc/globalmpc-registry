@@ -9,6 +9,8 @@ Production values (hosts, domains, credentials, actual caps) never enter the rep
 | `sql/login-roles.sql` | Login roles subject to RLS. Exists so the app never runs as superuser |
 | `local-secrets/` | **Public defaults, local use only.** See `README.md` in that directory for why |
 | `observability/*.yml` | Prometheus scrape configuration and alert rules |
+| `backup-restore.md` | What `scripts/ops/backup.sh`, `restore.sh`, and `drill.sh` capture, refuse, and verify |
+| `mainnet-contract.md` | Contract deployment procedure for mainnet (56) and what must be settled first |
 
 ## Secret injection
 
@@ -48,7 +50,8 @@ funding cap          = daily spend cap (hold only one day's worth)
 ```
 
 - **Gas per submission** — the `submitRoot` max from `forge test --gas-report`, plus the
-  base transaction cost (21,000) and a calldata margin.
+  base transaction cost (21,000) and a calldata margin. Measured on 2026-08-26: `submitRoot`
+  median 128,082, max 145,926; the calculation uses **170,000 gas per submission**.
 - **Submissions per day** — a fact of the production environment. The repository does
   not set it. Batching collects publications and submits them together, so submissions
   are **fewer** than publications.
@@ -61,6 +64,22 @@ Set `ANCHOR_DAILY_SPEND_CAP_WEI` as an **integer in wei**. Notations such as `0.
 worker refuse to run. A default would let a deployment ship with no one having chosen a cap.
 
 `apps/worker/test/anchor-config.test.ts` re-checks the multiplication.
+
+Record the chosen value and its basis (what the submissions-per-day figure was taken from) in
+the operations log. A value set without its basis cannot later answer why that number.
+
+### What the code does
+
+`checkSubmitAllowed` in `apps/worker/src/anchor-state.ts` checks three things right before
+a submission.
+
+1. `DAILY_SPEND_CAP_REACHED` — blocks when the total burned today (UTC) is at or above the cap
+2. `FEE_ABOVE_CAP` — blocks when this submission's gas price exceeds `ANCHOR_FEE_CAP_GWEI`
+3. `MAX_ATTEMPTS_REACHED` — the same batch is not resubmitted more than `ANCHOR_MAX_ATTEMPTS` times
+
+**The daily cap is checked before the gas cap.** When both apply, the reason left behind must be
+the loss cap — `FEE_ABOVE_CAP` clears when fees drop, but the daily cap clears only when the
+date changes.
 
 ### What this cap does not count
 
@@ -75,6 +94,14 @@ Because some things go uncounted, **the funding cap is the last line of defense*
 
 The day boundary is **UTC midnight**. Following the server timezone would silently shift
 the time the cap resets whenever the deployment location changes.
+
+### When it blocks
+
+Rows with `chain.transactions.last_error` = `DAILY_SPEND_CAP_REACHED` accumulate. Their state
+stays `created` and the batch does not disappear. After UTC midnight, the next loop proceeds.
+
+If the cap needs raising, redo the calculation above, record the basis, then change the value.
+Do not raise it just because it blocked — that cap is all of O1.
 
 ## Observability
 

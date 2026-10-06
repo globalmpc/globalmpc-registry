@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { SESSION_CONNECTION } from "@mpc/db";
 import type { AppConfig } from "./config.js";
 
 /**
@@ -13,5 +14,6 @@ export function createDb(config: AppConfig): postgres.Sql {
     idle_timeout: 30,
     // If values mix into query text, PII ends up in logs.
     onnotice: () => {},
+    connection: SESSION_CONNECTION,
   });
 }

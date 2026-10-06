@@ -54,6 +54,7 @@ const createDecisionSchema = z.object({
 async function collectRequirementFacts(
   tx: postgres.TransactionSql,
   projectId: string,
+  jurisdictionProfile: string,
   requirementIds: readonly string[],
   evaluatedAsOf: Date,
 ): Promise<Record<string, RequirementFacts>> {
@@ -79,6 +80,19 @@ async function collectRequirementFacts(
     FROM core.claim_conflicts cc
     JOIN core.claims c ON c.id = cc.claim_id
     WHERE c.project_id = ${projectId} AND cc.resolved_at IS NULL
+  `;
+
+  // OD-43: the profile is data — the latest version in effect at evaluation time, whatever its
+  // state, so a suspension reaches the rules instead of being skipped. With none, its state and
+  // environmental basis are absent, and rules that depend on them report not_evaluable instead of
+  // passing on a borrowed value.
+  const [profile] = await tx<
+    { state: string; environmental_requirement_basis: string | null }[]
+  >`
+    SELECT state, environmental_requirement_basis FROM core.jurisdiction_profiles
+    WHERE jurisdiction = ${jurisdictionProfile} AND effective_from <= ${evaluatedAsOf}
+    ORDER BY profile_version DESC
+    LIMIT 1
   `;
 
   const presentClaimTypes = claims.map((claim) => claim.claim_type);
@@ -124,8 +138,8 @@ async function collectRequirementFacts(
         // Facts referenced by rule set predicates. Derived from project state.
         projectStage: "exploration_or_later",
         acceptedReportingStandard: "JORC-2012",
-        environmentalRequirementBasis: "MNG-EIA-2019",
-        jurisdictionProfileState: "approved",
+        environmentalRequirementBasis: profile?.environmental_requirement_basis ?? undefined,
+        jurisdictionProfileState: profile?.state,
         offeringIntent: "false",
         rightsExpiryWithin12Months: "false",
         openFindingCount: String(conflicts.length),
@@ -165,9 +179,16 @@ export async function registerReadinessRoutes(
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
           const [policy] = await tx<
-            { id: string; definition: unknown; gate_id: string; state: string }[]
+            {
+              id: string;
+              definition: unknown;
+              gate_id: string;
+              state: string;
+              jurisdiction_profile: string;
+            }[]
           >`
-            SELECT id, definition, gate_id, state FROM core.compliance_policy_sets
+            SELECT id, definition, gate_id, state, jurisdiction_profile
+            FROM core.compliance_policy_sets
             WHERE id = ${parsed.data.policySetId}
           `;
           if (!policy) throw notFound("Policy set not found");
@@ -186,6 +207,7 @@ export async function registerReadinessRoutes(
           const facts = await collectRequirementFacts(
             tx,
             request.params.projectId,
+            policy.jurisdiction_profile,
             ruleSet.requirements.map((requirement) => requirement.requirementId),
             evaluatedAsOf,
           );
@@ -204,6 +226,14 @@ export async function registerReadinessRoutes(
                     presentAttestations: [...value.presentAttestations].sort(),
                     evidenceAgeDays: value.evidenceAgeDays ?? "",
                     unresolvedConflictTypes: [...value.unresolvedConflictTypes].sort(),
+                    // Context now comes from the DB (jurisdiction profile), so it is input too.
+                    // Absent keys are dropped; canonical bytes do not encode undefined.
+                    context: Object.fromEntries(
+                      Object.entries(value.context).filter(
+                        (entry): entry is [string, string | readonly string[]] =>
+                          entry[1] !== undefined,
+                      ),
+                    ),
                   },
                 ]),
               ),

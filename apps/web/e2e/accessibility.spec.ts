@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Automated accessibility checks — spec 11 §11.8, OD-31 (WCAG 2.2 AA).
@@ -44,16 +45,6 @@ function describe(violations: Awaited<ReturnType<typeof analyze>>["violations"])
         violation.nodes.map((node) => `    ${node.target.join(" ")}`).join("\n"),
     )
     .join("\n");
-}
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
 }
 
 test.describe("accessibility (WCAG 2.2 AA)", () => {

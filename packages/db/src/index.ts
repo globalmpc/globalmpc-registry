@@ -1,2 +1,2 @@
 export { runMigrations, listMigrations, MIGRATIONS_DIR } from "./migrate.js";
-export { withTenant, type TenantContext } from "./session.js";
+export { SESSION_CONNECTION, withTenant, type TenantContext } from "./session.js";

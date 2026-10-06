@@ -470,7 +470,7 @@ export const offeringGateStatus = z.object({
 export const evidenceStaleSignal = z.object({
   id: z.string(),
   projectId: z.string().nullable(),
-  targetType: z.enum(["compliance_assessment", "registry_entry_version"]),
+  targetType: z.enum(["compliance_assessment", "registry_entry_version", "project_lifecycle"]),
   targetId: z.string(),
   originAttestationId: z.string().nullable(),
   reason: z.string(),
@@ -1390,7 +1390,12 @@ export const decideRoleRevocationRequest = z.object({
 
 // --- Review registries (02 §2.8) ---------------------------------------
 
-export const REGISTRY_KINDS = ["credential", "attestation_schema", "policy_set"] as const;
+export const REGISTRY_KINDS = [
+  "credential",
+  "attestation_schema",
+  "policy_set",
+  "jurisdiction_profile",
+] as const;
 
 /** Blank is not a reason. The DB rejects it too; this says so before the insert fails. */
 const nonBlank = (max: number) =>
@@ -1459,6 +1464,25 @@ export const proposeAttestationSchemaRequest = z.object({
  */
 export const proposePolicySetRequest = z.object({
   definition: z.record(z.unknown()),
+  rationale: nonBlank(2000),
+});
+
+/**
+ * States a jurisdiction profile version can be stored in (04 §4.9). `drafting` and `review_ready`
+ * are the proposal itself; a version exists only once approved.
+ */
+export const JURISDICTION_PROFILE_VERSION_STATES = ["approved", "stale", "suspended"] as const;
+
+/**
+ * Propose the next version of a jurisdiction profile: its state and the facts readiness reads
+ * from it (OD-43). The key matches `jurisdictionProfile` on policy sets. A null basis records that
+ * none is confirmed; requirements that need one are then not evaluable.
+ */
+export const proposeJurisdictionProfileRequest = z.object({
+  jurisdiction: nonBlank(50),
+  state: z.enum(JURISDICTION_PROFILE_VERSION_STATES),
+  environmentalRequirementBasis: nonBlank(200).nullable(),
+  effectiveFrom: isoDateTime,
   rationale: nonBlank(2000),
 });
 

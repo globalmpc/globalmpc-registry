@@ -106,6 +106,12 @@ for (const route of ROUTES) {
       "401": errorResponse("Authentication required"),
       "403": errorResponse("Forbidden — returns the required role and the access request path"),
       "409": errorResponse("resourceVersion conflict or idempotency key reuse"),
+      // Only where a body is sent: the server refuses an oversized body before the route runs,
+      // so the caller has to send less. Distinct from 422 UPLOAD_TOO_LARGE, which is the upload
+      // cap judged by the route after the body arrived.
+      ...(route.requestSchema !== undefined
+        ? { "413": errorResponse("Request body larger than the server accepts") }
+        : {}),
       "422": errorResponse("Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)"),
       "503": errorResponse("External source, chain, or ERSP unavailable — check retryable"),
     },

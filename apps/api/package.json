@@ -25,7 +25,7 @@
     "@mpc/policy": "workspace:*",
     "@mpc/storage": "workspace:*",
     "@mpc/ui": "workspace:*",
-    "fastify": "5.12.1",
+    "fastify": "5.12.5",
     "postgres": "^3.4.5",
     "viem": "2.55.13",
     "zod": "^3.24.1"

@@ -326,6 +326,33 @@ describeDb("notification delivery", () => {
       expect((await deliveryRow(id)).last_error).toBe("timeout");
     });
 
+    it("times out a name lookup that never answers", async () => {
+      const id = await makeNotification();
+
+      await deliverOnce(sql, {
+        ...options,
+        timeoutMs: 20,
+        resolveHost: () => new Promise<string[]>(() => undefined),
+      });
+
+      expect((await deliveryRow(id)).last_error).toBe("timeout");
+    });
+
+    it("counts the backoff from when the send ended, not when the transaction began", async () => {
+      const id = await makeNotification();
+      const slowFailure: PinnedFetch = () =>
+        new Promise((resolve) => setTimeout(() => resolve(new Response("", { status: 500 })), 300));
+
+      const [started] = await sql<{ at: Date }[]>`SELECT clock_timestamp() AS at`;
+      await deliverOnce(sql, { ...options, fetchImpl: slowFailure });
+
+      const [row] = await sql<{ next_attempt_at: Date }[]>`
+        SELECT next_attempt_at FROM core.notification_deliveries WHERE notification_id = ${id}
+      `;
+      // The first retry waits the base backoff (1s) after the 300ms send, not after the claim.
+      expect(row!.next_attempt_at.getTime() - started!.at.getTime()).toBeGreaterThanOrEqual(1250);
+    });
+
     it("stores a connection failure without its text", async () => {
       const id = await makeNotification();
 
@@ -396,5 +423,33 @@ describeDb("notification delivery", () => {
         expect(row.last_error).toBe("secret_unavailable");
       },
     );
+  });
+
+  it("sends each delivery once when several workers run at the same time", async () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 20; i += 1) ids.add(await makeNotification());
+
+    // A slow receiver widens the window between claiming a row and marking it sent.
+    const sent = new Map<string, number>();
+    const fetchImpl: PinnedFetch = async (_url, init) => {
+      const id = (JSON.parse(init.body!) as { notificationId: string }).notificationId;
+      sent.set(id, (sent.get(id) ?? 0) + 1);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return new Response("", { status: 200 });
+    };
+
+    const worker = async () => {
+      while ((await deliverOnce(sql, { ...options, fetchImpl })).handled) {
+        // Keep claiming until nothing is left.
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+
+    expect([...sent.keys()].sort()).toEqual([...ids].sort());
+    expect([...sent.values()].filter((count) => count > 1)).toEqual([]);
+    const [pending] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM core.notification_deliveries WHERE state <> 'delivered'
+    `;
+    expect(pending?.n).toBe(0);
   });
 });

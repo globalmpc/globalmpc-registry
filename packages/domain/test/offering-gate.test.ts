@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   OFFERING_PRECONDITIONS,
   checkOfferingGate,
+  type OfferingPreconditionKey,
   type PreconditionStatus,
 } from "../src/offering-gate.js";
 
@@ -72,5 +73,56 @@ describe("activation conditions", () => {
     const keys = OFFERING_PRECONDITIONS.map((precondition) => precondition.key);
     expect(keys).toContain("legal_issuance_decision");
     expect(keys).toContain("security_audit");
+  });
+});
+
+function allSatisfiedExcept(key: OfferingPreconditionKey): PreconditionStatus[] {
+  return allSatisfied().filter((status) => status.key !== key);
+}
+
+describe("AC-07 — whitelist isolation", () => {
+  it("AC-07: marketing access-list membership does not stand in for ERSP approval", () => {
+    // Everything but the ERSP is evidenced, and the project also records that the wallet is on
+    // the marketing access list. The list is not a precondition, so it cannot fill the gap.
+    const statuses: PreconditionStatus[] = [
+      ...allSatisfiedExcept("ersp_engaged"),
+      {
+        // The route passes `project_facts.fact_key` through the same way (authorities.ts).
+        key: "marketing_access_list" as never,
+        satisfied: true,
+        evidenceRef: "doc://access-list",
+      },
+    ];
+
+    const decision = checkOfferingGate(statuses);
+    expect(decision.activatable).toBe(false);
+    if (!decision.activatable) {
+      expect(decision.missing.map((item) => item.key)).toEqual(["ersp_engaged"]);
+    }
+  });
+
+  it("AC-07: no activation condition is an access-list or whitelist membership", () => {
+    const keys: readonly string[] = OFFERING_PRECONDITIONS.map((precondition) => precondition.key);
+    expect(keys.filter((key) => /access|whitelist|allowlist|marketing/.test(key))).toEqual([]);
+  });
+});
+
+describe("AC-33 — ERSP status is not legal effect", () => {
+  it("AC-33: ERSP confirmation alone activates nothing", () => {
+    const decision = checkOfferingGate([
+      { key: "ersp_engaged", satisfied: true, evidenceRef: "doc://ersp" },
+    ]);
+    expect(decision.activatable).toBe(false);
+    if (!decision.activatable) {
+      expect(decision.missing).toHaveLength(OFFERING_PRECONDITIONS.length - 1);
+    }
+  });
+
+  it("AC-33: ERSP confirmation does not stand in for the legal issuance decision", () => {
+    const decision = checkOfferingGate(allSatisfiedExcept("legal_issuance_decision"));
+    expect(decision.activatable).toBe(false);
+    if (!decision.activatable) {
+      expect(decision.missing.map((item) => item.key)).toEqual(["legal_issuance_decision"]);
+    }
   });
 });

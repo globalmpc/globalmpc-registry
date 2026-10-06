@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Governance E2E — 04 §4.5, OD-06.
@@ -7,16 +8,6 @@ import { expect, test, type Page } from "@playwright/test";
  * a vote does not create**. The biggest risk of this screen is that a passed proposal
  * reads as "approved".
  */
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 test.describe("Governance", () => {
   test.setTimeout(120_000);

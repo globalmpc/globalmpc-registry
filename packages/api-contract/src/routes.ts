@@ -56,6 +56,7 @@ import {
   disableWalletRequest,
   proposeAttestationSchemaRequest,
   proposeCredentialRequest,
+  proposeJurisdictionProfileRequest,
   proposePolicySetRequest,
   registryProposal,
   createProposalRequest,
@@ -1287,6 +1288,12 @@ export const ROUTES: readonly RouteDefinition[] = [
     proposeAttestationSchemaRequest,
   ),
   ...reviewRegistryRoutes("policy-sets", "PolicySet", "compliance policy set", proposePolicySetRequest),
+  ...reviewRegistryRoutes(
+    "jurisdiction-profiles",
+    "JurisdictionProfile",
+    "jurisdiction profile version",
+    proposeJurisdictionProfileRequest,
+  ),
 
   // --- Observability ---------------------------------------------------------------
   {

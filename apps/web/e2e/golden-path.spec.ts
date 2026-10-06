@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Golden path E2E — R1 Task 10.
@@ -13,17 +14,6 @@ import { expect, test, type Page } from "@playwright/test";
  * The role changing at each step is itself under test — if one account could do
  * everything, the separation would not hold.
  */
-
-/** Account switch. A different role is a different person, so reconnect every time. */
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 test.describe("golden path", () => {
   // The steps depend on each other's outputs, so they form one test. Splitting them

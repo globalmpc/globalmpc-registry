@@ -7,6 +7,7 @@ import {
   decideRegistryProposalRequest,
   proposeAttestationSchemaRequest,
   proposeCredentialRequest,
+  proposeJurisdictionProfileRequest,
   proposePolicySetRequest,
   type REGISTRY_KINDS,
 } from "@mpc/api-contract";
@@ -14,16 +15,20 @@ import { badRequest, conflict, forbidden, notFound, unprocessable } from "../err
 import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
+import { enqueueEvent } from "../outbox.js";
 import {
   findAttestationSchema,
   findCredential,
+  findLatestJurisdictionProfile,
   findPolicySet,
   holderOrganization,
   materializeAttestationSchema,
   materializeCredential,
+  materializeJurisdictionProfile,
   materializePolicySet,
   validateAttestationSchema,
   validateCredential,
+  validateJurisdictionProfile,
   validatePolicySet,
   type Validated,
 } from "../services/review-registry.js";
@@ -50,6 +55,9 @@ import {
  * runs, so the CLI would be a standing path, not a one-time seed. What limits a hijacked
  * operator session here is that it can only propose: approval needs a second, different
  * person, and the DB rejects a decision by the proposer (`registry_proposal_two_person`).
+ *
+ * Jurisdiction profile versions (04 §4.9, OD-43) use the same path: a state change or basis
+ * revision is proposed, and approval inserts the next version that readiness reads.
  *
  * **Superseding does not mutate.** A new version is a new proposal and, once approved, a new
  * row. The previous row keeps its state and content — assessments and attestations made under
@@ -106,8 +114,13 @@ interface Prepared<Stored> {
   readonly payload: Stored;
 }
 
+/** Request facts a registry row's side effects (events) carry. */
+interface MaterializeContext {
+  readonly correlationId: string;
+}
+
 /**
- * What differs between the three registries. Everything else — authorization, the two-person
+ * What differs between the registries. Everything else — authorization, the two-person
  * rule, versions, audit — is shared, so it cannot differ.
  */
 interface KindSpec<Body extends { rationale: string }, Stored extends Record<string, unknown>> {
@@ -123,7 +136,14 @@ interface KindSpec<Body extends { rationale: string }, Stored extends Record<str
   /** The registry row this version would duplicate, if one exists. */
   findExisting(tx: Tx, tenantId: string, stored: Stored): Promise<string | null>;
   /** Re-validates (time has passed since the proposal) and writes the registry row. */
-  materialize(tx: Tx, tenantId: string, id: string, stored: Stored, now: Date): Promise<Validated<true>>;
+  materialize(
+    tx: Tx,
+    tenantId: string,
+    id: string,
+    stored: Stored,
+    now: Date,
+    context: MaterializeContext,
+  ): Promise<Validated<true>>;
   /** Whose credential this is — they do not approve it themselves. */
   holderOf?(stored: Stored): string;
 }
@@ -252,6 +272,80 @@ const POLICY_SET: KindSpec<z.infer<typeof proposePolicySetRequest>, StoredPolicy
       definition: stored.definition,
       state: "effective",
     });
+    return { ok: true, value: true };
+  },
+};
+
+// --- jurisdiction profile ---------------------------------------------------
+
+const storedJurisdictionProfile = proposeJurisdictionProfileRequest.omit({ rationale: true });
+type StoredJurisdictionProfile = z.infer<typeof storedJurisdictionProfile>;
+
+/**
+ * Jurisdiction profile versions — 04 §4.9, OD-43.
+ *
+ * Unlike the other registries, a version is not named by its payload: the next version number is
+ * assigned at approval, after the previous one. So there is no "already registered" duplicate —
+ * a proposal that changes nothing is refused in validation instead.
+ */
+const JURISDICTION_PROFILE: KindSpec<
+  z.infer<typeof proposeJurisdictionProfileRequest>,
+  StoredJurisdictionProfile
+> = {
+  kind: "jurisdiction_profile",
+  segment: "jurisdiction-profiles",
+  resourceType: "jurisdiction_profile",
+  requestSchema: proposeJurisdictionProfileRequest,
+  storedSchema: storedJurisdictionProfile,
+  async prepare(tx, tenantId, body) {
+    const current = await findLatestJurisdictionProfile(tx, tenantId, body.jurisdiction);
+    const checked = validateJurisdictionProfile(body, new Date(body.effectiveFrom), current);
+    if (!checked.ok) return checked;
+    const { rationale: _rationale, ...fields } = body;
+    return {
+      ok: true,
+      value: {
+        itemKey: body.jurisdiction,
+        effectiveFrom: new Date(body.effectiveFrom),
+        payload: fields,
+      },
+    };
+  },
+  async findExisting() {
+    return null;
+  },
+  async materialize(tx, tenantId, id, stored, _now, context) {
+    // Another version may have been approved since this was proposed — check against that one.
+    const current = await findLatestJurisdictionProfile(tx, tenantId, stored.jurisdiction);
+    const checked = validateJurisdictionProfile(stored, new Date(stored.effectiveFrom), current);
+    if (!checked.ok) return checked;
+
+    const profileVersion = (current?.profileVersion ?? 0) + 1;
+    await materializeJurisdictionProfile(tx, {
+      id,
+      tenantId,
+      profileVersion,
+      profile: checked.value,
+      effectiveFrom: new Date(stored.effectiveFrom),
+    });
+
+    // 07 §7.12 names state events only. A basis revision keeps the state and emits none.
+    if (current?.state !== checked.value.state) {
+      await enqueueEvent(tx, {
+        tenantId,
+        eventType: `jurisdiction_profile.${checked.value.state}`,
+        aggregateId: id,
+        aggregateVersion: profileVersion,
+        payload: {
+          jurisdiction: stored.jurisdiction,
+          profileVersion,
+          state: checked.value.state,
+          previousState: current?.state ?? null,
+          effectiveFrom: stored.effectiveFrom,
+        },
+        correlationId: context.correlationId,
+      });
+    }
     return { ok: true, value: true };
   },
 };
@@ -492,7 +586,9 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
           const stored = spec.storedSchema.parse(proposal.payload);
           const approved = body.decision === "approve";
           const materializedId = approved
-            ? await materializeApproved(tx, tenantId, spec, stored, decider, new Date(asOf))
+            ? await materializeApproved(tx, tenantId, spec, stored, decider, new Date(asOf), {
+                correlationId,
+              })
             : null;
 
           await tx`
@@ -565,6 +661,7 @@ async function materializeApproved<Body extends { rationale: string }, Stored ex
   stored: Stored,
   decider: string,
   now: Date,
+  context: MaterializeContext,
 ): Promise<string> {
   // A credential's holder does not confirm their own credential (02 §2.8, §2.9).
   if (spec.holderOf?.(stored) === decider) {
@@ -585,7 +682,7 @@ async function materializeApproved<Body extends { rationale: string }, Stored ex
   const id = randomUUID();
   let result: Validated<true>;
   try {
-    result = await spec.materialize(tx, tenantId, id, stored, now);
+    result = await spec.materialize(tx, tenantId, id, stored, now, context);
   } catch (caught) {
     // The CLI inserted the same version between the check and the insert.
     if (isUniqueViolation(caught)) {
@@ -604,4 +701,5 @@ export async function registerReviewRegistryRoutes(
   registerKind(app, sql, CREDENTIAL);
   registerKind(app, sql, ATTESTATION_SCHEMA);
   registerKind(app, sql, POLICY_SET);
+  registerKind(app, sql, JURISDICTION_PROFILE);
 }

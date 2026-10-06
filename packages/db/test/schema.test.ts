@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { listMigrations, runMigrations } from "../src/migrate.js";
@@ -407,7 +408,7 @@ describeDb("schema, RLS, guards", () => {
             owner_organization_id, lifecycle_state, prior_lifecycle_state
           ) VALUES (
             gen_random_uuid(), ${TENANT_A}, 'BAD-STATE-001', 'Bad', 'MNG',
-            ${org!.id}, 'active', 'registered'
+            ${org!.id}, 'registered', 'registered'
           )
         `,
       ).rejects.toThrow();
@@ -520,6 +521,220 @@ describeDb("schema, RLS, guards", () => {
           )
         `,
       ).rejects.toThrow();
+    });
+  });
+
+  /**
+   * The review registries take rows only from an approved proposal — spec 02 §2.8.
+   *
+   * `0002_rls.sql` gives `mpc_app` INSERT and UPDATE on every tenant table. The two-person rule
+   * of `0043` sits on the proposal table, so a plain INSERT from any other route would still
+   * produce a credential that can sign, a schema that is signable, or a policy set that decides
+   * readiness — with nobody having proposed or approved it. These tests run as the role the API
+   * connects with, not as superuser: as superuser the seed path is exempt and nothing is proven.
+   */
+  describe("review registries need an approved proposal", () => {
+    const PROPOSER = "44444444-4444-4444-4444-444444444401";
+    const DECIDER = "44444444-4444-4444-4444-444444444402";
+    let reviewerOrg: string;
+
+    beforeAll(async () => {
+      for (const [id, name] of [
+        [PROPOSER, "proposer"],
+        [DECIDER, "decider"],
+      ] as const) {
+        await sql`
+          INSERT INTO core.subjects (id, tenant_id, kind, display_name)
+          VALUES (${id}, ${TENANT_A}, 'person', ${name})
+          ON CONFLICT (id) DO NOTHING
+        `;
+      }
+      const [org] = await sql<{ id: string }[]>`
+        SELECT id FROM core.organizations WHERE tenant_id = ${TENANT_A} LIMIT 1
+      `;
+      reviewerOrg = org!.id;
+    });
+
+    /** The columns the approval path fills. Kept in one place so each test states only its point. */
+    function insertCredential(tx: postgres.TransactionSql, id: string) {
+      return tx`
+        INSERT INTO core.credentials (
+          id, tenant_id, subject_id, organization_id, issuer_reference,
+          credential_type, credential_scope, jurisdiction, issued_at, expires_at, current_status
+        ) VALUES (
+          ${id}, ${TENANT_A}, ${PROPOSER}, ${reviewerOrg}, 'AusIMM',
+          'competent_person', ARRAY['resource_estimate'], ARRAY['MNG'],
+          now() - interval '1 year', now() + interval '1 year', 'valid'
+        )
+      `;
+    }
+
+    function insertSchema(tx: postgres.TransactionSql, id: string, key: string) {
+      return tx`
+        INSERT INTO core.attestation_schemas (
+          id, tenant_id, schema_key, schema_version, attestation_type, required_evidence,
+          accepted_authority_types, mandatory_limitations, jurisdiction_profile, state
+        ) VALUES (
+          ${id}, ${TENANT_A}, ${key}, '1', 'professional_signoff',
+          ARRAY['mining_right_registration'], ARRAY['government_registry'],
+          ARRAY['legal_effect_not_determined'], 'MNG', 'active'
+        )
+      `;
+    }
+
+    function insertPolicySet(tx: postgres.TransactionSql, id: string, ruleSetId: string) {
+      return tx`
+        INSERT INTO core.compliance_policy_sets (
+          id, tenant_id, rule_set_id, rule_set_version, gate_id,
+          jurisdiction_profile, effective_from, definition, state
+        ) VALUES (
+          ${id}, ${TENANT_A}, ${ruleSetId}, '1.0.0', 'registry_publication',
+          'MNG', now(), '{}'::jsonb, 'effective'
+        )
+      `;
+    }
+
+    /** Propose and approve in the order the route uses: the row is written before the decision. */
+    async function approveProposal(
+      tx: postgres.TransactionSql,
+      kind: string,
+      itemKey: string,
+      materializedId: string,
+    ): Promise<void> {
+      const proposalId = randomUUID();
+      await tx`
+        INSERT INTO core.registry_proposals (
+          id, tenant_id, kind, item_key, item_version, payload, rationale,
+          effective_from, proposed_by_subject_id
+        ) VALUES (
+          ${proposalId}, ${TENANT_A}, ${kind}::core.registry_kind, ${itemKey}, 1,
+          '{}'::jsonb, 'reviewed against the issuer register', now(), ${PROPOSER}
+        )
+      `;
+      await tx`
+        UPDATE core.registry_proposals
+        SET state = 'approved', decided_by_subject_id = ${DECIDER}, decided_at = now(),
+            decision_reason = 'checked', materialized_id = ${materializedId},
+            version = version + 1
+        WHERE tenant_id = ${TENANT_A} AND id = ${proposalId}
+      `;
+    }
+
+    it("rejects a credential nobody approved", async () => {
+      await expect(
+        withTenant(appSql, { tenantId: TENANT_A }, (tx) => insertCredential(tx, randomUUID())),
+      ).rejects.toThrow(/approving a proposal/);
+    });
+
+    it("rejects an attestation schema nobody approved", async () => {
+      await expect(
+        withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
+          insertSchema(tx, randomUUID(), "unapproved-schema"),
+        ),
+      ).rejects.toThrow(/approving a proposal/);
+    });
+
+    it("rejects a policy set nobody approved", async () => {
+      await expect(
+        withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
+          insertPolicySet(tx, randomUUID(), "unapproved-rule-set"),
+        ),
+      ).rejects.toThrow(/approving a proposal/);
+    });
+
+    /**
+     * A proposal for the same item is not enough — it has to be the approved proposal that
+     * points at this row. Otherwise one approval would cover every row written after it.
+     */
+    it("rejects a row an approved proposal does not point at", async () => {
+      const approved = randomUUID();
+      await withTenant(appSql, { tenantId: TENANT_A }, async (tx) => {
+        await insertCredential(tx, approved);
+        await approveProposal(tx, "credential", "pointed-at-credential", approved);
+      });
+
+      await expect(
+        withTenant(appSql, { tenantId: TENANT_A }, (tx) => insertCredential(tx, randomUUID())),
+      ).rejects.toThrow(/approving a proposal/);
+    });
+
+    it("accepts the three registries when approval points at the row", async () => {
+      const credential = randomUUID();
+      const schema = randomUUID();
+      const policySet = randomUUID();
+
+      await withTenant(appSql, { tenantId: TENANT_A }, async (tx) => {
+        await insertCredential(tx, credential);
+        await approveProposal(tx, "credential", "accepted-credential", credential);
+        await insertSchema(tx, schema, "approved-schema");
+        await approveProposal(tx, "attestation_schema", "approved-schema-v1", schema);
+        await insertPolicySet(tx, policySet, "approved-rule-set");
+        await approveProposal(tx, "policy_set", "approved-rule-set-v1", policySet);
+      });
+
+      const rows = await withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
+        tx<{ id: string }[]>`
+          SELECT id FROM core.credentials WHERE id = ${credential}
+          UNION ALL SELECT id FROM core.attestation_schemas WHERE id = ${schema}
+          UNION ALL SELECT id FROM core.compliance_policy_sets WHERE id = ${policySet}
+        `,
+      );
+      expect(rows).toHaveLength(3);
+    });
+
+    /**
+     * The seed path is the superuser connection the bootstrap CLI runs on. It writes the same
+     * rows for an environment where nobody can approve yet (`0043`).
+     */
+    it("the seed path still writes without a proposal", async () => {
+      const [row] = await sql<{ id: string }[]>`
+        INSERT INTO core.attestation_schemas (
+          id, tenant_id, schema_key, schema_version, attestation_type, required_evidence,
+          accepted_authority_types, mandatory_limitations, jurisdiction_profile, state
+        ) VALUES (
+          gen_random_uuid(), ${TENANT_A}, 'seeded-schema', '1', 'professional_signoff',
+          ARRAY['mining_right_registration'], ARRAY['government_registry'],
+          ARRAY['legal_effect_not_determined'], 'MNG', 'draft'
+        ) RETURNING id
+      `;
+      expect(row?.id).toBeTruthy();
+    });
+
+    /**
+     * No route updates these tables — the only UPDATEs in the tree run on the seed connection.
+     * A privilege nothing uses can only be used by mistake, so it is not granted.
+     */
+    /**
+     * The seed exemption is an attribute — "this connection bypasses row-level security" — not a
+     * role name, because the seed connection is whatever `DATABASE_URL` the deployment hands the
+     * CLI. That leaves one thing to pin: no **other** RLS-bypassing role may reach the exemption.
+     * `mpc_worker` already bypasses RLS (`0012`) and has no INSERT on these tables; this fails if
+     * that ever changes, or if a new bypassing role is granted one.
+     */
+    it("no non-superuser role that bypasses RLS can insert into the three registries", async () => {
+      const reachable = await sql<{ rolname: string; relname: string }[]>`
+        SELECT r.rolname, t.relname
+        FROM pg_roles r
+        CROSS JOIN (VALUES ('credentials'), ('attestation_schemas'), ('compliance_policy_sets'))
+          AS t(relname)
+        WHERE r.rolbypassrls AND NOT r.rolsuper
+          AND has_table_privilege(r.oid, ('core.' || t.relname)::regclass, 'INSERT')
+        ORDER BY r.rolname, t.relname
+      `;
+      expect(reachable).toEqual([]);
+    });
+
+    it("the application role cannot UPDATE the three registries", async () => {
+      const granted = await sql<{ relname: string }[]>`
+        SELECT c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'core'
+          AND c.relname IN ('credentials', 'attestation_schemas', 'compliance_policy_sets')
+          AND has_table_privilege('mpc_app', c.oid, 'UPDATE')
+        ORDER BY c.relname
+      `;
+      expect(granted).toEqual([]);
     });
   });
 
