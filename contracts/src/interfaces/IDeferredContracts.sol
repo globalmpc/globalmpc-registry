@@ -13,27 +13,12 @@ pragma solidity 0.8.28;
 
 /// @notice Fixed-supply MPC token.
 /// @dev invariant (13 §13.5):
-///  - totalSupply == 10_000_000_000 * 10^decimals
+///  - totalSupply is fixed at deployment
 ///  - No mint authority, or it is permanently renounced right after deployment
 ///  - Unrelated to AT rights, dividends, or legal issuance (R-01·R-02). No NAV-tracking logic.
 interface IMPCToken {
     function totalSupply() external view returns (uint256);
     function mintingPermanentlyDisabled() external view returns (bool);
-}
-
-/// @notice Five-bucket vesting.
-/// @dev invariant:
-///  - Sum of bucket allocations == total supply
-///  - Sum of TGE releases == 1_350_000_000 (13.5%)
-///  - Cumulative vesting is monotonically non-decreasing and never exceeds the bucket total
-///  - Releasable remainder == 0 after the last period
-///  - Changing a beneficiary does not change the bucket total
-interface IMPCVesting {
-    enum Bucket { Community, TeamAdvisors, Investors, MarketingListing, Liquidity }
-
-    function bucketTotal(Bucket bucket) external view returns (uint256);
-    function cumulativeEntitlement(Bucket bucket, uint64 timestamp) external view returns (uint256);
-    function claimed(Bucket bucket) external view returns (uint256);
 }
 
 /// @notice versioned protocol parameter reference.

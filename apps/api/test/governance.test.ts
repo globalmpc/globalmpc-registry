@@ -374,7 +374,7 @@ describeDb("Governance — on-chain snapshot", () => {
   /** Reproduces a total-supply lookup failure. Failure means "unknown", not 0. */
   let totalSupplyFails = false;
 
-  const TOTAL_SUPPLY = 10_000_000_000n * 10n ** 18n;
+  const TOTAL_SUPPLY = 1_000_000n * 10n ** 18n;
 
   /** Reading a wrong address returns 0. 0 cannot be a denominator. */
   let totalSupplyValue = TOTAL_SUPPLY;

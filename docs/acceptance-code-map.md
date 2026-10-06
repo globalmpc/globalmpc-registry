@@ -20,7 +20,7 @@ contract deliverables, so items that need an apps implementation are not closed 
 | AC-07 | Whitelist isolation | `contracts/src/interfaces/IDeferredContracts.sol` | When R6 starts |
 | AC-08 | Reference pending | `packages/db` project_facts | When apps start |
 | AC-09 | Integrity disclaimer | `packages/api-contract/src/resources.ts` | `api-contract/test/contract.test.ts` |
-| AC-10 | Supply · vesting invariant | `contracts/src/interfaces/IDeferredContracts.sol` (interface only) | Separate release |
+| AC-10 | Supply invariant | `contracts/src/interfaces/IDeferredContracts.sol` (interface only) | Separate release |
 | AC-11 | Evaluation determinism | `packages/canonical/src/jcs.ts`<br>`packages/policy/src/engine.ts` | `canonical/test/determinism.property.test.ts`<br>`policy/test/engine.test.ts` |
 | AC-12 | Credential expiry | `packages/domain/src/attestation.ts` | `domain/test/attestation.test.ts` |
 | AC-13 | Source license | `packages/domain/src/disclosure.ts` | `domain/test/disclosure.test.ts` |
@@ -55,10 +55,7 @@ contract deliverables, so items that need an apps implementation are not closed 
 | pause does not change root or history | Implemented | `RegistryAnchorV1.t.sol::test_pause_blocksSubmissionOnly` |
 | No privileged call can change a root | Implemented | `test_noFunctionCanMutateStoredRoot` |
 | Empty batch rejected | Implemented | `invariant_noEmptyBatchStored` |
-| totalSupply fixed at 10 billion | Interface only | Separate release |
-| Bucket sum = total supply | Interface only | Separate release |
-| TGE 13.5% | Interface only | Separate release |
-| Cumulative vesting monotonically increasing | Interface only | Separate release |
+| totalSupply fixed | Interface only | Separate release |
 | Protocol governor target allowlist | Interface only | Separate release |
 | AccessRegistry ≠ ComplianceAdapter | Interface only | Separate release |
 
