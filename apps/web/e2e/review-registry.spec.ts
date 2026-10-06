@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Review registry proposals E2E — spec 02 §2.8.
@@ -7,16 +8,6 @@ import { expect, test, type Page } from "@playwright/test";
  * checks is that a proposal started in the browser reaches the server, comes back as pending, and
  * that the person who proposed it gets no way to approve it.
  */
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 function ruleSet(ruleSetId: string, version = "1.0.0") {
   return {

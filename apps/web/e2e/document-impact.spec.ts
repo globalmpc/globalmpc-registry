@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Document relations E2E.
@@ -10,16 +11,6 @@ import { expect, test, type Page } from "@playwright/test";
  * the one the new version carries, and the impact the database raises is the one the impacts
  * page lets a person close.
  */
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 async function sessionToken(page: Page): Promise<string> {
   const token = await page.evaluate(() => window.localStorage.getItem("mpc.session.token"));

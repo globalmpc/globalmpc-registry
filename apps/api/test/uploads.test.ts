@@ -392,23 +392,26 @@ describeDb("uploads", () => {
    * nor a destruction procedure. Real contracts and personal data wait for the secured route.
    */
   describe("storage tier gate", () => {
-    it("rejects confidential uploads and returns the next action", async () => {
-      const response = await app.inject({
-        method: "POST",
-        url: `/api/v1/projects/${fx.projectA}/uploads`,
-        headers: { authorization: `Bearer ${stewardToken}`, "idempotency-key": idempotencyKey() },
-        payload: {
-          contentBase64: Buffer.from("contract body").toString("base64"),
-          contentType: "application/pdf",
-          originalFilename: "contract.pdf",
-          sensitivity: "confidential",
-        },
-      });
+    it.each(["confidential", "pii", "whistleblower"])(
+      "rejects %s uploads and returns the next action",
+      async (sensitivity) => {
+        const response = await app.inject({
+          method: "POST",
+          url: `/api/v1/projects/${fx.projectA}/uploads`,
+          headers: { authorization: `Bearer ${stewardToken}`, "idempotency-key": idempotencyKey() },
+          payload: {
+            contentBase64: Buffer.from("contract body").toString("base64"),
+            contentType: "application/pdf",
+            originalFilename: "contract.pdf",
+            sensitivity,
+          },
+        });
 
-      expect(response.statusCode).toBe(422);
-      expect(response.json().code).toBe("SECURED_ROUTE_REQUIRED");
-      expect(response.json().details.requiredTier).toBe("secured");
-    });
+        expect(response.statusCode).toBe(422);
+        expect(response.json().code).toBe("SECURED_ROUTE_REQUIRED");
+        expect(response.json().details.requiredTier).toBe("secured");
+      },
+    );
 
     it("accepts restricted uploads as is", async () => {
       const response = await app.inject({

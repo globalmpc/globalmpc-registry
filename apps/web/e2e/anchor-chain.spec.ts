@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Chain confirmation E2E.
@@ -12,16 +13,6 @@ import { expect, test, type Page } from "@playwright/test";
  */
 
 const CHAIN_ENABLED = process.env["E2E_CHAIN"] === "1";
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 test.describe("chain confirmation", () => {
   test.skip(!CHAIN_ENABLED, "requires anvil and the anchor worker (E2E_CHAIN=1)");

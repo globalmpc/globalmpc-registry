@@ -20,10 +20,10 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 | Package | Contents | Tests |
 |---|---|---|
 | `packages/canonical` | Restricted JCS profile, leaf encoding, Merkle, golden vectors | 88 |
-| `packages/domain` | 12 source results, grade derivation, 12 state machines, invariants | 213 |
-| `packages/policy` | Readiness rule schema, deterministic evaluation engine | 44 |
-| `packages/db` | Schema, RLS, append-only guards, composite FKs, migration checksums | 61 |
-| `packages/api-contract` | Zod contract → OpenAPI 3.1, SIWE, authorization | 43 |
+| `packages/domain` | 12 source results, grade derivation, 12 state machines, invariants | 241 |
+| `packages/policy` | Readiness rule schema, deterministic evaluation engine | 46 |
+| `packages/db` | Schema, RLS, append-only guards, composite FKs, migration checksums | 71 |
+| `packages/api-contract` | Zod contract → OpenAPI 3.1, SIWE, authorization | 46 |
 | `packages/ui` | Status display mapping, R-04 forbidden-term lint, three-depth consistency | 37 |
 | `packages/config` | Secret reference resolution (`file:`, `env:`), audit fingerprints that do not expose values, public release hygiene rules | 80 |
 | `packages/storage` | Object storage — key rules, quarantine state machine, memory and S3 implementations | 17 |
@@ -32,15 +32,15 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 
 | App | Contents | Tests |
 |---|---|---|
-| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 108 routes | 780 |
+| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 112 routes | 845 |
 | `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 22 · E2E 97 |
-| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 149 |
+| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 154 |
 
 **Contracts**
 
 `contracts/` — `RegistryAnchorV1` + 10 deferred interfaces, 33 Foundry tests (including fuzz and invariant).
 
-Total: vitest 1534 + Playwright 97 + Foundry 33 + route 108. (measured 2026-09-17)
+Total: vitest 1647 + Playwright 97 + Foundry 33 + route 112. (measured 2026-10-01)
 
 ## Running
 
@@ -286,6 +286,11 @@ Bypassing them breaks tests or gets rejected by the DB.
   `core.claims_without_evidence` surfaces it. It is not deleted or downgraded automatically
 - **When a source goes down, the claims and attestations based on it are flagged accordingly** →
   trigger 0023. Review status does not change — the review really happened; what changed is the evidence
+- **A credential, Attestation Schema, or Policy change reaches what rests on it** → triggers 0051 ·
+  0052 and a worker sweep for credential expiry. Attestations move to re-review with the status at
+  signing kept; assessments are append-only, so they get a signal instead
+- **Shaken evidence proposes a suspension; it never suspends** → 0053 leaves a proposal and tells
+  `issuer_officer`. Lifecycle transitions stay with a person
 - **Finished attestations are not touched again** → `revoked` and `superseded` are not propagation
   targets. Touching them would blur "what was valid when"
 - **Public records are not taken down automatically** → when evidence is shaken only a signal is
@@ -321,7 +326,7 @@ Bypassing them breaks tests or gets rejected by the DB.
 
 ## What does not exist yet
 
-**API**: all 108 routes in the contract (`ROUTES`) are implemented. `plannedRoutes()` is empty.
+**API**: all 112 routes in the contract (`ROUTES`) are implemented. `plannedRoutes()` is empty.
 
 **Unimplemented gaps**
 

@@ -1646,17 +1646,22 @@ export async function disableAdminWallet(
 // --- Review registries (02 §2.8) -------------------------------------------
 
 /** Path segment of one review registry under `/api/v1/review-registry/`. */
-export type RegistrySegment = "credentials" | "attestation-schemas" | "policy-sets";
+export type RegistrySegment =
+  | "credentials"
+  | "attestation-schemas"
+  | "policy-sets"
+  | "jurisdiction-profiles";
 
 /**
- * A proposal to add one version of a credential, attestation schema or policy set.
+ * A proposal to add one version of a credential, attestation schema, policy set or jurisdiction
+ * profile.
  *
  * `itemVersion` counts versions of the item; `version` is this record's own version, sent back
  * as If-Match when deciding.
  */
 export interface RegistryProposal {
   id: string;
-  kind: "credential" | "attestation_schema" | "policy_set";
+  kind: "credential" | "attestation_schema" | "policy_set" | "jurisdiction_profile";
   itemKey: string;
   itemVersion: number;
   payload: Record<string, unknown>;

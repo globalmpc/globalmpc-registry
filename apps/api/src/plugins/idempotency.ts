@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type postgres from "postgres";
+import { withTenant } from "@mpc/db";
 import { conflict } from "../errors.js";
 
 /**
@@ -66,14 +67,37 @@ export async function reserveIdempotency<T>(
  * `IDEMPOTENCY_IN_FLIGHT` forever and the client has no way to retry.
  */
 export async function releaseIdempotency(
-  sql: postgres.Sql | postgres.TransactionSql,
+  sql: postgres.Sql,
   tenantId: string,
   key: string,
 ): Promise<void> {
-  await sql`
-    DELETE FROM core.idempotency_keys
-    WHERE key = ${key} AND tenant_id = ${tenantId} AND response_snapshot IS NULL
-  `;
+  // Runs on the failure path, outside the failed transaction, so it sets the tenant itself —
+  // without it RLS sees no rows and the key silently stays in flight.
+  await withTenant(sql, { tenantId }, async (tx) => {
+    await tx`
+      DELETE FROM core.idempotency_keys
+      WHERE key = ${key} AND tenant_id = ${tenantId} AND response_snapshot IS NULL
+    `;
+  });
+}
+
+/**
+ * Releases the reservation on a failure path without hiding that failure.
+ *
+ * The release opens its own transaction and can itself fail. Throwing that error would replace
+ * the one the client needs to see, so it is logged and the original error stands.
+ */
+export async function releaseIdempotencyAfterFailure(
+  sql: postgres.Sql,
+  tenantId: string,
+  key: string,
+  log: { error: (detail: Record<string, unknown>, message: string) => void },
+): Promise<void> {
+  try {
+    await releaseIdempotency(sql, tenantId, key);
+  } catch (releaseError) {
+    log.error({ err: releaseError }, "idempotency release failed after an earlier error");
+  }
 }
 
 /** Settles the reservation with a result. Later calls with the same key get this response. */

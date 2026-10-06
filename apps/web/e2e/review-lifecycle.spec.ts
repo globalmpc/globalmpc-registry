@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Review lifecycle E2E — 04 §4.2 and §4.4.
@@ -13,16 +14,6 @@ import { expect, test, type Page } from "@playwright/test";
  * - The path taken stays on screen. Going back does not erase it.
  * - A dispute does not erase the signature.
  */
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 test.describe("review lifecycle", () => {
   test.setTimeout(120_000);

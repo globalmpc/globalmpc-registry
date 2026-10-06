@@ -332,6 +332,54 @@ describe("policy engine combined with gate decision", () => {
   });
 });
 
+describe("AC-33 — ERSP status is not legal effect", () => {
+  // The project intends an offering and the ERSP has confirmed its linkage.
+  const erspConfirmed: Partial<RequirementFacts> = {
+    context: { ...SATISFIED.context, offeringIntent: "true", applicableJurisdiction: "MNG" },
+  };
+
+  function withErspConfirmed(
+    overrides: Record<string, Partial<RequirementFacts>> = {},
+  ): Record<string, Partial<RequirementFacts>> {
+    return Object.fromEntries(
+      ruleSet.requirements.map((requirement) => [
+        requirement.requirementId,
+        { ...erspConfirmed, ...overrides[requirement.requirementId] },
+      ]),
+    );
+  }
+
+  it("AC-33: a confirmed ERSP linkage does not lift a gap elsewhere, and go stays blocked", () => {
+    const assessment = evaluateAssessment(
+      ruleSet,
+      allSatisfiedInput(withErspConfirmed({ "mining-right": { presentClaimTypes: [] } })),
+    );
+    const ersp = assessment.requirementResults.find((r) => r.requirementId === "ersp-linkage")!;
+    expect(ersp.applicable).toBe(true);
+    expect(ersp.status).toBe("ok");
+    expect(assessment.status).toBe("gap");
+
+    const decision = checkGateDecision({
+      decision: "go",
+      requirementStatuses: assessment.requirementResults
+        .filter((r) => r.applicable)
+        .map((r) => r.status),
+      hasAssessment: true,
+      rationale: "the ERSP confirmed its linkage",
+    });
+    expect(decision.allowed).toBe(false);
+  });
+
+  it("AC-33: with the ERSP confirmed and nothing else missing, readiness is ok — not a go", () => {
+    const assessment = evaluateAssessment(ruleSet, allSatisfiedInput(withErspConfirmed()));
+    expect(assessment.status).toBe("ok");
+    // Readiness has no decision value to promote into; go is recorded only by a person (AC-03).
+    expect(["ok", "watch", "gap", "not_evaluable"]).toContain(assessment.status);
+    expect(assessment).not.toHaveProperty("decision");
+    expect(assessment).not.toHaveProperty("legalEffect");
+  });
+});
+
 describe("property — assessment", () => {
   it("the result status is always one of four values", () => {
     fc.assert(

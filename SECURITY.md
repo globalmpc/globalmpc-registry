@@ -27,6 +27,11 @@ Out of scope:
 - `contracts/lib/` — vendored third-party libraries (OpenZeppelin, forge-std). Report upstream.
 - `deploy/local-secrets/` — publicly known local-only defaults (anvil default account key, MinIO default credentials).
 
+## Threat model
+
+What is protected, the trust boundaries, and what is and is not mitigated:
+[`docs/security/threat-model.md`](docs/security/threat-model.md).
+
 ## Supported versions
 
 Only the latest commit on `main` is supported.

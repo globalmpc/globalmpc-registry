@@ -58,6 +58,17 @@ export const preconditionRequired = (
   details?: Record<string, unknown>,
 ) => new AppError(code, message, 428, false, details);
 
+/**
+ * 413 — the request body is larger than the server accepts.
+ *
+ * Fastify refuses an oversized body before any route runs, so this never comes from a handler.
+ * It is separate from `UPLOAD_TOO_LARGE` (422), which is the upload cap judged by the route
+ * after the body arrived: one says the transport refused to read the request, the other says
+ * the file itself is over the cap. `retryable` is false — the same body fails the same way.
+ */
+export const payloadTooLarge = (code: string, message: string, details?: Record<string, unknown>) =>
+  new AppError(code, message, 413, false, details);
+
 export const unprocessable = (code: string, message: string, details?: Record<string, unknown>) =>
   new AppError(code, message, 422, false, details);
 

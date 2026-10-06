@@ -1,5 +1,7 @@
 import postgres from "postgres";
 import { resolveSecret, resolveWebhookSecret } from "@mpc/config";
+import { SESSION_CONNECTION } from "@mpc/db";
+import { createCredentialExpirySweep, DEFAULT_CREDENTIAL_SWEEP_MS } from "./credential-expiry.js";
 import { createExpirySweep, DEFAULT_EXPIRY_SWEEP_MS } from "./document-expiry.js";
 import { createHeartbeat } from "./heartbeat.js";
 import { deliverOnce, deliveryBacklog } from "./notification-delivery.js";
@@ -44,7 +46,12 @@ const EXPIRY_SWEEP_MS = Number(
   process.env["DOCUMENT_EXPIRY_SWEEP_MS"] ?? String(DEFAULT_EXPIRY_SWEEP_MS),
 );
 
-const sql = postgres(databaseUrl, { onnotice: () => {} });
+/** Credential expiry sweep interval (`credential-expiry.ts`). */
+const CREDENTIAL_SWEEP_MS = Number(
+  process.env["CREDENTIAL_EXPIRY_SWEEP_MS"] ?? String(DEFAULT_CREDENTIAL_SWEEP_MS),
+);
+
+const sql = postgres(databaseUrl, { onnotice: () => {}, connection: SESSION_CONNECTION });
 
 function emit(record: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(record)}\n`);
@@ -78,6 +85,7 @@ emit({ level: "info", msg: "outbox.worker.started", pollIntervalMs: POLL_INTERVA
 
 const heartbeat = createHeartbeat(sql, "outbox");
 const sweepExpiry = createExpirySweep(sql, EXPIRY_SWEEP_MS);
+const sweepCredentials = createCredentialExpirySweep(sql, CREDENTIAL_SWEEP_MS);
 
 while (running) {
   try {
@@ -92,6 +100,16 @@ while (running) {
       }
     } catch (error) {
       emit({ level: "error", msg: "document.expiry.sweep_failed", error: String(error) });
+    }
+
+    // Same isolation as the document sweep: a failure is reported and retried next interval.
+    try {
+      const credentials = await sweepCredentials();
+      if (credentials.ran && credentials.flagged > 0) {
+        emit({ level: "info", msg: "credential.expiry.flagged", flagged: credentials.flagged });
+      }
+    } catch (error) {
+      emit({ level: "error", msg: "credential.expiry.sweep_failed", error: String(error) });
     }
 
     // Notification delivery also handles one item per cycle.

@@ -144,3 +144,12 @@ export {
   type PreconditionStatus,
   type OfferingGateDecision,
 } from "./offering-gate.js";
+
+export {
+  OFFERING_GATE_ID,
+  OFFERING_FAMILY_STATES,
+  checkLifecycleGuard,
+  type LifecycleCondition,
+  type LifecycleGuardFacts,
+  type LifecycleGuardResult,
+} from "./lifecycle-guards.js";

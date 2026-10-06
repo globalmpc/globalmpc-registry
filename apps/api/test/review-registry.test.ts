@@ -646,4 +646,171 @@ describeDb("review registry proposals", () => {
       );
     });
   });
+
+  describe("jurisdiction profiles (04 §4.9, OD-43)", () => {
+    function profileBody(jurisdiction: string, overrides: Record<string, unknown> = {}) {
+      return {
+        jurisdiction,
+        state: "approved",
+        environmentalRequirementBasis: "Synthetic Environmental Code",
+        effectiveFrom: "2026-01-01T00:00:00Z",
+        rationale: "Environmental basis confirmed with counsel",
+        ...overrides,
+      };
+    }
+
+    function newKey(): string {
+      return `ZZ-${randomUUID().slice(0, 8)}`;
+    }
+
+    async function approveProfile(body: Record<string, unknown>): Promise<Proposal> {
+      const proposed = await post(operatorToken, `${BASE}/jurisdiction-profiles/proposals`, body);
+      expect(proposed.statusCode, proposed.body).toBe(200);
+      const decided = await decide(approverToken, "jurisdiction-profiles", proposed.json());
+      expect(decided.statusCode, decided.body).toBe(200);
+      return decided.json() as Proposal;
+    }
+
+    async function versionsOf(key: string) {
+      return fx.sql<
+        { id: string; profile_version: number; state: string; environmental_requirement_basis: string | null }[]
+      >`
+        SELECT id, profile_version, state, environmental_requirement_basis
+        FROM core.jurisdiction_profiles
+        WHERE tenant_id = ${fx.tenantA} AND jurisdiction = ${key}
+        ORDER BY profile_version
+      `;
+    }
+
+    it("proposing creates no profile; another person's approval creates version 1", async () => {
+      const key = newKey();
+      const proposed = await post(operatorToken, `${BASE}/jurisdiction-profiles/proposals`, profileBody(key));
+      expect(proposed.statusCode, proposed.body).toBe(200);
+      expect(proposed.json().kind).toBe("jurisdiction_profile");
+      expect(proposed.json().itemKey).toBe(key);
+      expect(await versionsOf(key)).toHaveLength(0);
+
+      const decided = await decide(approverToken, "jurisdiction-profiles", proposed.json());
+      expect(decided.statusCode, decided.body).toBe(200);
+
+      const rows = await versionsOf(key);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: decided.json().materializedId,
+        profile_version: 1,
+        state: "approved",
+        environmental_requirement_basis: "Synthetic Environmental Code",
+      });
+    });
+
+    it("a suspension is a new version and emits jurisdiction_profile.suspended", async () => {
+      const key = newKey();
+      await approveProfile(profileBody(key));
+      const suspended = await approveProfile(profileBody(key, { state: "suspended" }));
+
+      const rows = await versionsOf(key);
+      expect(rows.map((row) => [row.profile_version, row.state])).toEqual([
+        [1, "approved"],
+        [2, "suspended"],
+      ]);
+
+      const events = await fx.sql<{ event_type: string; aggregate_version: number; payload: Record<string, unknown> }[]>`
+        SELECT event_type, aggregate_version, payload FROM core.outbox
+        WHERE tenant_id = ${fx.tenantA} AND aggregate_id = ${suspended.materializedId}
+      `;
+      expect(events).toHaveLength(1);
+      expect(events[0]?.event_type).toBe("jurisdiction_profile.suspended");
+      expect(events[0]?.aggregate_version).toBe(2);
+      expect(events[0]?.payload).toMatchObject({ jurisdiction: key, previousState: "approved" });
+    });
+
+    it("the first version must be approved", async () => {
+      const response = await post(
+        operatorToken,
+        `${BASE}/jurisdiction-profiles/proposals`,
+        profileBody(newKey(), { state: "suspended" }),
+      );
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("JURISDICTION_PROFILE_TRANSITION_INVALID");
+    });
+
+    it("a transition the state machine does not allow is refused at proposal", async () => {
+      const key = newKey();
+      await approveProfile(profileBody(key));
+      await approveProfile(profileBody(key, { state: "suspended" }));
+
+      const response = await post(
+        operatorToken,
+        `${BASE}/jurisdiction-profiles/proposals`,
+        profileBody(key, { state: "stale" }),
+      );
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("JURISDICTION_PROFILE_TRANSITION_INVALID");
+      expect(response.json().details).toMatchObject({ from: "suspended", to: "stale" });
+    });
+
+    it("a version that would take effect before the current one is refused", async () => {
+      const key = newKey();
+      await approveProfile(profileBody(key, { effectiveFrom: "2026-06-01T00:00:00Z" }));
+      const response = await post(
+        operatorToken,
+        `${BASE}/jurisdiction-profiles/proposals`,
+        profileBody(key, { state: "suspended", effectiveFrom: "2026-01-01T00:00:00Z" }),
+      );
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("JURISDICTION_PROFILE_EFFECTIVE_BEFORE_CURRENT");
+    });
+
+    it("a proposal that changes nothing is refused", async () => {
+      const key = newKey();
+      await approveProfile(profileBody(key));
+      const response = await post(operatorToken, `${BASE}/jurisdiction-profiles/proposals`, profileBody(key));
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("JURISDICTION_PROFILE_UNCHANGED");
+    });
+
+    it("a basis revision keeps the state and emits no state event", async () => {
+      const key = newKey();
+      await approveProfile(profileBody(key));
+      const revised = await approveProfile(profileBody(key, { environmentalRequirementBasis: null }));
+
+      const rows = await versionsOf(key);
+      expect(rows[1]).toMatchObject({ profile_version: 2, state: "approved", environmental_requirement_basis: null });
+      const events = await fx.sql`
+        SELECT 1 FROM core.outbox WHERE aggregate_id = ${revised.materializedId}
+      `;
+      expect(events).toHaveLength(0);
+    });
+
+    it("the proposer cannot approve their own profile change", async () => {
+      const proposed = await post(dualToken, `${BASE}/jurisdiction-profiles/proposals`, profileBody(newKey()));
+      expect(proposed.statusCode, proposed.body).toBe(200);
+      const self = await decide(dualToken, "jurisdiction-profiles", proposed.json());
+      expect(self.statusCode).toBe(422);
+      expect(self.json().code).toBe("REGISTRY_PROPOSAL_SELF_APPROVAL");
+    });
+
+    it("a profile approved through the API changes readiness", async () => {
+      const key = newKey();
+      const policy = await proposePolicy(ruleSet({ jurisdictionProfile: key }));
+      const policySetId = ((await decide(approverToken, "policy-sets", policy)).json() as Proposal)
+        .materializedId;
+
+      async function environmentalReason(): Promise<string> {
+        const response = await app.inject({
+          method: "POST",
+          url: `/api/v1/projects/${fx.projectA}/readiness-assessments`,
+          headers: { authorization: `Bearer ${operatorToken}`, "idempotency-key": idempotencyKey() },
+          payload: { policySetId },
+        });
+        expect(response.statusCode, response.body).toBe(200);
+        const results = response.json().requirementResults as { requirementId: string; reasonCode: string }[];
+        return results.find((r) => r.requirementId === "environmental-baseline")!.reasonCode;
+      }
+
+      expect(await environmentalReason()).toBe("NO_EVALUATION_BASIS");
+      await approveProfile(profileBody(key));
+      expect(await environmentalReason()).toBe("MISSING_REQUIRED_CLAIM_TYPE");
+    });
+  });
 });

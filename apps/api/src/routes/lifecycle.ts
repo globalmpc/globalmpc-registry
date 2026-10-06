@@ -1,7 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { withTenant } from "@mpc/db";
-import { atLifecycleMachine, resumeFromSuspension, type AtLifecycleState } from "@mpc/domain";
+import {
+  OFFERING_GATE_ID,
+  atLifecycleMachine,
+  checkLifecycleGuard,
+  checkOfferingGate,
+  resumeFromSuspension,
+  type AtLifecycleState,
+  type GateDecisionValue,
+  type LifecycleGuardFacts,
+} from "@mpc/domain";
 import { projectLifecycleTransitionRequest } from "@mpc/api-contract";
 import { badRequest, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertAuthorized, projectResource, sessionFacts } from "../plugins/authorize.js";
@@ -32,6 +41,12 @@ import {
  * - **Whoever suspended cannot reinstate.** If the same person suspends and reverts, suspension
  *   becomes personal discretion rather than a control.
  *
+ * **A reason is not enough.** Each move must also meet its §4.3 guard (`checkLifecycleGuard`).
+ * Opening an offering needs every offering precondition confirmed with evidence and a human
+ * `go` on the offering gate (invariant 7, AC-03); a guard whose input this system does not
+ * record refuses the move and says which condition it could not see. A DB trigger (0050)
+ * holds the offering part for writers that bypass this route.
+ *
  * **There are no automatic transitions.** A gate decision result does not move the state — for
  * the same reason readiness is not approval (AC-03). Stale signals do not move it either.
  * A person records a reason and moves it.
@@ -51,6 +66,74 @@ interface TransitionRow {
   reason: string;
   actor_subject_id: string | null;
   occurred_at: Date;
+}
+
+/**
+ * What the guards read. Offering preconditions come from `project_facts` exactly as
+ * `GET /projects/:id/offering-gate` reads them, so the screen and the refusal cannot disagree.
+ */
+async function readGuardFacts(
+  tx: postgres.TransactionSql,
+  tenantId: string,
+  projectId: string,
+  from: AtLifecycleState,
+): Promise<LifecycleGuardFacts> {
+  const facts = await tx<{ fact_key: string; status: string; evidence_ref: string | null }[]>`
+    SELECT fact_key, status, evidence_ref
+    FROM core.project_facts
+    WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+  `;
+  const offeringGate = checkOfferingGate(
+    facts.map((fact) => ({
+      key: fact.fact_key as never,
+      // Only `confirmed` counts as met. `pending` is under confirmation, not confirmed.
+      satisfied: fact.status === "confirmed",
+      evidenceRef: fact.evidence_ref,
+    })),
+  );
+
+  // The latest decision, not any go ever — a later hold or stop withdraws an earlier go.
+  const [latest] = await tx<{ decision: GateDecisionValue }[]>`
+    SELECT decision FROM core.gate_decisions
+    WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND gate_id = ${OFFERING_GATE_ID}
+    ORDER BY signed_at DESC, created_at DESC
+    LIMIT 1
+  `;
+
+  let reviewedSinceSuspension: boolean | null = false;
+  if (from === "suspended") {
+    const [suspension] = await tx<{ at: Date | null }[]>`
+      SELECT max(occurred_at) AS at FROM core.project_lifecycle_transitions
+      WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND to_state = 'suspended'
+    `;
+    if (!suspension?.at) {
+      reviewedSinceSuspension = null;
+    } else {
+      // "New evidence/review/readiness/decision" (§4.3 suspended→prior): a claim, a
+      // verification case step, a readiness assessment, or a gate decision after suspension.
+      const since = suspension.at;
+      const [row] = await tx<{ reviewed: boolean }[]>`
+        SELECT
+          EXISTS (SELECT 1 FROM core.claims
+                  WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+                    AND created_at > ${since})
+          OR EXISTS (SELECT 1 FROM core.verification_case_transitions t
+                     JOIN core.verification_cases c ON c.tenant_id = t.tenant_id AND c.id = t.case_id
+                     WHERE t.tenant_id = ${tenantId} AND c.project_id = ${projectId}
+                       AND t.occurred_at > ${since})
+          OR EXISTS (SELECT 1 FROM core.compliance_assessments
+                     WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+                       AND generated_at > ${since})
+          OR EXISTS (SELECT 1 FROM core.gate_decisions
+                     WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+                       AND created_at > ${since})
+          AS reviewed
+      `;
+      reviewedSinceSuspension = row?.reviewed === true;
+    }
+  }
+
+  return { offeringGate, latestOfferingDecision: latest?.decision ?? null, reviewedSinceSuspension };
 }
 
 export async function registerLifecycleRoutes(
@@ -193,6 +276,28 @@ export async function registerLifecycleRoutes(
                 { requiredAction: "Another permission holder decides the reinstatement" },
               );
             }
+          }
+
+          const guard = checkLifecycleGuard(
+            from,
+            toState,
+            await readGuardFacts(tx, tenantId, project.id, from),
+          );
+          if (!guard.allowed) {
+            // Every unmet condition is listed with why and whose it is — a bare refusal leaves
+            // the person unable to tell what to do next.
+            throw unprocessable(
+              guard.code,
+              guard.code === "LIFECYCLE_REGISTER_VIA_PUBLICATION"
+                ? "A project becomes registered by publishing its Registry entry"
+                : "Transition conditions are not met",
+              {
+                from,
+                to: toState,
+                conditions: guard.conditions,
+                unsupported: guard.unsupported,
+              },
+            );
           }
 
           const [updated] = await tx<ProjectRow[]>`

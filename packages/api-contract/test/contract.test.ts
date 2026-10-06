@@ -19,7 +19,7 @@ import {
   castVoteRequest,
   createProposalRequest,
 } from "../src/resources.js";
-import { errorEnvelope, sourceStatusView } from "../src/common.js";
+import { errorEnvelope, safetyFields, sourceStatusView } from "../src/common.js";
 
 describe("route definitions", () => {
   it("every mutation route has an action", () => {
@@ -315,6 +315,55 @@ describe("AC-22 — public projection rejects fields outside the allowlist", () 
     expect(
       publicProjection.safeParse({ ...VALID, legalEffect: "counsel_required" }).success,
     ).toBe(true);
+  });
+});
+
+describe("AC-33 — ERSP status is not legal effect", () => {
+  const ERSP_CONFIRMED = {
+    authority: "MPC data and evidence readiness assessment",
+    basisVersion: "1",
+    ruleVersion: "1",
+    limitations: ["The ERSP decides eligibility for its own function and jurisdiction"],
+    sourceAge: "3",
+    staleStatus: "fresh" as const,
+    verificationScope: ["ersp_authorization_reference"],
+    legalEffect: "none" as const,
+    externalRegulatedServiceStatus: {
+      status: "ersp_confirmed" as const,
+      erspOrganizationId: "ersp-org-1",
+      authorizationEvidenceId: "evidence-1",
+      asOf: "2026-08-01T00:00:00Z",
+      limitations: ["Confirmed for one function in one jurisdiction"],
+    },
+    disclaimerCodes: ["READINESS_IS_NOT_A_DECISION"],
+  };
+
+  it("AC-33: ersp_confirmed is carried with legalEffect none", () => {
+    const parsed = safetyFields.parse(ERSP_CONFIRMED);
+    expect(parsed.externalRegulatedServiceStatus?.status).toBe("ersp_confirmed");
+    expect(parsed.legalEffect).toBe("none");
+  });
+
+  it("AC-33: legalEffect has no value that ERSP confirmation could raise it to", () => {
+    // The field stops at counsel_required. Nothing above it exists to be set.
+    expect(safetyFields.shape.legalEffect.options).toEqual(["none", "counsel_required"]);
+    for (const legalEffect of ["effective", "legally_effective", "approved", "ersp_confirmed"]) {
+      expect(safetyFields.safeParse({ ...ERSP_CONFIRMED, legalEffect }).success).toBe(false);
+    }
+  });
+
+  it("AC-33: a legal effect smuggled inside the ERSP status does not survive parsing", () => {
+    const parsed = safetyFields.parse({
+      ...ERSP_CONFIRMED,
+      externalRegulatedServiceStatus: {
+        ...ERSP_CONFIRMED.externalRegulatedServiceStatus,
+        legalEffect: "effective",
+        offeringOpen: true,
+      },
+    });
+    expect(parsed.legalEffect).toBe("none");
+    expect(parsed.externalRegulatedServiceStatus).not.toHaveProperty("legalEffect");
+    expect(parsed.externalRegulatedServiceStatus).not.toHaveProperty("offeringOpen");
   });
 });
 

@@ -134,17 +134,31 @@ async function send(
   request: { readonly body: string; readonly headers: Readonly<Record<string, string>> },
   options: DeliveryOptions,
 ): Promise<DeliveryFailure | null> {
+  // The timeout covers the name lookup too: the row lock and its connection are held for the
+  // whole send, and a resolver that never answers would otherwise hold them past the timeout.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
+  const aborted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener("abort", () => reject(new Error("timeout")), {
+      once: true,
+    });
+  });
+  aborted.catch(() => undefined);
+
   let addresses: readonly string[];
   try {
-    addresses = await assertEndpointReachable(row.url, options.resolveHost ?? dnsResolver);
+    addresses = await Promise.race([
+      assertEndpointReachable(row.url, options.resolveHost ?? dnsResolver),
+      aborted,
+    ]);
   } catch (error) {
+    clearTimeout(timer);
+    if (controller.signal.aborted) return { category: "timeout" };
     if (error instanceof EndpointNotAllowedError) return { category: "rejected_destination" };
     return { category: "network_error" };
   }
 
   const doFetch = options.fetchImpl ?? pinnedFetch;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
 
   try {
     const response = await doFetch(new URL(row.url), {
@@ -170,110 +184,119 @@ async function send(
  *
  * Same shape as `scanOnce` — claim one row, return whether it was handled. Not batched so that
  * one slow endpoint does not make the rest queue behind it.
+ *
+ * **Claim, send and record in one transaction.** `FOR UPDATE SKIP LOCKED` only holds while its
+ * transaction is open; run on its own, the lock is gone when the SELECT returns and a second
+ * worker picks the same row while the first is still sending. Holding the row until the result
+ * is written means each worker sends a different delivery. If the worker dies mid-send, the
+ * transaction rolls back, the lock goes with the connection, and the row is pending again.
+ * The transaction holds one connection for at most the send timeout, name lookup included.
  */
 export async function deliverOnce(
   sql: postgres.Sql,
   options: DeliveryOptions,
   emit: (record: Record<string, unknown>) => void = () => undefined,
 ): Promise<DeliveryResult> {
-  const [row] = await sql<DeliverableNotification[]>`
-    SELECT d.notification_id, d.sink_id, d.tenant_id, d.attempts,
-           s.url, s.secret_reference,
-           n.kind::text AS kind, n.summary, n.link, n.occurred_at
-    FROM core.notification_deliveries d
-    JOIN core.notification_sinks s ON s.id = d.sink_id
-    JOIN core.notifications n ON n.id = d.notification_id
-    WHERE d.state = 'pending'
-      AND d.next_attempt_at <= now()
-      AND s.state = 'active'
-    ORDER BY d.next_attempt_at
-    FOR UPDATE OF d SKIP LOCKED
-    LIMIT 1
-  `;
-
-  if (!row) return { handled: false, delivered: 0, failed: 0 };
-
-  const attempt = row.attempts + 1;
-  const body = JSON.stringify({
-    kind: row.kind,
-    summary: row.summary,
-    link: row.link,
-    occurredAt: row.occurred_at.toISOString(),
-    notificationId: row.notification_id,
-  });
-  const timestamp = new Date().toISOString();
-
-  const secret = readSecret(row, options);
-  if (!("secret" in secret)) {
-    /**
-     * An unusable secret **stays unusable on retry.** The config must be fixed, so settle
-     * immediately instead of waiting for the attempt cap — meanwhile the log fills with the same
-     * error. Stored as one category whatever the reason, so the admin screen does not say which
-     * variables or files exist on the worker.
-     */
-    await sql`
-      UPDATE core.notification_deliveries
-      SET state = 'failed', attempts = ${attempt}, last_error = 'secret_unavailable'
-      WHERE notification_id = ${row.notification_id} AND sink_id = ${row.sink_id}
+  return sql.begin(async (tx) => {
+    const [row] = await tx<DeliverableNotification[]>`
+      SELECT d.notification_id, d.sink_id, d.tenant_id, d.attempts,
+             s.url, s.secret_reference,
+             n.kind::text AS kind, n.summary, n.link, n.occurred_at
+      FROM core.notification_deliveries d
+      JOIN core.notification_sinks s ON s.id = d.sink_id
+      JOIN core.notifications n ON n.id = d.notification_id
+      WHERE d.state = 'pending'
+        AND d.next_attempt_at <= now()
+        AND s.state = 'active'
+      ORDER BY d.next_attempt_at
+      FOR UPDATE OF d SKIP LOCKED
+      LIMIT 1
     `;
-    emit({
-      level: "error",
-      msg: "notification.secret_unavailable",
-      sinkId: row.sink_id,
-      reason: secret.reason,
+
+    if (!row) return { handled: false, delivered: 0, failed: 0 };
+
+    const attempt = row.attempts + 1;
+    const body = JSON.stringify({
+      kind: row.kind,
+      summary: row.summary,
+      link: row.link,
+      occurredAt: row.occurred_at.toISOString(),
+      notificationId: row.notification_id,
     });
-    return { handled: true, delivered: 0, failed: 1 };
-  }
+    const timestamp = new Date().toISOString();
 
-  const failure = await send(
-    row,
-    {
-      body,
-      headers: {
-        "content-type": "application/json",
-        "x-mpc-timestamp": timestamp,
-        "x-mpc-signature": signPayload(secret.secret, body, timestamp),
-        // Lets the receiver recognize retries. Delivery is at-least-once, so duplicates arrive.
-        "x-mpc-delivery-attempt": String(attempt),
-        "idempotency-key": `${row.notification_id}:${row.sink_id}`,
+    const secret = readSecret(row, options);
+    if (!("secret" in secret)) {
+      /**
+       * An unusable secret **stays unusable on retry.** The config must be fixed, so settle
+       * immediately instead of waiting for the attempt cap — meanwhile the log fills with the same
+       * error. Stored as one category whatever the reason, so the admin screen does not say which
+       * variables or files exist on the worker.
+       */
+      await tx`
+        UPDATE core.notification_deliveries
+        SET state = 'failed', attempts = ${attempt}, last_error = 'secret_unavailable'
+        WHERE notification_id = ${row.notification_id} AND sink_id = ${row.sink_id}
+      `;
+      emit({
+        level: "error",
+        msg: "notification.secret_unavailable",
+        sinkId: row.sink_id,
+        reason: secret.reason,
+      });
+      return { handled: true, delivered: 0, failed: 1 };
+    }
+
+    const failure = await send(
+      row,
+      {
+        body,
+        headers: {
+          "content-type": "application/json",
+          "x-mpc-timestamp": timestamp,
+          "x-mpc-signature": signPayload(secret.secret, body, timestamp),
+          // Lets the receiver recognize retries. Delivery is at-least-once, so duplicates arrive.
+          "x-mpc-delivery-attempt": String(attempt),
+          "idempotency-key": `${row.notification_id}:${row.sink_id}`,
+        },
       },
-    },
-    options,
-  );
+      options,
+    );
 
-  if (failure === null) {
-    await sql`
+    if (failure === null) {
+      await tx`
+        UPDATE core.notification_deliveries
+        SET state = 'delivered', attempts = ${attempt}, delivered_at = clock_timestamp(), last_error = NULL
+        WHERE notification_id = ${row.notification_id} AND sink_id = ${row.sink_id}
+      `;
+      return { handled: true, delivered: 1, failed: 0 };
+    }
+
+    // Settle at the cap. The in-app notification remains, so no information is lost — only the
+    // fact of "sent" is missing, and the row records exactly that.
+    const exhausted = attempt >= options.maxAttempts;
+    const backoff = options.backoffMs * 2 ** (attempt - 1);
+
+    await tx`
       UPDATE core.notification_deliveries
-      SET state = 'delivered', attempts = ${attempt}, delivered_at = now(), last_error = NULL
+      SET state = ${exhausted ? "failed" : "pending"},
+          attempts = ${attempt},
+          last_error = ${failure.category},
+          next_attempt_at = clock_timestamp() + ${`${Math.round(backoff / 1000)} seconds`}::interval
       WHERE notification_id = ${row.notification_id} AND sink_id = ${row.sink_id}
     `;
-    return { handled: true, delivered: 1, failed: 0 };
-  }
 
-  // Settle at the cap. The in-app notification remains, so no information is lost — only the
-  // fact of "sent" is missing, and the row records exactly that.
-  const exhausted = attempt >= options.maxAttempts;
-  const backoff = options.backoffMs * 2 ** (attempt - 1);
+    emit({
+      level: exhausted ? "error" : "warn",
+      msg: exhausted ? "notification.delivery.failed" : "notification.delivery.retry",
+      sinkId: row.sink_id,
+      attempt,
+      error: failure.category,
+      ...(failure.status === undefined ? {} : { status: failure.status }),
+    });
 
-  await sql`
-    UPDATE core.notification_deliveries
-    SET state = ${exhausted ? "failed" : "pending"},
-        attempts = ${attempt},
-        last_error = ${failure.category},
-        next_attempt_at = now() + ${`${Math.round(backoff / 1000)} seconds`}::interval
-    WHERE notification_id = ${row.notification_id} AND sink_id = ${row.sink_id}
-  `;
-
-  emit({
-    level: exhausted ? "error" : "warn",
-    msg: exhausted ? "notification.delivery.failed" : "notification.delivery.retry",
-    sinkId: row.sink_id,
-    attempt,
-    error: failure.category,
-    ...(failure.status === undefined ? {} : { status: failure.status }),
-  });
-
-  return { handled: true, delivered: 0, failed: exhausted ? 1 : 0 };
+    return { handled: true, delivered: 0, failed: exhausted ? 1 : 0 };
+  }) as Promise<DeliveryResult>;
 }
 
 /** Delivery counts by state. Left silent, nobody notices that nothing is being sent. */

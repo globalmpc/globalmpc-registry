@@ -27,7 +27,7 @@ import {
 import {
   completeIdempotency,
   hashRequest,
-  releaseIdempotency,
+  releaseIdempotencyAfterFailure,
   reserveIdempotency,
 } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
@@ -288,7 +288,7 @@ export async function registerSourceCollectRoutes(
       } catch (error) {
         // If the reservation is not released, this key stays `IN_FLIGHT` forever and the client
         // has no way to retry.
-        await releaseIdempotency(sql, tenantId, idempotencyKey);
+        await releaseIdempotencyAfterFailure(sql, tenantId, idempotencyKey, request.log);
         throw error;
       }
 
@@ -401,7 +401,7 @@ export async function registerSourceCollectRoutes(
           return response;
         });
       } catch (error) {
-        await releaseIdempotency(sql, tenantId, idempotencyKey);
+        await releaseIdempotencyAfterFailure(sql, tenantId, idempotencyKey, request.log);
         throw error;
       }
     },

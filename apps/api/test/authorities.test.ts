@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
+import { OFFERING_PRECONDITIONS } from "@mpc/domain";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
@@ -205,5 +207,80 @@ describeDb("Asset/Offering gate (OD-07)", () => {
       });
       expect(response.statusCode).toBe(404);
     }
+  });
+
+  /** A fresh project whose `project_facts` hold the given keys as confirmed with evidence. */
+  async function projectWithConfirmedFacts(keys: readonly string[]): Promise<string> {
+    const projectId = randomUUID();
+    await fx.sql`
+      INSERT INTO core.projects (
+        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+      ) VALUES (
+        ${projectId}, ${fx.tenantA}, ${`OG-${projectId.slice(0, 8)}`}, 'Offering gate check',
+        'MNG', ARRAY['copper'], ${fx.orgA}
+      )
+    `;
+    for (const key of keys) {
+      await fx.sql`
+        INSERT INTO core.project_facts (id, tenant_id, project_id, fact_key, status, evidence_ref)
+        VALUES (${randomUUID()}, ${fx.tenantA}, ${projectId}, ${key}, 'confirmed', ${randomUUID()})
+      `;
+    }
+    return projectId;
+  }
+
+  function gateOf(projectId: string) {
+    return app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/offering-gate`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+  }
+
+  const everyPreconditionBut = (excluded: string): string[] =>
+    OFFERING_PRECONDITIONS.map((precondition) => precondition.key).filter(
+      (key) => key !== excluded,
+    );
+
+  it("AC-07: an access-listed project without ERSP approval is refused a regulated transfer", async () => {
+    // Every other condition is evidenced, and the marketing access list is recorded as confirmed.
+    const projectId = await projectWithConfirmedFacts([
+      ...everyPreconditionBut("ersp_engaged"),
+      "marketing_access_list",
+    ]);
+
+    const gate = await gateOf(projectId);
+    expect(gate.statusCode).toBe(200);
+    expect(gate.json().activatable).toBe(false);
+    expect(gate.json().missing.map((item: { key: string }) => item.key)).toEqual(["ersp_engaged"]);
+
+    // And the transfer itself has nowhere to go — no transfer path exists (OD-07).
+    const transfer = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/transfers`,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
+      payload: { wallet: fx.readerA.address, jurisdiction: "MNG" },
+    });
+    expect(transfer.statusCode).toBe(404);
+  });
+
+  it("AC-33: ERSP confirmation does not promote legal issuance or the offering", async () => {
+    const projectId = await projectWithConfirmedFacts(everyPreconditionBut("legal_issuance_decision"));
+
+    const gate = await gateOf(projectId);
+    expect(gate.json().activatable).toBe(false);
+    expect(gate.json().missing.map((item: { key: string }) => item.key)).toEqual([
+      "legal_issuance_decision",
+    ]);
+    expect(gate.json().notMeaning).toContain("are not issuance approval");
+
+    // No state moved on its own: the project is still where it was created.
+    const lifecycle = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/lifecycle`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(lifecycle.json().lifecycleState).toBe("draft");
+    expect(lifecycle.json().transitions).toEqual([]);
   });
 });

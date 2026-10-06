@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
 import { withTenant } from "@mpc/db";
-import { badRequest, conflict, notFound } from "../errors.js";
+import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import {
   assertAuthorized,
   projectResource,
@@ -63,6 +63,14 @@ function nextActions(row: SignalRow): string[] {
       "Correct with a new version (supersede)",
       "Take down the public record (revoke) — changes what the world sees",
       "Mark as no impact (dismiss) — the reason is recorded",
+    ];
+  }
+
+  // A suspension proposal (0053). The transition itself is a separate, human lifecycle call.
+  if (row.target_type === "project_lifecycle") {
+    return [
+      "Suspend the project through a lifecycle transition — nothing is suspended automatically",
+      "Close the proposal (dismiss) — record whether the project was suspended, or why not",
     ];
   }
 
@@ -168,6 +176,16 @@ export async function registerStaleSignalRoutes(
 
         if (current.resolution !== "open") {
           throw conflict("SIGNAL_ALREADY_RESOLVED", `Already closed as ${current.resolution}`);
+        }
+
+        // A suspension proposal has no version to supersede and no record to revoke. Closing it
+        // as either would claim something that did not happen.
+        if (current.target_type === "project_lifecycle" && parsed.data.resolution !== "dismissed") {
+          throw unprocessable(
+            "SIGNAL_RESOLUTION_NOT_APPLICABLE",
+            "A suspension proposal can only be dismissed with a note",
+            { targetType: current.target_type, resolution: parsed.data.resolution },
+          );
         }
 
         const [row] = await tx<SignalRow[]>`

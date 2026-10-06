@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Workspace aggregate screens.
@@ -6,16 +7,6 @@ import { expect, test, type Page } from "@playwright/test";
  * All four were missing not for lack of data but because of **a structure where things
  * were visible only after opening a single project**. This checks that the structure is actually undone.
  */
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 test.describe("workspace navigation", () => {
   test("every global item in the spec is present as a link", async ({ page }) => {

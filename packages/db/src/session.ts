@@ -1,6 +1,18 @@
 import type postgres from "postgres";
 
 /**
+ * Connection parameters every runtime client opens with.
+ *
+ * **"Today" is the UTC day.** Document expiry is judged against `current_date` — the expiry sweep,
+ * the document graph, detection after an upload — and `current_date` follows the session time
+ * zone. Left unset, that is whatever the server or database default happens to be, so the day a
+ * document turns expired would move with the deployment. A project in UTC+8 therefore sees a
+ * document expire at 08:00 local time; that is the price of one boundary for every jurisdiction.
+ * The anchor gas cap counts its day in UTC for the same reason (`anchor-submitter.ts`).
+ */
+export const SESSION_CONNECTION = { TimeZone: "UTC" } as const;
+
+/**
  * Tenant session context.
  *
  * 02 §2.5: every query runs inside a tenant scope. RLS policies read

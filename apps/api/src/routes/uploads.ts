@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
 import { withTenant } from "@mpc/db";
-import { admitToStorage } from "@mpc/domain";
+import { SENSITIVITY_LEVELS, admitToStorage } from "@mpc/domain";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import {
   assertAuthorized,
@@ -106,7 +106,12 @@ const createUploadSchema = z.object({
   contentBase64: z.string().min(1),
   contentType: contentTypeSchema,
   originalFilename: z.string().min(1).nullable().default(null),
-  sensitivity: z.enum(["public", "restricted", "confidential"]).default("restricted"),
+  /**
+   * Every level is accepted here so that the storage gate below answers for all of them. A
+   * narrower enum turned `pii` and `whistleblower` into a 400 format error, while the public
+   * legal page promises a 422 with the next action for every sensitive level.
+   */
+  sensitivity: z.enum(SENSITIVITY_LEVELS).default("restricted"),
 });
 
 const scanResultSchema = z.object({
