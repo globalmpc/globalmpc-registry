@@ -96,7 +96,7 @@ TARGET_DATABASE_URL="$target_url" \
 # `restore.sh` also compares with the manifest, but that is against **backup time**. Here it
 # is matched against the live source too — whether the backup is stale is also a drill result.
 #
-# **But equality is not required for `audit.events`** — 2026-09-10 audit A6.
+# **But equality is not required for `audit.events`**.
 # This table is append-only and grows while the backup runs. Requiring equality would make
 # **a good backup fail the drill**, and that failure would misstate its reason. Production has
 # no window where writes stop, so a verdict that passes only on a quiet DB is not a drill.

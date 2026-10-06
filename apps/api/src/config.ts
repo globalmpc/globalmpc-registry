@@ -25,10 +25,10 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1),
   SIWE_DOMAIN: z.string().min(1),
   SIWE_URI: z.string().url(),
-  // Only BSC mainnet 56 / testnet 97 are allowed. Anchoring on another chain splits the
-  // Explorer's verification path.
-  CHAIN_ID: z.coerce.number().refine((value) => value === 56 || value === 97, {
-    message: "CHAIN_ID must be 56 (BSC mainnet) or 97 (BSC testnet)",
+  // Only BSC mainnet 56 and the local development chain 31337 are allowed. Anchoring on another
+  // chain splits the Explorer's verification path.
+  CHAIN_ID: z.coerce.number().refine((value) => value === 56 || value === 31337, {
+    message: "CHAIN_ID must be 56 (BSC mainnet) or 31337 (local chain)",
   }),
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -83,7 +83,7 @@ const schema = z.object({
    * right**. Left entries are not counted because the requester can fill them freely —
    * overstating the hop count makes the cap forgeable at once.
    *
-   * Rationale for the default of 1: Traefik (Coolify) appends the client address it saw at the
+   * Rationale for the default of 1: the deploy platform's reverse proxy appends the client address it saw at the
    * right end, and Next's proxy **passes the received header through unchanged** (it adds no
    * entry). So the only trusted hop is web.
    *
@@ -211,7 +211,7 @@ export class ConfigError extends Error {
  * Reads an empty string as "not given".
  *
  * Deployment platforms inject declared variables as empty strings even without a value.
- * Coolify puts the variable list parsed from the compose file into **every container**, so
+ * A compose-based platform may put the variable list parsed from the compose file into **every container**, so
  * `CHAIN_RPC_URL`, left empty for the anchor worker, reaches the API as `""` too.
  * `.url().optional()` accepts undefined but rejects an empty string, so the API dies at start.
  *

@@ -15,7 +15,7 @@ import type { Session } from "./plugins/session.js";
  * them is not "what role is this person" but "is the recovered signer the reviewer assigned to
  * this case". Writing an arbitrary role name on that path would make the audit record look like
  * an authorization decision that was never made. (Signature requests do go through the policy
- * since W-085 and record the role that passed.)
+ * and record the role that passed.)
  */
 export const ROLE_ASSIGNMENT_BOUND = "assignment_bound";
 

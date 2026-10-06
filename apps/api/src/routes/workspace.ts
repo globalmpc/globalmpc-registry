@@ -16,7 +16,7 @@ import type { Session } from "../plugins/session.js";
  * Notifications the caller may see — sent to them, or sent to a role they hold on a project
  * they can see.
  *
- * Shared by the list and by mark-read (W-086). Mark-read returns the summary and link, so a
+ * Shared by the list and by mark-read. Mark-read returns the summary and link, so a
  * filter only on the list left every hidden notification readable by id.
  */
 function visibleNotificationFilter(tx: postgres.TransactionSql, session: Session) {

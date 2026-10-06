@@ -44,7 +44,7 @@ fi
 mkdir -p "$BACKUP_DIR"
 taken_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# Take the dump and the stats **from the same snapshot** — 2026-09-10 audit A6.
+# Take the dump and the stats **from the same snapshot**.
 #
 # Previously `audit.events` was counted over a separate connection after `pg_dump`. If even
 # one business event arrived in between, the dump's row count and the manifest's differed,
@@ -110,7 +110,7 @@ if [ -n "${OBJECT_BUCKET:-}" ]; then
   object_bytes=$(find "$BACKUP_DIR/objects" -type f -exec wc -c {} + \
     | tail -1 | awk '{print $1}')
 
-  # Per-object hashes — 2026-09-10 audit A5.
+  # Per-object hashes.
   #
   # Count and bytes alone do not catch **changed contents**. A backup in which evidence was
   # silently swapped for another file still looks fine after restore.

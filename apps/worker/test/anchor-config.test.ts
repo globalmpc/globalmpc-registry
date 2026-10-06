@@ -12,7 +12,7 @@ import { loadAnchorConfig, type AnchorEnv } from "../src/anchor-config.js";
 const base: AnchorEnv = {
   DATABASE_URL: "postgres://u:p@localhost:5432/db",
   CHAIN_RPC_URL: "http://localhost:8545",
-  CHAIN_ID: "97",
+  CHAIN_ID: "31337",
   ANCHOR_CONTRACT_ADDRESS: `0x${"ab".repeat(20)}`,
   ANCHOR_SIGNER_PRIVATE_KEY: `0x${"11".repeat(32)}`,
   ANCHOR_DAILY_SPEND_CAP_WEI: "50000000000000000",
@@ -86,5 +86,11 @@ describe("anchor config — daily gas cap (O1)", () => {
     // wei is an integer. A decimal point means the unit was mistaken.
     expect(() => loadAnchorConfig({ ...base, ANCHOR_DAILY_SPEND_CAP_WEI: "0.05" })).toThrowError();
     expect(() => loadAnchorConfig({ ...base, ANCHOR_DAILY_SPEND_CAP_WEI: "1e17" })).toThrowError();
+  });
+});
+
+describe("chains where the worker may submit as an EOA", () => {
+  it("defaults to the local chain only", () => {
+    expect(loadAnchorConfig(base).eoaAllowedChainIds).toEqual([31337]);
   });
 });

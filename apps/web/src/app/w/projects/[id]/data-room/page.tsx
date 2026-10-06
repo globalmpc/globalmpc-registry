@@ -81,7 +81,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
   }, [load, sessionLoading]);
 
   /**
-   * **Actually calls** the official source — 2026-09-10 audit A1.
+   * **Actually calls** the official source.
    *
    * This screen used to send `confirmed_from_source` directly. That turned the meaning of
    * confirmation from "we checked" into **"the uploader said so"**. Confirmation
@@ -414,7 +414,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                           </button>
                         ) : null}
 
-                        {/* Only scanned files get a link (Q-033). The server refuses the rest. */}
+                        {/* Only scanned files get a link. The server refuses the rest. */}
                         {upload.state === "scanned_clean" || upload.state === "promoted" ? (
                           <button
                             data-testid={`download-${upload.id}`}

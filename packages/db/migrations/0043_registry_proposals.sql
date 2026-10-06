@@ -1,4 +1,4 @@
--- Separated approval for the review registries — spec 02 §2.8, W-066 / Q-020.
+-- Separated approval for the review registries — spec 02 §2.8.
 --
 -- **Why:** credentials, attestation schemas and compliance policy sets were created only by the
 -- operator CLI in `apps/api/src/bootstrap-registry.ts`. "Approval" there is a name the operator

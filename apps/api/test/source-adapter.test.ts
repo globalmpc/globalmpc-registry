@@ -80,8 +80,6 @@ describe("HTTP response classification", () => {
   });
 
   /**
-   * 2026-09-10 audit A7.
-   *
    * Previously 200 + successful parse meant confirmed. Both `{}` and `{"error":"unavailable"}`
    * became "confirmed by the source".
    */
@@ -117,7 +115,7 @@ describe("HTTP response classification", () => {
 const publicResolver = async () => ["203.0.113.10"];
 
 /**
- * Response body classification — 2026-09-10 audit A7.
+ * Response body classification.
  *
  * **A successful parse is not a schema match.** They used to be the same, so a response in
  * which the source said "cannot answer" became `confirmed_from_source`.
@@ -233,7 +231,7 @@ describe("adapter calls", () => {
   });
 
   it("does not confirm a 200 in an undeclared format", async () => {
-    // A7 negative test. Previously this response was confirmed_from_source.
+    // Negative test. Previously this response was confirmed_from_source.
     const result = await invokeHttpAdapter(
       {
         descriptor,

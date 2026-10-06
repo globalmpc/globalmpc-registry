@@ -9,7 +9,7 @@ import { ipv4ToBytes, ipv6ToBytes } from "./ip.js";
  * **with credentials attached**) and notification webhooks (`apps/worker`, called with a signed
  * body). Checking format alone, the value could be `http://169.254.169.254/` or an internal
  * service address, turning either path into a channel for reading the internal network. Both
- * judge with this module so the rules cannot drift apart (W-087).
+ * judge with this module so the rules cannot drift apart.
  *
  * Blocked at two points.
  *

@@ -176,7 +176,7 @@ export async function currentChainId(): Promise<number> {
 /**
  * Values used to offer adding the chain when the wallet does not know it.
  *
- * The server accepts only chains 56 and 97 (`apps/api/src/config.ts`). Listing any other chain here
+ * The server accepts only chains 56 and 31337 (`apps/api/src/config.ts`). Listing any other chain here
  * would move the wallet to a chain that cannot be used.
  */
 const CHAIN_PARAMS: Readonly<
@@ -196,11 +196,11 @@ const CHAIN_PARAMS: Readonly<
     rpcUrls: ["https://bsc-rpc.publicnode.com"],
     blockExplorerUrls: ["https://bscscan.com"],
   },
-  97: {
-    chainName: "BNB Smart Chain Testnet",
-    nativeCurrency: { name: "tBNB", symbol: "tBNB", decimals: 18 },
-    rpcUrls: ["https://bsc-testnet-rpc.publicnode.com"],
-    blockExplorerUrls: ["https://testnet.bscscan.com"],
+  31337: {
+    chainName: "Local chain",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: ["http://127.0.0.1:8545"],
+    blockExplorerUrls: [],
   },
 };
 
@@ -208,7 +208,7 @@ const CHAIN_PARAMS: Readonly<
  * Block explorer URL for a transaction hash.
  *
  * Visitors must be able to check a public record's tx hash on BscScan themselves. If the chain is
- * outside those the server accepts (56, 97) or the value is not hash-shaped, no link is made — plain
+ * not BSC mainnet (56) or the value is not hash-shaped, no link is made — plain
  * text is better than sending them to a page that does not exist.
  */
 export function blockExplorerTxUrl(chainId: number, hash: string): string | null {

@@ -22,7 +22,7 @@ import { ErrorNotice } from "@/components/ErrorNotice";
  * Here **the browser recomputes the Merkle path** from the leaf, proof, and root the server
  * returned. It does not copy the server's `merkleVerified` flag.
  *
- * **What it does not do (W-089).** The root and the confirmation state come from the server
+ * **What it does not do.** The root and the confirmation state come from the server
  * too — nothing on this page reads the chain. A match shows the leaf sits under the root the
  * server reports; whether that root is the one anchored on chain is for the reader to check on
  * the block explorer, which the transaction link opens. The copy says exactly that. Saying

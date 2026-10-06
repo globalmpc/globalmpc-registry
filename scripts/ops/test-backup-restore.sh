@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
-# Backup/restore drill — 2026-09-10 audit A5·A6.
+# Backup/restore drill.
 #
 # The conditions this script creates are the point.
 #
-# 1. **Take a backup while writes continue** (A6). A drill on a quiet DB never creates the
+# 1. **Take a backup while writes continue**. A drill on a quiet DB never creates the
 #    condition where `pg_dump` and the stats disagree. In production that condition is the
 #    default.
-# 2. **Attempt a restore from a 'complete backup' with no objects** (A5). Previously that
+# 2. **Attempt a restore from a 'complete backup' with no objects**. Previously that
 #    ended as "restore done".
-# 3. **Actually download restored objects and compare them** (A5).
+# 3. **Actually download restored objects and compare them**.
 #
 # Usage:
 #   DATABASE_URL=postgres://... ./test-backup-restore.sh
@@ -77,7 +77,7 @@ VALUES ('$seed_tenant', 'backup.drill', 'drill', gen_random_uuid(),
 SQL
 }
 
-echo "== 1. Take a backup while writes continue (A6)"
+echo "== 1. Take a backup while writes continue"
 writer &
 writer_pid=$!
 sleep 0.5
@@ -119,7 +119,7 @@ else
   bad "writes did not overlap the backup window — this drill did not create the condition"
 fi
 
-echo "== 2. Restore that backup into an empty DB (A6)"
+echo "== 2. Restore that backup into an empty DB"
 psql "$DATABASE_URL" -X -q -c "CREATE DATABASE $restore_db" >/dev/null
 target="${DATABASE_URL%/*}/$restore_db"
 
@@ -138,7 +138,7 @@ else
   bad "restored row count $restored_events differs from manifest $manifest_events"
 fi
 
-echo "== 3. A 'complete backup' without objects does not start a restore (A5)"
+echo "== 3. A 'complete backup' without objects does not start a restore"
 cp -R "$work/backup" "$work/fake-complete"
 python3 - "$work/fake-complete/manifest.json" <<'PY'
 import json, sys
@@ -159,7 +159,7 @@ else
 fi
 psql "$DATABASE_URL" -X -q -c "DROP DATABASE IF EXISTS ${restore_db}_2" >/dev/null 2>&1 || true
 
-echo "== 4. Object integrity (A5)"
+echo "== 4. Object integrity"
 if [ -n "${OBJECT_BUCKET:-}" ]; then
   rm -rf "$work/obj-backup"
   BACKUP_DIR="$work/obj-backup" "$here/backup.sh" >/dev/null
@@ -183,7 +183,7 @@ if [ -n "${OBJECT_BUCKET:-}" ]; then
     echo "  skipped — no objects in the bucket"
   fi
 
-  echo "== 5. Good objects are returned and actually downloaded and compared (A5)"
+  echo "== 5. Good objects are returned and actually downloaded and compared"
   rm -rf "$work/obj-backup2"
   BACKUP_DIR="$work/obj-backup2" "$here/backup.sh" >/dev/null
 

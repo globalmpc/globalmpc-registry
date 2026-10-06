@@ -45,7 +45,7 @@ export interface HttpAdapterConfig {
 }
 
 /**
- * Source response profile — 2026-09-10 audit A7.
+ * Source response profile.
  *
  * Previously **a response that parsed as JSON was taken as matching the schema.** So HTTP 200
  * with `{"error":"unavailable"}` or `{}` became `confirmed_from_source` — a path that records a
@@ -206,7 +206,7 @@ export function classifyHttpResponse(input: {
       /**
        * This source's normal response shape is not declared.
        *
-       * **This is the core of A7.** Confirming on parse success alone makes both `{}` and
+       * **This is the core of the response profile.** Confirming on parse success alone makes both `{}` and
        * `{"error":"..."}` confirmations. Without a declaration nothing is confirmed.
        */
       case "unprofiled":

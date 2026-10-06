@@ -29,13 +29,14 @@ describe("visibleNav", () => {
 describe("blockExplorerTxUrl", () => {
   const hash = `0x${"ab".repeat(32)}`;
 
-  it("links chains the server accepts to BscScan", () => {
+  it("links BSC mainnet transactions to BscScan", () => {
     expect(blockExplorerTxUrl(56, hash)).toBe(`https://bscscan.com/tx/${hash}`);
-    expect(blockExplorerTxUrl(97, hash)).toBe(`https://testnet.bscscan.com/tx/${hash}`);
   });
 
-  it("makes no link for an unknown chain or a non-hash value", () => {
+  it("makes no link for the local chain, an unknown chain, or a non-hash value", () => {
+    expect(blockExplorerTxUrl(31337, hash)).toBeNull();
+    expect(blockExplorerTxUrl(97, hash)).toBeNull();
     expect(blockExplorerTxUrl(1, hash)).toBeNull();
-    expect(blockExplorerTxUrl(97, "not-a-hash")).toBeNull();
+    expect(blockExplorerTxUrl(56, "not-a-hash")).toBeNull();
   });
 });

@@ -24,4 +24,3 @@ fail_on_revert = false
 
 [rpc_endpoints]
 bsc = "${BSC_RPC_URL}"
-bsc_testnet = "${BSC_TESTNET_RPC_URL}"

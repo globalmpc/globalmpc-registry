@@ -34,7 +34,7 @@ if [ "$expected_sha" != "$actual_sha" ]; then
   exit 1
 fi
 
-# Check the requirements of a complete backup **before restoring** — 2026-09-10 audit A5.
+# Check the requirements of a complete backup **before restoring**.
 #
 # Previously, when `objects/` was missing or `OBJECT_BUCKET` was empty, the object copy branch
 # was **silently skipped** and "restore done" printed at the end. A service with only the DB
@@ -131,7 +131,7 @@ if [ "$complete" = "true" ]; then
   check "object count" "$local_objects" "$restored"
 
   #
-  # **Actually download them** — 2026-09-10 audit A5.
+  # **Actually download them**.
   #
   # A successful sync is not the same as evidence being openable. If permissions, policies,
   # or bucket settings are off, listings show but bodies cannot be read, and that state

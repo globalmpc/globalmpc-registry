@@ -381,7 +381,7 @@ describeDb("Governance — on-chain snapshot", () => {
 
   const chain = {
     tokenAddress: `0x${"ab".repeat(20)}`,
-    chainId: 97,
+    chainId: 31337,
     confirmationDepth: 12,
     headBlockNumber: async () => 1000,
     readBalance: async () => 5n,

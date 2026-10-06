@@ -141,7 +141,7 @@ test.describe("real wallet connection — any wallet becomes a user", () => {
 
     const calls = (await page.evaluate(() => (window as unknown as { __walletCalls: string[] }).__walletCalls));
     expect(calls).toContain("io.metamask:wallet_addEthereumChain");
-    expect(await steps(page)).toMatch(/switched 1 → 97/);
+    expect(await steps(page)).toMatch(/switched 1 → 31337/);
   });
 
   test("MetaMask mobile — offers to add the chain even when 4902 is wrapped in -32603", async ({ page }) => {
@@ -195,7 +195,7 @@ test.describe("real wallet connection — any wallet becomes a user", () => {
   test("the chain in the signing message comes from the server — not hardcoded in the web", async ({ page }) => {
     await installWallets(page, [METAMASK]);
 
-    // Assume the server says 56 (stg, prod). The old web hardcoded 97.
+    // Assume the server says 56 (stg, prod). The old web hardcoded its own chain.
     await page.route("**/api/v1/auth/siwe/nonce", async (route) => {
       const response = await route.fetch();
       const body = (await response.json()) as Record<string, unknown>;

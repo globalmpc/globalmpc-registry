@@ -38,7 +38,13 @@ pnpm check                                 # must pass before a PR
 ```
 
 `pnpm check` covers typecheck · tests · OpenAPI drift · prohibited language · brand
-assets · README counts · compose volume paths. Contracts: `cd contracts && forge test`.
+assets · README counts · compose volume paths · public hygiene. Contracts: `cd contracts && forge test`.
+
+**Everything here is published.** Write in English only, and do not reference internal
+trackers, internal audit labels, workstation paths, or personal addresses — cite the
+documented notation or state the reason in place. `pnpm check:public` (also run by the
+`@mpc/config` tests) enforces it; private names can be added at run time through
+`PUBLIC_HYGIENE_EXTRA_PATTERNS`, one regular expression per line.
 
 **A green run without `DATABASE_URL` is not green**: tenant-isolation and append-only
 tests are silently skipped.

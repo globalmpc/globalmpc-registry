@@ -5,11 +5,11 @@ import { isIP } from "node:net";
  *
  * Three places ask the same question — is a source endpoint internal (SSRF, `endpoint.ts`),
  * is a notification webhook internal (SSRF, the worker), and is the peer forwarding the request
- * our proxy (`apps/api/src/client-ip.ts`). Each judged by string prefix and was actually breached
- * (2026-09-10 audit A2). The verdict is centralized and **looks only at bytes** — with multiple
+ * our proxy (`apps/api/src/client-ip.ts`). Each judged by string prefix and was actually breached.
+ * The verdict is centralized and **looks only at bytes** — with multiple
  * notations, the judging side and the connecting side see different addresses.
  *
- * Lives in `@mpc/config` because the API and the worker both depend on it (W-087).
+ * Lives in `@mpc/config` because the API and the worker both depend on it.
  */
 
 /**

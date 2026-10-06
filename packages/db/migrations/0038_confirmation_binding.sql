@@ -1,4 +1,4 @@
--- Confirmation binds only to server-produced evidence — 2026-09-10 audit A1.
+-- Confirmation binds only to server-produced evidence.
 --
 -- 0021 added "confirmation requires signature evidence", but that evidence was **a boolean sent
 -- in the request body**. A `source.upload` holder sending `signatureValid: true`

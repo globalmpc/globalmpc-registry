@@ -1,15 +1,16 @@
 /**
  * No variable substitution in Compose volume paths — 2026-09-11.
  *
- * Coolify rejects `${` in a volume source for security and **halts the whole deploy**:
+ * The deploy platform rejects `${` in a volume source for security and **halts the whole deploy**:
  *
  *   Deployment failed: Invalid Docker volume definition: Invalid volume source:
  *   contains forbidden character '${' (variable substitution with potential
  *   command injection).
  *
  * Local `docker compose` accepts the substitution, so local checks, CI, and E2E all stay
- * green while only the deploy fails. That happened (2026-09-10 A4 fix → 2026-09-11 deploy
- * failure). It is a constraint people cannot reliably remember, so it is a gate.
+ * green while only the deploy fails. That happened once: an alerting config fix passed every
+ * check and then failed the deploy. It is a constraint people cannot reliably remember, so it
+ * is a gate.
  *
  * No YAML parser — indentation is used to see only services' `volumes:` blocks. This
  * repository's compose files use only short syntax (`- source:target`) and long syntax (`source:`).
@@ -52,8 +53,8 @@ interface Violation {
 }
 
 /**
- * Strings Coolify rejects in a volume source — `validateShellSafePath`
- * (coollabsio/coolify `bootstrap/helpers/shared.php`). Not just `${`. The list is copied
+ * Strings the deploy platform rejects in a volume source — its shell-safe path validator.
+ * Not just `${`. The list is copied
  * verbatim so the next rejection does not surface at deploy time again.
  * Newline and CR are omitted since they cannot occur within one line.
  */
@@ -99,7 +100,7 @@ const all = FILES.flatMap((file) =>
 );
 
 /**
- * Every worker entrypoint has a service in the local stack — W-095.
+ * Every worker entrypoint has a service in the local stack.
  *
  * `apps/worker` has one process per `start*` script. The local stack once ran the anchor and
  * scan workers but not `start` (outbox publishing and notification delivery), so events and
@@ -133,7 +134,7 @@ if (missingWorkers.length > 0) {
 }
 
 if (all.length > 0) {
-  console.error("Volume paths contain Coolify-forbidden characters. The deploy will be rejected:\n");
+  console.error("Volume paths contain characters the deploy platform forbids. The deploy will be rejected:\n");
   for (const violation of all) console.error(`  ${violation.file}:${violation.line}  ${violation.text}`);
   console.error(
     "\nKeep only fixed paths in volumes. If a file must be chosen, choose it via an env var in a start script" +
@@ -142,4 +143,4 @@ if (all.length > 0) {
   process.exit(1);
 }
 
-console.log(`No Coolify-forbidden characters in volume paths — ${FILES.join(" · ")}`);
+console.log(`No platform-forbidden characters in volume paths — ${FILES.join(" · ")}`);

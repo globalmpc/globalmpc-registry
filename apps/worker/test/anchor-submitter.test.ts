@@ -23,7 +23,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
   * handle.
  */
 
-const CHAIN_ID = 97;
+const CHAIN_ID = 31337;
 const ROOT = `0x${"11".repeat(32)}`;
 const MANIFEST = `0x${"22".repeat(32)}`;
 const TX_HASH = `0x${"44".repeat(32)}`;

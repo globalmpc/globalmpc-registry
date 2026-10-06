@@ -707,7 +707,7 @@ describeDb("Verification and EIP-712 signature", () => {
   });
 
   /**
-   * Signature requests carry the same checks as drafting (W-085).
+   * Signature requests carry the same checks as drafting.
    *
    * The response holds the typed data and the human-readable payload of the draft — project key,
    * type, claim count, limitations, snapshot hash. Without these checks anyone in the tenant
@@ -743,7 +743,7 @@ describeDb("Verification and EIP-712 signature", () => {
         INSERT INTO core.wallet_identities (
           id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 97, 'high_assurance', now()
+          ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'high_assurance', now()
         )
       `;
       await fx.sql`

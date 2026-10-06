@@ -29,7 +29,7 @@ describeDb("SIWE authentication", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/auth/siwe/nonce",
-      payload: { walletAddress: address.toLowerCase(), chainId: 97 },
+      payload: { walletAddress: address.toLowerCase(), chainId: 31337 },
     });
     return response.json() as { nonce: string; statement: string; expiresAt: string };
   }
@@ -37,7 +37,7 @@ describeDb("SIWE authentication", () => {
   function message(overrides: Partial<Parameters<typeof createSiweMessage>[0]> = {}) {
     return createSiweMessage({
       address: account.address,
-      chainId: 97,
+      chainId: 31337,
       domain: "localhost:3000",
       nonce: "placeholder",
       statement: "s",
@@ -68,7 +68,7 @@ describeDb("SIWE authentication", () => {
       const response = await app.inject({
         method: "POST",
         url: "/api/v1/auth/siwe/nonce",
-        payload: { walletAddress: "not-an-address", chainId: 97 },
+        payload: { walletAddress: "not-an-address", chainId: 31337 },
       });
       expect(response.statusCode).toBe(400);
     });
@@ -250,7 +250,7 @@ describeDb("SIWE authentication", () => {
     /**
      * The server also states which chain to sign for.
      *
-     * The web app hard-coded 97 while stg and prod use 56. The server rejects a different
+     * The web app hard-coded its own chain while stg and prod use 56. The server rejects a different
      * chain, so real-wallet sign-in succeeded 0 times in those environments. The source of
      * truth is consolidated into a single server setting.
      */

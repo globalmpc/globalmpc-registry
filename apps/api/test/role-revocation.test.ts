@@ -17,7 +17,7 @@ import {
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
- * Two-person role revocation — 02 §2.8, Q-031 remaining item 3.
+ * Two-person role revocation — 02 §2.8.
  *
  * Before this, the only way to take a role away was to disable every wallet of the person.
  * That also cut off whatever else they legitimately held, and it left the role binding in force
@@ -90,7 +90,7 @@ describeDb("role revocation", () => {
       INSERT INTO core.wallet_identities (
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${walletId}, ${tenantId}, ${subjectId}, ${account.address}, 97, ${assurance}, now()
+        ${walletId}, ${tenantId}, ${subjectId}, ${account.address}, 31337, ${assurance}, now()
       )
     `;
     await fx.sql`

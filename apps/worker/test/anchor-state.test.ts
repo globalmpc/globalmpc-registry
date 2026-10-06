@@ -187,7 +187,7 @@ describe("submission safety check (O1)", () => {
     feeCapWei: 100_000_000_000n,
     attempts: 0,
     maxAttempts: 3,
-    eoaAllowedChainIds: [31337, 97],
+    eoaAllowedChainIds: [31337],
     safeAddress: null,
     dailySpendCapWei: 1_000_000_000_000_000n,
     spentTodayWei: 0n,

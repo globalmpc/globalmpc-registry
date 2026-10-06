@@ -11,7 +11,7 @@ import type { Session } from "../src/plugins/session.js";
 
 const WALLET_ONLY: Session = {
   walletAddress: `0x${"ab".repeat(20)}`,
-  chainId: 97,
+  chainId: 31337,
   subjectId: "subject-reader",
   tenantId: "tenant-a",
   assuranceLevel: "wallet_only",

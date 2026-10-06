@@ -95,7 +95,7 @@ describeDb("notification sinks", () => {
   });
 
   /**
-   * Registration refuses internal destinations (W-087).
+   * Registration refuses internal destinations.
    *
    * The worker checks again at send time, with the name resolved. This is the save-time
    * rejection that tells the operator what is wrong on the spot.
@@ -115,7 +115,7 @@ describeDb("notification sinks", () => {
   });
 
   /**
-   * The signing-secret reference stays inside the webhook namespace (W-087).
+   * The signing-secret reference stays inside the webhook namespace.
    *
    * Otherwise it could point the worker at its own database URL or signer key.
    */

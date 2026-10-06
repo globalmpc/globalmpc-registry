@@ -55,7 +55,7 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 /** Multipart cap. It streams to storage, so it can accept more. */
 const MAX_STREAM_BYTES = 2 * 1024 * 1024 * 1024;
 
-/** States that passed the malware scan. Only these get a download link (Q-033). */
+/** States that passed the malware scan. Only these get a download link. */
 const DOWNLOADABLE_STATES: ReadonlySet<UploadState> = new Set(["scanned_clean", "promoted"]);
 
 /**
@@ -723,7 +723,7 @@ export async function registerUploadRoutes(
           }
 
           /**
-           * Allowlist, not blocklist (Q-033, option 1).
+           * Allowlist, not blocklist (option 1).
            *
            * Blocking only `scanned_infected` handed out links for quarantined files the scanner
            * had not seen yet — a malicious file reached the project's users before the scan.

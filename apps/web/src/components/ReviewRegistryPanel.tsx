@@ -13,7 +13,7 @@ import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
- * Review registry proposals — spec 02 §2.8, W-066.
+ * Review registry proposals — spec 02 §2.8.
  *
  * Credentials, attestation schemas and compliance policy sets are proposed by an operator and
  * approved by a different person holding the review role. Approval is what creates the record.

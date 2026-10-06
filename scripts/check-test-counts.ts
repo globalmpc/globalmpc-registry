@@ -144,7 +144,7 @@ const numericFixes = [
   },
   (text: string) => text.replace(/(\| `apps\/api` \|[^|]*?)\d+ routes/, `$1${counts.routes} routes`),
   /**
-   * Route counts outside the table — 2026-09-10 audit.
+   * Route counts outside the table.
    *
    * The substitution above only matches the `| \`apps/api\` |` row. So "59 routes" in the
    * prose of §"What does not exist yet" stayed after routes reached 79, and the gate stayed

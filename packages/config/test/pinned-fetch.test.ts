@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pinnedFetch, ResponseTooLargeError, type PinnedRequestInit } from "../src/pinned-fetch.js";
 
 /**
- * Pinned transport for webhook delivery — W-087.
+ * Pinned transport for webhook delivery.
  *
  * Source calls are GETs; webhooks POST a signed body. The pinning and the no-redirect rule must
  * hold for both, and a webhook needs a much smaller response cap — it reads nothing back.

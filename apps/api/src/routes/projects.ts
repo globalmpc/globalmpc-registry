@@ -139,7 +139,7 @@ export async function registerProjectRoutes(
   });
 
   /**
-   * Organizations this session may name as a project's owner — Q-032.
+   * Organizations this session may name as a project's owner.
    *
    * The registration form used to look the organization up in a table of demo tenant ids, so on
    * any other tenant it had nothing to submit. The list follows the same rule as the create check

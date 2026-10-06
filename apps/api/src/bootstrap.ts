@@ -39,7 +39,7 @@ export interface BootstrapInput {
   readonly jurisdiction: string;
   readonly subjectName: string;
   readonly walletAddress: string;
-  /** 56 (BSC mainnet) or 97 (BSC testnet). */
+  /** 56 (BSC mainnet) or 31337 (local chain). */
   readonly chainId: number;
   readonly role: string;
   readonly assuranceLevel: AssuranceLevel;
@@ -89,9 +89,9 @@ function validate(input: BootstrapInput): { walletAddress: string } {
     throw new BootstrapError(`walletAddress is malformed — ${input.walletAddress}`);
   }
 
-  // The API accepts only 56 and 97. A wallet bound to another chain cannot log in.
-  if (input.chainId !== 56 && input.chainId !== 97) {
-    throw new BootstrapError("chainId must be 56 (BSC mainnet) or 97 (BSC testnet)");
+  // The API accepts only 56 and 31337. A wallet bound to another chain cannot log in.
+  if (input.chainId !== 56 && input.chainId !== 31337) {
+    throw new BootstrapError("chainId must be 56 (BSC mainnet) or 31337 (local chain)");
   }
 
   const required = ROLE_MINIMUM_ASSURANCE[input.role];

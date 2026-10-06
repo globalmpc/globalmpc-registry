@@ -128,7 +128,7 @@ describeDb("source lookup", () => {
     // answer" false.
     expect(after?.last_success_at).toBeNull();
 
-    // Confirmation requires the declared fields (A7). `{ok:true}` is now schema_changed.
+    // Confirmation requires the declared fields. `{ok:true}` is now schema_changed.
     nextResponse = () => new Response(JSON.stringify({ licenseId: "MN-1" }), { status: 200 });
     await collect(stewardToken);
 
@@ -139,7 +139,7 @@ describeDb("source lookup", () => {
   });
 
   /**
-   * Response profile — 2026-09-10 audit A7.
+   * Response profile.
    *
    * Previously, 200 + valid JSON meant confirmed. Even a response in which the source said
    * "cannot answer" was recorded as confirmed.

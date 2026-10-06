@@ -37,14 +37,14 @@ import {
 } from "./shared.js";
 
 /**
- * Review registry proposals — spec 02 §2.8, W-066 / Q-020.
+ * Review registry proposals — spec 02 §2.8.
  *
  * Credentials, attestation schemas and compliance policy sets used to be created only by the
  * bootstrap CLI, where "approval" was a name the operator typed. Here the operator proposes and
  * **someone else, holding the designated review role, decides**. Approval writes the registry
  * row through the same function the CLI uses.
  *
- * **Why an HTTP path at all (Q-020).** Keeping these in the CLI, as tenant creation is (Q-003),
+ * **Why an HTTP path at all.** Keeping these in the CLI, as tenant creation is,
  * would keep one hijacked operator session away from them — but it would also keep approval a
  * statement nobody verifies, and schemas and policies gain versions for as long as the system
  * runs, so the CLI would be a standing path, not a one-time seed. What limits a hijacked

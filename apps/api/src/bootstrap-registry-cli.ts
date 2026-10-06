@@ -106,7 +106,7 @@ try {
     //
     // **Accepting only a file makes it unusable in containers.** Deployments do not mount the
     // repository, so no rule set file exists there. Hence `POLICY_SET_JSON` too —
-    // in environments like Coolify, environment variables are all you can supply.
+    // on some deploy platforms, environment variables are all you can supply.
     const path = process.env["POLICY_SET_FILE"] ?? "";
     const inline = process.env["POLICY_SET_JSON"] ?? "";
     if (path === "" && inline === "") {

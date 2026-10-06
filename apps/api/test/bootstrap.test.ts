@@ -49,7 +49,7 @@ describeDb("production bootstrap", () => {
       jurisdiction: "MNG",
       subjectName: "First Operator",
       walletAddress: newWallet().address,
-      chainId: 97,
+      chainId: 31337,
       role: "mpc_operator",
       assuranceLevel: "high_assurance",
       ...overrides,
@@ -124,8 +124,9 @@ describeDb("production bootstrap", () => {
     ).rejects.toThrow(BootstrapError);
   });
 
-  it("rejects a non-BSC chain", async () => {
+  it("rejects a chain other than BSC mainnet and the local chain", async () => {
     await expect(bootstrapOperator(fx.sql, input({ chainId: 1 }))).rejects.toThrow(BootstrapError);
+    await expect(bootstrapOperator(fx.sql, input({ chainId: 97 }))).rejects.toThrow(BootstrapError);
   });
 
   it("rejects a wallet already bound to another tenant", async () => {

@@ -101,10 +101,10 @@ describe("switchChain — wallet without the chain", () => {
     const wallet = fakeWallet({ start: 1 });
     use(wallet.provider);
 
-    await switchChain(97);
+    await switchChain(31337);
 
     expect(wallet.calls).toContain("wallet_addEthereumChain");
-    expect(wallet.chain()).toBe(97);
+    expect(wallet.chain()).toBe(31337);
   });
 
   it("MetaMask mobile (4902 inside -32603) — offers to add", async () => {
@@ -138,7 +138,7 @@ describe("switchChain — wallet without the chain", () => {
     const wallet = fakeWallet({ start: 1, switchFailure: () => ({ code: 4001, message: "User rejected" }) });
     use(wallet.provider);
 
-    const failure = await switchChain(97).catch((caught: unknown) => caught);
+    const failure = await switchChain(31337).catch((caught: unknown) => caught);
 
     expect(failure).toBeInstanceOf(WalletError);
     expect((failure as WalletError).rejectedByUser).toBe(true);
@@ -152,19 +152,19 @@ describe("switchChain — wallet without the chain", () => {
     const wallet = fakeWallet({ start: 1, addSwitches: false });
     use(wallet.provider);
 
-    await switchChain(97);
+    await switchChain(31337);
 
     expect(wallet.calls.filter((method) => method === "wallet_switchEthereumChain")).toHaveLength(2);
-    expect(wallet.chain()).toBe(97);
+    expect(wallet.chain()).toBe(31337);
   });
 });
 
 describe("ensureChain", () => {
   it("does not request a switch when already aligned", async () => {
-    const wallet = fakeWallet({ start: 97 });
+    const wallet = fakeWallet({ start: 31337 });
     use(wallet.provider);
 
-    await expect(ensureChain(97)).resolves.toEqual({ before: 97, switched: false });
+    await expect(ensureChain(31337)).resolves.toEqual({ before: 31337, switched: false });
     expect(wallet.calls).not.toContain("wallet_switchEthereumChain");
   });
 

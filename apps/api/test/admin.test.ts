@@ -53,7 +53,7 @@ describeDb("platform administration", () => {
         id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
         ${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${second.address},
-        97, 'high_assurance', now()
+        31337, 'high_assurance', now()
       )
     `;
     await fx.sql`
@@ -203,7 +203,7 @@ describeDb("platform administration", () => {
         `/api/v1/admin/subjects/${fx.operatorSubjectA}/wallets`,
         {
           walletAddress: newAccount().address,
-          chainId: 97,
+          chainId: 31337,
           assuranceLevel: "high_assurance",
           justification: "attempt to take over another operator",
         },
@@ -241,7 +241,7 @@ describeDb("platform administration", () => {
       const bound = await post(
         operatorAToken,
         `/api/v1/admin/subjects/${subject.id}/wallets`,
-        { walletAddress: lost.address, chainId: 97, assuranceLevel: "identity_bound", justification: "recovery after a reported loss" },
+        { walletAddress: lost.address, chainId: 31337, assuranceLevel: "identity_bound", justification: "recovery after a reported loss" },
       );
       expect(bound.statusCode).toBe(200);
       expect(bound.json().locked).toBe(false);
@@ -296,7 +296,7 @@ describeDb("platform administration", () => {
       const rebound = await post(
         operatorAToken,
         `/api/v1/admin/subjects/${subject.id}/wallets`,
-        { walletAddress: replacement.address, chainId: 97, assuranceLevel: "identity_bound", justification: "recovery after a reported loss" },
+        { walletAddress: replacement.address, chainId: 31337, assuranceLevel: "identity_bound", justification: "recovery after a reported loss" },
       );
       expect(rebound.statusCode).toBe(200);
       expect(rebound.json().locked).toBe(false);
@@ -313,7 +313,7 @@ describeDb("platform administration", () => {
       const bound = (
         await post(operatorAToken, `/api/v1/admin/subjects/${subject.id}/wallets`, {
           walletAddress: key.address,
-          chainId: 97,
+          chainId: 31337,
           assuranceLevel: "wallet_only",
           justification: "test binding",
         })
@@ -344,7 +344,7 @@ describeDb("platform administration", () => {
       const bound = (
         await post(operatorAToken, `/api/v1/admin/subjects/${subject.id}/wallets`, {
           walletAddress: key.address,
-          chainId: 97,
+          chainId: 31337,
           assuranceLevel: "wallet_only",
           justification: "test binding",
         })
@@ -379,7 +379,7 @@ describeDb("platform administration", () => {
 
       await post(operatorAToken, `/api/v1/admin/subjects/${first.id}/wallets`, {
         walletAddress: key.address,
-        chainId: 97,
+        chainId: 31337,
         assuranceLevel: "wallet_only",
         justification: "test binding",
       });
@@ -387,7 +387,7 @@ describeDb("platform administration", () => {
       // Moving it would make the address's past signatures read as someone else's.
       const moved = await post(operatorAToken, `/api/v1/admin/subjects/${second.id}/wallets`, {
         walletAddress: key.address,
-        chainId: 97,
+        chainId: 31337,
         assuranceLevel: "wallet_only",
         justification: "test binding",
       });
@@ -398,7 +398,7 @@ describeDb("platform administration", () => {
   });
 
   /**
-   * Q-032 — the operator chooses the assurance level and says why.
+   * The operator chooses the assurance level and says why.
    *
    * A fixed level left reviewer, gate approver, and issuance roles below their minimum on any
    * wallet bound from the screen. Letting the operator choose widens what one person can grant,
@@ -413,7 +413,7 @@ describeDb("platform administration", () => {
       const target = await subject("justification target");
       const missing = await post(operatorAToken, `/api/v1/admin/subjects/${target.id}/wallets`, {
         walletAddress: newAccount().address,
-        chainId: 97,
+        chainId: 31337,
         assuranceLevel: "high_assurance",
       });
       expect(missing.statusCode).toBe(400);
@@ -422,7 +422,7 @@ describeDb("platform administration", () => {
 
       const blank = await post(operatorAToken, `/api/v1/admin/subjects/${target.id}/wallets`, {
         walletAddress: newAccount().address,
-        chainId: 97,
+        chainId: 31337,
         assuranceLevel: "high_assurance",
         justification: "   ",
       });
@@ -433,7 +433,7 @@ describeDb("platform administration", () => {
       const target = await subject("invalid level target");
       const response = await post(operatorAToken, `/api/v1/admin/subjects/${target.id}/wallets`, {
         walletAddress: newAccount().address,
-        chainId: 97,
+        chainId: 31337,
         assuranceLevel: "super_admin",
         justification: "not a real level",
       });
@@ -447,7 +447,7 @@ describeDb("platform administration", () => {
       const justification = "Passport checked in person on 2026-09-14";
       const bound = await post(operatorAToken, `/api/v1/admin/subjects/${target.id}/wallets`, {
         walletAddress: newAccount().address,
-        chainId: 97,
+        chainId: 31337,
         assuranceLevel: "high_assurance",
         justification,
       });
