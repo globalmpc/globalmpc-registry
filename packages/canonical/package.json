@@ -1,0 +1,17 @@
+{
+  "name": "@mpc/canonical",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Canonical serialization, leaf encoding, and Merkle commitment for MPC Registry anchoring.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.7.1"
+  }
+}

@@ -1,0 +1,301 @@
+{
+  "$description": "Stack-agnostic construction rules. What a project inherits when it adopts the MPC system, independent of framework.",
+  "groups": [
+    {
+      "id": "surface",
+      "title": {
+        "en": "Surfaces"
+      },
+      "note": {
+        "en": "Four depths, near-black and cool. Depth is carried by lightness alone — the site has no elevation shadows."
+      }
+    },
+    {
+      "id": "brand",
+      "title": {
+        "en": "Brand & interactive"
+      },
+      "note": {
+        "en": "Copper in its interface role: the accent a visitor can act on. Two near-identical values exist here for historical reasons — see the note on --primary."
+      }
+    },
+    {
+      "id": "support",
+      "title": {
+        "en": "Support pairs"
+      },
+      "note": {
+        "en": "Background/foreground pairs for secondary UI. Always used as a pair: a surface token without its -foreground partner is how contrast bugs start."
+      }
+    },
+    {
+      "id": "signal",
+      "title": {
+        "en": "Signal colours"
+      },
+      "note": {
+        "en": "Each carries a fixed meaning. Reaching for one because it looks right is the misuse this group exists to prevent."
+      }
+    },
+    {
+      "id": "line",
+      "title": {
+        "en": "Lines & inputs"
+      },
+      "note": {
+        "en": "White at low alpha rather than a solid grey, so a hairline reads consistently on all four surface depths without a per-surface variant."
+      }
+    },
+    {
+      "id": "geometry",
+      "title": {
+        "en": "Geometry"
+      },
+      "note": {
+        "en": "A deliberately tight radius scale. The largest value is 10px: the visual language is drawn with rules and hairlines, and rounded corners work against it."
+      }
+    },
+    {
+      "id": "type",
+      "title": {
+        "en": "Type stacks"
+      },
+      "note": {
+        "en": "Self-hosted via @fontsource — there is no fonts.googleapis.com request. The fallbacks matter: they are what renders before the webfont resolves."
+      }
+    }
+  ],
+  "layers": [
+    {
+      "id": "shell",
+      "title": {
+        "en": "Shells"
+      },
+      "rule": {
+        "en": "Own the LocaleProvider, the Nav/Footer frame, and section order. A route file should render a shell and nothing else."
+      }
+    },
+    {
+      "id": "chrome",
+      "title": {
+        "en": "Chrome"
+      },
+      "rule": {
+        "en": "Rendered by every shell. Links come from one navigation registry, never from a local list."
+      }
+    },
+    {
+      "id": "section",
+      "title": {
+        "en": "Sections"
+      },
+      "rule": {
+        "en": "One argument each, opened by a `.label-eyebrow`. Carry `py-24 lg:py-32` and a hairline; do not set a custom container."
+      }
+    },
+    {
+      "id": "figure",
+      "title": {
+        "en": "Figures"
+      },
+      "rule": {
+        "en": "SVG and CSS only — no charting dependency. Must collapse to a readable static diagram under reduced motion."
+      }
+    },
+    {
+      "id": "overlay",
+      "title": {
+        "en": "Overlays"
+      },
+      "rule": {
+        "en": "Exactly one may be visible at a time, and each declares how it yields to the others."
+      }
+    },
+    {
+      "id": "behaviour",
+      "title": {
+        "en": "Behaviours"
+      },
+      "rule": {
+        "en": "Wrap content, never replace it. SSR emits the final state so nothing depends on client JS to become visible."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "rule": {
+        "en": "Author colour as a token, never as a literal — with one exception below."
+      },
+      "why": {
+        "en": "The published brand kit is derived from `styles.css`. A literal in a component is invisible to that pipeline and cannot be handed to a partner."
+      }
+    },
+    {
+      "rule": {
+        "en": "The exception: the whitepaper viewer (`.wp-*`) fixes its colours on purpose."
+      },
+      "why": {
+        "en": "It renders paper. A white A4 sheet that followed the dark theme would stop being a document."
+      }
+    },
+    {
+      "rule": {
+        "en": "Every animated utility must have a `prefers-reduced-motion` opt-out, and SSR must render the final state."
+      },
+      "why": {
+        "en": "Content that only appears after client JS is invisible to crawlers and to anyone with motion disabled. Reveal and CountUp both ship the finished value from the server."
+      }
+    },
+    {
+      "rule": {
+        "en": "Section rhythm is fixed: `py-24 lg:py-32`, separated by a hairline."
+      },
+      "why": {
+        "en": "The home page is one continuous argument. Varying the spacing per section reads as unrelated pages stacked together."
+      }
+    },
+    {
+      "rule": {
+        "en": "Content width is `max-w-7xl px-6 lg:px-10`. Nothing sets its own container."
+      },
+      "why": {
+        "en": "A single measure is what makes the hairlines line up across sections that were written months apart."
+      }
+    }
+  ],
+  "utilities": [
+    {
+      "className": "font-display",
+      "use": {
+        "en": "Display face plus the -0.02em tracking it is designed with. Use this, not `font-family` alone."
+      },
+      "animated": false
+    },
+    {
+      "className": "font-mono",
+      "use": {
+        "en": "Mono face for data and labels."
+      },
+      "animated": false
+    },
+    {
+      "className": "label-eyebrow",
+      "use": {
+        "en": "The eyebrow label: 11px mono, 0.18em tracking, uppercase, copper. Every section opens with one."
+      },
+      "animated": false
+    },
+    {
+      "className": "text-balance",
+      "use": {
+        "en": "Balanced line breaks for headlines. Not for paragraphs."
+      },
+      "animated": false
+    },
+    {
+      "className": "hairline-t",
+      "use": {
+        "en": "Top divider at --border. The standard way sections separate."
+      },
+      "animated": false
+    },
+    {
+      "className": "hairline-b",
+      "use": {
+        "en": "Bottom divider at --border."
+      },
+      "animated": false
+    },
+    {
+      "className": "grid-lines",
+      "use": {
+        "en": "Static 80px measuring grid. Structural texture, not decoration."
+      },
+      "animated": false
+    },
+    {
+      "className": "copper-gradient",
+      "use": {
+        "en": "Copper-to-gold gradient clipped to text. Static counterpart to .copper-shimmer."
+      },
+      "animated": false
+    },
+    {
+      "className": "glow-copper",
+      "use": {
+        "en": "Wide, low-opacity copper glow behind a focal element."
+      },
+      "animated": false
+    },
+    {
+      "className": "reveal",
+      "use": {
+        "en": "Scroll reveal. Pair with the Reveal component — the raw class stays invisible until .is-visible is added."
+      },
+      "animated": true
+    },
+    {
+      "className": "is-visible",
+      "use": {
+        "en": "Applied by the Reveal observer. Never author this in JSX. Reduced-motion neutralises it through .reveal rather than by name."
+      },
+      "animated": false
+    },
+    {
+      "className": "grid-pan",
+      "use": {
+        "en": "The measuring grid, panning slowly. Backgrounds only."
+      },
+      "animated": true
+    },
+    {
+      "className": "copper-shimmer",
+      "use": {
+        "en": "Light travelling across a copper headline. One per page — it is the hero's device."
+      },
+      "animated": true
+    },
+    {
+      "className": "aurora",
+      "use": {
+        "en": "Drifting blurred colour field for ambient depth. Absolutely positioned, pointer-events: none."
+      },
+      "animated": true
+    },
+    {
+      "className": "flow-dash",
+      "use": {
+        "en": "Travelling dashes along an SVG path — flow direction in the pipeline diagram."
+      },
+      "animated": true
+    },
+    {
+      "className": "flow-particle",
+      "use": {
+        "en": "A particle riding an SVG path via offset-distance."
+      },
+      "animated": true
+    },
+    {
+      "className": "flow-rail",
+      "use": {
+        "en": "Sweep travelling across a horizontal rail."
+      },
+      "animated": true
+    },
+    {
+      "className": "node-pulse",
+      "use": {
+        "en": "Pulsing node in a diagram. Marks an active stage."
+      },
+      "animated": true
+    },
+    {
+      "className": "live-dot",
+      "use": {
+        "en": "Expanding ring in --positive. Reserved for genuinely live state."
+      },
+      "animated": true
+    }
+  ]
+}

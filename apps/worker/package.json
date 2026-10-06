@@ -1,0 +1,24 @@
+{
+  "name": "@mpc/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Outbox publisher and background reconciliation for the MPC dApp.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "start:anchor": "tsx src/anchor-main.ts",
+    "start:scan": "tsx src/scan-main.ts"
+  },
+  "dependencies": {
+    "@mpc/db": "workspace:*",
+    "postgres": "^3.4.5",
+    "viem": "^2.21.0",
+    "@mpc/config": "workspace:*",
+    "@mpc/storage": "workspace:*"
+  }
+}

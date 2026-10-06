@@ -1,0 +1,4 @@
+{
+  "$description": "Fixture: a $type this system does not support.",
+  "spacing": { "gap": { "$value": "8px", "$type": "spacing" } }
+}
