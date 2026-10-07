@@ -19,4 +19,6 @@ overrides:
   # GHSA-qw65-cvwx-89v3 · GHSA-58mr-gqgx-xq4g.
   "fast-uri@^3.0.0": 3.1.8
   "fast-uri@^4.0.0": 4.1.5
+  # next → postcss pins source-map-js 1.2.1 — GHSA-68fv-2mgg-jv7q (indexed source-map DoS).
+  source-map-js: 1.2.2
 
