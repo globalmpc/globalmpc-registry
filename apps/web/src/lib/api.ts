@@ -396,8 +396,17 @@ export async function listUploads(
  *
  * Larger files go as multipart. base64 inflates the body by 33% and the server loads it
  * entirely into memory — simple for small files, unusable for large ones.
+ *
+ * **The number is set by the API's body limit, not by taste.** The API runs on Fastify's
+ * default 1 MiB limit, and a body over it is refused before the route is reached: the error
+ * handler finds no `AppError` and answers 500 with no usable reason. At 512 KiB the encoded
+ * body is about 700 KiB, which leaves room for the rest of the JSON.
+ *
+ * This used to be 4 MiB, so every file from roughly 0.8 MiB up — which is most phone photos —
+ * failed with that 500. Anything above this cutoff streams as multipart, and multipart carries
+ * its own cap (`MAX_STREAM_BYTES`) instead of the body limit.
  */
-const BASE64_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+export const BASE64_UPLOAD_LIMIT_BYTES = 512 * 1024;
 
 /**
  * File upload.

@@ -32,15 +32,15 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 
 | App | Contents | Tests |
 |---|---|---|
-| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 112 routes | 845 |
-| `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 22 · E2E 97 |
-| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 154 |
+| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 108 routes | 780 |
+| `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 24 · E2E 97 |
+| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 149 |
 
 **Contracts**
 
 `contracts/` — `RegistryAnchorV1` + 10 deferred interfaces, 33 Foundry tests (including fuzz and invariant).
 
-Total: vitest 1647 + Playwright 97 + Foundry 33 + route 112. (measured 2026-10-01)
+Total: vitest 1536 + Playwright 97 + Foundry 33 + route 108. (measured 2026-09-30)
 
 ## Running
 

@@ -27,6 +27,25 @@ const ONE_PIXEL_PNG = Buffer.from(
   "base64",
 );
 
+/**
+ * The size of a real phone photo.
+ *
+ * A photo this size does not fit the base64 path: base64 inflates it by a third and the API
+ * refuses a body over 1 MiB before the route sees it, which reaches the phone as a bare 500. It
+ * has to go out as multipart instead, so this is the size the test uploads.
+ */
+const PHONE_PHOTO_BYTES = 2 * 1024 * 1024;
+
+/** Bytes no other upload will have, so the content hash cannot collide with an earlier one. */
+function photoBytes(seed: string): Buffer {
+  const buffer = Buffer.alloc(PHONE_PHOTO_BYTES);
+  buffer.write(seed);
+  for (let index = seed.length; index < buffer.length; index += 1) {
+    buffer[index] = (index * 31 + seed.length) % 256;
+  }
+  return buffer;
+}
+
 test.describe("field uploads on a phone", () => {
   test.setTimeout(120_000);
 
@@ -68,6 +87,19 @@ test.describe("field uploads on a phone", () => {
     // A photo is not evidence on arrival either — it waits for the scan like any file.
     await expect(states.nth(0)).toHaveText("quarantined");
     await expect(states.nth(1)).toHaveText("quarantined");
+    await expectNoSidewaysScroll(page);
+
+    // A photo off a phone camera, at the size a phone camera produces. Anything this large
+    // leaves the base64 path, so this is what proves the field case actually works.
+    await page.getByTestId("upload-photo-input").setInputFiles({
+      name: "adit-portal.jpg",
+      mimeType: "image/jpeg",
+      buffer: photoBytes(`adit portal ${projectKey}`),
+    });
+    await expect(states).toHaveCount(3);
+    await expect(states.nth(2)).toHaveText("quarantined");
+    // Every byte arrived. A truncated file would store as evidence with different content.
+    await expect(page.getByText(`${PHONE_PHOTO_BYTES / 1024} KB`)).toBeVisible();
     await expectNoSidewaysScroll(page);
 
     await page.locator('[data-testid^="relations-"]').first().click();
