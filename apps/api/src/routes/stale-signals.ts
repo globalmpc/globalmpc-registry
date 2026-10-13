@@ -216,7 +216,7 @@ export async function registerStaleSignalRoutes(
           resourceType: "evidence_stale_signal",
           resourceId: current.id,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
           reason: parsed.data.note,
           detail: {
             resolution: parsed.data.resolution,

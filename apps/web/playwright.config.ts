@@ -22,6 +22,7 @@ const DEMO_ACCOUNT_LABELS = [
   "Proposer A",
   "Voter A",
   "Scan Service",
+  "Publisher A",
 ] as const;
 
 const DEMO_ACCOUNT_KEYS =

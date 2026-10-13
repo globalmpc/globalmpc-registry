@@ -11,7 +11,8 @@
  * via the header) cannot be caught here, since the forged address is also public. That is left
  * to the ops procedure that checks the real proxy hop count after deployment.
  */
-import { parseCidr, matchesCidr, type CidrRange } from "./ip.js";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { ipToBytes, parseCidr, matchesCidr, type CidrRange } from "./ip.js";
 
 const IPV4_MAPPED_PREFIX = "::ffff:";
 
@@ -100,4 +101,62 @@ export function createProxyTrust(
 
   return (address, hop) =>
     hop < hops && ranges.some((range) => matchesCidr(address, range));
+}
+
+/** Header the web proxy fills with the shared secret. */
+export const EDGE_SECRET_HEADER = "x-mpc-edge-secret";
+/** Header the web proxy fills with the visitor address it saw. */
+export const EDGE_CLIENT_IP_HEADER = "x-mpc-client-ip";
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/** Equal length is not given; compare digests so length says nothing about the secret. */
+function secretMatches(expected: string, given: string): boolean {
+  const a = createHash("sha256").update(expected).digest();
+  const b = createHash("sha256").update(given).digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * The requester address when the web app runs behind a CDN (`EDGE_PROXY_SECRET`).
+ *
+ * `createProxyTrust` wants the immediate peer inside a known range, and a CDN egress is not.
+ * So `x-forwarded-for` from it is rightly ignored — but then every visitor is the CDN and the
+ * unauthenticated-path cap is shared by the whole site. The web proxy therefore attaches the
+ * address **it** saw together with a secret only it knows. The address is used when, and only
+ * when, the secret matches and the value is a syntactically valid IP; otherwise the socket-side
+ * decision (`fallback`, i.e. `request.ip`) stands.
+ *
+ * Without a configured secret the headers are ignored entirely — a requester who sends them
+ * gets exactly what it would get without them.
+ */
+export function createEdgeClientResolver(
+  secret: string | null,
+): (headers: Record<string, string | string[] | undefined>, fallback: string) => string {
+  if (secret === null) return (_headers, fallback) => fallback;
+
+  return (headers, fallback) => {
+    const given = firstHeader(headers[EDGE_SECRET_HEADER]);
+    if (!given || !secretMatches(secret, given)) return fallback;
+
+    const address = firstHeader(headers[EDGE_CLIENT_IP_HEADER])?.trim();
+    if (!address || ipToBytes(address) === null) return fallback;
+    return address;
+  };
+}
+
+/**
+ * Whether a peer may read the ops endpoints (`/health/*`, `/metrics`).
+ *
+ * The check is on the **socket** address, never a forwarded header — a forwarded value is
+ * whatever the requester wrote. An empty range list admits nobody.
+ */
+export function createOpsEndpointGuard(cidrs: readonly string[]): (peer: string | undefined) => boolean {
+  const ranges = cidrs
+    .map((entry) => parseCidr(entry))
+    .filter((range): range is CidrRange => range !== null);
+
+  return (peer) => peer !== undefined && ranges.some((range) => matchesCidr(peer, range));
 }

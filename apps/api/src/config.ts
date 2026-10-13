@@ -19,6 +19,7 @@ const SECRET_VARIABLES = [
   "DATABASE_URL",
   "SESSION_SECRET",
   "OBJECT_SECRET_ACCESS_KEY",
+  "EDGE_PROXY_SECRET",
 ] as const;
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
@@ -115,6 +116,31 @@ const schema = z.object({
     .default("127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7"),
 
   /**
+   * Edge proxy path — the web app runs on a CDN whose egress addresses are not fixed.
+   *
+   * `TRUSTED_PROXY_CIDRS` cannot name such a peer, so `x-forwarded-for` from it is never trusted
+   * and every visitor would share one requester address. Instead the web proxy attaches this
+   * shared secret and the visitor address it saw, and the API takes that address only when the
+   * secret matches. Unset means the path is closed: the headers are ignored.
+   */
+  EDGE_PROXY_SECRET: z.string().min(32).optional(),
+  /**
+   * Web origin allowed to call the streaming upload route directly, bypassing the edge proxy
+   * (a proxied request there is cut by the CDN's proxy time cap before a large upload ends).
+   * Exactly one origin; unset means no cross-origin access at all.
+   */
+  EDGE_WEB_ORIGIN: z.string().url().optional(),
+  /**
+   * Peer ranges that may read `/health/*` and `/metrics`. Those endpoints carry no auth; when
+   * the API host itself is reachable from the internet they must not be. Peers outside these
+   * ranges get the same 404 as an unknown path. The default is the private ranges — the
+   * orchestrator and the collector sit on the container network.
+   */
+  OPS_ENDPOINT_CIDRS: z
+    .string()
+    .default("127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7"),
+
+  /**
    * Object storage — OD-22.
    *
    * `memory` is lost when the process dies. Choosing it in production loses evidence originals
@@ -197,6 +223,12 @@ export interface AppConfig {
   readonly trustedProxyHops: number;
   /** Trust the header only when that hop is within these ranges. Empty means trust nobody. */
   readonly trustedProxyCidrs: readonly string[];
+  /** Shared secret the web proxy attaches. `null` closes the edge path. */
+  readonly edgeProxySecret: string | null;
+  /** The one origin allowed to call the streaming upload route cross-origin. */
+  readonly edgeWebOrigin: string | null;
+  /** Peer ranges allowed on `/health/*` and `/metrics`. Others get 404. */
+  readonly opsEndpointCidrs: readonly string[];
   /** Total request time cap (ms). Cannot be 0 — the schema requires a positive value. */
   readonly requestTimeoutMs: number;
   /** Socket idle cap (ms). Refreshed during transfer, so it does not cut large uploads. */
@@ -316,6 +348,12 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
     authRateLimitMax: value.AUTH_RATE_LIMIT_MAX,
     trustedProxyHops: value.TRUSTED_PROXY_HOPS,
     trustedProxyCidrs: value.TRUSTED_PROXY_CIDRS.split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+    edgeProxySecret: value.EDGE_PROXY_SECRET ?? null,
+    // A trailing slash would never equal a browser `Origin` header; normalize once here.
+    edgeWebOrigin: value.EDGE_WEB_ORIGIN ? new URL(value.EDGE_WEB_ORIGIN).origin : null,
+    opsEndpointCidrs: value.OPS_ENDPOINT_CIDRS.split(",")
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0),
     requestTimeoutMs: value.REQUEST_TIMEOUT_MS,

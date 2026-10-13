@@ -116,6 +116,39 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("edge proxy path", () => {
+    it("is closed unless a secret is given", () => {
+      const config = loadConfig(VALID);
+      expect(config.edgeProxySecret).toBeNull();
+      expect(config.edgeWebOrigin).toBeNull();
+    });
+
+    it("refuses a short secret — a guessable value would let anyone name its own address", () => {
+      expect(() => loadConfig({ ...VALID, EDGE_PROXY_SECRET: "short" })).toThrowError(
+        /EDGE_PROXY_SECRET/,
+      );
+      expect(loadConfig({ ...VALID, EDGE_PROXY_SECRET: "x".repeat(32) }).edgeProxySecret).toBe(
+        "x".repeat(32),
+      );
+    });
+
+    it("normalizes the web origin to what a browser sends in Origin", () => {
+      expect(
+        loadConfig({ ...VALID, EDGE_WEB_ORIGIN: "https://registry.example/" }).edgeWebOrigin,
+      ).toBe("https://registry.example");
+      expect(() => loadConfig({ ...VALID, EDGE_WEB_ORIGIN: "registry.example" })).toThrowError(
+        /EDGE_WEB_ORIGIN/,
+      );
+    });
+
+    it("defaults the ops endpoint peers to the private ranges and accepts an explicit list", () => {
+      expect(loadConfig(VALID).opsEndpointCidrs).toContain("10.0.0.0/8");
+      expect(loadConfig({ ...VALID, OPS_ENDPOINT_CIDRS: " 10.1.0.0/16 ,, " }).opsEndpointCidrs).toEqual([
+        "10.1.0.0/16",
+      ]);
+    });
+  });
+
   describe("TRUSTED_PROXY_HOPS", () => {
     it("defaults to 1 — assumes one reverse proxy in front", () => {
       expect(loadConfig(VALID).trustedProxyHops).toBe(1);

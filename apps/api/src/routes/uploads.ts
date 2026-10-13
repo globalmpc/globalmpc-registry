@@ -397,7 +397,7 @@ export async function registerUploadRoutes(
             resourceType: "object_upload",
             resourceId: uploadId,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             // File names are not recorded. The audit log would become a channel for restricted data.
             detail: {
               byteSize: bytes.byteLength,
@@ -512,7 +512,7 @@ export async function registerUploadRoutes(
             resourceType: "object_upload",
             resourceId: uploadId,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             // File names are not recorded. The audit log would become a channel for restricted data.
             detail: { byteSize: stored.byteSize, contentType: stored.contentType, via: "multipart" },
           });
@@ -585,7 +585,7 @@ export async function registerUploadRoutes(
             beforeVersion: row.version,
             afterVersion: row.version + 1,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           return { ...toView(updated!), requestId, asOf };
@@ -669,7 +669,7 @@ export async function registerUploadRoutes(
             beforeVersion: row.version,
             afterVersion: row.version + 1,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { artifactId },
           });
 
@@ -753,7 +753,7 @@ export async function registerUploadRoutes(
             resourceType: "object_upload",
             resourceId: row.id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           return {

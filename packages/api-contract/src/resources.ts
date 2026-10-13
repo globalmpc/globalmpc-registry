@@ -698,6 +698,51 @@ export const jurisdictionProfileView = z.object({
 });
 
 /**
+ * Execution Record — 09 §9.7.
+ *
+ * Who executed, under what authority, what was executed, and the evidence. The evidence is
+ * referenced by location and hash — signed contracts are confidential, and the hash pins which
+ * document was meant.
+ */
+export const recordExecutionRequest = z.object({
+  /** The state the proposal moves to. A failed or disputed execution needs evidence too. */
+  outcome: z.enum(["executed", "failed", "disputed"]),
+  executor: z.string().trim().min(1, "Who executed it cannot be empty"),
+  authority: z.string().trim().min(1, "The authority for the execution cannot be empty"),
+  executedAction: z.string().trim().min(1, "What was executed cannot be empty"),
+  contractReference: z.string().trim().min(1).nullable().default(null),
+  contractHash: hex32.nullable().default(null),
+  externalReference: z.string().trim().min(1).nullable().default(null),
+  effectiveDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Effective date must be YYYY-MM-DD")
+    .nullable()
+    .default(null),
+  evidenceReference: z.string().trim().min(1, "The evidence reference cannot be empty"),
+  evidenceHash: hex32,
+  /** What this record does not establish. Same rule as attestations (AC-01). */
+  limitations: z.array(z.string().trim().min(1)).min(1, "State at least one limitation"),
+});
+
+export const executionRecord = z.object({
+  id: z.string(),
+  fromState: z.string(),
+  outcome: z.enum(["executed", "failed", "disputed"]),
+  recorderSubjectId: z.string(),
+  executor: z.string(),
+  authority: z.string(),
+  executedAction: z.string(),
+  contractReference: z.string().nullable(),
+  contractHash: z.string().nullable(),
+  externalReference: z.string().nullable(),
+  effectiveDate: z.string().nullable(),
+  evidenceReference: z.string(),
+  evidenceHash: z.string(),
+  limitations: z.array(z.string()),
+  recordedAt: isoDateTime,
+});
+
+/**
  * Governance proposal — 04 §4.5, OD-06.
  *
  * Includes the quorum and pass threshold in the response. Values are fixed at
@@ -763,6 +808,25 @@ export const governanceProposal = z.object({
    * on-chain evidence.
    */
   eligibleWeightSource: z.enum(["onchain_total_supply", "manual"]).nullable(),
+  /**
+   * Conflict-of-interest disclosure — 09 §9.4, REQ-DAPP-022. Fixed at creation.
+   *
+   * Null only for proposals created before the field existed.
+   */
+  conflictDisclosure: z.string().nullable(),
+  /** How a pass takes effect — 09 §9.4. Null only for proposals created before the field. */
+  executionMode: z.enum(["record_only", "onchain_bounded", "offchain_required"]).nullable(),
+  /**
+   * Off-chain execution — 09 §9.7, REQ-DAPP-020.
+   *
+   * **Separate from the tally.** The vote result says what was decided; this says what was
+   * done about it and on what evidence. `state` is null until the proposal reaches
+   * `execution_pending`.
+   */
+  execution: z.object({
+    state: z.enum(["execution_pending", "executed", "failed", "disputed"]).nullable(),
+    records: z.array(executionRecord),
+  }),
   /** What this proposal cannot create. A vote does not create off-chain facts. */
   limitations: z.array(z.string()),
 });
@@ -788,6 +852,16 @@ export const createProposalRequest = z.object({
     .regex(/^[1-9]\d*$/, "The quorum denominator must be an integer string of 1 or more")
     .nullable()
     .default(null),
+  /**
+   * Conflict-of-interest disclosure — 09 §9.4, REQ-DAPP-022.
+   *
+   * Required. "No conflict known to the proposer" is itself a statement the proposer answers
+   * for, so it is written out rather than left empty. Only the disclosure is recorded — which
+   * conflicts block a vote is undecided (OD-10 to OD-12).
+   */
+  conflictDisclosure: z.string().trim().min(1, "The conflict-of-interest disclosure cannot be empty"),
+  /** How a pass takes effect — 09 §9.4. Fixed at creation so voters know before voting. */
+  executionMode: z.enum(["record_only", "onchain_bounded", "offchain_required"]),
 });
 
 export const castVoteRequest = z.object({
@@ -1018,6 +1092,12 @@ export const publicProposal = z
       abstain: z.string(),
       voterCount: z.number().int().nonnegative(),
     }),
+    /**
+     * Conflict-of-interest disclosure and execution mode — 09 §9.4 lists "public disclosure"
+     * among the proposal fields. Null only for proposals created before the fields existed.
+     */
+    conflictDisclosure: z.string().nullable(),
+    executionMode: z.enum(["record_only", "onchain_bounded", "offchain_required"]).nullable(),
   })
   .strict();
 
@@ -1026,6 +1106,56 @@ export const publicProposalList = z.object({
   nextCursor: z.string().nullable(),
   sort: z.literal("createdAt:desc,id:desc"),
 });
+
+/**
+ * Centralization disclosure — 09 §9.11, 11 §11.3, REQ-DAPP-023.
+ *
+ * **Current authority** is read from what this service holds: active role bindings and the
+ * anchor contract and Safe addresses its own chain records name. Holders are counted, never
+ * named — a count says how concentrated a power is without publishing who the people are.
+ *
+ * **Target state** is the stage list of 09 §9.11 as written. The criteria for moving between
+ * stages have no decided values (OD-10 to OD-12), so none are shown as if they did.
+ */
+export const governanceCentralization = z
+  .object({
+    currentStage: z.string(),
+    stages: z.array(
+      z.object({
+        stage: z.string(),
+        description: z.string(),
+        delegates: z.array(z.string()),
+        current: z.boolean(),
+      }),
+    ),
+    transitionCriteria: z.object({
+      candidates: z.array(z.string()),
+      decided: z.literal(false),
+      note: z.string(),
+    }),
+    /** Powers not yet delegated to governance at the current stage. */
+    centralizedPowers: z.array(z.string()),
+    governanceRoles: z.array(
+      z.object({
+        role: z.string(),
+        power: z.string(),
+        activeHolders: z.number().int().nonnegative(),
+      }),
+    ),
+    anchor: z.object({
+      contracts: z.array(
+        z.object({
+          chainId: z.number().int(),
+          contractAddress: z.string(),
+          /** Safe addresses this service sent anchor proposals to. Empty if none were sent. */
+          safeAddresses: z.array(z.string()),
+        }),
+      ),
+      note: z.string(),
+    }),
+    limitations: z.array(z.string()),
+  })
+  .strict();
 
 /** One proposal and its transition history. By state alone, no quorum and cancellation look the same. */
 export const publicProposalDetail = publicProposal.extend({
@@ -1490,6 +1620,95 @@ export const proposeJurisdictionProfileRequest = z.object({
 export const decideRegistryProposalRequest = z.object({
   decision: z.enum(["approve", "reject"]),
   reason: nonBlank(1000),
+});
+
+// --- Registry publication drafts (02 §2.8, 05 §5.9, 07 §7.2) -----------------------
+
+/**
+ * The person-identifier safeguards as a record — 05 §5.9, AC-32.
+ *
+ * Each one is written down with who drafted it and when, not asserted as a boolean. The explicit
+ * publication approval is not here: it is the approver's own act at publication.
+ */
+export const personIdentifierRecord = z
+  .object({
+    lawfulBasis: nonBlank(2000),
+    purpose: nonBlank(2000),
+    retention: nonBlank(1000),
+    irreversibilityAcknowledged: z.literal(true),
+  })
+  .strict();
+
+/**
+ * Draft a registry version. Nothing is public until another person publishes it.
+ *
+ * **What the server derives is not accepted from the body.** The commercial-reuse status comes
+ * from the source receipts, the lifecycle from the subject, and the snapshot hash is computed —
+ * `sourceSnapshotHash` may be sent only to assert "this is what I reviewed", and a different
+ * value is rejected. `.strict()` turns a leftover `commercialReuse` or safeguard boolean into a
+ * visible 400 rather than a silently ignored claim.
+ */
+export const createRegistryDraftRequest = z
+  .object({
+    registryType: z.enum(["project", "verification", "asset"]),
+    subjectId: z.string().uuid(),
+    publicKey: z.string().min(1).max(200),
+    projection: z.record(z.unknown()),
+    sourceSnapshotHash: hex32.optional(),
+    policyVersion: z.string().min(1).max(100),
+    schemaVersion: z.string().min(1).max(100),
+    containsPersonLevelIdentifier: z.boolean().default(false),
+    personIdentifierRecord: personIdentifierRecord.optional(),
+    /** Whether this publication is meant as grounds for a commercial offering (AC-13). */
+    publishedAsCommercialBasis: z.boolean().default(false),
+  })
+  .strict();
+
+/** Publish a draft. The publisher acknowledges irreversibility themselves (05 §5.9). */
+export const publishRegistryDraftRequest = z
+  .object({
+    irreversibilityAcknowledged: z.literal(true),
+    /** Required when the draft contains person-level identifiers — the explicit approval. */
+    personIdentifierPublicationApproved: z.boolean().default(false),
+  })
+  .strict();
+
+export const rejectRegistryDraftRequest = z.object({ reason: nonBlank(1000) }).strict();
+
+export const registryDraftListQuery = z.object({
+  subjectId: z.string().uuid().optional(),
+  state: z.enum(["pending", "published", "rejected"]).optional(),
+});
+
+export const registryPublicationDraft = z.object({
+  id: z.string(),
+  registryType: z.enum(["project", "verification"]),
+  subjectId: z.string(),
+  publicKey: z.string(),
+  projection: z.record(z.unknown()),
+  sourceSnapshotHash: hex32,
+  commercialReuse: z.enum(["confirmed", "unconfirmed", "prohibited"]),
+  publishedAsCommercialBasis: z.boolean(),
+  policyVersion: z.string(),
+  schemaVersion: z.string(),
+  containsPersonLevelIdentifier: z.boolean(),
+  personIdentifierRecord: z
+    .object({
+      lawfulBasis: z.string(),
+      purpose: z.string(),
+      retention: z.string(),
+      irreversibilityAcknowledgedAt: isoDateTime,
+    })
+    .nullable(),
+  proposedBySubjectId: z.string(),
+  proposedAt: isoDateTime,
+  state: z.enum(["pending", "published", "rejected"]),
+  decidedBySubjectId: z.string().nullable(),
+  decidedAt: isoDateTime.nullable(),
+  decisionReason: z.string().nullable(),
+  /** The version publication created. Null until published. */
+  entryVersionId: z.string().nullable(),
+  version: z.number().int().positive(),
 });
 
 // --- Workspace aggregates ---------------------------------------

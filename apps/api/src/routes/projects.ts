@@ -117,7 +117,7 @@ export async function registerProjectRoutes(
           resourceId: id,
           afterVersion: 1,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
         });
 
         await enqueueEvent(tx, {

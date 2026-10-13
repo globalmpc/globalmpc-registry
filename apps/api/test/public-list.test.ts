@@ -5,6 +5,7 @@ import { PUBLIC_FIELD_ALLOWLIST } from "@mpc/domain";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from "./helpers/db.js";
+import { insertProject, publishProject } from "./helpers/registry.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -19,39 +20,27 @@ describeDb("public Registry list and search", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let token: string;
+  let approverToken: string;
   /** publicKey of entries this file creates. Prefixed to avoid mixing with other files' records. */
   const prefix = `LIST-${randomUUID().slice(0, 8)}`;
 
-  function projection(overrides: Record<string, unknown> = {}) {
-    return {
-      stableId: randomUUID(),
-      status: "registered",
-      version: "1",
-      asOf: "2026-08-01T00:00:00.000Z",
-      sourceAge: "12",
-      staleStatus: "fresh",
-      limitations: ["Legal title verification is outside this review's scope"],
-      legalEffect: "none",
-      disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
-      ...overrides,
-    };
-  }
-
-  async function publish(publicKey: string, overrides: Record<string, unknown> = {}) {
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/registry-entries",
-      headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
-      payload: {
-        registryType: "project",
-        subjectId: fx.projectA,
-        publicKey,
-        projection: projection(overrides),
-        sourceSnapshotHash: `0x${"11".repeat(32)}`,
-        policyVersion: "mn-core-1.0.0",
-        schemaVersion: "project-registry-1",
-      },
-    });
+  /** Identity fields come from the project, so the fixture project carries them. */
+  async function publish(
+    publicKey: string,
+    fields: { projectName?: string; hostCountry?: string; mineral?: string[] } = {},
+  ) {
+    const projectId = await insertProject(
+      fx.sql,
+      { tenantId: fx.tenantA, organizationId: fx.orgA },
+      publicKey,
+      { name: fields.projectName, hostCountryIso3: fields.hostCountry, minerals: fields.mineral },
+    );
+    const response = await publishProject(
+      app,
+      fx.sql,
+      { drafter: token, publisher: approverToken },
+      projectId,
+    );
     expect(response.statusCode).toBe(200);
     return response.json();
   }
@@ -68,6 +57,7 @@ describeDb("public Registry list and search", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     token = await signIn(app, fx.operatorA);
+    approverToken = await signIn(app, fx.disclosureApproverA);
 
     // Pagination needs a deterministic order. Publishes run serially.
     await publish(`${prefix}-A`, { projectName: "Altan Ridge", hostCountry: "MN" });

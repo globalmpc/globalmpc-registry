@@ -5,13 +5,14 @@ import { verifyMerkleProof, type Hex } from "@mpc/canonical";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from "./helpers/db.js";
+import { draftRegistryEntry, projectProjection, publishDraft } from "./helpers/registry.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 describeDb("Registry publication and public lookup", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
-  let tokens: { operatorA: string; stewardA: string };
+  let tokens: { operatorA: string; stewardA: string; disclosureApproverA: string };
 
   beforeAll(async () => {
     fx = await setupFixture();
@@ -21,6 +22,7 @@ describeDb("Registry publication and public lookup", () => {
     tokens = {
       operatorA: await signIn(app, fx.operatorA),
       stewardA: await signIn(app, fx.stewardA),
+      disclosureApproverA: await signIn(app, fx.disclosureApproverA),
     };
   });
 
@@ -44,22 +46,50 @@ describeDb("Registry publication and public lookup", () => {
     };
   }
 
-  function publish(wallet: string, overrides: Record<string, unknown> = {}) {
-    return app.inject({
-      method: "POST",
-      url: "/api/v1/registry-entries",
-      headers: { authorization: `Bearer ${wallet}`, "idempotency-key": idempotencyKey() },
-      payload: {
-        registryType: "project",
-        subjectId: fx.projectA,
-        publicKey: `KEY-${randomUUID().slice(0, 8)}`,
-        projection: validProjection(),
-        sourceSnapshotHash: `0x${"11".repeat(32)}`,
-        policyVersion: "mn-core-1.0.0",
-        schemaVersion: "project-registry-1",
-        ...overrides,
-      },
+  /**
+   * The Project Registry key is the project's key, so a test that names a key gets a project
+   * with that key — naming the same key twice publishes two versions of one entry.
+   */
+  const projectsByKey = new Map<string, string>();
+  async function projectWithKey(projectKey: string): Promise<string> {
+    const known = projectsByKey.get(projectKey);
+    if (known) return known;
+    const projectId = randomUUID();
+    await fx.sql`
+      INSERT INTO core.projects (
+        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+      ) VALUES (
+        ${projectId}, ${fx.tenantA}, ${projectKey}, 'Registry fixture', 'MNG',
+        ARRAY['copper'], ${fx.orgA}
+      )
+    `;
+    projectsByKey.set(projectKey, projectId);
+    return projectId;
+  }
+
+  /** Drafts as `wallet`; publishes as the Disclosure Approver when the draft succeeds. */
+  async function draft(wallet: string, overrides: Record<string, unknown> = {}) {
+    const { publicKey: requestedKey, subjectId: requestedSubject, ...rest } = overrides;
+    const publicKey = (requestedKey as string | undefined) ?? `KEY-${randomUUID().slice(0, 8)}`;
+    const subjectId = (requestedSubject as string | undefined) ?? (await projectWithKey(publicKey));
+    const [project] = await fx.sql<{ project_key: string }[]>`
+      SELECT project_key FROM core.projects WHERE id = ${subjectId}
+    `;
+    return draftRegistryEntry(app, wallet, {
+      registryType: "project",
+      subjectId,
+      publicKey: requestedKey ?? project?.project_key ?? publicKey,
+      projection: project ? await projectProjection(fx.sql, subjectId) : validProjection(),
+      policyVersion: "mn-core-1.0.0",
+      schemaVersion: "project-registry-1",
+      ...rest,
     });
+  }
+
+  async function publish(wallet: string, overrides: Record<string, unknown> = {}) {
+    const drafted = await draft(wallet, overrides);
+    if (drafted.statusCode !== 200) return drafted;
+    return publishDraft(app, tokens.disclosureApproverA, drafted.json());
   }
 
   /**
@@ -121,11 +151,18 @@ describeDb("Registry publication and public lookup", () => {
       // The Verification Registry records review outcomes. It does not mean the project is
       // registered.
       const projectId = await newProject();
+      const attestationId = await seedAttestation(projectId, "signed");
 
-      const response = await publish(tokens.operatorA, {
+      const drafted = await draftRegistryEntry(app, tokens.operatorA, {
         registryType: "verification",
-        subjectId: projectId,
+        subjectId: attestationId,
+        publicKey: `VER-${randomUUID().slice(0, 8)}`,
+        projection: validProjection({ stableId: attestationId, status: "signed" }),
+        policyVersion: "mn-core-1.0.0",
+        schemaVersion: "verification-registry-1",
       });
+      expect(drafted.statusCode).toBe(200);
+      const response = await publishDraft(app, tokens.disclosureApproverA, drafted.json());
       expect(response.statusCode).toBe(200);
 
       expect(await lifecycleOf(projectId)).toBe("draft");
@@ -165,28 +202,429 @@ describeDb("Registry publication and public lookup", () => {
     }
   });
 
-  it("AC-32: cannot publish natural-person identifiers without a safeguard", async () => {
-    const response = await publish(tokens.operatorA, {
-      containsPersonLevelIdentifier: true,
-      personIdentifierSafeguards: {
-        lawfulBasisRecorded: true,
-        explicitPublicationApproval: true,
-        purposeRecorded: true,
-        retentionRecorded: true,
-        irreversibilityAcknowledged: false,
-      },
+  describe("AC-32: person-level identifiers (05 §5.9)", () => {
+    const record = {
+      lawfulBasis: "Written consent of the named person, 2026-08-01",
+      purpose: "Identify the signing competent person to readers",
+      retention: "For the life of the public record",
+      irreversibilityAcknowledged: true,
+    };
+
+    it("cannot draft person-level identifiers without the safeguards on record", async () => {
+      const response = await draft(tokens.operatorA, { containsPersonLevelIdentifier: true });
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("PUBLICATION_PERSON_IDENTIFIER_GUARD");
     });
-    expect(response.statusCode).toBe(422);
-    expect(response.json().code).toBe("PUBLICATION_PERSON_IDENTIFIER_GUARD");
+
+    it("safeguards are a record, not booleans the client asserts", async () => {
+      const response = await draft(tokens.operatorA, {
+        containsPersonLevelIdentifier: true,
+        personIdentifierSafeguards: {
+          lawfulBasisRecorded: true,
+          explicitPublicationApproval: true,
+          purposeRecorded: true,
+          retentionRecorded: true,
+          irreversibilityAcknowledged: true,
+        },
+      });
+      expect(response.statusCode).toBe(400);
+    });
+
+    it("publication needs the approver's explicit approval of the identifiers", async () => {
+      const drafted = await draft(tokens.operatorA, {
+        containsPersonLevelIdentifier: true,
+        personIdentifierRecord: record,
+      });
+      expect(drafted.statusCode).toBe(200);
+
+      const response = await publishDraft(app, tokens.disclosureApproverA, drafted.json());
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("PUBLICATION_PERSON_IDENTIFIER_GUARD");
+    });
+
+    it("records who drafted the safeguards and who approved, with times", async () => {
+      const drafted = await draft(tokens.operatorA, {
+        containsPersonLevelIdentifier: true,
+        personIdentifierRecord: record,
+      });
+      const published = await publishDraft(app, tokens.disclosureApproverA, drafted.json(), {
+        personIdentifierPublicationApproved: true,
+      });
+      expect(published.statusCode).toBe(200);
+
+      const [row] = await fx.sql<
+        {
+          lawful_basis: string;
+          purpose: string;
+          retention: string;
+          irreversibility_acknowledged_at: Date | null;
+          proposed_by_subject_id: string;
+          decided_by_subject_id: string;
+          decided_at: Date | null;
+          person_identifier_publication_approved: boolean;
+        }[]
+      >`
+        SELECT lawful_basis, purpose, retention, irreversibility_acknowledged_at,
+               proposed_by_subject_id, decided_by_subject_id, decided_at,
+               person_identifier_publication_approved
+        FROM core.registry_publication_drafts WHERE id = ${drafted.json().id}
+      `;
+      expect(row!.lawful_basis).toBe(record.lawfulBasis);
+      expect(row!.purpose).toBe(record.purpose);
+      expect(row!.retention).toBe(record.retention);
+      expect(row!.irreversibility_acknowledged_at).not.toBeNull();
+      expect(row!.proposed_by_subject_id).toBe(fx.operatorSubjectA);
+      expect(row!.decided_by_subject_id).not.toBe(fx.operatorSubjectA);
+      expect(row!.decided_at).not.toBeNull();
+      expect(row!.person_identifier_publication_approved).toBe(true);
+    });
   });
 
-  it("AC-13: unconfirmed commercial_reuse cannot back a commercial publication", async () => {
-    const response = await publish(tokens.operatorA, {
-      commercialReuse: "unconfirmed",
-      publishedAsCommercialBasis: true,
+  describe("AC-13: commercial reuse comes from the source receipts", () => {
+    async function receiptFor(projectId: string, commercialReuse: string): Promise<void> {
+      await fx.sql`
+        INSERT INTO core.source_receipts (
+          id, tenant_id, project_id, connection_id, authority_id, collection_method,
+          result, query_basis, endpoint_or_document_ref, authentication_method,
+          raw_hash, source_schema_version, adapter_version, terms_license,
+          commercial_reuse, disclosure_permission, received_at, as_of,
+          freshness_status, correlation_id
+        ) VALUES (
+          ${randomUUID()}, ${fx.tenantA}, ${projectId}, ${fx.connectionA}, ${fx.authorityA},
+          'manual_official_registry_confirmation', 'source_returned_no_record', '{}'::jsonb,
+          'https://x.test/a', 'none', ${`0x${"11".repeat(32)}`}, '1', '1', 'CC-BY-4.0',
+          ${commercialReuse}, 'public', now(), now(), 'fresh', 'test'
+        )
+      `;
+    }
+
+    it("the client cannot state the commercial-reuse status", async () => {
+      const response = await draft(tokens.operatorA, {
+        commercialReuse: "confirmed",
+        publishedAsCommercialBasis: true,
+      });
+      expect(response.statusCode).toBe(400);
     });
-    expect(response.statusCode).toBe(422);
-    expect(response.json().code).toBe("PUBLICATION_SOURCE_LICENSE_UNCONFIRMED");
+
+    it("a project without receipts cannot back a commercial publication", async () => {
+      const response = await draft(tokens.operatorA, { publishedAsCommercialBasis: true });
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("PUBLICATION_SOURCE_LICENSE_UNCONFIRMED");
+      expect(response.json().details.commercialReuse).toBe("unconfirmed");
+    });
+
+    it("confirmed receipts allow it, and one prohibited receipt blocks it again", async () => {
+      const projectId = await projectWithKey(`CR-${randomUUID().slice(0, 8)}`);
+      await receiptFor(projectId, "confirmed");
+
+      const allowed = await draft(tokens.operatorA, {
+        subjectId: projectId,
+        publishedAsCommercialBasis: true,
+      });
+      expect(allowed.statusCode).toBe(200);
+      expect(allowed.json().commercialReuse).toBe("confirmed");
+      await app.inject({
+        method: "POST",
+        url: `/api/v1/registry-entries/drafts/${allowed.json().id}/reject`,
+        headers: {
+          authorization: `Bearer ${tokens.disclosureApproverA}`,
+          "idempotency-key": idempotencyKey(),
+          "if-match": `"${allowed.json().version}"`,
+        },
+        payload: { reason: "Superseded by a new receipt" },
+      });
+
+      await receiptFor(projectId, "prohibited");
+      const blocked = await draft(tokens.operatorA, {
+        subjectId: projectId,
+        publishedAsCommercialBasis: true,
+      });
+      expect(blocked.statusCode).toBe(422);
+      expect(blocked.json().details.commercialReuse).toBe("prohibited");
+    });
+  });
+
+  /** A signed attestation on `projectId`, the subject of a Verification Registry entry. */
+  async function seedAttestation(projectId: string, state: string): Promise<string> {
+    const caseId = randomUUID();
+    await fx.sql`
+      INSERT INTO core.verification_cases (id, tenant_id, project_id, schema_id, state)
+      VALUES (${caseId}, ${fx.tenantA}, ${projectId}, ${fx.schemaA}, 'draft')
+    `;
+    const assignmentId = randomUUID();
+    await fx.sql`
+      INSERT INTO core.assignments (id, tenant_id, case_id, subject_id, credential_id)
+      VALUES (${assignmentId}, ${fx.tenantA}, ${caseId}, ${fx.reviewerSubjectA}, ${fx.credentialA})
+    `;
+    const claimId = randomUUID();
+    await fx.sql`
+      INSERT INTO core.claims (
+        id, tenant_id, project_id, claim_type, value_text, source_coordinate, grade
+      ) VALUES (
+        ${claimId}, ${fx.tenantA}, ${projectId}, 'mining_right', 'MN-1', '{"page":"1"}'::jsonb,
+        'verified'
+      )
+    `;
+    const id = randomUUID();
+    await fx.sql`
+      INSERT INTO core.verification_attestations (
+        id, tenant_id, case_id, assignment_id, credential_id, schema_id,
+        attestation_type, claim_scope, evidence_snapshot_hash, findings, limitations,
+        credential_status_snapshot, method_version, policy_version,
+        payload_hash, signature, signer_wallet_address, signed_at, state
+      ) VALUES (
+        ${id}, ${fx.tenantA}, ${caseId}, ${assignmentId}, ${fx.credentialA}, ${fx.schemaA},
+        'professional_signoff', ARRAY[${claimId}]::UUID[], ${`0x${"22".repeat(32)}`},
+        '{"note":"reviewed"}'::jsonb, 'legal_effect_not_determined', '{}'::jsonb, '1', '1',
+        ${`0x${"33".repeat(32)}`}, ${`0x${"44".repeat(65)}`},
+        ${fx.reviewerA.address.toLowerCase()}, now(), ${state}
+      )
+    `;
+    return id;
+  }
+
+  describe("two steps, two people (02 §2.8, 07 §7.2)", () => {
+    function reject(token: string, drafted: { id: string; version: number }) {
+      return app.inject({
+        method: "POST",
+        url: `/api/v1/registry-entries/drafts/${drafted.id}/reject`,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "idempotency-key": idempotencyKey(),
+          "if-match": `"${drafted.version}"`,
+        },
+        payload: { reason: "The projection names the wrong reviewer organization" },
+      });
+    }
+
+    it("a draft is not public and is not a registry version", async () => {
+      const publicKey = `DRF-${randomUUID().slice(0, 8)}`;
+      const drafted = await draft(tokens.operatorA, { publicKey });
+      expect(drafted.statusCode).toBe(200);
+      expect(drafted.json().state).toBe("pending");
+
+      const lookup = await app.inject({
+        method: "GET",
+        url: `/api/v1/public/registries/project/${publicKey}`,
+      });
+      expect(lookup.statusCode).toBe(404);
+      const versions = await fx.sql`
+        SELECT v.id FROM core.registry_entry_versions v
+        JOIN core.registry_entries e ON e.id = v.entry_id
+        WHERE e.public_key = ${publicKey}
+      `;
+      expect(versions).toHaveLength(0);
+    });
+
+    it("the drafting role cannot publish", async () => {
+      const drafted = await draft(tokens.operatorA);
+      const response = await publishDraft(app, tokens.operatorA, drafted.json());
+      expect(response.statusCode).toBe(403);
+      expect(response.json().details.requiredRoles).toContain("disclosure_approver");
+    });
+
+    it("a person holding both roles cannot publish their own draft", async () => {
+      const [approver] = await fx.sql<{ subject_id: string }[]>`
+        SELECT subject_id FROM core.wallet_identities
+        WHERE wallet_address = ${fx.disclosureApproverA.address}
+      `;
+      await fx.sql`
+        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${fx.tenantA}, ${approver!.subject_id}, ${fx.orgA}, 'mpc_operator')
+      `;
+      try {
+        const both = await signIn(app, fx.disclosureApproverA);
+        const drafted = await draft(both);
+        expect(drafted.statusCode).toBe(200);
+
+        const response = await publishDraft(app, both, drafted.json());
+        expect(response.statusCode).toBe(422);
+        expect(response.json().code).toBe("REGISTRY_DRAFT_SELF_PUBLICATION");
+      } finally {
+        await fx.sql`
+          UPDATE core.role_bindings SET revoked_at = now()
+          WHERE subject_id = ${approver!.subject_id} AND role = 'mpc_operator'
+        `;
+      }
+    });
+
+    it("the database refuses publication by the drafter", async () => {
+      const drafted = (await draft(tokens.operatorA)).json();
+      const published = (await publish(tokens.operatorA)).json();
+      await expect(
+        fx.sql`
+          UPDATE core.registry_publication_drafts
+          SET state = 'published', decided_by_subject_id = proposed_by_subject_id,
+              decided_at = now(), entry_version_id = ${published.id}
+          WHERE id = ${drafted.id}
+        `,
+      ).rejects.toThrow(/registry_draft_two_person/);
+    });
+
+    it("a draft cannot be edited after it is made", async () => {
+      // The approver approves what they read. An edit after drafting would publish something
+      // nobody approved.
+      const drafted = (await draft(tokens.operatorA)).json();
+      await expect(
+        fx.sql`
+          UPDATE core.registry_publication_drafts
+          SET projection = '{"stableId":"changed"}'::jsonb
+          WHERE id = ${drafted.id}
+        `,
+      ).rejects.toThrow(/cannot be modified after it is created/);
+    });
+
+    it("another tenant's pending draft for the same key does not block this tenant's draft", async () => {
+      const publicKey = `XT-${randomUUID().slice(0, 8)}`;
+      const otherProject = randomUUID();
+      await fx.sql`
+        INSERT INTO core.projects (
+          id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        ) VALUES (
+          ${otherProject}, ${fx.tenantB}, ${publicKey}, 'Other tenant', 'MNG', ARRAY['copper'],
+          ${fx.orgB}
+        )
+      `;
+      const otherDraft = await draft(await signIn(app, fx.operatorB), {
+        publicKey,
+        subjectId: otherProject,
+      });
+      expect(otherDraft.statusCode).toBe(200);
+
+      // Tenant A cannot see B's draft, so a refusal pointing at it could not be acted on.
+      const ours = await draft(tokens.operatorA, { publicKey });
+      expect(ours.statusCode).toBe(200);
+    });
+
+    it("a rejected draft publishes nothing and frees the key for a new draft", async () => {
+      const publicKey = `REJ-${randomUUID().slice(0, 8)}`;
+      const drafted = (await draft(tokens.operatorA, { publicKey })).json();
+
+      const second = await draft(tokens.operatorA, { publicKey });
+      expect(second.statusCode).toBe(409);
+      expect(second.json().code).toBe("REGISTRY_DRAFT_PENDING");
+
+      const rejected = await reject(tokens.disclosureApproverA, drafted);
+      expect(rejected.statusCode).toBe(200);
+      expect(rejected.json().state).toBe("rejected");
+
+      const again = await publishDraft(app, tokens.disclosureApproverA, drafted);
+      expect(again.statusCode).toBe(412);
+
+      expect((await draft(tokens.operatorA, { publicKey })).statusCode).toBe(200);
+    });
+
+    it("a draft made stale by new evidence cannot be published", async () => {
+      const publicKey = `STL-${randomUUID().slice(0, 8)}`;
+      const drafted = (await draft(tokens.operatorA, { publicKey })).json();
+
+      await fx.sql`
+        INSERT INTO core.claims (
+          id, tenant_id, project_id, claim_type, value_text, source_coordinate
+        ) VALUES (
+          ${randomUUID()}, ${fx.tenantA}, ${projectsByKey.get(publicKey)!}, 'mining_right',
+          'MN-2', '{"page":"2"}'::jsonb
+        )
+      `;
+
+      const response = await publishDraft(app, tokens.disclosureApproverA, drafted);
+      expect(response.statusCode).toBe(409);
+      expect(response.json().code).toBe("REGISTRY_DRAFT_STALE");
+      expect(response.json().details.staleFields).toContain("sourceSnapshotHash");
+    });
+  });
+
+  describe("what the server derives (05 §5.6·§5.12)", () => {
+    it("refuses the asset registry before R6", async () => {
+      const response = await draft(tokens.operatorA, { registryType: "asset" });
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("REGISTRY_TYPE_NOT_AVAILABLE");
+    });
+
+    it("records the server's evidence snapshot hash, not the client's", async () => {
+      const claimed = await draft(tokens.operatorA, { sourceSnapshotHash: `0x${"11".repeat(32)}` });
+      expect(claimed.statusCode).toBe(422);
+      expect(claimed.json().code).toBe("REGISTRY_SNAPSHOT_MISMATCH");
+
+      const expected = claimed.json().details.expected as string;
+      const drafted = await draft(tokens.operatorA);
+      expect(drafted.json().sourceSnapshotHash).toMatch(/^0x[0-9a-f]{64}$/);
+
+      const published = (await publishDraft(app, tokens.disclosureApproverA, drafted.json())).json();
+      const [row] = await fx.sql<{ source_snapshot_hash: string }[]>`
+        SELECT source_snapshot_hash FROM core.registry_entry_versions WHERE id = ${published.id}
+      `;
+      expect(row!.source_snapshot_hash).toBe(drafted.json().sourceSnapshotHash);
+      // Two empty projects have the same evidence set, so the same hash.
+      expect(expected).toBe(drafted.json().sourceSnapshotHash);
+    });
+
+    it("rejects a projection that disagrees with the project", async () => {
+      const projectId = await projectWithKey(`MIS-${randomUUID().slice(0, 8)}`);
+      const response = await draft(tokens.operatorA, {
+        subjectId: projectId,
+        projection: await projectProjection(fx.sql, projectId, {
+          projectName: "Someone else's mine",
+          status: "offering",
+        }),
+      });
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("PUBLICATION_PROJECTION_MISMATCH");
+      expect(response.json().details.offendingFields).toEqual(["projectName", "status"]);
+    });
+
+    it("publishes a project entry only under the project's key", async () => {
+      const projectId = await projectWithKey(`OWN-${randomUUID().slice(0, 8)}`);
+      const response = await draft(tokens.operatorA, {
+        subjectId: projectId,
+        publicKey: `OTHER-${randomUUID().slice(0, 8)}`,
+      });
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("REGISTRY_PUBLIC_KEY_MISMATCH");
+    });
+
+    it("a verification entry must point to a signed attestation", async () => {
+      const projectId = await projectWithKey(`VRF-${randomUUID().slice(0, 8)}`);
+      const pointsAtProject = await draftRegistryEntry(app, tokens.operatorA, {
+        registryType: "verification",
+        subjectId: projectId,
+        publicKey: `VER-${randomUUID().slice(0, 8)}`,
+        projection: validProjection({ stableId: projectId, status: "signed" }),
+        policyVersion: "mn-core-1.0.0",
+        schemaVersion: "verification-registry-1",
+      });
+      expect(pointsAtProject.statusCode).toBe(422);
+      expect(pointsAtProject.json().code).toBe("REGISTRY_SUBJECT_NOT_SIGNED");
+
+      const revoked = await seedAttestation(projectId, "revoked");
+      const pointsAtRevoked = await draftRegistryEntry(app, tokens.operatorA, {
+        registryType: "verification",
+        subjectId: revoked,
+        publicKey: `VER-${randomUUID().slice(0, 8)}`,
+        projection: validProjection({ stableId: revoked, status: "revoked" }),
+        policyVersion: "mn-core-1.0.0",
+        schemaVersion: "verification-registry-1",
+      });
+      expect(pointsAtRevoked.statusCode).toBe(422);
+      expect(pointsAtRevoked.json().code).toBe("REGISTRY_SUBJECT_NOT_SIGNED");
+    });
+
+    it("a verification entry records the attestation's signed snapshot", async () => {
+      const projectId = await projectWithKey(`VSN-${randomUUID().slice(0, 8)}`);
+      const attestationId = await seedAttestation(projectId, "signed");
+      const drafted = await draftRegistryEntry(app, tokens.operatorA, {
+        registryType: "verification",
+        subjectId: attestationId,
+        publicKey: `VER-${randomUUID().slice(0, 8)}`,
+        projection: validProjection({ stableId: attestationId, status: "signed" }),
+        policyVersion: "mn-core-1.0.0",
+        schemaVersion: "verification-registry-1",
+      });
+      expect(drafted.statusCode).toBe(200);
+      expect(drafted.json().sourceSnapshotHash).toBe(`0x${"22".repeat(32)}`);
+      // The signed claim has no receipt behind it, so its terms are unknown.
+      expect(drafted.json().commercialReuse).toBe("unconfirmed");
+    });
   });
 
   it("rejects a projection without limitations", async () => {

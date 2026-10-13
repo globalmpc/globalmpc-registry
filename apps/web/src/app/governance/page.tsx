@@ -8,6 +8,7 @@ import {
   type PublicProposalDetail,
 } from "@/lib/api";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { GovernanceCentralizationPanel } from "@/components/GovernanceCentralization";
 
 /**
  * Public Governance — spec 11 §11.2.
@@ -88,6 +89,8 @@ export default function PublicGovernancePage() {
 
       {error ? <ErrorNotice error={error} /> : null}
 
+      <GovernanceCentralizationPanel />
+
       <div className="panel" data-testid="public-governance-list">
         {items.length === 0 && !busy ? (
           <p className="sub" style={{ margin: 0 }}>
@@ -149,6 +152,13 @@ export default function PublicGovernancePage() {
           <dl className="dl">
             <dt>Rationale</dt>
             <dd>{open.rationale}</dd>
+            {/* 09 §9.4: who may gain from the proposal is read before the tally. */}
+            <dt>Conflict disclosure</dt>
+            <dd data-testid="public-proposal-disclosure">
+              {open.conflictDisclosure ?? "Not recorded — created before disclosures were required"}
+            </dd>
+            <dt>Execution mode</dt>
+            <dd className="mono">{open.executionMode ?? "—"}</dd>
             <dt>State</dt>
             <dd className="mono">{open.state}</dd>
             <dt>Quorum</dt>

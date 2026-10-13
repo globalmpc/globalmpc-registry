@@ -409,6 +409,20 @@ export async function listUploads(
 export const BASE64_UPLOAD_LIMIT_BYTES = 512 * 1024;
 
 /**
+ * Where the streaming upload goes.
+ *
+ * Every other request is same-origin and passes through the web proxy. A CDN in front of the
+ * web app cuts a proxied request at its own time cap, which a large upload does not fit in, so
+ * a deployment may name the API host and this one route goes there directly. The API admits
+ * that origin, and only it, on that route (`EDGE_WEB_ORIGIN`). Unset means same-origin as before.
+ */
+export function streamUploadUrl(projectId: string, directOrigin: string | undefined): string {
+  const path = `/api/v1/projects/${projectId}/uploads/stream`;
+  if (!directOrigin) return path;
+  return new URL(path, directOrigin).toString();
+}
+
+/**
  * File upload.
  *
  * Picks a path by size. Both paths produce the same content hash and enter the same
@@ -425,11 +439,14 @@ export async function createUpload(
     form.append("file", file, file.name);
 
     // Do not set content-type directly. The browser must attach the boundary.
-    const response = await apiFetch(`/api/v1/projects/${projectId}/uploads/stream`, {
+    const response = await apiFetch(
+      streamUploadUrl(projectId, process.env.NEXT_PUBLIC_API_DIRECT_ORIGIN),
+      {
       method: "POST",
       headers: { ...authHeader(token), "idempotency-key": key },
       body: form,
-    });
+      },
+    );
     return parse<ObjectUpload>(response);
   }
 
@@ -1075,15 +1092,68 @@ export interface PublishedVersion {
   publishedAt: string;
 }
 
-export async function publishRegistryEntry(
+/**
+ * A drafted registry version — 02 §2.8, 07 §7.2.
+ *
+ * Not public. The snapshot hash and commercial-reuse status are what the server derived from
+ * the record, shown so the Disclosure Approver can see what they would publish.
+ */
+export interface RegistryDraft {
+  id: string;
+  registryType: "project" | "verification";
+  subjectId: string;
+  publicKey: string;
+  projection: Record<string, unknown>;
+  sourceSnapshotHash: string;
+  commercialReuse: "confirmed" | "unconfirmed" | "prohibited";
+  containsPersonLevelIdentifier: boolean;
+  proposedBySubjectId: string;
+  proposedAt: string;
+  state: "pending" | "published" | "rejected";
+  decidedBySubjectId: string | null;
+  decidedAt: string | null;
+  entryVersionId: string | null;
+  version: number;
+}
+
+export async function draftRegistryEntry(
   token: string,
   input: Record<string, unknown>,
   key: string,
-): Promise<PublishedVersion> {
+): Promise<RegistryDraft> {
   const response = await apiFetch("/api/v1/registry-entries", {
     method: "POST",
     headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
     body: JSON.stringify(input),
+  });
+  return parse<RegistryDraft>(response);
+}
+
+export async function listRegistryDrafts(
+  token: string,
+  subjectId: string,
+): Promise<{ items: RegistryDraft[] }> {
+  const response = await apiFetch(
+    `/api/v1/registry-entries/drafts?subjectId=${encodeURIComponent(subjectId)}`,
+    { headers: authHeader(token), cache: "no-store" },
+  );
+  return parse<{ items: RegistryDraft[] }>(response);
+}
+
+export async function publishRegistryDraft(
+  token: string,
+  draft: { id: string; version: number },
+  key: string,
+): Promise<PublishedVersion> {
+  const response = await apiFetch(`/api/v1/registry-entries/drafts/${draft.id}/publish`, {
+    method: "POST",
+    headers: {
+      ...authHeader(token),
+      "content-type": "application/json",
+      "idempotency-key": key,
+      "if-match": `"${draft.version}"`,
+    },
+    body: JSON.stringify({ irreversibilityAcknowledged: true }),
   });
   return parse<PublishedVersion>(response);
 }
@@ -1326,6 +1396,34 @@ export interface GovernanceProposal {
   eligibleWeight: string | null;
   /** Where the denominator came from. `manual` means a person set the value. */
   eligibleWeightSource: "onchain_total_supply" | "manual" | null;
+  /** Conflict-of-interest disclosure — 09 §9.4. Null only for proposals made before the field. */
+  conflictDisclosure: string | null;
+  executionMode: ExecutionMode | null;
+  /** Off-chain execution — kept apart from the tally (09 §9.7). */
+  execution: {
+    state: "execution_pending" | "executed" | "failed" | "disputed" | null;
+    records: ExecutionRecord[];
+  };
+}
+
+export type ExecutionMode = "record_only" | "onchain_bounded" | "offchain_required";
+
+export interface ExecutionRecord {
+  id: string;
+  fromState: string;
+  outcome: "executed" | "failed" | "disputed";
+  recorderSubjectId: string;
+  executor: string;
+  authority: string;
+  executedAction: string;
+  contractReference: string | null;
+  contractHash: string | null;
+  externalReference: string | null;
+  effectiveDate: string | null;
+  evidenceReference: string;
+  evidenceHash: string;
+  limitations: string[];
+  recordedAt: string;
 }
 
 export async function listProposals(token: string): Promise<{ items: GovernanceProposal[] }> {
@@ -1382,6 +1480,59 @@ export async function castVote(
     body: JSON.stringify(input),
   });
   return parse<GovernanceProposal>(response);
+}
+
+/** Records off-chain execution — the only way out of `execution_pending` (09 §9.7). */
+export async function recordProposalExecution(
+  token: string,
+  proposalId: string,
+  version: number,
+  input: {
+    outcome: ExecutionRecord["outcome"];
+    executor: string;
+    authority: string;
+    executedAction: string;
+    evidenceReference: string;
+    evidenceHash: string;
+    limitations: string[];
+  },
+  key: string,
+): Promise<GovernanceProposal> {
+  const response = await apiFetch(
+    `/api/v1/governance/proposals/${proposalId}/execution-records`,
+    {
+      method: "POST",
+      headers: {
+        ...authHeader(token),
+        "content-type": "application/json",
+        "idempotency-key": key,
+        "if-match": `"${version}"`,
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return parse<GovernanceProposal>(response);
+}
+
+/** Who holds which governance power now, and the stages still to come (09 §9.11). */
+export interface GovernanceCentralization {
+  currentStage: string;
+  stages: { stage: string; description: string; delegates: string[]; current: boolean }[];
+  transitionCriteria: { candidates: string[]; decided: false; note: string };
+  centralizedPowers: string[];
+  governanceRoles: { role: string; power: string; activeHolders: number }[];
+  anchor: {
+    contracts: { chainId: number; contractAddress: string; safeAddresses: string[] }[];
+    note: string;
+  };
+  limitations: string[];
+}
+
+export async function getGovernanceCentralization(): Promise<GovernanceCentralization> {
+  const response = await apiFetch("/api/v1/public/governance/centralization", {
+    cache: "no-store",
+  });
+  return parse<GovernanceCentralization>(response);
 }
 
 // --- Public (unauthenticated) ---------------------------------------------------
@@ -1486,6 +1637,8 @@ export interface PublicProposal {
   createdAt: string;
   /** Weight is a decimal string. Converting it to a number rounds silently (ADR-T07). */
   tally: { for: string; against: string; abstain: string; voterCount: number };
+  conflictDisclosure: string | null;
+  executionMode: ExecutionMode | null;
 }
 
 export interface PublicProposalDetail extends PublicProposal {

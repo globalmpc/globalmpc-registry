@@ -58,6 +58,8 @@ export const REVIEWER_A = addressOfLabel("Reviewer A");
 export const SCAN_SERVICE = addressOfLabel("Scan Service");
 export const PROPOSER_A = addressOfLabel("Proposer A");
 export const VOTER_A = addressOfLabel("Voter A");
+/** Publishes registry drafts. A different person from the operator who drafts (02 §2.8). */
+export const DISCLOSURE_APPROVER_A = addressOfLabel("Publisher A");
 
 /** Reviewer subject, credential and schema. The Verification Workbench uses these ids. */
 export const E2E_REVIEWER_SUBJECT = "aaaaaaaa-0000-0000-0000-000000000006";
@@ -252,6 +254,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       { subject: "aaaaaaaa-0000-0000-0000-000000000008", wallet: PROPOSER_A, label: "Proposer A", role: "protocol_proposer", assurance: "identity_bound" },
       // Voting rights come from holdings, not from identity (02 §2.3).
       { subject: "aaaaaaaa-0000-0000-0000-000000000009", wallet: VOTER_A, label: "Voter A", role: "protocol_voter", assurance: "wallet_only" },
+      { subject: "aaaaaaaa-0000-0000-0000-00000000000a", wallet: DISCLOSURE_APPROVER_A, label: "Publisher A", role: "disclosure_approver", assurance: "high_assurance" },
     ]) {
       await sql`
         INSERT INTO core.subjects (id, tenant_id, kind, display_name)

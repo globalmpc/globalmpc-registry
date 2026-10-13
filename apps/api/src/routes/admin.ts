@@ -261,7 +261,7 @@ export async function registerAdminRoutes(
           resourceId: id,
           afterVersion: 1,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
         });
 
         const [created] = await readSubjects(tx, tenantId, id);
@@ -366,7 +366,7 @@ export async function registerAdminRoutes(
             resourceId: id,
             afterVersion: 1,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             // The level decides which roles this wallet can exercise. Without the stated basis
             // the record shows who granted it but not why.
             detail: {
@@ -475,7 +475,7 @@ export async function registerAdminRoutes(
             beforeVersion: wallet.version,
             afterVersion: wallet.version + 1,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           reply.header("etag", etagOf(wallet.version + 1));
@@ -569,7 +569,7 @@ export async function registerAdminRoutes(
           resourceId: id,
           afterVersion: 1,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
         });
 
         const [row] = await tx<GrantRow[]>`
@@ -673,7 +673,7 @@ export async function registerAdminRoutes(
             beforeVersion: grant.version,
             afterVersion: grant.version + 1,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           reply.header("etag", etagOf(grant.version + 1));
@@ -836,7 +836,7 @@ export async function registerAdminRoutes(
           resourceId: id,
           afterVersion: 1,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
         });
 
         const [created] = await readSinks(tx, tenantId, id);
@@ -898,7 +898,7 @@ export async function registerAdminRoutes(
             beforeVersion: current.version,
             afterVersion: current.version + 1,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           reply.header("etag", etagOf(current.version + 1));

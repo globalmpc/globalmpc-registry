@@ -15,8 +15,35 @@ import type { MetricsRegistry } from "../metrics.js";
 export async function registerHealthRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
-  metrics?: MetricsRegistry,
+  metrics: MetricsRegistry | undefined,
+  // No default: an ops endpoint left open because a caller forgot the guard is not a safe default.
+  allowPeer: (peer: string | undefined) => boolean,
 ): Promise<void> {
+  /**
+   * Peers outside `OPS_ENDPOINT_CIDRS` get the same answer as an unknown path.
+   *
+   * Nothing here needs auth on the container network, but once the API host is reachable
+   * from the internet, readiness and the operational gauges must not be. A 403 would confirm
+   * the path exists; the not-found envelope says nothing.
+   */
+  app.addHook("onRequest", async (request, reply) => {
+    const url = request.routeOptions.url;
+    if (url !== "/health/live" && url !== "/health/ready" && url !== "/metrics") return;
+    // A request that came through a proxy carries a forwarding header; its socket peer is the
+    // proxy, often on a private range. The collector scrapes the API directly and sends none.
+    const proxied =
+      request.headers["x-forwarded-for"] !== undefined ||
+      request.headers["forwarded"] !== undefined ||
+      request.headers["x-real-ip"] !== undefined;
+    if (!proxied && allowPeer(request.socket.remoteAddress)) return;
+    return reply.status(404).send({
+      code: "NOT_FOUND",
+      message: "The requested route does not exist",
+      retryable: false,
+      correlationId: request.context?.correlationId ?? "unknown",
+    });
+  });
+
   app.get("/health/live", async () => ({ status: "live" }));
 
   if (metrics) {

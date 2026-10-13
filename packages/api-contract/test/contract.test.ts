@@ -5,6 +5,7 @@ import {
   ACCESS_REQUEST_PATHS,
   ACTION_POLICIES,
   authorize,
+  governanceAction,
   type AuthorizationContext,
   type ResourceContext,
 } from "../src/authorization.js";
@@ -18,6 +19,7 @@ import {
   createGateDecisionRequest,
   castVoteRequest,
   createProposalRequest,
+  recordExecutionRequest,
 } from "../src/resources.js";
 import { errorEnvelope, safetyFields, sourceStatusView } from "../src/common.js";
 
@@ -591,6 +593,8 @@ describe("createProposalRequest", () => {
     proposalType: "fee_schedule",
     title: "Fee change",
     rationale: "Current fees do not cover operating costs",
+    conflictDisclosure: "The proposer holds no position affected by the fee schedule",
+    executionMode: "record_only",
   };
 
   it("rejects 0 as the quorum denominator", () => {
@@ -599,5 +603,81 @@ describe("createProposalRequest", () => {
 
   it("a proposal can be created without a denominator — blocked when voting opens", () => {
     expect(createProposalRequest.safeParse(base).success).toBe(true);
+  });
+});
+
+/** Conflict-of-interest disclosure — 09 §9.4, REQ-DAPP-022. "None known" must be stated. */
+describe("createProposalRequest — disclosure", () => {
+  const base = {
+    space: "protocol",
+    proposalType: "fee_schedule",
+    title: "Fee change",
+    rationale: "Current fees do not cover operating costs",
+    executionMode: "record_only",
+  };
+
+  it("rejects a proposal without a conflict disclosure", () => {
+    expect(createProposalRequest.safeParse(base).success).toBe(false);
+    expect(
+      createProposalRequest.safeParse({ ...base, conflictDisclosure: "  " }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an execution mode outside 09 §9.4", () => {
+    expect(
+      createProposalRequest.safeParse({
+        ...base,
+        conflictDisclosure: "None known",
+        executionMode: "automatic",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+/** Governance space roles — 02 §2.2·§2.3, REQ-DAPP-021. */
+describe("governance roles per space", () => {
+  const roles = (action: string) => ACTION_POLICIES[action]!.allowedRoles;
+
+  it("each space proposes and votes with its own roles only", () => {
+    expect(roles(governanceAction("protocol", "propose"))).toEqual(["protocol_proposer"]);
+    expect(roles(governanceAction("project", "propose"))).toEqual(["project_proposer"]);
+    expect(roles(governanceAction("protocol", "vote"))).toEqual(["protocol_voter"]);
+    expect(roles(governanceAction("project", "vote"))).toEqual(["project_voter"]);
+  });
+
+  it("the MPC operator neither proposes nor votes in any space", () => {
+    // 02 §2.3 gives it "administer", not C/V; 02 §2.2 forbids it project asset decisions.
+    for (const action of Object.keys(ACTION_POLICIES).filter(
+      (name) => name.startsWith("governance.") && /\.(propose|vote)$/.test(name),
+    )) {
+      expect(roles(action), action).not.toContain("mpc_operator");
+    }
+    expect(roles(governanceAction("project", "administer"))).toContain("mpc_operator");
+  });
+
+  it("only the execution recorder writes execution records", () => {
+    expect(roles("governance.execution.record")).toEqual(["execution_recorder"]);
+  });
+});
+
+/** Execution record — 09 §9.7. Evidence is referenced by hash, and limitations are required. */
+describe("recordExecutionRequest", () => {
+  const base = {
+    outcome: "executed",
+    executor: "SPV board",
+    authority: "Shareholder agreement clause 7",
+    executedAction: "Transfer of the operating licence to the buyer",
+    evidenceReference: "dataroom://contracts/transfer-signed.pdf",
+    evidenceHash: `0x${"ab".repeat(32)}`,
+    limitations: ["This record does not establish the legal validity of the transfer"],
+  };
+
+  it("accepts a complete record", () => {
+    expect(recordExecutionRequest.safeParse(base).success).toBe(true);
+  });
+
+  it("rejects a record without evidence hash or limitations", () => {
+    expect(recordExecutionRequest.safeParse({ ...base, evidenceHash: "abc" }).success).toBe(false);
+    expect(recordExecutionRequest.safeParse({ ...base, limitations: [] }).success).toBe(false);
   });
 });

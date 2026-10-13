@@ -5,6 +5,7 @@ import { PUBLIC_FIELD_ALLOWLIST } from "@mpc/domain";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
+import { insertProject, projectKeyOf, publishProject } from "./helpers/registry.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -46,6 +47,8 @@ describeDb("public governance and public history", () => {
         title: "Schema change",
         rationale: "The current schema cannot express limitations",
         eligibleWeight: "100",
+        conflictDisclosure: "No conflict known to the proposer",
+        executionMode: "record_only",
         ...body,
       },
     });
@@ -106,6 +109,8 @@ describeDb("public governance and public history", () => {
         title: `PROJECT-${randomUUID().slice(0, 8)}`,
         rationale: "Internal project decision",
         eligibleWeight: "100",
+        conflictDisclosure: "No conflict known to the proposer",
+        executionMode: "offchain_required",
       },
     });
 
@@ -199,30 +204,12 @@ describeDb("public governance and public history", () => {
 
   it("lists a revoked public version in history and honors the allowlist", async () => {
     const publicKey = `DISC-${randomUUID().slice(0, 8)}`;
-    const published = await app.inject({
-      method: "POST",
-      url: "/api/v1/registry-entries",
-      headers: { authorization: `Bearer ${operatorToken}`, "idempotency-key": idempotencyKey() },
-      payload: {
-        registryType: "project",
-        subjectId: fx.projectA,
-        publicKey,
-        projection: {
-          stableId: randomUUID(),
-          status: "registered",
-          version: "1",
-          asOf: "2026-08-01T00:00:00.000Z",
-          sourceAge: "12",
-          staleStatus: "fresh",
-          limitations: ["Legal rights verification is outside this review's scope"],
-          legalEffect: "none",
-          disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
-        },
-        sourceSnapshotHash: `0x${"11".repeat(32)}`,
-        policyVersion: "mn-core-1.0.0",
-        schemaVersion: "project-registry-1",
-      },
-    });
+    const published = await publishProject(
+      app,
+      fx.sql,
+      { drafter: operatorToken, publisher: await signIn(app, fx.disclosureApproverA) },
+      await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, publicKey),
+    );
     expect(published.statusCode).toBe(200);
 
     // Revocation has no in-repo route yet. This checks not whether the event is created but
@@ -273,31 +260,13 @@ describeDb("public governance and public history", () => {
   }
 
   async function publishPublic(projectId: string): Promise<string> {
-    const publicKey = `Q17-${randomUUID().slice(0, 8)}`;
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/registry-entries",
-      headers: { authorization: `Bearer ${operatorToken}`, "idempotency-key": idempotencyKey() },
-      payload: {
-        registryType: "project",
-        subjectId: projectId,
-        publicKey,
-        projection: {
-          stableId: randomUUID(),
-          status: "registered",
-          version: "1",
-          asOf: "2026-08-01T00:00:00.000Z",
-          sourceAge: "12",
-          staleStatus: "fresh",
-          limitations: ["Legal rights verification is outside this review's scope"],
-          legalEffect: "none",
-          disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
-        },
-        sourceSnapshotHash: `0x${"11".repeat(32)}`,
-        policyVersion: "mn-core-1.0.0",
-        schemaVersion: "project-registry-1",
-      },
-    });
+    const publicKey = await projectKeyOf(fx.sql, projectId);
+    const response = await publishProject(
+      app,
+      fx.sql,
+      { drafter: operatorToken, publisher: await signIn(app, fx.disclosureApproverA) },
+      projectId,
+    );
     expect(response.statusCode).toBe(200);
     return publicKey;
   }

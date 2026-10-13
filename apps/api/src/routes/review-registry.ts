@@ -525,7 +525,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
           afterVersion: 1,
           reason: body.rationale,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
           detail: { kind: spec.kind, itemKey, itemVersion },
         });
 
@@ -619,7 +619,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
             afterVersion: proposal.version + 1,
             reason: body.reason,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail,
           });
 
@@ -635,7 +635,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
               afterVersion: 1,
               reason: proposal.rationale,
               correlationId,
-              requestIp: request.ip,
+              requestIp: request.clientIp,
               detail: {
                 ...detail,
                 proposalId: proposal.id,

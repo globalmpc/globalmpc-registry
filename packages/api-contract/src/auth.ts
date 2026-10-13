@@ -129,6 +129,8 @@ export const ROLE_MINIMUM_ASSURANCE: Readonly<Record<string, AssuranceLevel>> = 
   reviewer_lab: "high_assurance",
   reviewer_legal: "high_assurance",
   reviewer_assurance: "high_assurance",
+  // Makes material public and anchored, which cannot be undone.
+  disclosure_approver: "high_assurance",
   issuer_officer: "high_assurance",
   gate_approver: "high_assurance",
   mpc_operator: "high_assurance",

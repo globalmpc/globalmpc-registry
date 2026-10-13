@@ -366,7 +366,7 @@ export async function registerSourceCollectRoutes(
             resourceType: "source_receipt",
             resourceId: id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             // Records only the outcome and connection key. queryBasis can contain identifiers.
             detail: { result, connectionKey: connection.connection_key },
           });
@@ -561,7 +561,7 @@ export async function registerSecondReviewRoute(
           resourceType: "source_receipt",
           resourceId: id,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
           reason: parsed.data.observation,
           detail: {
             supersedes: receipt.id,

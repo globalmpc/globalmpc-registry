@@ -93,6 +93,88 @@ export function checkVoteEligibility(
 }
 
 /**
+ * The space a voter role binding votes in — 02 §2.2.
+ *
+ * `protocol_voter` votes on the protocol with MPC weight. `project_voter` votes on **one**
+ * project's AT snapshot, so only a binding that names that project has a space. An
+ * organization-level `project_voter` binding names no project; reading it as "every project"
+ * would let one binding vote on every project's assets (02 §2.2 `project_voter` prohibitions).
+ *
+ * Other roles do not vote. The MPC operator administers proposals (02 §2.3) and must not make
+ * project asset decisions (02 §2.2), so it has no space here.
+ */
+export function voterSpaceOf(binding: {
+  readonly role: string;
+  readonly projectId: string | null;
+}): GovernanceSpace | null {
+  if (binding.role === "protocol_voter") return "protocol";
+  if (binding.role === "project_voter" && binding.projectId !== null) {
+    return { kind: "project", projectId: binding.projectId };
+  }
+  return null;
+}
+
+/**
+ * How a passed proposal takes effect — 09 §9.4 `execution mode`.
+ *
+ * Fixed at creation so voters know before voting whether a pass changes anything on chain or
+ * only starts an off-chain process that someone else must carry out.
+ */
+export const EXECUTION_MODES = ["record_only", "onchain_bounded", "offchain_required"] as const;
+export type ExecutionMode = (typeof EXECUTION_MODES)[number];
+
+/**
+ * Centralization stages — 09 §9.11, in the spec's order.
+ *
+ * The text is the spec's; nothing here adds dates or thresholds. The criteria for moving
+ * between stages are candidates whose values OD-10 to OD-12 have not decided.
+ */
+export const GOVERNANCE_STAGES = [
+  {
+    stage: "founder_operated",
+    description:
+      "The founding team operates the protocol. Redlines cannot be changed and every admin is disclosed.",
+    delegates: [],
+  },
+  {
+    stage: "parameter_delegated",
+    description: "Bounded parameters such as fees move to governance.",
+    delegates: ["bounded_parameters"],
+  },
+  {
+    stage: "policy_delegated",
+    description: "Listing and reviewer criteria move to governance.",
+    delegates: ["listing_and_reviewer_criteria"],
+  },
+  {
+    stage: "treasury_delegated",
+    description:
+      "The treasury moves to governance once its threshold and operating record are met.",
+    delegates: ["treasury"],
+  },
+] as const;
+export type GovernanceStage = (typeof GOVERNANCE_STAGES)[number]["stage"];
+
+/**
+ * The current stage.
+ *
+ * Every later stage is entered by meeting transition criteria, and no criterion has a value
+ * yet (09 §9.11: "values are decided in OD-10 to OD-12", all pending). No transition can have
+ * happened, so the protocol is in the first stage. When a value is decided and a transition
+ * occurs, this becomes a recorded fact instead of a constant.
+ */
+export const CURRENT_GOVERNANCE_STAGE: GovernanceStage = "founder_operated";
+
+/** Candidate criteria for moving between stages — 09 §9.11. No values are decided. */
+export const STAGE_TRANSITION_CRITERIA_CANDIDATES = [
+  "active_project_count",
+  "mpc_holder_distribution",
+  "turnout",
+  "incident_free_period",
+  "audit_maturity",
+] as const;
+
+/**
  * Targets no space can create.
  *
  * The `Forbidden` node in the design overview diagram — readiness override,
