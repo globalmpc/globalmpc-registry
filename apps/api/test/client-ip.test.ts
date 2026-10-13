@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createProxyTrust, createUnroutableClientWarning, isUnroutableAddress } from "../src/client-ip.js";
+import {
+  createEdgeClientResolver,
+  createOpsEndpointGuard,
+  createProxyTrust,
+  createUnroutableClientWarning,
+  isUnroutableAddress,
+} from "../src/client-ip.js";
 
 /**
  * Whether the requester address is public — the only runtime signal that the hop count is right.
@@ -134,5 +140,62 @@ describe("createProxyTrust", () => {
     expect(createProxyTrust(0, cidrs)).toBe(false);
     // Only malformed values is the same as having no trusted range.
     expect(createProxyTrust(1, ["not-a-cidr"])).toBe(false);
+  });
+});
+
+/**
+ * Edge proxy path — the web app on a CDN vouches for the visitor address it saw.
+ *
+ * The socket peer is the CDN, which no range can name, so `x-forwarded-for` is rightly ignored
+ * there. The vouched address is taken only with a matching secret; anything else keeps the
+ * socket-side decision.
+ */
+describe("createEdgeClientResolver", () => {
+  const secret = "s".repeat(32);
+  const resolve = createEdgeClientResolver(secret);
+
+  it("takes the vouched address when the secret matches", () => {
+    expect(
+      resolve({ "x-mpc-edge-secret": secret, "x-mpc-client-ip": "203.0.113.7" }, "198.51.100.1"),
+    ).toBe("203.0.113.7");
+  });
+
+  it("keeps the socket-side address when the secret is wrong or missing", () => {
+    expect(
+      resolve({ "x-mpc-edge-secret": "t".repeat(32), "x-mpc-client-ip": "203.0.113.7" }, "198.51.100.1"),
+    ).toBe("198.51.100.1");
+    expect(resolve({ "x-mpc-client-ip": "203.0.113.7" }, "198.51.100.1")).toBe("198.51.100.1");
+  });
+
+  it("keeps the socket-side address when the vouched value is not an IP", () => {
+    // A cap key that is not an address would let one requester pick its own bucket name.
+    expect(
+      resolve({ "x-mpc-edge-secret": secret, "x-mpc-client-ip": "not-an-address" }, "198.51.100.1"),
+    ).toBe("198.51.100.1");
+    expect(resolve({ "x-mpc-edge-secret": secret, "x-mpc-client-ip": "" }, "198.51.100.1")).toBe(
+      "198.51.100.1",
+    );
+  });
+
+  it("ignores both headers entirely when no secret is configured", () => {
+    const closed = createEdgeClientResolver(null);
+    expect(
+      closed({ "x-mpc-edge-secret": "anything", "x-mpc-client-ip": "203.0.113.7" }, "198.51.100.1"),
+    ).toBe("198.51.100.1");
+  });
+});
+
+describe("createOpsEndpointGuard", () => {
+  it("admits peers inside the ranges, in plain and IPv4-mapped form", () => {
+    const allow = createOpsEndpointGuard(["127.0.0.0/8", "10.0.0.0/8"]);
+    expect(allow("127.0.0.1")).toBe(true);
+    expect(allow("::ffff:10.0.5.2")).toBe(true);
+    expect(allow("203.0.113.9")).toBe(false);
+  });
+
+  it("admits nobody when the list is empty or unparseable, and never an unknown peer", () => {
+    expect(createOpsEndpointGuard([])("127.0.0.1")).toBe(false);
+    expect(createOpsEndpointGuard(["nonsense"])("127.0.0.1")).toBe(false);
+    expect(createOpsEndpointGuard(["127.0.0.0/8"])(undefined)).toBe(false);
   });
 });

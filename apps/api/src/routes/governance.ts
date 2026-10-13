@@ -2,16 +2,21 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
+import { governanceAction, recordExecutionRequest } from "@mpc/api-contract";
 import { withTenant } from "@mpc/db";
 import {
   canTransition,
   checkProposalSpace,
+  checkVoteEligibility,
+  EXECUTION_MODES,
   isForbiddenTarget,
   proposalMachine,
   tallyVotes,
+  voterSpaceOf,
+  type GovernanceSpace,
   type ProposalState,
 } from "@mpc/domain";
-import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
+import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import {
   assertAuthorized,
   projectResource,
@@ -20,6 +25,8 @@ import {
   visibleProjectScope,
 } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
+import type { Session } from "../plugins/session.js";
+import { registerGovernanceCentralizationRoute } from "./governance-centralization.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
 import {
@@ -49,6 +56,12 @@ import {
  * - **Quorum and pass threshold use the values at proposal time.** Changing the rules
  *   later cannot overturn the result.
  * - **Missing quorum and defeat are distinct.** The next step differs.
+ * - **Each space has its own proposers and voters** (02 §2.2, REQ-DAPP-021). The role that
+ *   acts must belong to the proposal's space, and a project voter votes only on the project
+ *   its binding names.
+ * - **Execution is recorded, not declared** (09 §9.7, REQ-DAPP-020). Leaving
+ *   `execution_pending` takes an Execution Record from the execution recorder; the vote
+ *   result and the execution state stay separate.
  */
 
 /**
@@ -85,7 +98,22 @@ const createSchema = z.object({
     .regex(/^[1-9]\d*$/, "Quorum denominator must be an integer string of 1 or more")
     .nullable()
     .default(null),
+  /**
+   * Conflict-of-interest disclosure — 09 §9.4, REQ-DAPP-022.
+   *
+   * Only the disclosure is recorded. Which conflicts block a vote is undecided
+   * (OD-10 to OD-12), so no gate is applied here.
+   */
+  conflictDisclosure: z.string().trim().min(1, "The conflict-of-interest disclosure cannot be empty"),
+  executionMode: z.enum(EXECUTION_MODES),
 });
+
+/**
+ * States reached only through an Execution Record — 09 §9.7.
+ *
+ * A reason line is not evidence that anything was executed.
+ */
+const EXECUTION_OUTCOMES: readonly string[] = ["executed", "failed", "disputed"];
 
 const voteSchema = z.object({
   choice: z.enum(["for", "against", "abstain"]),
@@ -171,6 +199,26 @@ interface ProposalRow {
   readonly snapshot_chain_id: number | null;
   readonly eligible_weight: string | null;
   readonly eligible_weight_source: "onchain_total_supply" | "manual" | null;
+  readonly conflict_disclosure: string | null;
+  readonly execution_mode: (typeof EXECUTION_MODES)[number] | null;
+}
+
+interface ExecutionRecordRow {
+  readonly id: string;
+  readonly from_state: string;
+  readonly outcome: "executed" | "failed" | "disputed";
+  readonly recorder_subject_id: string;
+  readonly executor: string;
+  readonly authority: string;
+  readonly executed_action: string;
+  readonly contract_reference: string | null;
+  readonly contract_hash: string | null;
+  readonly external_reference: string | null;
+  readonly effective_date: string | null;
+  readonly evidence_reference: string;
+  readonly evidence_hash: string;
+  readonly limitations: string[];
+  readonly recorded_at: Date;
 }
 
 interface TallyRow {
@@ -188,14 +236,17 @@ interface TallyRow {
 const MANUAL_ELIGIBLE_WEIGHT_LIMITATION =
   "The quorum denominator is a human-specified value and was not confirmed against on-chain total supply";
 
+interface LoadedProposal {
+  readonly row: ProposalRow;
+  readonly tally: TallyRow;
+  readonly transitions: unknown[];
+  readonly executionRecords: ExecutionRecordRow[];
+}
+
 async function loadProposal(
   tx: postgres.TransactionSql | postgres.Sql,
   proposalId: string,
-): Promise<{
-  row: ProposalRow;
-  tally: TallyRow;
-  transitions: unknown[];
-} | null> {
+): Promise<LoadedProposal | null> {
   const [row] = await tx<ProposalRow[]>`
     SELECT * FROM core.governance_proposals WHERE id = ${proposalId}
   `;
@@ -217,14 +268,35 @@ async function loadProposal(
     ORDER BY occurred_at
   `;
 
-  return { row, tally: tally!, transitions: [...transitions] };
+  const executionRecords = await tx<ExecutionRecordRow[]>`
+    SELECT id, from_state, outcome, recorder_subject_id, executor, authority, executed_action,
+           contract_reference, contract_hash, external_reference,
+           to_char(effective_date, 'YYYY-MM-DD') AS effective_date,
+           evidence_reference, evidence_hash, limitations, recorded_at
+    FROM core.governance_execution_records
+    WHERE proposal_id = ${proposalId}
+    ORDER BY recorded_at, id
+  `;
+
+  return {
+    row,
+    tally: tally!,
+    transitions: [...transitions],
+    executionRecords: [...executionRecords],
+  };
 }
 
-function toView(
-  loaded: { row: ProposalRow; tally: TallyRow; transitions: unknown[] },
-  requestId: string,
-  asOf: string,
-) {
+/** Execution state, or null before the proposal reaches it. Never derived from the tally. */
+function executionStateOf(state: ProposalState) {
+  return state === "execution_pending" ||
+    state === "executed" ||
+    state === "failed" ||
+    state === "disputed"
+    ? state
+    : null;
+}
+
+function toView(loaded: LoadedProposal, requestId: string, asOf: string) {
   const { row, tally } = loaded;
 
   const forWeight = BigInt(tally.for_weight);
@@ -293,6 +365,28 @@ function toView(
     /** Quorum denominator. May be null before voting opens, as it is not yet fixed. */
     eligibleWeight: row.eligible_weight,
     eligibleWeightSource: row.eligible_weight_source,
+    conflictDisclosure: row.conflict_disclosure,
+    executionMode: row.execution_mode,
+    execution: {
+      state: executionStateOf(row.state),
+      records: loaded.executionRecords.map((record) => ({
+        id: record.id,
+        fromState: record.from_state,
+        outcome: record.outcome,
+        recorderSubjectId: record.recorder_subject_id,
+        executor: record.executor,
+        authority: record.authority,
+        executedAction: record.executed_action,
+        contractReference: record.contract_reference,
+        contractHash: record.contract_hash,
+        externalReference: record.external_reference,
+        effectiveDate: record.effective_date,
+        evidenceReference: record.evidence_reference,
+        evidenceHash: record.evidence_hash,
+        limitations: record.limitations,
+        recordedAt: record.recorded_at.toISOString(),
+      })),
+    },
     limitations: [
       ...GOVERNANCE_LIMITATIONS,
       ...(row.snapshot_block ? [`Weight is the balance at block ${row.snapshot_block}`] : []),
@@ -323,6 +417,51 @@ async function proposalProjectId(
   return row.project_id;
 }
 
+/** A proposal's space follows from its project: `proposal_space_scope` ties the two (0017). */
+function spaceOfProject(projectId: string | null): "protocol" | "project" {
+  return projectId === null ? "protocol" : "project";
+}
+
+/**
+ * Voting eligibility by space — 02 §2.2, 09 §9.3, domain `checkVoteEligibility`.
+ *
+ * Role authorization alone does not say **which project** a `project_voter` may vote on: the
+ * role reaches the whole tenant (`TENANT_WIDE_ROLES`), yet a project voter votes only on the AT
+ * snapshot of its own project. So every voter binding is mapped to the space it votes in, and
+ * the domain rule decides. A session with no voter binding at all falls through to the role
+ * check, which names the role it needs.
+ */
+function assertVoteEligible(
+  bindings: Session["roleBindings"],
+  proposalProjectIdValue: string | null,
+): void {
+  const proposalSpace: GovernanceSpace =
+    proposalProjectIdValue === null
+      ? "protocol"
+      : { kind: "project", projectId: proposalProjectIdValue };
+
+  const voterBindings = bindings.filter(
+    (binding) => binding.role === "protocol_voter" || binding.role === "project_voter",
+  );
+  if (voterBindings.length === 0) return;
+
+  let reason: string = "GOVERNANCE_SPACE_MISMATCH";
+  for (const binding of voterBindings) {
+    const voterSpace = voterSpaceOf(binding);
+    if (voterSpace === null) {
+      reason = "GOVERNANCE_PROJECT_SCOPE_MISMATCH";
+      continue;
+    }
+    const check = checkVoteEligibility(voterSpace, proposalSpace);
+    if (check.allowed) return;
+    reason = check.reason;
+  }
+
+  throw forbidden(reason, "Your voting rights do not cover this proposal's space", {
+    space: proposalSpace === "protocol" ? "protocol" : "project",
+  });
+}
+
 /** Proposal resource. A project proposal is judged within that project's scope. */
 function proposalResource(tenantId: string, projectId: string | null) {
   return projectId === null
@@ -335,6 +474,8 @@ export async function registerGovernanceRoutes(
   sql: postgres.Sql,
   chain?: GovernanceChain,
 ): Promise<void> {
+  await registerGovernanceCentralizationRoute(app, sql);
+
   app.get("/api/v1/governance/proposals", async (request) => {
     const { session, tenantId } = requireReadContext(request);
     const { requestId, asOf } = request.context;
@@ -431,9 +572,25 @@ export async function registerGovernanceRoutes(
      */
     const data = parsed.data;
 
+    // Checked before authorization: a project proposal without a project would otherwise be
+    // judged at tenant scope, where the project boundary is not evaluated.
+    if (data.space === "project" && !data.projectId) {
+      throw badRequest("PROPOSAL_PROJECT_REQUIRED", "projectId is required for project space");
+    }
+    if (data.space === "protocol" && data.projectId) {
+      throw badRequest("PROPOSAL_PROJECT_FORBIDDEN", "A protocol proposal has no projectId");
+    }
+
+    /**
+     * The proposer's role must belong to the proposal's space — 02 §2.2.
+     *
+     * `protocol_proposer` is forbidden to create project asset proposals and
+     * `project_proposer` to change protocol policy. Checking the proposal type against the
+     * space alone let a protocol proposer create a project sale proposal.
+     */
     const effectiveRole = assertAuthorized(
       session,
-      "governance.propose",
+      governanceAction(data.space, "propose"),
       data.projectId === null
         ? tenantResource(tenantId, { sensitivity: "public" })
         : projectResource(tenantId, data.projectId, { sensitivity: "public" }),
@@ -460,10 +617,6 @@ export async function registerGovernanceRoutes(
       });
     }
 
-    if (data.space === "project" && !data.projectId) {
-      throw badRequest("PROPOSAL_PROJECT_REQUIRED", "projectId is required for project space");
-    }
-
     const { requestId, asOf, correlationId } = request.context;
     const requestHash = hashRequest(request.body);
 
@@ -475,12 +628,14 @@ export async function registerGovernanceRoutes(
           INSERT INTO core.governance_proposals (
             id, tenant_id, space, project_id, proposal_type, title, rationale,
             proposer_subject_id, quorum_numerator, quorum_denominator,
-            threshold_numerator, threshold_denominator, eligible_weight
+            threshold_numerator, threshold_denominator, eligible_weight,
+            conflict_disclosure, execution_mode
           ) VALUES (
             ${proposalId}, ${tenantId}, ${data.space}, ${data.projectId},
             ${data.proposalType}, ${data.title}, ${data.rationale},
             ${session.subjectId!}, ${data.quorumNumerator}, ${data.quorumDenominator},
-            ${data.thresholdNumerator}, ${data.thresholdDenominator}, ${data.eligibleWeight}
+            ${data.thresholdNumerator}, ${data.thresholdDenominator}, ${data.eligibleWeight},
+            ${data.conflictDisclosure}, ${data.executionMode}
           )
         `;
 
@@ -493,8 +648,12 @@ export async function registerGovernanceRoutes(
           resourceType: "governance_proposal",
           resourceId: proposalId,
           correlationId,
-          requestIp: request.ip,
-          detail: { space: data.space, proposalType: data.proposalType },
+          requestIp: request.clientIp,
+          detail: {
+            space: data.space,
+            proposalType: data.proposalType,
+            executionMode: data.executionMode,
+          },
         });
 
         const loaded = await loadProposal(tx, proposalId);
@@ -523,19 +682,36 @@ export async function registerGovernanceRoutes(
         });
       }
 
+      const { toState, reason } = parsed.data;
+
+      // Leaving execution_pending takes evidence, which this endpoint does not accept.
+      if (EXECUTION_OUTCOMES.includes(toState)) {
+        throw conflict(
+          "EXECUTION_RECORD_REQUIRED",
+          "This state is reached only by recording the off-chain execution",
+          {
+            toState,
+            path: `/api/v1/governance/proposals/${request.params.proposalId}/execution-records`,
+          },
+        );
+      }
+
+      /**
+       * Administering a proposal stays inside its space — REQ-DAPP-021.
+       *
+       * A protocol proposer moving a project proposal forward is a cross-space mutation, the
+       * same as creating one.
+       */
+      const projectId = await proposalProjectId(sql, tenantId, request.params.proposalId);
       const effectiveRole = assertAuthorized(
         session,
-        "governance.propose",
-        proposalResource(
-          tenantId,
-          await proposalProjectId(sql, tenantId, request.params.proposalId),
-        ),
+        governanceAction(spaceOfProject(projectId), "administer"),
+        proposalResource(tenantId, projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request.body);
-      const { toState, reason } = parsed.data;
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -671,7 +847,7 @@ export async function registerGovernanceRoutes(
             afterVersion: current.version + 1,
             reason,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             /**
              * Records the denominator's source as well.
              *
@@ -722,13 +898,13 @@ export async function registerGovernanceRoutes(
         });
       }
 
+      const projectId = await proposalProjectId(sql, tenantId, request.params.proposalId);
+      assertVoteEligible(session.roleBindings, projectId);
+
       const effectiveRole = assertAuthorized(
         session,
-        "governance.vote",
-        proposalResource(
-          tenantId,
-          await proposalProjectId(sql, tenantId, request.params.proposalId),
-        ),
+        governanceAction(spaceOfProject(projectId), "vote"),
+        proposalResource(tenantId, projectId),
         sessionFacts(session),
       );
 
@@ -787,7 +963,7 @@ export async function registerGovernanceRoutes(
             resourceType: "governance_proposal",
             resourceId: proposal.id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             // Weight is recorded, but who chose what stays only in the votes table.
             detail: {
               choice: parsed.data.choice,
@@ -797,6 +973,147 @@ export async function registerGovernanceRoutes(
 
           const loaded = await loadProposal(tx, proposal.id);
           return toView(loaded!, requestId, asOf);
+        }),
+      );
+    },
+  );
+
+  /**
+   * Off-chain execution record — 09 §9.7, 02 §2.3 "Off-chain Execution", REQ-DAPP-020.
+   *
+   * The only way out of `execution_pending` (and `disputed`). The recorder states who executed,
+   * under what authority, what was executed, and the evidence by reference and hash. The
+   * record and the state change are written together; a DB trigger refuses the state change
+   * without the record for any other writer.
+   *
+   * The tally is not touched — it is copied into the transition row as it stood, the same as
+   * every other transition, so the record shows what the vote said when execution was recorded.
+   */
+  app.post<{ Params: { proposalId: string } }>(
+    "/api/v1/governance/proposals/:proposalId/execution-records",
+    async (request) => {
+      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const expectedVersion = requireIfMatch(request);
+
+      const parsed = recordExecutionRequest.safeParse(request.body);
+      if (!parsed.success) {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
+          issues: parsed.error.issues,
+        });
+      }
+
+      const projectId = await proposalProjectId(sql, tenantId, request.params.proposalId);
+      const effectiveRole = assertAuthorized(
+        session,
+        "governance.execution.record",
+        proposalResource(tenantId, projectId),
+        sessionFacts(session),
+      );
+
+      const { requestId, asOf, correlationId } = request.context;
+      const requestHash = hashRequest(request.body);
+      const record = parsed.data;
+
+      return withTenant(sql, { tenantId }, (tx) =>
+        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+          const [current] = await tx<ProposalRow[]>`
+            SELECT * FROM core.governance_proposals
+            WHERE id = ${request.params.proposalId}
+            FOR UPDATE
+          `;
+          if (!current) throw notFound("Proposal not found");
+
+          assertVersionMatches(expectedVersion, current.version, "governance_proposal");
+
+          if (
+            (current.state !== "execution_pending" && current.state !== "disputed") ||
+            !canTransition(proposalMachine, current.state, record.outcome)
+          ) {
+            throw conflict(
+              "EXECUTION_NOT_PENDING",
+              "Execution can be recorded only while it is pending or disputed",
+              {
+                state: current.state,
+                outcome: record.outcome,
+                allowedTransitions: [...(proposalMachine.transitions[current.state] ?? [])],
+              },
+            );
+          }
+
+          const view = toView((await loadProposal(tx, current.id))!, requestId, asOf);
+          const recordId = randomUUID();
+
+          await tx`
+            INSERT INTO core.governance_execution_records (
+              id, tenant_id, proposal_id, from_state, outcome, recorder_subject_id,
+              executor, authority, executed_action, contract_reference, contract_hash,
+              external_reference, effective_date, evidence_reference, evidence_hash, limitations
+            ) VALUES (
+              ${recordId}, ${tenantId}, ${current.id}, ${current.state}, ${record.outcome},
+              ${session.subjectId!}, ${record.executor}, ${record.authority},
+              ${record.executedAction}, ${record.contractReference}, ${record.contractHash},
+              ${record.externalReference}, ${record.effectiveDate}, ${record.evidenceReference},
+              ${record.evidenceHash}, ${record.limitations}
+            )
+          `;
+
+          await tx`
+            UPDATE core.governance_proposals
+            SET state = ${record.outcome}, version = version + 1
+            WHERE id = ${current.id}
+          `;
+
+          // The transition reason of a protocol proposal is public (0027). What was executed
+          // can name contracts and parties, so it stays in the record, which is not public.
+          const reason = `Execution recorded as ${record.outcome}`;
+          await tx`
+            INSERT INTO core.governance_transitions (
+              id, tenant_id, proposal_id, from_state, to_state, reason,
+              actor_subject_id, tally_snapshot
+            ) VALUES (
+              ${randomUUID()}, ${tenantId}, ${current.id}, ${current.state},
+              ${record.outcome}, ${reason}, ${session.subjectId ?? null},
+              ${tx.json(view.tally as never)}
+            )
+          `;
+
+          await recordAudit(tx, {
+            effectiveRole,
+            tenantId,
+            ...(projectId ? { projectId } : {}),
+            session,
+            command: "governance.execution.recorded",
+            resourceType: "governance_proposal",
+            resourceId: current.id,
+            beforeVersion: current.version,
+            afterVersion: current.version + 1,
+            reason,
+            correlationId,
+            requestIp: request.clientIp,
+            detail: {
+              executionRecordId: recordId,
+              fromState: current.state,
+              outcome: record.outcome,
+              evidenceHash: record.evidenceHash,
+            },
+          });
+
+          // 07 §7.4 `execution.status.changed` — kept apart from the proposal's vote events.
+          await enqueueEvent(tx, {
+            tenantId,
+            eventType: "execution.status.changed",
+            aggregateId: current.id,
+            aggregateVersion: current.version + 1,
+            payload: {
+              executionRecordId: recordId,
+              fromState: current.state,
+              toState: record.outcome,
+            },
+            correlationId,
+          });
+
+          const after = await loadProposal(tx, current.id);
+          return toView(after!, requestId, asOf);
         }),
       );
     },

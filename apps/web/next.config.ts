@@ -51,6 +51,8 @@ const nextConfig: NextConfig = {
    */
   env: {
     NEXT_PUBLIC_DEMO_ACCOUNT_KEYS: demoAccountKeys(),
+    // Same rule: always defined at build time. Empty means the streaming upload stays same-origin.
+    NEXT_PUBLIC_API_DIRECT_ORIGIN: process.env["NEXT_PUBLIC_API_DIRECT_ORIGIN"] ?? "",
   },
 
   /**

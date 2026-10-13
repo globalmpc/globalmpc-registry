@@ -745,7 +745,7 @@ export async function registerEvidenceRoutes(
             resourceType: "source_receipt",
             resourceId: id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             // The result goes into the audit log. Which result it was is what gets reproduced later.
             detail: { result: data.result, collectionMethod: data.collectionMethod },
           });
@@ -856,7 +856,7 @@ export async function registerEvidenceRoutes(
             resourceId: id,
             afterVersion: 1,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { claimType: data.claimType, grade },
           });
 
@@ -934,7 +934,7 @@ export async function registerEvidenceRoutes(
             resourceType: "claim",
             resourceId: request.params.claimId,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { conflictType: parsed.data.conflictType, grade },
           });
 

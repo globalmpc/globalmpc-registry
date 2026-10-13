@@ -50,6 +50,8 @@ export interface TestFixture {
   readonly voterA: TestAccount;
   /** tenant A · auditor. Decides authority approval (02 §2.8) */
   readonly auditorA: TestAccount;
+  /** tenant A · disclosure_approver. Publishes what an operator drafted (02 §2.8) */
+  readonly disclosureApproverA: TestAccount;
   /** operatorA's subject id. Used to check whether registrant and approver are the same */
   readonly operatorSubjectA: string;
   /** Pre-created project in tenant A */
@@ -220,6 +222,8 @@ export async function setupFixture(): Promise<TestFixture> {
   const voterA = newAccount();
   // A registrant cannot approve (02 §2.8). A separate approver is needed to test it.
   const auditorA = newAccount();
+  // Publishing a registry draft needs a second person (02 §2.8).
+  const disclosureApproverA = newAccount();
   // Steward bound to a single project. Must differ from an organization-level binding to
   // test project scope.
   const scopedStewardA = newAccount();
@@ -232,6 +236,7 @@ export async function setupFixture(): Promise<TestFixture> {
   const proposerSubject = randomUUID();
   const voterSubject = randomUUID();
   const auditorSubject = randomUUID();
+  const disclosureApproverSubject = randomUUID();
 
   for (const [subject, wallet, label, role, assurance] of [
     [reviewerSubjectA, reviewerA, "Reviewer A", "reviewer_cp_qp", "high_assurance"],
@@ -244,6 +249,13 @@ export async function setupFixture(): Promise<TestFixture> {
     [voterSubject, voterA, "Voter A", "protocol_voter", "wallet_only"],
     // Trusting an authority is a review outcome, not an operations task (02 §2.8).
     [auditorSubject, auditorA, "Auditor A", "auditor", "high_assurance"],
+    [
+      disclosureApproverSubject,
+      disclosureApproverA,
+      "Disclosure Approver A",
+      "disclosure_approver",
+      "high_assurance",
+    ],
   ] as const) {
     await sql`
       INSERT INTO core.subjects (id, tenant_id, kind, display_name)
@@ -380,6 +392,7 @@ export async function setupFixture(): Promise<TestFixture> {
     proposerA,
     voterA,
     auditorA,
+    disclosureApproverA,
     projectA,
     otherProjectA,
     scopedStewardA,

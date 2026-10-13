@@ -6,6 +6,9 @@ import {
   tallyVotes,
   checkVoteEligibility,
   isForbiddenTarget,
+  voterSpaceOf,
+  GOVERNANCE_STAGES,
+  CURRENT_GOVERNANCE_STAGE,
   type GovernanceSpace,
 } from "../src/governance.js";
 
@@ -69,6 +72,44 @@ describe("voting eligibility", () => {
     const cross = checkVoteEligibility(PROJECT_A, PROJECT_B);
     expect(cross.allowed).toBe(false);
     if (!cross.allowed) expect(cross.reason).toBe("GOVERNANCE_PROJECT_SCOPE_MISMATCH");
+  });
+});
+
+describe("the space a voter binding votes in — 02 §2.2", () => {
+  it("a protocol voter binding votes in the protocol space", () => {
+    expect(voterSpaceOf({ role: "protocol_voter", projectId: null })).toBe("protocol");
+  });
+
+  it("a project voter binding votes only in the project it is bound to", () => {
+    expect(voterSpaceOf({ role: "project_voter", projectId: "01JZPROJECTA" })).toEqual(PROJECT_A);
+  });
+
+  it("a project voter binding without a project has no space", () => {
+    // It names no AT snapshot, so reading it as "every project" would let one binding vote on
+    // every project's assets.
+    expect(voterSpaceOf({ role: "project_voter", projectId: null })).toBeNull();
+  });
+
+  it("roles that do not vote have no space", () => {
+    // 02 §2.3: the MPC operator administers proposals; it does not vote on them.
+    expect(voterSpaceOf({ role: "mpc_operator", projectId: null })).toBeNull();
+    expect(voterSpaceOf({ role: "protocol_proposer", projectId: null })).toBeNull();
+  });
+});
+
+describe("centralization stages — 09 §9.11", () => {
+  it("lists the four stages in the order of the spec", () => {
+    expect(GOVERNANCE_STAGES.map((stage) => stage.stage)).toEqual([
+      "founder_operated",
+      "parameter_delegated",
+      "policy_delegated",
+      "treasury_delegated",
+    ]);
+  });
+
+  it("the current stage is the first one", () => {
+    // Moving past it needs criteria values that are still open (OD-10 to OD-12).
+    expect(CURRENT_GOVERNANCE_STAGE).toBe("founder_operated");
   });
 });
 

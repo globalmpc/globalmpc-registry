@@ -396,6 +396,8 @@ export async function registerPublicRoutes(
     weight_against: string;
     weight_abstain: string;
     voter_count: string;
+    conflict_disclosure: string | null;
+    execution_mode: "record_only" | "onchain_bounded" | "offchain_required" | null;
   }
 
   function toProposal(row: ProposalRow) {
@@ -411,6 +413,9 @@ export async function registerPublicRoutes(
       votingClosesAt: row.voting_closes_at?.toISOString() ?? null,
       createdAt: row.created_at.toISOString(),
       tally: tallyOf(row),
+      // 09 §9.4: disclosed with the proposal so holders read it before they vote.
+      conflictDisclosure: row.conflict_disclosure,
+      executionMode: row.execution_mode,
     };
   }
 

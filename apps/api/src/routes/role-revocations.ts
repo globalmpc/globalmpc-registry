@@ -252,7 +252,7 @@ export async function registerRoleRevocationRoutes(
           resourceId: id,
           afterVersion: 1,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
           detail: { roleBindingId: binding.id, role: binding.role },
         });
 
@@ -341,7 +341,7 @@ export async function registerRoleRevocationRoutes(
             beforeVersion: current.version,
             afterVersion: current.version + 1,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { roleBindingId: current.role_binding_id },
           });
 

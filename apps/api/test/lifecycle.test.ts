@@ -5,6 +5,7 @@ import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { OFFERING_PRECONDITIONS } from "@mpc/domain";
 import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
+import { projectProjection, publishProject } from "./helpers/registry.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -109,30 +110,12 @@ describeDb("project lifecycle", () => {
 
   /** Registry publication performs draft → registered. This uses the same path. */
   async function register(projectId: string): Promise<number> {
-    const published = await app.inject({
-      method: "POST",
-      url: "/api/v1/registry-entries",
-      headers: { authorization: `Bearer ${operatorToken}`, "idempotency-key": idempotencyKey() },
-      payload: {
-        registryType: "project",
-        subjectId: projectId,
-        publicKey: `LC-${randomUUID().slice(0, 8)}`,
-        projection: {
-          stableId: randomUUID(),
-          status: "registered",
-          version: "1",
-          asOf: "2026-08-01T00:00:00.000Z",
-          sourceAge: "12",
-          staleStatus: "fresh",
-          limitations: ["legal rights verification is outside the scope of this review"],
-          legalEffect: "none",
-          disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
-        },
-        sourceSnapshotHash: `0x${"11".repeat(32)}`,
-        policyVersion: "mn-core-1.0.0",
-        schemaVersion: "project-registry-1",
-      },
-    });
+    const published = await publishProject(
+      app,
+      fx.sql,
+      { drafter: operatorToken, publisher: await signIn(app, fx.disclosureApproverA) },
+      projectId,
+    );
     expect(published.statusCode).toBe(200);
 
     const lifecycle = await app.inject({
@@ -613,33 +596,16 @@ describeDb("lifecycle in the public projection", () => {
       },
     });
     const projectId = created.json().id;
-    const publicKey = `W39-${randomUUID().slice(0, 8)}`;
+    const publicKey = created.json().projectKey as string;
 
     // The screen sends the state **just before** publication. That is `draft`.
-    const published = await app.inject({
-      method: "POST",
-      url: "/api/v1/registry-entries",
-      headers: { authorization: `Bearer ${operatorToken}`, "idempotency-key": idempotencyKey() },
-      payload: {
-        registryType: "project",
-        subjectId: projectId,
-        publicKey,
-        projection: {
-          stableId: randomUUID(),
-          status: "draft",
-          version: "1",
-          asOf: "2026-08-01T00:00:00.000Z",
-          sourceAge: "12",
-          staleStatus: "fresh",
-          limitations: ["legal rights verification is outside the scope of this review"],
-          legalEffect: "none",
-          disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
-        },
-        sourceSnapshotHash: `0x${"11".repeat(32)}`,
-        policyVersion: "mn-core-1.0.0",
-        schemaVersion: "project-registry-1",
-      },
-    });
+    const published = await publishProject(
+      app,
+      fx.sql,
+      { drafter: operatorToken, publisher: await signIn(app, fx.disclosureApproverA) },
+      projectId,
+      { projection: await projectProjection(fx.sql, projectId, { status: "draft" }) },
+    );
     expect(published.statusCode).toBe(200);
 
     // In 11 §11.4, `registered` means "a Registry record exists", and this very request
@@ -678,31 +644,19 @@ describeDb("lifecycle in the public projection", () => {
       WHERE id = ${projectId}
     `;
 
-    const publicKey = `W39B-${randomUUID().slice(0, 8)}`;
-    const published = await app.inject({
-      method: "POST",
-      url: "/api/v1/registry-entries",
-      headers: { authorization: `Bearer ${operatorToken}`, "idempotency-key": idempotencyKey() },
-      payload: {
-        registryType: "project",
-        subjectId: projectId,
-        publicKey,
-        projection: {
-          stableId: randomUUID(),
-          status: "registered",
-          version: "1",
-          asOf: "2026-08-01T00:00:00.000Z",
-          sourceAge: "12",
-          staleStatus: "fresh",
-          limitations: ["legal rights verification is outside the scope of this review"],
-          legalEffect: "none",
-          disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
-        },
-        sourceSnapshotHash: `0x${"11".repeat(32)}`,
-        policyVersion: "mn-core-1.0.0",
-        schemaVersion: "project-registry-1",
-      },
+    const tokens = {
+      drafter: operatorToken,
+      publisher: await signIn(app, fx.disclosureApproverA),
+    };
+
+    // Claiming `registered` for a suspended project is a claim the record does not support.
+    const claimed = await publishProject(app, fx.sql, tokens, projectId, {
+      projection: await projectProjection(fx.sql, projectId, { status: "registered" }),
     });
+    expect(claimed.statusCode).toBe(422);
+    expect(claimed.json().code).toBe("PUBLICATION_PROJECTION_MISMATCH");
+
+    const published = await publishProject(app, fx.sql, tokens, projectId);
     expect(published.statusCode).toBe(200);
 
     // Reverting suspended via publication would resume without incident closure.

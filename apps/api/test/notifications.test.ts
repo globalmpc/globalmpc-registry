@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
+import { insertProject, publishProject } from "./helpers/registry.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -119,30 +120,12 @@ describeDb("notifications", () => {
 
   it("notifies operators when a public record is revoked", async () => {
     const publicKey = `NOTIF-${randomUUID().slice(0, 8)}`;
-    const published = await app.inject({
-      method: "POST",
-      url: "/api/v1/registry-entries",
-      headers: { authorization: `Bearer ${operatorToken}`, "idempotency-key": idempotencyKey() },
-      payload: {
-        registryType: "project",
-        subjectId: fx.projectA,
-        publicKey,
-        projection: {
-          stableId: randomUUID(),
-          status: "registered",
-          version: "1",
-          asOf: "2026-08-01T00:00:00.000Z",
-          sourceAge: "12",
-          staleStatus: "fresh",
-          limitations: ["Legal title verification is outside this review's scope"],
-          legalEffect: "none",
-          disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
-        },
-        sourceSnapshotHash: `0x${"11".repeat(32)}`,
-        policyVersion: "mn-core-1.0.0",
-        schemaVersion: "project-registry-1",
-      },
-    });
+    const published = await publishProject(
+      app,
+      fx.sql,
+      { drafter: operatorToken, publisher: await signIn(app, fx.disclosureApproverA) },
+      await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, publicKey),
+    );
     expect(published.statusCode).toBe(200);
 
     await fx.sql`

@@ -470,7 +470,7 @@ export async function registerDocumentRoutes(
             beforeVersion: row.version,
             afterVersion: row.version + 1,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             // Which fields changed, not their values: the type is the uploader's own words, and
             // the audit log is not a place for document descriptions.
             detail: {
@@ -649,7 +649,7 @@ export async function registerDocumentRoutes(
             resourceType: "document_link",
             resourceId: created!.id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { kind, upstreamUploadId, downstreamUploadId },
           });
 
@@ -717,7 +717,7 @@ export async function registerDocumentRoutes(
             resourceType: "document_link",
             resourceId: current.id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             reason: parsed.data.reason,
             detail: {
               kind: current.kind,
@@ -887,7 +887,7 @@ export async function registerDocumentRoutes(
               resourceType: "document_impact",
               resourceId: row.id,
               correlationId,
-              requestIp: request.ip,
+              requestIp: request.clientIp,
               reason: parsed.data.note,
               detail: {
                 resolution: parsed.data.resolution,
@@ -1007,7 +1007,7 @@ export async function registerDocumentRoutes(
           resourceType: "document_link_rule",
           resourceId: rule!.id,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
           detail: { kind, linksCreated },
         });
 
@@ -1065,7 +1065,7 @@ export async function registerDocumentRoutes(
             resourceType: "document_link_rule",
             resourceId: current.id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             reason: parsed.data.note,
           });
 

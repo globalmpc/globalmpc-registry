@@ -13980,8 +13980,8 @@
     },
     "/api/v1/registry-entries": {
       "post": {
-        "operationId": "publishRegistryVersion",
-        "summary": "Publish a version approved for disclosure — rejects fields outside the allowlist",
+        "operationId": "draftRegistryVersion",
+        "summary": "Draft a registry version — checked against the subject, nothing is public yet",
         "tags": [
           "workspace"
         ],
@@ -14015,9 +14015,9 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/definitions/publishRegistryVersionResponse",
+                  "$ref": "#/definitions/draftRegistryVersionResponse",
                   "definitions": {
-                    "publishRegistryVersionResponse": {
+                    "draftRegistryVersionResponse": {
                       "type": "object",
                       "properties": {
                         "id": {
@@ -14027,37 +14027,33 @@
                           "type": "string",
                           "enum": [
                             "project",
-                            "verification",
-                            "asset"
+                            "verification"
                           ]
+                        },
+                        "subjectId": {
+                          "type": "string"
                         },
                         "publicKey": {
                           "type": "string"
                         },
-                        "version": {
-                          "type": "integer",
-                          "exclusiveMinimum": true,
-                          "minimum": 0
+                        "projection": {
+                          "type": "object",
+                          "additionalProperties": {}
                         },
-                        "status": {
+                        "sourceSnapshotHash": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "commercialReuse": {
                           "type": "string",
                           "enum": [
-                            "draft",
-                            "published",
-                            "revoked",
-                            "superseded"
+                            "confirmed",
+                            "unconfirmed",
+                            "prohibited"
                           ]
                         },
-                        "contentHash": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^0x[0-9a-f]{64}$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                        "publishedAsCommercialBasis": {
+                          "type": "boolean"
                         },
                         "policyVersion": {
                           "type": "string"
@@ -14065,52 +14061,112 @@
                         "schemaVersion": {
                           "type": "string"
                         },
-                        "serializationVersion": {
+                        "containsPersonLevelIdentifier": {
+                          "type": "boolean"
+                        },
+                        "personIdentifierRecord": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "lawfulBasis": {
+                                  "type": "string"
+                                },
+                                "purpose": {
+                                  "type": "string"
+                                },
+                                "retention": {
+                                  "type": "string"
+                                },
+                                "irreversibilityAcknowledgedAt": {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                }
+                              },
+                              "required": [
+                                "lawfulBasis",
+                                "purpose",
+                                "retention",
+                                "irreversibilityAcknowledgedAt"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "proposedBySubjectId": {
+                          "type": "string"
+                        },
+                        "proposedAt": {
                           "type": "string",
-                          "const": "1"
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
                         },
-                        "publishedAt": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
-                            },
-                            {
-                              "type": "null"
-                            }
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "published",
+                            "rejected"
                           ]
                         },
-                        "revokedAt": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "supersededById": {
+                        "decidedBySubjectId": {
                           "type": [
                             "string",
                             "null"
                           ]
+                        },
+                        "decidedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "decisionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "entryVersionId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "version": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
                         }
                       },
                       "required": [
                         "id",
                         "registryType",
+                        "subjectId",
                         "publicKey",
-                        "version",
-                        "status",
-                        "contentHash",
+                        "projection",
+                        "sourceSnapshotHash",
+                        "commercialReuse",
+                        "publishedAsCommercialBasis",
                         "policyVersion",
                         "schemaVersion",
-                        "serializationVersion",
-                        "publishedAt",
-                        "revokedAt",
-                        "supersededById"
+                        "containsPersonLevelIdentifier",
+                        "personIdentifierRecord",
+                        "proposedBySubjectId",
+                        "proposedAt",
+                        "state",
+                        "decidedBySubjectId",
+                        "decidedAt",
+                        "decisionReason",
+                        "entryVersionId",
+                        "version"
                       ],
                       "additionalProperties": false
                     }
@@ -14284,6 +14340,47 @@
               }
             }
           },
+          "413": {
+            "description": "Request body larger than the server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
             "content": {
@@ -14367,12 +14464,113 @@
             }
           }
         },
-        "x-mpc-action": "registry.publish",
+        "x-mpc-action": "registry.draft",
         "security": [
           {
             "siweSession": []
           }
-        ]
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/draftRegistryVersionRequest",
+                "definitions": {
+                  "draftRegistryVersionRequest": {
+                    "type": "object",
+                    "properties": {
+                      "registryType": {
+                        "type": "string",
+                        "enum": [
+                          "project",
+                          "verification",
+                          "asset"
+                        ]
+                      },
+                      "subjectId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "publicKey": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "projection": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "sourceSnapshotHash": {
+                        "type": "string",
+                        "pattern": "^0x[0-9a-f]{64}$"
+                      },
+                      "policyVersion": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "schemaVersion": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "containsPersonLevelIdentifier": {
+                        "type": "boolean",
+                        "default": false
+                      },
+                      "personIdentifierRecord": {
+                        "type": "object",
+                        "properties": {
+                          "lawfulBasis": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "retention": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "irreversibilityAcknowledged": {
+                            "type": "boolean",
+                            "const": true
+                          }
+                        },
+                        "required": [
+                          "lawfulBasis",
+                          "purpose",
+                          "retention",
+                          "irreversibilityAcknowledged"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "publishedAsCommercialBasis": {
+                        "type": "boolean",
+                        "default": false
+                      }
+                    },
+                    "required": [
+                      "registryType",
+                      "subjectId",
+                      "publicKey",
+                      "projection",
+                      "policyVersion",
+                      "schemaVersion"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
       },
       "get": {
         "operationId": "listRegistryEntries",
@@ -14737,6 +14935,1497 @@
             "siweSession": []
           }
         ]
+      }
+    },
+    "/api/v1/registry-entries/drafts": {
+      "get": {
+        "operationId": "listRegistryDrafts",
+        "summary": "List registry drafts — pending and decided",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "subjectId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "published",
+                "rejected"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/listRegistryDraftsResponse",
+                  "definitions": {
+                    "listRegistryDraftsResponse": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "registryType": {
+                            "type": "string",
+                            "enum": [
+                              "project",
+                              "verification"
+                            ]
+                          },
+                          "subjectId": {
+                            "type": "string"
+                          },
+                          "publicKey": {
+                            "type": "string"
+                          },
+                          "projection": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          },
+                          "sourceSnapshotHash": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          },
+                          "commercialReuse": {
+                            "type": "string",
+                            "enum": [
+                              "confirmed",
+                              "unconfirmed",
+                              "prohibited"
+                            ]
+                          },
+                          "publishedAsCommercialBasis": {
+                            "type": "boolean"
+                          },
+                          "policyVersion": {
+                            "type": "string"
+                          },
+                          "schemaVersion": {
+                            "type": "string"
+                          },
+                          "containsPersonLevelIdentifier": {
+                            "type": "boolean"
+                          },
+                          "personIdentifierRecord": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "lawfulBasis": {
+                                    "type": "string"
+                                  },
+                                  "purpose": {
+                                    "type": "string"
+                                  },
+                                  "retention": {
+                                    "type": "string"
+                                  },
+                                  "irreversibilityAcknowledgedAt": {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  }
+                                },
+                                "required": [
+                                  "lawfulBasis",
+                                  "purpose",
+                                  "retention",
+                                  "irreversibilityAcknowledgedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "proposedBySubjectId": {
+                            "type": "string"
+                          },
+                          "proposedAt": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "published",
+                              "rejected"
+                            ]
+                          },
+                          "decidedBySubjectId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "decidedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "decisionReason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "entryVersionId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "version": {
+                            "type": "integer",
+                            "exclusiveMinimum": true,
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "registryType",
+                          "subjectId",
+                          "publicKey",
+                          "projection",
+                          "sourceSnapshotHash",
+                          "commercialReuse",
+                          "publishedAsCommercialBasis",
+                          "policyVersion",
+                          "schemaVersion",
+                          "containsPersonLevelIdentifier",
+                          "personIdentifierRecord",
+                          "proposedBySubjectId",
+                          "proposedAt",
+                          "state",
+                          "decidedBySubjectId",
+                          "decidedAt",
+                          "decisionReason",
+                          "entryVersionId",
+                          "version"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "registry.read",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/registry-entries/drafts/{draftId}/publish": {
+      "post": {
+        "operationId": "publishRegistryVersion",
+        "summary": "Publish a draft — by a Disclosure Approver who did not draft it",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Expected version of the versioned resource. Format: `\"3\"` (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/publishRegistryVersionResponse",
+                  "definitions": {
+                    "publishRegistryVersionResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "registryType": {
+                          "type": "string",
+                          "enum": [
+                            "project",
+                            "verification",
+                            "asset"
+                          ]
+                        },
+                        "publicKey": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "published",
+                            "revoked",
+                            "superseded"
+                          ]
+                        },
+                        "contentHash": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "policyVersion": {
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "type": "string"
+                        },
+                        "serializationVersion": {
+                          "type": "string",
+                          "const": "1"
+                        },
+                        "publishedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "revokedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "supersededById": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "registryType",
+                        "publicKey",
+                        "version",
+                        "status",
+                        "contentHash",
+                        "policyVersion",
+                        "schemaVersion",
+                        "serializationVersion",
+                        "publishedAt",
+                        "revokedAt",
+                        "supersededById"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "registry.publish",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/publishRegistryVersionRequest",
+                "definitions": {
+                  "publishRegistryVersionRequest": {
+                    "type": "object",
+                    "properties": {
+                      "irreversibilityAcknowledged": {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      "personIdentifierPublicationApproved": {
+                        "type": "boolean",
+                        "default": false
+                      }
+                    },
+                    "required": [
+                      "irreversibilityAcknowledged"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/registry-entries/drafts/{draftId}/reject": {
+      "post": {
+        "operationId": "rejectRegistryDraft",
+        "summary": "Turn a draft down — publishes nothing, the draft stays on record",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Expected version of the versioned resource. Format: `\"3\"` (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/rejectRegistryDraftResponse",
+                  "definitions": {
+                    "rejectRegistryDraftResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "registryType": {
+                          "type": "string",
+                          "enum": [
+                            "project",
+                            "verification"
+                          ]
+                        },
+                        "subjectId": {
+                          "type": "string"
+                        },
+                        "publicKey": {
+                          "type": "string"
+                        },
+                        "projection": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "sourceSnapshotHash": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "commercialReuse": {
+                          "type": "string",
+                          "enum": [
+                            "confirmed",
+                            "unconfirmed",
+                            "prohibited"
+                          ]
+                        },
+                        "publishedAsCommercialBasis": {
+                          "type": "boolean"
+                        },
+                        "policyVersion": {
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "type": "string"
+                        },
+                        "containsPersonLevelIdentifier": {
+                          "type": "boolean"
+                        },
+                        "personIdentifierRecord": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "lawfulBasis": {
+                                  "type": "string"
+                                },
+                                "purpose": {
+                                  "type": "string"
+                                },
+                                "retention": {
+                                  "type": "string"
+                                },
+                                "irreversibilityAcknowledgedAt": {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                }
+                              },
+                              "required": [
+                                "lawfulBasis",
+                                "purpose",
+                                "retention",
+                                "irreversibilityAcknowledgedAt"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "proposedBySubjectId": {
+                          "type": "string"
+                        },
+                        "proposedAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "published",
+                            "rejected"
+                          ]
+                        },
+                        "decidedBySubjectId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "decidedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "decisionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "entryVersionId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "version": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "registryType",
+                        "subjectId",
+                        "publicKey",
+                        "projection",
+                        "sourceSnapshotHash",
+                        "commercialReuse",
+                        "publishedAsCommercialBasis",
+                        "policyVersion",
+                        "schemaVersion",
+                        "containsPersonLevelIdentifier",
+                        "personIdentifierRecord",
+                        "proposedBySubjectId",
+                        "proposedAt",
+                        "state",
+                        "decidedBySubjectId",
+                        "decidedAt",
+                        "decisionReason",
+                        "entryVersionId",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "registry.publish",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/rejectRegistryDraftRequest",
+                "definitions": {
+                  "rejectRegistryDraftRequest": {
+                    "type": "object",
+                    "properties": {
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      }
+                    },
+                    "required": [
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/registry-entries/{entryId}/revoke": {
@@ -28274,6 +29963,145 @@
                               }
                             ]
                           },
+                          "conflictDisclosure": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "executionMode": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "record_only",
+                                  "onchain_bounded",
+                                  "offchain_required"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "execution": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "execution_pending",
+                                      "executed",
+                                      "failed",
+                                      "disputed"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "records": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "fromState": {
+                                      "type": "string"
+                                    },
+                                    "outcome": {
+                                      "type": "string",
+                                      "enum": [
+                                        "executed",
+                                        "failed",
+                                        "disputed"
+                                      ]
+                                    },
+                                    "recorderSubjectId": {
+                                      "type": "string"
+                                    },
+                                    "executor": {
+                                      "type": "string"
+                                    },
+                                    "authority": {
+                                      "type": "string"
+                                    },
+                                    "executedAction": {
+                                      "type": "string"
+                                    },
+                                    "contractReference": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "contractHash": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "externalReference": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "effectiveDate": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "evidenceReference": {
+                                      "type": "string"
+                                    },
+                                    "evidenceHash": {
+                                      "type": "string"
+                                    },
+                                    "limitations": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "recordedAt": {
+                                      "type": "string",
+                                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "fromState",
+                                    "outcome",
+                                    "recorderSubjectId",
+                                    "executor",
+                                    "authority",
+                                    "executedAction",
+                                    "contractReference",
+                                    "contractHash",
+                                    "externalReference",
+                                    "effectiveDate",
+                                    "evidenceReference",
+                                    "evidenceHash",
+                                    "limitations",
+                                    "recordedAt"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "records"
+                            ],
+                            "additionalProperties": false
+                          },
                           "limitations": {
                             "type": "array",
                             "items": {
@@ -28302,6 +30130,9 @@
                           "snapshotBlock",
                           "eligibleWeight",
                           "eligibleWeightSource",
+                          "conflictDisclosure",
+                          "executionMode",
+                          "execution",
                           "limitations"
                         ],
                         "additionalProperties": false
@@ -28802,6 +30633,145 @@
                             }
                           ]
                         },
+                        "conflictDisclosure": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "executionMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "record_only",
+                                "onchain_bounded",
+                                "offchain_required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "execution": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "execution_pending",
+                                    "executed",
+                                    "failed",
+                                    "disputed"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "records": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "fromState": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": [
+                                      "executed",
+                                      "failed",
+                                      "disputed"
+                                    ]
+                                  },
+                                  "recorderSubjectId": {
+                                    "type": "string"
+                                  },
+                                  "executor": {
+                                    "type": "string"
+                                  },
+                                  "authority": {
+                                    "type": "string"
+                                  },
+                                  "executedAction": {
+                                    "type": "string"
+                                  },
+                                  "contractReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "contractHash": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "externalReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "effectiveDate": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "evidenceReference": {
+                                    "type": "string"
+                                  },
+                                  "evidenceHash": {
+                                    "type": "string"
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "recordedAt": {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "fromState",
+                                  "outcome",
+                                  "recorderSubjectId",
+                                  "executor",
+                                  "authority",
+                                  "executedAction",
+                                  "contractReference",
+                                  "contractHash",
+                                  "externalReference",
+                                  "effectiveDate",
+                                  "evidenceReference",
+                                  "evidenceHash",
+                                  "limitations",
+                                  "recordedAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "records"
+                          ],
+                          "additionalProperties": false
+                        },
                         "limitations": {
                           "type": "array",
                           "items": {
@@ -28830,6 +30800,9 @@
                         "snapshotBlock",
                         "eligibleWeight",
                         "eligibleWeightSource",
+                        "conflictDisclosure",
+                        "executionMode",
+                        "execution",
                         "limitations"
                       ],
                       "additionalProperties": false
@@ -29210,13 +31183,27 @@
                           }
                         ],
                         "default": null
+                      },
+                      "conflictDisclosure": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "executionMode": {
+                        "type": "string",
+                        "enum": [
+                          "record_only",
+                          "onchain_bounded",
+                          "offchain_required"
+                        ]
                       }
                     },
                     "required": [
                       "space",
                       "proposalType",
                       "title",
-                      "rationale"
+                      "rationale",
+                      "conflictDisclosure",
+                      "executionMode"
                     ],
                     "additionalProperties": false
                   }
@@ -29463,6 +31450,145 @@
                             }
                           ]
                         },
+                        "conflictDisclosure": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "executionMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "record_only",
+                                "onchain_bounded",
+                                "offchain_required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "execution": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "execution_pending",
+                                    "executed",
+                                    "failed",
+                                    "disputed"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "records": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "fromState": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": [
+                                      "executed",
+                                      "failed",
+                                      "disputed"
+                                    ]
+                                  },
+                                  "recorderSubjectId": {
+                                    "type": "string"
+                                  },
+                                  "executor": {
+                                    "type": "string"
+                                  },
+                                  "authority": {
+                                    "type": "string"
+                                  },
+                                  "executedAction": {
+                                    "type": "string"
+                                  },
+                                  "contractReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "contractHash": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "externalReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "effectiveDate": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "evidenceReference": {
+                                    "type": "string"
+                                  },
+                                  "evidenceHash": {
+                                    "type": "string"
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "recordedAt": {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "fromState",
+                                  "outcome",
+                                  "recorderSubjectId",
+                                  "executor",
+                                  "authority",
+                                  "executedAction",
+                                  "contractReference",
+                                  "contractHash",
+                                  "externalReference",
+                                  "effectiveDate",
+                                  "evidenceReference",
+                                  "evidenceHash",
+                                  "limitations",
+                                  "recordedAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "records"
+                          ],
+                          "additionalProperties": false
+                        },
                         "limitations": {
                           "type": "array",
                           "items": {
@@ -29491,6 +31617,9 @@
                         "snapshotBlock",
                         "eligibleWeight",
                         "eligibleWeightSource",
+                        "conflictDisclosure",
+                        "executionMode",
+                        "execution",
                         "limitations"
                       ],
                       "additionalProperties": false
@@ -30009,6 +32138,145 @@
                             }
                           ]
                         },
+                        "conflictDisclosure": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "executionMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "record_only",
+                                "onchain_bounded",
+                                "offchain_required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "execution": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "execution_pending",
+                                    "executed",
+                                    "failed",
+                                    "disputed"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "records": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "fromState": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": [
+                                      "executed",
+                                      "failed",
+                                      "disputed"
+                                    ]
+                                  },
+                                  "recorderSubjectId": {
+                                    "type": "string"
+                                  },
+                                  "executor": {
+                                    "type": "string"
+                                  },
+                                  "authority": {
+                                    "type": "string"
+                                  },
+                                  "executedAction": {
+                                    "type": "string"
+                                  },
+                                  "contractReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "contractHash": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "externalReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "effectiveDate": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "evidenceReference": {
+                                    "type": "string"
+                                  },
+                                  "evidenceHash": {
+                                    "type": "string"
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "recordedAt": {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "fromState",
+                                  "outcome",
+                                  "recorderSubjectId",
+                                  "executor",
+                                  "authority",
+                                  "executedAction",
+                                  "contractReference",
+                                  "contractHash",
+                                  "externalReference",
+                                  "effectiveDate",
+                                  "evidenceReference",
+                                  "evidenceHash",
+                                  "limitations",
+                                  "recordedAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "records"
+                          ],
+                          "additionalProperties": false
+                        },
                         "limitations": {
                           "type": "array",
                           "items": {
@@ -30037,6 +32305,9 @@
                         "snapshotBlock",
                         "eligibleWeight",
                         "eligibleWeightSource",
+                        "conflictDisclosure",
+                        "executionMode",
+                        "execution",
                         "limitations"
                       ],
                       "additionalProperties": false
@@ -30335,7 +32606,7 @@
             }
           }
         },
-        "x-mpc-action": "governance.propose",
+        "x-mpc-action": "governance.administer",
         "security": [
           {
             "siweSession": []
@@ -30632,6 +32903,145 @@
                             }
                           ]
                         },
+                        "conflictDisclosure": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "executionMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "record_only",
+                                "onchain_bounded",
+                                "offchain_required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "execution": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "execution_pending",
+                                    "executed",
+                                    "failed",
+                                    "disputed"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "records": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "fromState": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": [
+                                      "executed",
+                                      "failed",
+                                      "disputed"
+                                    ]
+                                  },
+                                  "recorderSubjectId": {
+                                    "type": "string"
+                                  },
+                                  "executor": {
+                                    "type": "string"
+                                  },
+                                  "authority": {
+                                    "type": "string"
+                                  },
+                                  "executedAction": {
+                                    "type": "string"
+                                  },
+                                  "contractReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "contractHash": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "externalReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "effectiveDate": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "evidenceReference": {
+                                    "type": "string"
+                                  },
+                                  "evidenceHash": {
+                                    "type": "string"
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "recordedAt": {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "fromState",
+                                  "outcome",
+                                  "recorderSubjectId",
+                                  "executor",
+                                  "authority",
+                                  "executedAction",
+                                  "contractReference",
+                                  "contractHash",
+                                  "externalReference",
+                                  "effectiveDate",
+                                  "evidenceReference",
+                                  "evidenceHash",
+                                  "limitations",
+                                  "recordedAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "records"
+                          ],
+                          "additionalProperties": false
+                        },
                         "limitations": {
                           "type": "array",
                           "items": {
@@ -30660,6 +33070,9 @@
                         "snapshotBlock",
                         "eligibleWeight",
                         "eligibleWeightSource",
+                        "conflictDisclosure",
+                        "executionMode",
+                        "execution",
                         "limitations"
                       ],
                       "additionalProperties": false
@@ -30989,6 +33402,848 @@
                     },
                     "required": [
                       "choice"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/governance/proposals/{proposalId}/execution-records": {
+      "post": {
+        "operationId": "recordProposalExecution",
+        "summary": "Record off-chain execution — the only way out of execution_pending",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "proposalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Expected version of the versioned resource. Format: `\"3\"` (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/recordProposalExecutionResponse",
+                  "definitions": {
+                    "recordProposalExecutionResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "space": {
+                          "type": "string",
+                          "enum": [
+                            "protocol",
+                            "project"
+                          ]
+                        },
+                        "projectId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "proposalType": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "rationale": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        },
+                        "proposerSubjectId": {
+                          "type": "string"
+                        },
+                        "quorum": {
+                          "type": "object",
+                          "properties": {
+                            "numerator": {
+                              "type": "integer"
+                            },
+                            "denominator": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "numerator",
+                            "denominator"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "threshold": {
+                          "type": "object",
+                          "properties": {
+                            "numerator": {
+                              "type": "integer"
+                            },
+                            "denominator": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "numerator",
+                            "denominator"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "votingOpensAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "votingClosesAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "version": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        },
+                        "tally": {
+                          "type": "object",
+                          "properties": {
+                            "forWeight": {
+                              "type": "string"
+                            },
+                            "againstWeight": {
+                              "type": "string"
+                            },
+                            "abstainWeight": {
+                              "type": "string"
+                            },
+                            "participatedWeight": {
+                              "type": "string"
+                            },
+                            "quorumMet": {
+                              "type": "boolean"
+                            },
+                            "thresholdMet": {
+                              "type": "boolean"
+                            },
+                            "provisionalOutcome": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "forWeight",
+                            "againstWeight",
+                            "abstainWeight",
+                            "participatedWeight",
+                            "quorumMet",
+                            "thresholdMet",
+                            "provisionalOutcome",
+                            "reason"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "transitions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "fromState": {
+                                "type": "string"
+                              },
+                              "toState": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "occurredAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              }
+                            },
+                            "required": [
+                              "fromState",
+                              "toState",
+                              "reason",
+                              "occurredAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "weightSource": {
+                          "type": "string",
+                          "enum": [
+                            "onchain_snapshot",
+                            "manual"
+                          ]
+                        },
+                        "snapshotBlock": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "eligibleWeight": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "eligibleWeightSource": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "onchain_total_supply",
+                                "manual"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "conflictDisclosure": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "executionMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "record_only",
+                                "onchain_bounded",
+                                "offchain_required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "execution": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "execution_pending",
+                                    "executed",
+                                    "failed",
+                                    "disputed"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "records": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "fromState": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": [
+                                      "executed",
+                                      "failed",
+                                      "disputed"
+                                    ]
+                                  },
+                                  "recorderSubjectId": {
+                                    "type": "string"
+                                  },
+                                  "executor": {
+                                    "type": "string"
+                                  },
+                                  "authority": {
+                                    "type": "string"
+                                  },
+                                  "executedAction": {
+                                    "type": "string"
+                                  },
+                                  "contractReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "contractHash": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "externalReference": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "effectiveDate": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "evidenceReference": {
+                                    "type": "string"
+                                  },
+                                  "evidenceHash": {
+                                    "type": "string"
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "recordedAt": {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "fromState",
+                                  "outcome",
+                                  "recorderSubjectId",
+                                  "executor",
+                                  "authority",
+                                  "executedAction",
+                                  "contractReference",
+                                  "contractHash",
+                                  "externalReference",
+                                  "effectiveDate",
+                                  "evidenceReference",
+                                  "evidenceHash",
+                                  "limitations",
+                                  "recordedAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "records"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "limitations": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "space",
+                        "projectId",
+                        "proposalType",
+                        "title",
+                        "rationale",
+                        "state",
+                        "proposerSubjectId",
+                        "quorum",
+                        "threshold",
+                        "votingOpensAt",
+                        "votingClosesAt",
+                        "createdAt",
+                        "version",
+                        "tally",
+                        "transitions",
+                        "weightSource",
+                        "snapshotBlock",
+                        "eligibleWeight",
+                        "eligibleWeightSource",
+                        "conflictDisclosure",
+                        "executionMode",
+                        "execution",
+                        "limitations"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "governance.execution.record",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/recordProposalExecutionRequest",
+                "definitions": {
+                  "recordProposalExecutionRequest": {
+                    "type": "object",
+                    "properties": {
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "executed",
+                          "failed",
+                          "disputed"
+                        ]
+                      },
+                      "executor": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "executedAction": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "contractReference": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "contractHash": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "externalReference": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "effectiveDate": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "evidenceReference": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "evidenceHash": {
+                        "type": "string",
+                        "pattern": "^0x[0-9a-f]{64}$"
+                      },
+                      "limitations": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "minItems": 1
+                      }
+                    },
+                    "required": [
+                      "outcome",
+                      "executor",
+                      "authority",
+                      "executedAction",
+                      "evidenceReference",
+                      "evidenceHash",
+                      "limitations"
                     ],
                     "additionalProperties": false
                   }
@@ -48905,6 +52160,27 @@
                                   "voterCount"
                                 ],
                                 "additionalProperties": false
+                              },
+                              "conflictDisclosure": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "executionMode": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "record_only",
+                                      "onchain_bounded",
+                                      "offchain_required"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -48918,7 +52194,9 @@
                               "votingOpensAt",
                               "votingClosesAt",
                               "createdAt",
-                              "tally"
+                              "tally",
+                              "conflictDisclosure",
+                              "executionMode"
                             ],
                             "additionalProperties": false
                           }
@@ -49334,6 +52612,27 @@
                           ],
                           "additionalProperties": false
                         },
+                        "conflictDisclosure": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "executionMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "record_only",
+                                "onchain_bounded",
+                                "offchain_required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "transitions": {
                           "type": "array",
                           "items": {
@@ -49387,7 +52686,439 @@
                         "votingClosesAt",
                         "createdAt",
                         "tally",
+                        "conflictDisclosure",
+                        "executionMode",
                         "transitions"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/governance/centralization": {
+      "get": {
+        "operationId": "getGovernanceCentralization",
+        "summary": "Current governance authority and the stages still to come",
+        "tags": [
+          "public"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/getGovernanceCentralizationResponse",
+                  "definitions": {
+                    "getGovernanceCentralizationResponse": {
+                      "type": "object",
+                      "properties": {
+                        "currentStage": {
+                          "type": "string"
+                        },
+                        "stages": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "stage": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "delegates": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "current": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "stage",
+                              "description",
+                              "delegates",
+                              "current"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "transitionCriteria": {
+                          "type": "object",
+                          "properties": {
+                            "candidates": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "decided": {
+                              "type": "boolean",
+                              "const": false
+                            },
+                            "note": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "candidates",
+                            "decided",
+                            "note"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "centralizedPowers": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "governanceRoles": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "role": {
+                                "type": "string"
+                              },
+                              "power": {
+                                "type": "string"
+                              },
+                              "activeHolders": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "role",
+                              "power",
+                              "activeHolders"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "anchor": {
+                          "type": "object",
+                          "properties": {
+                            "contracts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "chainId": {
+                                    "type": "integer"
+                                  },
+                                  "contractAddress": {
+                                    "type": "string"
+                                  },
+                                  "safeAddresses": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "chainId",
+                                  "contractAddress",
+                                  "safeAddresses"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "note": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "contracts",
+                            "note"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "limitations": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "currentStage",
+                        "stages",
+                        "transitionCriteria",
+                        "centralizedPowers",
+                        "governanceRoles",
+                        "anchor",
+                        "limitations"
                       ],
                       "additionalProperties": false
                     }

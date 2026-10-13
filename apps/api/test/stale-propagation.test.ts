@@ -317,6 +317,47 @@ describeDb("stale propagation", () => {
       expect(signal?.reason).toContain("Underlying");
     });
 
+    it("leaves a signal on the verification entry that publishes the stale attestation", async () => {
+      // A Verification Registry entry points at its attestation, not at the project, so the
+      // project match alone would miss it.
+      const { claimId } = await seedClaim();
+      const attestationId = await seedAttestation(claimId, "active");
+      const entryId = randomUUID();
+      await fx.sql`
+        INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
+        VALUES (${entryId}, ${fx.tenantA}, 'verification', ${attestationId},
+                ${`VER-${entryId.slice(0, 8)}`})
+      `;
+      const versionId = randomUUID();
+      await fx.sql`
+        INSERT INTO core.registry_entry_versions (
+          id, tenant_id, entry_id, version, status, public_projection,
+          content_hash, source_snapshot_hash, policy_version, schema_version,
+          serialization_version, published_at
+        ) VALUES (
+          ${versionId}, ${fx.tenantA}, ${entryId}, 1, 'published', '{}'::jsonb,
+          ${`0x${"55".repeat(32)}`}, ${`0x${"22".repeat(32)}`}, '1', '1', '1', now()
+        )
+      `;
+
+      await fx.sql`
+        UPDATE core.source_connections SET state = 'degraded' WHERE id = ${fx.connectionA}
+      `;
+
+      const [signal] = await fx.sql<{ resolution: string; origin_attestation_id: string }[]>`
+        SELECT resolution::text, origin_attestation_id FROM core.evidence_stale_signals
+        WHERE target_type = 'registry_entry_version' AND target_id = ${versionId}
+      `;
+      expect(signal?.resolution).toBe("open");
+      expect(signal?.origin_attestation_id).toBe(attestationId);
+
+      // A signal only — the public record stays up.
+      const [version] = await fx.sql<{ status: string }[]>`
+        SELECT status::text FROM core.registry_entry_versions WHERE id = ${versionId}
+      `;
+      expect(version?.status).toBe("published");
+    });
+
     it("does not change the public version itself", async () => {
       const versionId = await seedPublishedRegistryEntry();
       const { claimId } = await seedClaim();

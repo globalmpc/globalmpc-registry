@@ -37,6 +37,12 @@ test.describe("Governance", () => {
     await expect(page.getByTestId("create-proposal")).toBeDisabled();
     await page.getByLabel("Eligible weight (required)").fill("100");
 
+    // A conflict-of-interest disclosure is required too (09 §9.4) — "none known" is written out.
+    await expect(page.getByTestId("create-proposal")).toBeDisabled();
+    await page
+      .getByLabel("Conflict disclosure (required)")
+      .fill("No conflict known to the proposer");
+
     await page.getByTestId("create-proposal").click();
 
     const table = page.getByTestId("proposal-table");
@@ -48,6 +54,9 @@ test.describe("Governance", () => {
       "",
     );
     await expect(stateCell).toHaveText("draft");
+    await expect(page.getByTestId(`disclosure-${proposalId}`)).toContainText(
+      "No conflict known to the proposer",
+    );
 
     // State changes also require a reason.
     await expect(page.getByTestId(`advance-review-${proposalId}`)).toBeDisabled();
@@ -95,6 +104,13 @@ test.describe("Governance", () => {
     await expect(page.getByTestId("governance-boundary")).toContainText(
       "does not happen automatically",
     );
+  });
+
+  test("shows the current stage and who holds governance powers", async ({ page }) => {
+    // 09 §9.11: the current stage and the powers still centralized are public.
+    await page.goto("/governance");
+    await expect(page.getByTestId("governance-stage")).toHaveText("founder_operated");
+    await expect(page.getByTestId("governance-centralization")).toContainText("treasury");
   });
 
   test("voters cannot propose and proposers cannot vote", async ({ page }) => {

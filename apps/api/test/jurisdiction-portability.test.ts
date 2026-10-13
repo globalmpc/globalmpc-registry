@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from "./helpers/db.js";
+import { projectKeyOf, publishProject } from "./helpers/registry.js";
 import rulesFixture from "../../../packages/policy/test/fixtures/registry-gate.rules.json" with { type: "json" };
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
@@ -181,28 +182,15 @@ describeDb("second-jurisdiction portability (AC-25)", () => {
   });
 
   it("publishes a synthetic-jurisdiction record to the Registry and reads it publicly", async () => {
-    const publicKey = `ZZZ-PUB-${randomUUID().slice(0, 8)}`;
-    const published = await post(operatorToken, "/api/v1/registry-entries", {
-      registryType: "project",
-      subjectId: projectId,
-      publicKey,
-      projection: {
-        stableId: randomUUID(),
-        status: "registered",
-        version: "1",
-        asOf: "2026-08-01T00:00:00.000Z",
-        sourceAge: "12",
-        staleStatus: "fresh",
-        hostCountry: JURISDICTION,
-        limitations: ["Legal title verification is outside this review's scope"],
-        legalEffect: "none",
-        disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"],
-      },
+    const publicKey = await projectKeyOf(fx.sql, projectId);
+    const published = await publishProject(
+      app,
+      fx.sql,
+      { drafter: operatorToken, publisher: await signIn(app, fx.disclosureApproverA) },
+      projectId,
       // The policy version string must not embed the jurisdiction either.
-      sourceSnapshotHash: `0x${"33".repeat(32)}`,
-      policyVersion: "zzz-core-1.0.0",
-      schemaVersion: "project-registry-1",
-    });
+      { policyVersion: "zzz-core-1.0.0" },
+    );
     expect(published.statusCode).toBe(200);
 
     const read = await app.inject({

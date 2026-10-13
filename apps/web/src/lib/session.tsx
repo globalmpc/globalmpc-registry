@@ -64,6 +64,10 @@ const DEMO_ACCOUNT_PROFILES: readonly Omit<DemoAccount, "privateKey">[] = [
   { label: "Reviewer A", description: "Tenant A · reviewer_cp_qp · signs under a credential" },
   { label: "Proposer A", description: "Tenant A · protocol_proposer · creates proposals" },
   { label: "Voter A", description: "Tenant A · protocol_voter · votes only" },
+  {
+    label: "Publisher A",
+    description: "Tenant A · disclosure_approver · publishes what an operator drafted",
+  },
   // A system identity, not a person. It is listed so that E2E can call the API with the
   // checking service's session.
   { label: "Scan Service", description: "Tenant A · scan_service · reports scan results only" },

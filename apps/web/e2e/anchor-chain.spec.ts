@@ -41,11 +41,20 @@ test.describe("chain confirmation", () => {
 
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;
 
+    // One person drafts, another publishes (02 §2.8).
+    await page.goto(`/w/projects/${projectId}/publication`);
+    await page.getByTestId("draft").click();
+    await expect(page.getByTestId("pending-draft")).toBeVisible();
+
+    await connectAs(page, "Publisher A");
     await page.goto(`/w/projects/${projectId}/publication`);
     await page.getByTestId("irreversibility-ack").check();
     await page.getByTestId("publish").click();
     await expect(page.getByTestId("published-result")).toContainText(projectKey);
 
+    await connectAs(page, "Operator A");
+    await page.goto(`/w/projects/${projectId}/publication`);
+    await expect(page.getByTestId("published-result")).toContainText(projectKey);
     await page.getByTestId("anchor").click();
     // Right after creation it is not on chain.
     await expect(page.getByTestId("anchor-result")).toContainText("created");

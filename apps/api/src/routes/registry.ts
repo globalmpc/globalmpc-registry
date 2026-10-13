@@ -10,6 +10,7 @@ import {
   PROOF_PROVES,
   publicProjection,
   publicRegistryListQuery,
+  publishRegistryDraftRequest,
 } from "@mpc/api-contract";
 import type { AppConfig } from "../config.js";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
@@ -29,272 +30,338 @@ import {
   requireReadContext,
 } from "./shared.js";
 import { buildAnchorBatch, buildInclusionProof } from "../services/anchor-batch.js";
+import {
+  projectionMismatches,
+  resolvePublicationSubject,
+} from "../services/registry-publication.js";
+import {
+  lockDraft,
+  parseBody,
+  registerRegistryDraftRoutes,
+  safeguardsOf,
+  subjectOf,
+} from "./registry-drafts.js";
 
 /**
- * Registry publication and public lookup — spec 05 §5.6·§5.7, 08 §8.11.
+ * Registry publication and public lookup — spec 02 §2.8, 05 §5.6·§5.7·§5.9, 07 §7.2, 08 §8.11.
  *
  * What this route guarantees:
  *
+ * - Publication takes two steps and two people. A draft (`registry-drafts.ts`) records what
+ *   would be published; a Disclosure Approver who did not draft it publishes (DB
+ *   `registry_draft_two_person`).
+ * - What the server can know is not taken from the client: the evidence snapshot hash, the
+ *   commercial-reuse status of the sources, the subject's identity and lifecycle.
  * - Publication is rejected if any field is outside the allowlist (AC-22).
- * - Natural-person identifiers are public only when all five safeguards are present (AC-32).
+ * - Natural-person identifiers are public only when all five safeguards are on record (AC-32).
  * - A published version cannot be overwritten. Revoke is a new state, not a deletion.
  * - Public routes are unauthenticated and return only published versions.
  * - An inclusion proof is returned with what it does **not** prove (AC-23).
  */
-
-const publishSchema = z.object({
-  registryType: z.enum(["project", "verification", "asset"]),
-  subjectId: z.string().uuid(),
-  publicKey: z.string().min(1),
-  projection: z.record(z.unknown()),
-  sourceSnapshotHash: z.string().regex(/^0x[0-9a-f]{64}$/),
-  policyVersion: z.string().min(1),
-  schemaVersion: z.string().min(1),
-  containsPersonLevelIdentifier: z.boolean().default(false),
-  personIdentifierSafeguards: z
-    .object({
-      lawfulBasisRecorded: z.boolean(),
-      explicitPublicationApproval: z.boolean(),
-      purposeRecorded: z.boolean(),
-      retentionRecorded: z.boolean(),
-      irreversibilityAcknowledged: z.boolean(),
-    })
-    .default({
-      lawfulBasisRecorded: false,
-      explicitPublicationApproval: false,
-      purposeRecorded: false,
-      retentionRecorded: false,
-      irreversibilityAcknowledged: false,
-    }),
-  commercialReuse: z.enum(["confirmed", "unconfirmed", "prohibited"]).default("unconfirmed"),
-  publishedAsCommercialBasis: z.boolean().default(false),
-});
 
 export async function registerRegistryRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
   config: AppConfig,
 ): Promise<void> {
-  // --- Publish -----------------------------------------------------------
+  // --- Draft (step 1) ----------------------------------------------------
 
-  app.post("/api/v1/registry-entries", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+  await registerRegistryDraftRoutes(app, sql);
 
-    const parsed = publishSchema.safeParse(request.body);
-    if (!parsed.success) {
-      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
-        issues: parsed.error.issues,
-      });
-    }
+  // --- Publish (step 2) --------------------------------------------------
 
-    const effectiveRole = assertAuthorized(
-      session,
-      "registry.publish",
-      tenantResource(tenantId, {
-        sensitivity: "public",
-        state: "approved",
-        statesAllowingAction: ["approved"],
-      }),
-      sessionFacts(session),
-    );
+  app.post<{ Params: { draftId: string } }>(
+    "/api/v1/registry-entries/drafts/:draftId/publish",
+    async (request, reply) => {
+      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      // The approver states which revision of the draft they read.
+      const expectedDraftVersion = requireIfMatch(request);
 
-    const data = parsed.data;
-    const { requestId, asOf, correlationId } = request.context;
-    const requestHash = hashRequest(request.body);
+      const effectiveRole = assertAuthorized(
+        session,
+        "registry.publish",
+        tenantResource(tenantId, {
+          sensitivity: "public",
+          state: "pending",
+          statesAllowingAction: ["pending"],
+          // Publication requires independence from whoever drafted it (02 §2.8).
+          separationSensitive: true,
+        }),
+        sessionFacts(session),
+      );
+      const body = parseBody(publishRegistryDraftRequest, request.body);
+      const publisher = subjectOf(session);
 
-    // The domain decides publishability. The route does not rewrite the allowlist.
-    const publishCheck = checkPublishable({
-      fields: Object.keys(data.projection),
-      sensitivity: "public",
-      disclosureApproved: true,
-      containsPersonLevelIdentifier: data.containsPersonLevelIdentifier,
-      personIdentifierSafeguards: data.personIdentifierSafeguards,
-      commercialReuse: data.commercialReuse,
-      publishedAsCommercialBasis: data.publishedAsCommercialBasis,
-    });
+      const { requestId, asOf, correlationId } = request.context;
+      const requestHash = hashRequest(request.body);
 
-    if (!publishCheck.allowed) {
-      throw unprocessable(publishCheck.reason, "This projection cannot be published", {
-        offendingFields: publishCheck.offendingFields,
-      });
-    }
+      return withTenant(sql, { tenantId }, (tx) =>
+        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+          const draft = await lockDraft(tx, tenantId, request.params.draftId);
+          if (!draft) throw notFound("Draft not found");
+          assertVersionMatches(expectedDraftVersion, draft.version, "registry_publication_draft");
 
-    // Filters once more through the schema. `.strict()` rejects fields outside the allowlist.
-    const projectionCheck = publicProjection.safeParse(data.projection);
-    if (!projectionCheck.success) {
-      throw unprocessable("PUBLICATION_PROJECTION_INVALID", "Projection does not match the public schema", {
-        issues: projectionCheck.error.issues,
-      });
-    }
-
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-        const [existingEntry] = await tx<{ id: string }[]>`
-          SELECT id FROM core.registry_entries
-          WHERE registry_type = ${data.registryType} AND public_key = ${data.publicKey}
-        `;
-
-        const entryId = existingEntry?.id ?? randomUUID();
-        if (!existingEntry) {
-          await tx`
-            INSERT INTO core.registry_entries (
-              id, tenant_id, registry_type, subject_id, public_key
-            ) VALUES (
-              ${entryId}, ${tenantId}, ${data.registryType}, ${data.subjectId}, ${data.publicKey}
-            )
-          `;
-        }
-
-        const [previous] = await tx<{ id: string; version: number }[]>`
-          SELECT id, version FROM core.registry_entry_versions
-          WHERE entry_id = ${entryId} ORDER BY version DESC LIMIT 1
-        `;
-
-        const versionId = randomUUID();
-        const nextVersion = (previous?.version ?? 0) + 1;
-
-        /**
-         * `status` holds the lifecycle **after** publication.
-         *
-         * Storing the client's value as is would leave the first published version as `draft`,
-         * because the UI sends the pre-publication state. But `registered` in 11 §11.4 means
-         * "a Registry record exists", and this very request creates that record — so the moment
-         * it is stored, it is no longer `draft`.
-         *
-         * The server decides. In the public projection, lifecycle is **not a value the client
-         * gets to claim.**
-         */
-        const publishedProjection = { ...(data.projection as Record<string, unknown>) };
-        if (data.registryType === "project") {
-          const [current] = await tx<{ lifecycle_state: string }[]>`
-            SELECT lifecycle_state FROM core.projects
-            WHERE tenant_id = ${tenantId} AND id = ${data.subjectId}
-          `;
-          if (current) {
-            // If it was `draft`, this publication moves it (below). Any other state
-            // stays — publication does not push the state forward.
-            publishedProjection["status"] =
-              current.lifecycle_state === "draft" ? "registered" : current.lifecycle_state;
-          }
-        }
-        const contentHash = hashProjection(publishedProjection as never);
-
-        await tx`
-          INSERT INTO core.registry_entry_versions (
-            id, tenant_id, entry_id, version, status, public_projection,
-            content_hash, source_snapshot_hash, policy_version, schema_version,
-            previous_version_id, published_at
-          ) VALUES (
-            ${versionId}, ${tenantId}, ${entryId}, ${nextVersion}, 'published',
-            ${tx.json(publishedProjection as never)}, ${contentHash}, ${data.sourceSnapshotHash},
-            ${data.policyVersion}, ${data.schemaVersion}, ${previous?.id ?? null}, now()
-          )
-        `;
-
-        // The previous version is not deleted; it is linked as superseded (invariant 4).
-        if (previous) {
-          await tx`
-            UPDATE core.registry_entry_versions
-            SET status = 'superseded', superseded_by_id = ${versionId}
-            WHERE id = ${previous.id}
-          `;
-        }
-
-        /**
-         * 04 §4.3 — `draft→registered`.
-         *
-         * The transition table's guard is "Project Registry minimum fields and accountable subject",
-         * and this publication is what satisfies it. It is done by someone who already holds
-         * `registry.publish`, so no new permission is created.
-         *
-         * **Moves only from `draft`.** The `WHERE` is that guard — publishing from another state
-         * leaves the state as is. Reverting suspended via publication would reinstate without
-         * incident closure, and who decides that is not yet determined.
-         *
-         * Verification and asset registries do not mean the project is registered, so they are not
-         * touched.
-         */
-        if (data.registryType === "project") {
-          const moved = await tx<{ id: string; version: number }[]>`
-            UPDATE core.projects
-            SET lifecycle_state = 'registered', version = version + 1, updated_at = now()
-            WHERE id = ${data.subjectId} AND lifecycle_state = 'draft'
-            RETURNING id, version
-          `;
-
-          if (moved.length > 0) {
-            /**
-             * Also recorded in the transition history — migration `0031`.
-             *
-             * Why a separate table from the audit log: audit is "who did what" and history is
-             * "where this project has been". Extracting the latter from the audit log would require
-             * parsing command strings, which turns the strings into a schema.
-             */
-            await tx`
-              INSERT INTO core.project_lifecycle_transitions (
-                tenant_id, project_id, from_state, to_state, reason, actor_subject_id
-              ) VALUES (
-                ${tenantId}, ${data.subjectId}, 'draft', 'registered',
-                'Project Registry publication satisfied the 04 §4.3 guard',
-                ${session.subjectId}
-              )
-            `;
-
-            await recordAudit(tx, {
-              effectiveRole,
-              tenantId,
-              session,
-              command: "project.lifecycle.transitioned",
-              resourceType: "project",
-              resourceId: data.subjectId,
-              afterVersion: moved[0]!.version,
-              correlationId,
-              requestIp: request.ip,
-              detail: { from: "draft", to: "registered", cause: "registry.version.published" },
+          if (draft.state !== "pending") {
+            throw unprocessable("REGISTRY_DRAFT_ALREADY_DECIDED", "Draft is already decided", {
+              state: draft.state,
             });
           }
-        }
 
-        await recordAudit(tx, {
-          effectiveRole,
-          tenantId,
-          session,
-          command: "registry.version.published",
-          resourceType: "registry_entry_version",
-          resourceId: versionId,
-          afterVersion: nextVersion,
-          correlationId,
-          requestIp: request.ip,
-          detail: { registryType: data.registryType, publicKey: data.publicKey },
-        });
+          /**
+           * Two-person rule — 02 §2.8.
+           *
+           * The DB CHECK blocks the same thing, but filtering here first says why. A constraint
+           * violation message does not tell the user what to do next.
+           */
+          if (draft.proposed_by_subject_id === publisher) {
+            throw unprocessable(
+              "REGISTRY_DRAFT_SELF_PUBLICATION",
+              "The person who drafted this cannot publish it",
+              { hint: "Another Disclosure Approver publishes" },
+            );
+          }
 
-        await enqueueEvent(tx, {
-          tenantId,
-          eventType: "registry.version.published",
-          aggregateId: versionId,
-          aggregateVersion: nextVersion,
-          payload: { registryType: data.registryType, contentHash },
-          correlationId,
-        });
+          /**
+           * The draft is re-checked against the subject as it is **now**.
+           *
+           * Between drafting and publishing, evidence can be added, a source's terms can change
+           * and the project can be suspended. The approver approves what the draft shows; if
+           * that is no longer true, publishing it would anchor a stale statement.
+           */
+          // The project's lifecycle becomes the published status. Locked here, in the same order
+          // as lifecycle transitions, so a suspension cannot commit between reading and writing it.
+          if (draft.registry_type === "project") {
+            await tx`
+              SELECT 1 FROM core.projects
+              WHERE tenant_id = ${tenantId} AND id = ${draft.subject_id}
+              FOR UPDATE
+            `;
+          }
+          const subject = await resolvePublicationSubject(
+            tx,
+            tenantId,
+            draft.registry_type,
+            draft.subject_id,
+          );
+          const staleFields = [
+            ...(subject.sourceSnapshotHash === draft.source_snapshot_hash
+              ? []
+              : ["sourceSnapshotHash"]),
+            ...(subject.commercialReuse === draft.commercial_reuse ? [] : ["commercialReuse"]),
+            ...projectionMismatches(draft.projection, subject),
+          ];
+          if (staleFields.length > 0) {
+            throw conflict(
+              "REGISTRY_DRAFT_STALE",
+              "The record changed since this draft was made. Reject it and draft again",
+              { staleFields },
+            );
+          }
 
-        return {
-          id: versionId,
-          entryId,
-          registryType: data.registryType,
-          publicKey: data.publicKey,
-          version: nextVersion,
-          status: "published",
-          contentHash,
-          policyVersion: data.policyVersion,
-          schemaVersion: data.schemaVersion,
-          serializationVersion: "1" as const,
-          publishedAt: new Date().toISOString(),
-          requestId,
-          asOf,
-        };
-      }),
-    );
-  });
+          const publishCheck = checkPublishable({
+            fields: Object.keys(draft.projection),
+            sensitivity: "public",
+            // Given by this request: a Disclosure Approver who is not the drafter.
+            disclosureApproved: true,
+            containsPersonLevelIdentifier: draft.contains_person_level_identifier,
+            personIdentifierSafeguards: safeguardsOf(
+              {
+                lawfulBasis: draft.lawful_basis,
+                purpose: draft.purpose,
+                retention: draft.retention,
+                acknowledgedAt: draft.irreversibility_acknowledged_at,
+              },
+              body.personIdentifierPublicationApproved,
+            ),
+            commercialReuse: subject.commercialReuse,
+            publishedAsCommercialBasis: draft.published_as_commercial_basis,
+          });
+          if (!publishCheck.allowed) {
+            throw unprocessable(publishCheck.reason, "This projection cannot be published", {
+              offendingFields: publishCheck.offendingFields,
+            });
+          }
+
+          /**
+           * `status` holds the lifecycle **after** publication.
+           *
+           * The draft may carry the pre-publication state the screen showed (`draft`), but
+           * `registered` in 11 §11.4 means "a Registry record exists", and this very request
+           * creates that record. The server decides; lifecycle is **not a value the client
+           * gets to claim.**
+           */
+          const publishedProjection = { ...draft.projection, status: subject.publishedStatus };
+          const projectionCheck = publicProjection.safeParse(publishedProjection);
+          if (!projectionCheck.success) {
+            throw unprocessable(
+              "PUBLICATION_PROJECTION_INVALID",
+              "Projection does not match the public schema",
+              { issues: projectionCheck.error.issues },
+            );
+          }
+          const contentHash = hashProjection(publishedProjection as never);
+
+          const [existingEntry] = await tx<{ id: string; subject_id: string }[]>`
+            SELECT id, subject_id FROM core.registry_entries
+            WHERE registry_type = ${draft.registry_type} AND public_key = ${draft.public_key}
+          `;
+          if (existingEntry && existingEntry.subject_id !== draft.subject_id) {
+            throw conflict("REGISTRY_KEY_TAKEN", "This public key belongs to another subject");
+          }
+
+          const entryId = existingEntry?.id ?? randomUUID();
+          if (!existingEntry) {
+            await tx`
+              INSERT INTO core.registry_entries (
+                id, tenant_id, registry_type, subject_id, public_key
+              ) VALUES (
+                ${entryId}, ${tenantId}, ${draft.registry_type}, ${draft.subject_id},
+                ${draft.public_key}
+              )
+            `;
+          }
+
+          const [previous] = await tx<{ id: string; version: number }[]>`
+            SELECT id, version FROM core.registry_entry_versions
+            WHERE entry_id = ${entryId} ORDER BY version DESC LIMIT 1
+          `;
+
+          const versionId = randomUUID();
+          const nextVersion = (previous?.version ?? 0) + 1;
+
+          await tx`
+            INSERT INTO core.registry_entry_versions (
+              id, tenant_id, entry_id, version, status, public_projection,
+              content_hash, source_snapshot_hash, policy_version, schema_version,
+              previous_version_id, published_at
+            ) VALUES (
+              ${versionId}, ${tenantId}, ${entryId}, ${nextVersion}, 'published',
+              ${tx.json(publishedProjection as never)}, ${contentHash},
+              ${draft.source_snapshot_hash}, ${draft.policy_version}, ${draft.schema_version},
+              ${previous?.id ?? null}, now()
+            )
+          `;
+
+          // The previous version is not deleted; it is linked as superseded (invariant 4).
+          if (previous) {
+            await tx`
+              UPDATE core.registry_entry_versions
+              SET status = 'superseded', superseded_by_id = ${versionId}
+              WHERE id = ${previous.id}
+            `;
+          }
+
+          await tx`
+            UPDATE core.registry_publication_drafts
+            SET state = 'published', decided_by_subject_id = ${publisher}, decided_at = now(),
+                person_identifier_publication_approved = ${body.personIdentifierPublicationApproved},
+                entry_version_id = ${versionId}, version = version + 1
+            WHERE tenant_id = ${tenantId} AND id = ${draft.id}
+          `;
+
+          /**
+           * 04 §4.3 — `draft→registered`.
+           *
+           * The transition table's guard is "Project Registry minimum fields and accountable
+           * subject", and this publication is what satisfies it.
+           *
+           * **Moves only from `draft`.** The `WHERE` is that guard — publishing from another
+           * state leaves the state as is. Reverting suspended via publication would reinstate
+           * without incident closure, and who decides that is not yet determined.
+           *
+           * Verification registries do not mean the project is registered, so they are not
+           * touched.
+           */
+          if (draft.registry_type === "project") {
+            const moved = await tx<{ id: string; version: number }[]>`
+              UPDATE core.projects
+              SET lifecycle_state = 'registered', version = version + 1, updated_at = now()
+              WHERE id = ${subject.projectId} AND lifecycle_state = 'draft'
+              RETURNING id, version
+            `;
+
+            if (moved.length > 0) {
+              /**
+               * Also recorded in the transition history — migration `0031`.
+               *
+               * Why a separate table from the audit log: audit is "who did what" and history is
+               * "where this project has been". Extracting the latter from the audit log would
+               * require parsing command strings, which turns the strings into a schema.
+               */
+              await tx`
+                INSERT INTO core.project_lifecycle_transitions (
+                  tenant_id, project_id, from_state, to_state, reason, actor_subject_id
+                ) VALUES (
+                  ${tenantId}, ${subject.projectId}, 'draft', 'registered',
+                  'Project Registry publication satisfied the 04 §4.3 guard',
+                  ${session.subjectId}
+                )
+              `;
+
+              await recordAudit(tx, {
+                effectiveRole,
+                tenantId,
+                session,
+                command: "project.lifecycle.transitioned",
+                resourceType: "project",
+                resourceId: subject.projectId,
+                afterVersion: moved[0]!.version,
+                correlationId,
+                requestIp: request.clientIp,
+                detail: { from: "draft", to: "registered", cause: "registry.version.published" },
+              });
+            }
+          }
+
+          await recordAudit(tx, {
+            effectiveRole,
+            tenantId,
+            session,
+            command: "registry.version.published",
+            resourceType: "registry_entry_version",
+            resourceId: versionId,
+            afterVersion: nextVersion,
+            correlationId,
+            requestIp: request.clientIp,
+            detail: {
+              registryType: draft.registry_type,
+              publicKey: draft.public_key,
+              draftId: draft.id,
+              draftedBySubjectId: draft.proposed_by_subject_id,
+              personIdentifierPublicationApproved: body.personIdentifierPublicationApproved,
+            },
+          });
+
+          await enqueueEvent(tx, {
+            tenantId,
+            eventType: "registry.version.published",
+            aggregateId: versionId,
+            aggregateVersion: nextVersion,
+            payload: { registryType: draft.registry_type, contentHash },
+            correlationId,
+          });
+
+          reply.header("etag", etagOf(draft.version + 1));
+          return {
+            id: versionId,
+            entryId,
+            draftId: draft.id,
+            registryType: draft.registry_type,
+            publicKey: draft.public_key,
+            version: nextVersion,
+            status: "published",
+            contentHash,
+            policyVersion: draft.policy_version,
+            schemaVersion: draft.schema_version,
+            serializationVersion: "1" as const,
+            publishedAt: new Date().toISOString(),
+            requestId,
+            asOf,
+          };
+        }),
+      );
+    },
+  );
 
   app.post<{ Params: { entryId: string } }>(
     "/api/v1/registry-entries/:entryId/revoke",
@@ -350,7 +417,7 @@ export async function registerRegistryRoutes(
             resourceId: version.id,
             reason: parsed.data.reasonCode,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           await enqueueEvent(tx, {
@@ -439,7 +506,7 @@ export async function registerRegistryRoutes(
           resourceType: "anchor_batch",
           resourceId: batchRowId,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
           detail: { recordCount: batch.recordCount, root: batch.root },
         });
 
@@ -652,7 +719,7 @@ export async function registerRegistryRoutes(
             resourceId: request.params.batchId,
             reason: `from_${transaction.state}`,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { previousAttempts: transaction.attempts },
           });
 

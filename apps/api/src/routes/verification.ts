@@ -286,7 +286,7 @@ export async function registerVerificationRoutes(
           resourceType: "verification_case",
           resourceId: caseId,
           correlationId,
-          requestIp: request.ip,
+          requestIp: request.clientIp,
           detail: { assignmentId, claimCount: data.claimIds.length },
         });
 
@@ -499,7 +499,7 @@ export async function registerVerificationRoutes(
             afterVersion: current.version + 1,
             reason,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { fromState: current.state, toState },
           });
 
@@ -617,7 +617,7 @@ export async function registerVerificationRoutes(
             resourceId: attestation.id,
             reason: parsed.data.reasonCode,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           await enqueueEvent(tx, {
@@ -792,7 +792,7 @@ export async function registerVerificationRoutes(
             resourceId: dispute.id,
             reason: outcome,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { attestationId: dispute.attestation_id, attestationState },
           });
 
@@ -964,7 +964,7 @@ export async function registerVerificationRoutes(
             resourceType: "verification_attestation",
             resourceId: attestationId,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           return {
@@ -1082,7 +1082,7 @@ export async function registerVerificationRoutes(
             resourceType: "verification_attestation",
             resourceId: attestation.id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           const typedData = buildTypedData(config, message);
@@ -1261,7 +1261,7 @@ export async function registerVerificationRoutes(
             resourceType: "verification_attestation",
             resourceId: attestation.id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { signer },
           });
 

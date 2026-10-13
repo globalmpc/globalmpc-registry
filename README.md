@@ -20,10 +20,10 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 | Package | Contents | Tests |
 |---|---|---|
 | `packages/canonical` | Restricted JCS profile, leaf encoding, Merkle, golden vectors | 88 |
-| `packages/domain` | 12 source results, grade derivation, 12 state machines, invariants | 241 |
+| `packages/domain` | 12 source results, grade derivation, 12 state machines, invariants | 247 |
 | `packages/policy` | Readiness rule schema, deterministic evaluation engine | 46 |
 | `packages/db` | Schema, RLS, append-only guards, composite FKs, migration checksums | 71 |
-| `packages/api-contract` | Zod contract → OpenAPI 3.1, SIWE, authorization | 46 |
+| `packages/api-contract` | Zod contract → OpenAPI 3.1, SIWE, authorization | 53 |
 | `packages/ui` | Status display mapping, R-04 forbidden-term lint, three-depth consistency | 37 |
 | `packages/config` | Secret reference resolution (`file:`, `env:`), audit fingerprints that do not expose values, public release hygiene rules | 80 |
 | `packages/storage` | Object storage — key rules, quarantine state machine, memory and S3 implementations | 17 |
@@ -32,15 +32,15 @@ Notation used in comments, such as `spec 05 §5.3` and `OD-17`, is listed in
 
 | App | Contents | Tests |
 |---|---|---|
-| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 108 routes | 780 |
-| `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 24 · E2E 97 |
-| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 149 |
+| `apps/api` | Fastify 5. SIWE sessions; upload, evidence, review, readiness, Registry, anchor, audit, governance, Authority, and provenance lookup — 117 routes | 910 |
+| `apps/web` | Next.js 16. Data Room, Verification, readiness, Gate, publishing, Anchor, audit, governance, Authority, Explorer. Real wallet signing | unit 33 · E2E 98 |
+| `apps/worker` | Outbox publishing, anchor submission/confirmation/reorg, daily gas cap (O1), Safe proposal and execution tracking, ClamAV scanning | 154 |
 
 **Contracts**
 
 `contracts/` — `RegistryAnchorV1` + 10 deferred interfaces, 33 Foundry tests (including fuzz and invariant).
 
-Total: vitest 1536 + Playwright 97 + Foundry 33 + route 108. (measured 2026-09-30)
+Total: vitest 1736 + Playwright 98 + Foundry 33 + route 117. (measured 2026-10-08)
 
 ## Running
 
@@ -111,7 +111,7 @@ psql "postgres://postgres@localhost:5432/mpc_dev" -c \
 #    screen and the addresses holding roles diverge, and login succeeds with no permissions.
 export MPC_DEMO_KEYS=$(node -e 'const c=require("node:crypto");
 const labels=["Operator A","Operator B","Operator C","Reader A","Steward A",
-  "Approver A","Reviewer A","Proposer A","Voter A","Scan Service"];
+  "Approver A","Reviewer A","Proposer A","Voter A","Scan Service","Publisher A"];
 console.log(JSON.stringify(Object.fromEntries(
   labels.map((l)=>[l,"0x"+c.randomBytes(32).toString("hex")]))))')
 
@@ -204,6 +204,9 @@ Bypassing them breaks tests or gets rejected by the DB.
 - A readiness assessment cannot be UPDATEd at all → trigger + no PATCH path in the API
 - An attestation with empty `limitations` is not stored → DB CHECK constraint
 - A public projection rejects fields outside the allowlist → Zod `.strict()`
+- **The person who drafts a registry version cannot publish it** → DB CHECK
+  `registry_draft_two_person`; the snapshot hash and commercial-reuse status are derived by the
+  server, and a person-level identifier needs its safeguards recorded before a draft exists
 - The 12 source results are a DB enum → no aliasing or merging
 - Protocol governance cannot propose a project disposition → enforced three times: domain, API, contract
 - **References across a tenant boundary cannot be created** → composite FKs. PostgreSQL FK
@@ -271,6 +274,12 @@ Bypassing them breaks tests or gets rejected by the DB.
   otherwise it is rejected with `TALLY_MISMATCH`. A DB trigger blocks vote changes after closing
 - **Votes do not create off-chain facts** → governance responses state this every time through
   `limitations`, and proposals on forbidden subjects are rejected outright
+- **A passed vote is not an execution** → leaving `execution_pending` takes an Execution Record
+  from `execution_recorder` (who, authority, what, evidence hash); a DB trigger refuses the state
+  change without one
+- **Each governance space has its own proposers and voters** → a protocol role cannot propose or
+  vote on a project proposal, a project voter votes only on the project its binding names, and
+  `mpc_operator` administers but neither proposes nor votes
 - **Unverified integrations are not shown as active** → sources in `pending_access` are not
   called and do not disappear from the list. The reason they cannot be used is shown alongside
 - **Accessibility violations are zero** → axe scans 8 screens and enforces zero violations
@@ -326,7 +335,7 @@ Bypassing them breaks tests or gets rejected by the DB.
 
 ## What does not exist yet
 
-**API**: all 112 routes in the contract (`ROUTES`) are implemented. `plannedRoutes()` is empty.
+**API**: all 117 routes in the contract (`ROUTES`) are implemented. `plannedRoutes()` is empty.
 
 **Unimplemented gaps**
 

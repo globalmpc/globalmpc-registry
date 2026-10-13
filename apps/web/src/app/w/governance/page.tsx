@@ -1,17 +1,37 @@
 "use client";
 
 import Link from "next/link";
+import {
+  canRecordExecutionFor,
+  EMPTY_EXECUTION_RECORD,
+  type ExecutionRecordFields,
+} from "@/lib/execution-record";
 import { useCallback, useEffect, useState } from "react";
 import {
   castVote,
   createProposal,
   listProposals,
   newIdempotencyKey,
+  recordProposalExecution,
   transitionProposal,
+  type ExecutionMode,
   type GovernanceProposal,
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { GovernanceCentralizationPanel } from "@/components/GovernanceCentralization";
+
+/** Proposal types per space — the domain's allowlists (09 §9.2·§9.3). */
+const PROPOSAL_TYPES = {
+  protocol: "attestation_schema_approval",
+  project: "independent_valuation_request",
+} as const;
+
+const EXECUTION_MODES: readonly ExecutionMode[] = [
+  "record_only",
+  "onchain_bounded",
+  "offchain_required",
+];
 
 /**
  * Governance — spec 04 §4.5, 11 §11.3, OD-06.
@@ -39,6 +59,20 @@ export default function GovernancePage() {
    */
   const [eligibleWeight, setEligibleWeight] = useState("");
   const [reason, setReason] = useState("");
+  const [space, setSpace] = useState<"protocol" | "project">("protocol");
+  const [projectId, setProjectId] = useState("");
+  /**
+   * Conflict-of-interest disclosure — 09 §9.4, REQ-DAPP-022.
+   *
+   * Required: "none known" is a statement the proposer answers for, not an empty field.
+   */
+  const [disclosure, setDisclosure] = useState("");
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("record_only");
+  // Execution record — 09 §9.7. Evidence by reference and hash; the document stays private.
+  const [executionRecord, setExecutionRecord] =
+    useState<ExecutionRecordFields>(EMPTY_EXECUTION_RECORD);
+  const setRecordField = (field: keyof ExecutionRecordFields) => (value: string) =>
+    setExecutionRecord((current) => ({ ...current, [field]: value }));
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -76,9 +110,28 @@ export default function GovernancePage() {
     );
   }
 
+  /**
+   * Roles per space — 02 §2.2·§2.3.
+   *
+   * Each space has its own proposer and voter. The MPC operator administers proposals but
+   * neither proposes nor votes. The server decides; these only avoid offering buttons it
+   * would refuse.
+   */
   const roles = session?.roleBindings?.map((binding) => binding.role) ?? [];
-  const canPropose = roles.some((role) => role.endsWith("_proposer") || role === "mpc_operator");
-  const canVote = roles.some((role) => role.endsWith("_voter") || role === "mpc_operator");
+  const proposableSpaces = (["protocol", "project"] as const).filter((candidate) =>
+    roles.includes(`${candidate}_proposer`),
+  );
+  const canPropose = proposableSpaces.length > 0;
+  const createSpace = proposableSpaces.includes(space) ? space : proposableSpaces[0];
+  const canVoteIn = (proposalSpace: string) => roles.includes(`${proposalSpace}_voter`);
+  const canVote = roles.some((role) => role === "protocol_voter" || role === "project_voter");
+  const canAdminister = (proposalSpace: string) =>
+    roles.includes(`${proposalSpace}_proposer`) || roles.includes("mpc_operator");
+  const canAdministerAny = canPropose || roles.includes("mpc_operator");
+  const canRecordExecution = roles.includes("execution_recorder");
+  const awaitingRecord = proposals.filter(
+    (proposal) => proposal.state === "execution_pending" || proposal.state === "disputed",
+  );
 
   return (
     <>
@@ -103,9 +156,42 @@ export default function GovernancePage() {
         a reviewer’s standing nor the outcome of a review.
       </div>
 
-      {canPropose ? (
+      <GovernanceCentralizationPanel />
+
+      {canPropose && createSpace ? (
         <div className="panel">
           <h2>Create a proposal</h2>
+          {proposableSpaces.length > 1 ? (
+            <div className="field">
+              <label htmlFor="space">Space</label>
+              <select
+                id="space"
+                value={createSpace}
+                onChange={(event) => setSpace(event.target.value as "protocol" | "project")}
+              >
+                {proposableSpaces.map((candidate) => (
+                  <option key={candidate} value={candidate}>
+                    {candidate}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <p className="meta">
+              Space: <span className="mono">{createSpace}</span> — your role proposes only here.
+            </p>
+          )}
+          {createSpace === "project" ? (
+            <div className="field">
+              <label htmlFor="projectId">Project ID</label>
+              <input
+                id="projectId"
+                className="mono"
+                value={projectId}
+                onChange={(event) => setProjectId(event.target.value.trim())}
+              />
+            </div>
+          ) : null}
           <div className="field">
             <label htmlFor="title">Title</label>
             <input id="title" value={title} onChange={(event) => setTitle(event.target.value)} />
@@ -139,6 +225,33 @@ export default function GovernancePage() {
               connected, the total supply at the snapshot block replaces this.
             </p>
           </div>
+          <div className="field">
+            <label htmlFor="disclosure">Conflict disclosure (required)</label>
+            <input
+              id="disclosure"
+              value={disclosure}
+              onChange={(event) => setDisclosure(event.target.value)}
+              placeholder="Who may gain from this proposal, including you — or state that none is known"
+            />
+            <p className="meta">
+              Shown with the proposal, publicly for protocol proposals. It cannot be edited
+              afterwards.
+            </p>
+          </div>
+          <div className="field">
+            <label htmlFor="executionMode">Execution mode</label>
+            <select
+              id="executionMode"
+              value={executionMode}
+              onChange={(event) => setExecutionMode(event.target.value as ExecutionMode)}
+            >
+              {EXECUTION_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {mode}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
             className="primary"
             data-testid="create-proposal"
@@ -147,18 +260,23 @@ export default function GovernancePage() {
               title.trim().length === 0 ||
               rationale.trim().length === 0 ||
               eligibleWeight.length === 0 ||
-              /^0+$/.test(eligibleWeight)
+              /^0+$/.test(eligibleWeight) ||
+              disclosure.trim().length === 0 ||
+              (createSpace === "project" && projectId.length === 0)
             }
             onClick={() =>
               void run((activeToken) =>
                 createProposal(
                   activeToken,
                   {
-                    space: "protocol",
-                    proposalType: "attestation_schema_approval",
+                    space: createSpace,
+                    projectId: createSpace === "project" ? projectId : null,
+                    proposalType: PROPOSAL_TYPES[createSpace],
                     title: title.trim(),
                     rationale: rationale.trim(),
                     eligibleWeight,
+                    conflictDisclosure: disclosure.trim(),
+                    executionMode,
                   },
                   newIdempotencyKey(),
                 ),
@@ -202,11 +320,35 @@ export default function GovernancePage() {
                     <td>
                       {proposal.title}
                       <div className="meta">{proposal.rationale}</div>
+                      <div className="meta" data-testid={`disclosure-${proposal.id}`}>
+                        Conflict disclosure:{" "}
+                        {proposal.conflictDisclosure ??
+                          "not recorded — created before disclosures were required"}
+                      </div>
+                      <div className="meta mono">
+                        Execution mode: {proposal.executionMode ?? "—"}
+                      </div>
                     </td>
                     <td>
                       <span className="mono" data-testid={`proposal-state-${proposal.id}`}>
                         {proposal.state}
                       </span>
+                      {/*
+                        Execution is its own column of facts — 09 §9.7. A passed vote is not
+                        an execution; only a recorded execution with evidence is.
+                      */}
+                      {proposal.execution.state ? (
+                        <div className="meta" data-testid={`execution-${proposal.id}`}>
+                          Execution: {proposal.execution.state}
+                          {proposal.execution.records.map((record) => (
+                            <div key={record.id}>
+                              {record.outcome} by {record.executor} under {record.authority}:{" "}
+                              {record.executedAction}
+                              <div className="mono">Evidence {record.evidenceHash}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="mono meta">
                       For {proposal.tally.forWeight} / against {proposal.tally.againstWeight} /
@@ -259,7 +401,7 @@ export default function GovernancePage() {
                     </td>
                     <td>
                       <div className="row" style={{ gap: 6 }}>
-                        {canVote && proposal.state === "voting"
+                        {canVoteIn(proposal.space) && proposal.state === "voting"
                           ? (["for", "against", "abstain"] as const).map((choice) => (
                               <button
                                 key={choice}
@@ -281,7 +423,41 @@ export default function GovernancePage() {
                             ))
                           : null}
 
-                        {canPropose
+                        {canRecordExecution &&
+                        (proposal.state === "execution_pending" || proposal.state === "disputed")
+                          ? (["executed", "failed"] as const).map((outcome) => (
+                              <button
+                                key={outcome}
+                                data-testid={`record-${outcome}-${proposal.id}`}
+                                disabled={busy || !canRecordExecutionFor(executionRecord, proposal.id)}
+                                onClick={() =>
+                                  void run(async (activeToken) => {
+                                    await recordProposalExecution(
+                                      activeToken,
+                                      proposal.id,
+                                      proposal.version,
+                                      {
+                                        outcome,
+                                        executor: executionRecord.executor.trim(),
+                                        authority: executionRecord.authority.trim(),
+                                        executedAction: executionRecord.executedAction.trim(),
+                                        evidenceReference: executionRecord.evidenceReference.trim(),
+                                        evidenceHash: executionRecord.evidenceHash,
+                                        limitations: [executionRecord.limitation.trim()],
+                                      },
+                                      newIdempotencyKey(),
+                                    );
+                                    // A written record is final; nothing typed for it carries over.
+                                    setExecutionRecord(EMPTY_EXECUTION_RECORD);
+                                  })
+                                }
+                              >
+                                Record {outcome}
+                              </button>
+                            ))
+                          : null}
+
+                        {canAdminister(proposal.space)
                           ? nextStates(proposal).map((next) => (
                               <button
                                 key={next}
@@ -335,7 +511,79 @@ export default function GovernancePage() {
           </div>
         ) : null}
 
-        {canPropose ? (
+        {canRecordExecution ? (
+          <div className="field-group" data-testid="execution-record-form">
+            <h2 style={{ marginTop: 14 }}>Execution record</h2>
+            <p className="meta">
+              Records what was done off chain after a vote, and on what evidence. It does not
+              change the vote result.
+            </p>
+            <div className="field">
+              <label htmlFor="executionTarget">For proposal</label>
+              <select
+                id="executionTarget"
+                value={executionRecord.targetProposalId}
+                onChange={(event) => setRecordField("targetProposalId")(event.target.value)}
+              >
+                <option value="">Choose the proposal this record is for</option>
+                {awaitingRecord.map((proposal) => (
+                  <option key={proposal.id} value={proposal.id}>
+                    {proposal.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {(
+              [
+                ["executor", "Executed by", executionRecord.executor, setRecordField("executor")],
+                [
+                  "executionAuthority",
+                  "Under authority",
+                  executionRecord.authority,
+                  setRecordField("authority"),
+                ],
+                [
+                  "executedAction",
+                  "What was executed",
+                  executionRecord.executedAction,
+                  setRecordField("executedAction"),
+                ],
+                [
+                  "evidenceReference",
+                  "Evidence reference",
+                  executionRecord.evidenceReference,
+                  setRecordField("evidenceReference"),
+                ],
+                [
+                  "evidenceHash",
+                  "Evidence hash (0x + 64 hex)",
+                  executionRecord.evidenceHash,
+                  setRecordField("evidenceHash"),
+                ],
+                [
+                  "executionLimitation",
+                  "What this record does not establish",
+                  executionRecord.limitation,
+                  setRecordField("limitation"),
+                ],
+              ] as const
+            ).map(([id, label, value, set]) => (
+              <div className="field" key={id}>
+                <label htmlFor={id}>{label}</label>
+                <input
+                  id={id}
+                  className={id === "evidenceHash" ? "mono" : undefined}
+                  value={value}
+                  onChange={(event) =>
+                    set(id === "evidenceHash" ? event.target.value.trim().toLowerCase() : event.target.value)
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {canAdministerAny ? (
           <div className="field">
             <label htmlFor="reason">Reason for the state change (required)</label>
             <input
@@ -373,8 +621,7 @@ function nextStates(proposal: GovernanceProposal): string[] {
       return ["recorded"];
     case "recorded":
       return ["execution_pending"];
-    case "execution_pending":
-      return ["executed", "failed"];
+    // Leaving execution_pending takes an execution record (09 §9.7), not a transition.
     default:
       return [];
   }

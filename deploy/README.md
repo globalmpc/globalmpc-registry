@@ -103,6 +103,30 @@ stays `created` and the batch does not disappear. After UTC midnight, the next l
 If the cap needs raising, redo the calculation above, record the basis, then change the value.
 Do not raise it just because it blocked — that cap is all of O1.
 
+## Edge proxy path — web app on a CDN, API on its own host
+
+The default layout puts `web` and `api` on one private network: `web` proxies `/api/*` and
+the API trusts `x-forwarded-for` from that peer because it is inside `TRUSTED_PROXY_CIDRS`.
+When the web app runs on a CDN (Vercel or similar), three things stop holding, and each has a
+setting.
+
+| Problem | Setting | Where |
+|---|---|---|
+| The CDN's egress addresses are not fixed, so no range can name the peer; every visitor becomes the CDN and the sign-in cap (`AUTH_RATE_LIMIT_MAX`) is shared by the whole site | `EDGE_PROXY_SECRET` — the same value on both sides. The web proxy attaches it with the visitor address it saw; the API uses that address only when the secret matches. Minimum 32 characters; generate it, never reuse another secret. Set it only behind a platform that overwrites `x-real-ip` and `x-forwarded-for` with the address it saw (Vercel does); in front of anything that passes a visitor's own `x-real-ip` through, the visitor picks its address and every forged one gets its own cap | web **and** API |
+| The CDN cuts a proxied request at its own time cap (Vercel: 120 s), which a large evidence upload does not fit in | `NEXT_PUBLIC_API_DIRECT_ORIGIN` (web, build time) — the API host the browser posts the streaming upload route to directly. `EDGE_WEB_ORIGIN` (API) — the one origin admitted on that route. Nothing else is opened cross-origin | web (build) · API |
+| `/health/*` and `/metrics` carry no auth; an API host reachable from the internet would expose readiness and the operational gauges | `OPS_ENDPOINT_CIDRS` — socket peers allowed on those paths, default the private ranges. Anyone else gets the 404 of an unknown path. List the collector's and the orchestrator's ranges | API |
+
+Values that change with the public address, as before: `SIWE_DOMAIN`, `SIWE_URI`,
+`API_ORIGIN` (web, run time).
+
+What to confirm after the first deployment: sign in twice from two networks and check the
+API log does not report the requester as unroutable; upload a file above the base64 cap and
+confirm the browser request went to `NEXT_PUBLIC_API_DIRECT_ORIGIN`; request `/health/ready`
+from outside and receive 404.
+
+**This is a staging layout.** The rules on production deployment in the repository root
+README are unchanged by these settings.
+
 ## Observability
 
 ```sh

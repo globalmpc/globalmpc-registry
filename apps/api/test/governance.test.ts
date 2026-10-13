@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
+import { addGovernanceAccount } from "./helpers/governance-accounts.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -42,6 +43,8 @@ describeDb("Governance", () => {
         proposalType: "attestation_schema_approval",
         title: "schema change",
         rationale: "the current schema cannot express limitations",
+        conflictDisclosure: "No conflict known to the proposer",
+        executionMode: "record_only",
         ...body,
       },
     });
@@ -370,6 +373,7 @@ describeDb("Governance — on-chain snapshot", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let proposerToken: string;
+  let projectProposerToken: string;
 
   /** Reproduces a total-supply lookup failure. Failure means "unknown", not 0. */
   let totalSupplyFails = false;
@@ -395,6 +399,7 @@ describeDb("Governance — on-chain snapshot", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql, { governanceChain: chain });
     proposerToken = await signIn(app, fx.proposerA);
+    projectProposerToken = await signIn(app, await addGovernanceAccount(fx, "project_proposer"));
   });
 
   afterAll(async () => {
@@ -402,17 +407,19 @@ describeDb("Governance — on-chain snapshot", () => {
     await fx.close();
   });
 
-  async function openVoting(body: Record<string, unknown>) {
+  async function openVoting(body: Record<string, unknown>, token = proposerToken) {
     const created = (
       await app.inject({
         method: "POST",
         url: "/api/v1/governance/proposals",
-        headers: { authorization: `Bearer ${proposerToken}`, "idempotency-key": idempotencyKey() },
+        headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
         payload: {
           space: "protocol",
           proposalType: "attestation_schema_approval",
           title: "schema change",
           rationale: "the current schema cannot express limitations",
+          conflictDisclosure: "No conflict known to the proposer",
+          executionMode: "record_only",
           ...body,
         },
       })
@@ -425,7 +432,7 @@ describeDb("Governance — on-chain snapshot", () => {
         method: "POST",
         url: `/api/v1/governance/proposals/${created.id}/transitions`,
         headers: {
-          authorization: `Bearer ${proposerToken}`,
+          authorization: `Bearer ${token}`,
           "idempotency-key": idempotencyKey(),
           "if-match": `"${version}"`,
         },
@@ -451,12 +458,16 @@ describeDb("Governance — on-chain snapshot", () => {
   });
 
   it("a project proposal does not read weight from the MPC token", async () => {
-    const response = await openVoting({
-      space: "project",
-      projectId: fx.projectA,
-      proposalType: "independent_valuation_request",
-      eligibleWeight: "100",
-    });
+    // A project proposal is created and administered by a project proposer (02 §2.2).
+    const response = await openVoting(
+      {
+        space: "project",
+        projectId: fx.projectA,
+        proposalType: "independent_valuation_request",
+        eligibleWeight: "100",
+      },
+      projectProposerToken,
+    );
 
     expect(response.statusCode).toBe(200);
     const body = response.json();

@@ -35,12 +35,25 @@ import { createObjectStore } from "./object-store.js";
 import { resolveSession, type Session } from "./plugins/session.js";
 import { extractBearerToken, resolveSessionToken } from "./plugins/session-token.js";
 import { tooManyRequests } from "./errors.js";
-import { createProxyTrust, createUnroutableClientWarning } from "./client-ip.js";
+import {
+  createEdgeClientResolver,
+  createOpsEndpointGuard,
+  createProxyTrust,
+  createUnroutableClientWarning,
+} from "./client-ip.js";
+import { registerStreamUploadCors } from "./plugins/stream-upload-cors.js";
 import type { HostResolver } from "./services/source-endpoint.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     session: Session | null;
+    /**
+     * The requester address every cap and audit row uses.
+     *
+     * Equals `request.ip` unless the edge proxy path is open (`EDGE_PROXY_SECRET`) and the
+     * request carries a matching secret — then it is the address the web proxy saw.
+     */
+    clientIp: string;
   }
   interface FastifyInstance {
     /** Routes actually registered. Used for contract↔implementation comparison and ops debugging. */
@@ -206,6 +219,16 @@ export async function buildServer(
     app.log.warn({ clientAddress: address, trustedProxyHops: config.trustedProxyHops }, message),
   );
 
+  /**
+   * Resolved once per request, before the cap reads it. `request.ip` stays what fastify
+   * decided from the socket and the trusted proxy ranges; `clientIp` adds the edge path.
+   */
+  const resolveEdgeClient = createEdgeClientResolver(config.edgeProxySecret);
+  app.decorateRequest("clientIp", "");
+  app.addHook("onRequest", async (request) => {
+    request.clientIp = resolveEdgeClient(request.headers, request.ip);
+  });
+
   await app.register(rateLimit, {
     global: true,
     max: config.rateLimitMax,
@@ -218,8 +241,8 @@ export async function buildServer(
     keyGenerator: (request) => {
       // Report the first moment the cap key falls to a private address. That state runs without
       // errors, so unless the server says so, nobody in deployment notices.
-      warnUnroutableClient(request.ip);
-      return request.ip;
+      warnUnroutableClient(request.clientIp);
+      return request.clientIp;
     },
     // Do not count the ops endpoint. The scrape interval would eat the cap.
     allowList: (request) =>
@@ -278,7 +301,7 @@ export async function buildServer(
    */
   const objectStore = createObjectStore(config);
 
-  await registerHealthRoutes(app, sql, metrics);
+  await registerHealthRoutes(app, sql, metrics, createOpsEndpointGuard(config.opsEndpointCidrs));
   await registerAuthRoutes(app, sql, config);
   await registerProjectRoutes(app, sql);
   await registerEvidenceRoutes(app, sql, objectStore);
@@ -303,6 +326,9 @@ export async function buildServer(
   // multipart is used only by the upload route. It is registered globally, but only one route
   // reads file parts, so body parsing for other routes is unaffected.
   await app.register(multipart);
+  // The one route a browser may call across origins, and only when the deployment names that
+  // origin. Registered before the route so the preflight never reaches multipart parsing.
+  await registerStreamUploadCors(app, config.edgeWebOrigin);
   // One store per server. Building one per route multiplies connections.
   await registerUploadRoutes(app, sql, objectStore);
 

@@ -273,7 +273,7 @@ export async function registerReadinessRoutes(
             resourceType: "compliance_assessment",
             resourceId: id,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { status: assessment.status, ruleSetVersion: ruleSet.version },
           });
 
@@ -460,7 +460,7 @@ export async function registerReadinessRoutes(
             resourceId: id,
             reason: data.rationale,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
             detail: { decision: data.decision, assessmentStatus: assessment.status },
           });
 

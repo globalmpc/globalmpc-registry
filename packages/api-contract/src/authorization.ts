@@ -72,6 +72,7 @@ export const TENANT_WIDE_ROLES: readonly string[] = [
   "reviewer_lab",
   "reviewer_legal",
   "reviewer_assurance",
+  "disclosure_approver",
 ];
 
 /**
@@ -222,6 +223,8 @@ const WORKSPACE_READERS = [
   "reviewer_lab",
   "reviewer_legal",
   "reviewer_assurance",
+  // Reads what it is asked to make public — 02 §2.8 "privacy·terms·jurisdiction policy".
+  "disclosure_approver",
 ] as const;
 
 /** Governance derives from holdings, so voters and proposers can read it too (04 §4.5). */
@@ -248,6 +251,55 @@ const GOVERNANCE_READERS = [
  * once made, changes one line.
  */
 export const REGISTRY_APPROVER_ROLES: readonly string[] = ["reviewer_assurance"];
+
+/** Roles per governance space — 02 §2.2·§2.3. See the governance entries of `ACTION_POLICIES`. */
+const GOVERNANCE_SPACE_ROLES = {
+  protocol: {
+    propose: ["protocol_proposer"],
+    vote: ["protocol_voter"],
+    administer: ["protocol_proposer", "mpc_operator"],
+  },
+  project: {
+    propose: ["project_proposer"],
+    vote: ["project_voter"],
+    administer: ["project_proposer", "mpc_operator"],
+  },
+} as const;
+
+export type GovernanceVerb = "propose" | "vote" | "administer";
+
+/** The action a route authorizes once it knows the proposal's space. */
+export function governanceAction(space: "protocol" | "project", verb: GovernanceVerb): string {
+  return `governance.${space}.${verb}`;
+}
+
+function governanceActions(): Record<string, ActionPolicy> {
+  const entries: Record<string, ActionPolicy> = {};
+  for (const verb of ["propose", "vote", "administer"] as const) {
+    const union = new Set<string>();
+    for (const space of ["protocol", "project"] as const) {
+      const action = governanceAction(space, verb);
+      const roles = GOVERNANCE_SPACE_ROLES[space][verb];
+      entries[action] = { action, allowedRoles: roles };
+      roles.forEach((role) => union.add(role));
+    }
+    entries[`governance.${verb}`] = { action: `governance.${verb}`, allowedRoles: [...union] };
+  }
+  return entries;
+}
+
+/**
+ * Who makes a drafted registry version public — 02 §2.8 "public projection approval:
+ * Data Owner + Disclosure Approver".
+ *
+ * 02 §2.8 names the Disclosure Approver but 02 §2.2 has no role that carries it, and none of the
+ * existing roles is a good stand-in: `mpc_operator` drafts (02 §2.3 "publish workflow"), so it
+ * cannot also be the second person by role, and project-party roles would approve their own
+ * project's disclosure. So the role carries the spec's name. **Nobody holds it until it is
+ * granted** through the two-person role grant, so a deployment without one cannot publish —
+ * a visible refusal rather than a silent single-person publication.
+ */
+export const DISCLOSURE_APPROVER_ROLES: readonly string[] = ["disclosure_approver"];
 
 /**
  * Allowed roles per action — 02 §2.3 permission table.
@@ -406,9 +458,21 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     action: "gate.decide",
     allowedRoles: ["gate_approver"],
   },
+  /**
+   * Registry publication — two steps, two people (02 §2.8, 07 §7.2).
+   *
+   * Drafting checks and records a projection; nothing is public yet. Publishing makes it
+   * public and anchorable, so it is the step that needs the Disclosure Approver. The DB rejects
+   * publication by the person who drafted (`registry_draft_two_person`), whatever roles they
+   * hold.
+   */
+  "registry.draft": {
+    action: "registry.draft",
+    allowedRoles: ["mpc_operator"],
+  },
   "registry.publish": {
     action: "registry.publish",
-    allowedRoles: ["mpc_operator"],
+    allowedRoles: DISCLOSURE_APPROVER_ROLES,
   },
   "registry.revoke": {
     action: "registry.revoke",
@@ -423,24 +487,32 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     allowedRoles: ["issuer_officer", "mpc_operator"],
   },
   /**
-   * Proposal creation and state transitions — 04 §4.5.
+   * Governance — 02 §2.2·§2.3, 09 §9.1, REQ-DAPP-021.
    *
-   * `protocol_proposer` and `project_proposer` require identity_bound. An
-   * anonymous wallet cannot start a governance process.
+   * **Each space has its own proposer and voter role.** A protocol proposer cannot create a
+   * project asset proposal and a protocol voter cannot vote on one; the reverse holds for the
+   * project roles. Routes authorize the space-specific action (`governanceAction`) once the
+   * proposal's space is known; the unscoped action is what the route contract declares, the
+   * union of both spaces, derived so the two cannot drift apart.
+   *
+   * **`mpc_operator` neither proposes nor votes.** 02 §2.3 gives it "administer" on both
+   * proposal kinds, not C/V, and 02 §2.2 forbids it project asset decisions. It keeps the
+   * administrative transitions, which the tally and state machine constrain.
+   *
+   * Proposers require identity_bound — an anonymous wallet cannot start a governance process.
+   * Voters need only `wallet_only`: voting rights come from holdings, not identity, and in
+   * exchange a vote cannot create off-chain facts (invariant 12).
    */
-  "governance.propose": {
-    action: "governance.propose",
-    allowedRoles: ["protocol_proposer", "project_proposer", "mpc_operator"],
-  },
+  ...governanceActions(),
   /**
-   * Voting.
+   * Off-chain execution records — 02 §2.3 "Off-chain Execution", 09 §9.7.
    *
-   * `wallet_only` suffices — voting rights come from holdings, not identity. In
-   * exchange, a vote cannot create off-chain facts (invariant 12).
+   * Only the execution recorder writes them. It records what was done and on what evidence;
+   * it cannot change the vote snapshot or tally (02 §2.4 rule 9).
    */
-  "governance.vote": {
-    action: "governance.vote",
-    allowedRoles: ["protocol_voter", "project_voter", "mpc_operator"],
+  "governance.execution.record": {
+    action: "governance.execution.record",
+    allowedRoles: ["execution_recorder"],
   },
   "audit.read": {
     action: "audit.read",

@@ -333,7 +333,7 @@ export async function registerLifecycleRoutes(
             afterVersion: updated!.version,
             reason: parsed.data.reason,
             correlationId,
-            requestIp: request.ip,
+            requestIp: request.clientIp,
           });
 
           await enqueueEvent(tx, {

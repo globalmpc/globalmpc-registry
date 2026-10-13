@@ -56,10 +56,11 @@ describeDb("weight resolution", () => {
     await sql`
       INSERT INTO core.governance_proposals (
         id, tenant_id, space, proposal_type, title, rationale, proposer_subject_id,
-        quorum_numerator, quorum_denominator, threshold_numerator, threshold_denominator
+        quorum_numerator, quorum_denominator, threshold_numerator, threshold_denominator,
+        conflict_disclosure, execution_mode
       ) VALUES (
         ${proposalId}, ${tenantId}, 'protocol', 'fee_schedule', 'title', 'reason',
-        ${subjectId}, 1, 4, 1, 2
+        ${subjectId}, 1, 4, 1, 2, 'none known', 'record_only'
       )
     `;
   });
