@@ -3,6 +3,13 @@ import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
 import { withTenant } from "@mpc/db";
+import {
+  authorityMachine,
+  canTransition,
+  sourceConnectionMachine,
+  type AuthorityState,
+  type SourceConnectionState,
+} from "@mpc/domain";
 import { assertEndpointShape } from "../services/source-endpoint.js";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import {
@@ -15,6 +22,7 @@ import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
 import { assertVersionMatches, requireIfMatch, requireMutationContext } from "./shared.js";
 import { requireReadContext } from "./shared.js";
+import { assertActivationReviewed, assertNotCreatedActive } from "./connection-review.js";
 
 /**
  * Authority Registry operations — spec 02 §2.8, 05 §5.11, REQ-DAPP-043.
@@ -222,6 +230,60 @@ function assertActivatable(connectionState: string, authorityState: string): voi
   );
 }
 
+/**
+ * Connection state changes follow the lifecycle of 04 §4.9.
+ *
+ * Without this, `disabled → active` or `planned → active` was one PATCH away — a switched-off or
+ * never-tested integration could be declared live, which is exactly the overstatement the R5 gate
+ * forbids. `degraded → active` additionally needs every reconciliation task resolved (AC-19):
+ * the source answering again is not the same as someone having checked why it broke.
+ */
+async function assertConnectionTransition(
+  tx: postgres.TransactionSql,
+  connectionId: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  if (from === to) return;
+
+  if (!canTransition(sourceConnectionMachine, from as SourceConnectionState, to as SourceConnectionState)) {
+    throw unprocessable("CONNECTION_TRANSITION_NOT_ALLOWED", `A ${from} connection cannot move to ${to}`, {
+      from,
+      to,
+      allowed: [...(sourceConnectionMachine.transitions[from as SourceConnectionState] ?? [])],
+    });
+  }
+
+  if (from === "degraded" && to === "active") {
+    const [open] = await tx<{ id: string }[]>`
+      SELECT id FROM core.source_reconciliation_tasks
+      WHERE connection_id = ${connectionId} AND state = 'open'
+    `;
+    if (open) {
+      throw conflict("RECONCILIATION_REQUIRED", "Resolve the reconciliation task before reactivating", {
+        taskId: open.id,
+        nextAction: "Compare the receipt that degraded the connection, then resolve the task",
+      });
+    }
+  }
+}
+
+/**
+ * Passes the reason and actor to the stage-history trigger (migration 0060).
+ *
+ * Transaction-local: the next request on the same pooled connection does not inherit them.
+ */
+async function setTransitionContext(
+  tx: postgres.TransactionSql,
+  reason: string,
+  actorSubjectId: string | null,
+): Promise<void> {
+  await tx`
+    SELECT set_config('app.connection_transition_reason', ${reason}, true),
+           set_config('app.actor_subject_id', ${actorSubjectId ?? ""}, true)
+  `;
+}
+
 export async function registerAuthorityAdminRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
@@ -246,7 +308,7 @@ export async function registerAuthorityAdminRoutes(
     );
 
     const { requestId, asOf, correlationId } = request.context;
-    const requestHash = hashRequest(request.body);
+    const requestHash = hashRequest(request);
     const data = parsed.data;
 
     const result = await withTenant(sql, { tenantId }, (tx) =>
@@ -434,6 +496,21 @@ export async function registerAuthorityAdminRoutes(
           throw conflict("AUTHORITY_STATE_UNCHANGED", `Already in state ${data.state}`);
         }
 
+        /**
+         * The authority lifecycle of 04 §4.9.
+         *
+         * Without it, `revoked → accepted` revived an authority whose revocation was final, and
+         * `proposed → accepted` skipped review. Terminal states stay terminal.
+         */
+        const from = current.state as AuthorityState;
+        if (!canTransition(authorityMachine, from, data.state)) {
+          throw unprocessable(
+            "AUTHORITY_TRANSITION_NOT_ALLOWED",
+            `An authority in ${from} cannot move to ${data.state}`,
+            { from, to: data.state, allowed: [...authorityMachine.transitions[from]] },
+          );
+        }
+
         const accepting = data.state === "accepted";
 
         const [row] = await tx<AuthorityRow[]>`
@@ -607,7 +684,7 @@ export async function registerAuthorityAdminRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       const result = await withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -620,6 +697,17 @@ export async function registerAuthorityAdminRoutes(
           // The DB trigger blocks the same thing, but failing there returns 500. A foreseeable
           // rejection is returned as 422 with its reason.
           assertActivatable(data.state ?? "planned", authority.state);
+          assertNotCreatedActive(data.state);
+          // 04 §4.9: a connection starts planned and walks its stages, each kept as evidence.
+          // Created further along, it would skip feasibility and access checks nobody recorded.
+          if (data.state !== undefined && data.state !== "planned") {
+            throw unprocessable(
+              "CONNECTION_TRANSITION_NOT_ALLOWED",
+              "A connection is created planned and moves through its stages",
+              { allowed: ["planned"] },
+            );
+          }
+          await setTransitionContext(tx, data.reason, session.subjectId);
 
           const id = randomUUID();
 
@@ -720,6 +808,13 @@ export async function registerAuthorityAdminRoutes(
           `;
           assertActivatable(data.state, authority?.state ?? "unknown");
         }
+        // The lifecycle step is checked first: a step the lifecycle forbids is refused as such,
+        // whether or not a review exists.
+        if (data.state) {
+          await assertConnectionTransition(tx, current.id, current.state, data.state);
+        }
+        await assertActivationReviewed(tx, current, data, session.subjectId);
+        await setTransitionContext(tx, data.reason, session.subjectId);
 
         const [row] = await tx<ConnectionRow[]>`
           UPDATE core.source_connections SET

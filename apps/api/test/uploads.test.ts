@@ -101,6 +101,36 @@ describeDb("uploads", () => {
     });
   }
 
+  /**
+   * Starts `count` requests and holds each at its upload INSERT until all are waiting there.
+   *
+   * Without the hold the requests happen to run one after another and the race never shows.
+   * A SHARE lock on the table lets the duplicate lookup through and stops the INSERT.
+   */
+  async function heldAtInsert<T>(count: number, request: () => Promise<T>): Promise<T[]> {
+    const blocker = await fx.sql.reserve();
+    let pending: Promise<T>[] = [];
+    try {
+      await blocker`BEGIN`;
+      await blocker`LOCK TABLE core.object_uploads IN SHARE MODE`;
+      pending = Array.from({ length: count }, request);
+      for (let attempt = 0; ; attempt += 1) {
+        const [row] = await fx.sql<{ waiting: number }[]>`
+          SELECT count(*)::int AS waiting FROM pg_stat_activity
+          WHERE datname = current_database() AND wait_event_type = 'Lock'
+            AND query LIKE '%INSERT INTO core.object_uploads%'
+        `;
+        if (row!.waiting >= count) break;
+        if (attempt >= 100) throw new Error(`fewer than ${count} uploads reached the INSERT in 5s`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    } finally {
+      await blocker`COMMIT`;
+      blocker.release();
+    }
+    return Promise.all(pending);
+  }
+
   it("places uploads in quarantine", async () => {
     const response = await upload(stewardToken);
 
@@ -238,6 +268,103 @@ describeDb("uploads", () => {
     expect(second.json().id).toBe(first.json().id);
   });
 
+  describe("the same content uploaded again", () => {
+    function markSuccessor(uploadId: string, version: number, supersedesUploadId: string) {
+      return app.inject({
+        method: "PATCH",
+        url: `/api/v1/uploads/${uploadId}/document-profile`,
+        headers: {
+          authorization: `Bearer ${stewardToken}`,
+          "idempotency-key": idempotencyKey(),
+          "if-match": `"${version}"`,
+        },
+        payload: { supersedesUploadId },
+      });
+    }
+
+    async function promoted(content: string) {
+      const created = (
+        await upload(stewardToken, { contentBase64: Buffer.from(content).toString("base64") })
+      ).json();
+      const scanned = (await scan(created.id, created.version, "clean")).json();
+      return (await promote(created.id, scanned.version)).json();
+    }
+
+    it("A → B → A: the re-upload returns A itself, and naming A the successor of B is 409 VERSION_LOOP", async () => {
+      const bytesA = `permit as first issued ${Date.now()}`;
+      const a = await promoted(bytesA);
+      const b = await promoted(`permit as amended ${Date.now()}`);
+      const marked = await markSuccessor(b.id, b.version, a.id);
+      expect(marked.statusCode).toBe(200);
+
+      // The content hash is unique within a project, so the bytes of A land on A again: the
+      // replaced version, not a new upload waiting for its scan.
+      const again = await upload(stewardToken, {
+        contentBase64: Buffer.from(bytesA).toString("base64"),
+      });
+      expect(again.statusCode).toBe(200);
+      expect(again.json()).toMatchObject({ id: a.id, state: "promoted" });
+
+      // Making the replaced version replace its own replacement would be a loop.
+      const loop = await markSuccessor(a.id, again.json().version, b.id);
+      expect(loop.statusCode).toBe(409);
+      expect(loop.json().code).toBe("VERSION_LOOP");
+
+      const [chain] = await fx.sql<{ rows: string; successor: string | null }[]>`
+        SELECT (SELECT count(*) FROM core.object_uploads
+                WHERE project_id = ${fx.projectA} AND content_hash = ${a.contentHash})::text AS rows,
+               core.document_successor(${a.id}) AS successor
+      `;
+      expect(chain).toEqual({ rows: "1", successor: b.id });
+    });
+
+    it("identical uploads at the same moment all get the one upload, never a 500", async () => {
+      const contentBase64 = Buffer.from(`simultaneous ${Date.now()}`).toString("base64");
+      // Every request reads "not there yet" before any of them inserts; the unique index on the
+      // content hash then decides, and the losers must get the answer a later duplicate gets.
+      const responses = await heldAtInsert(8, () => upload(stewardToken, { contentBase64 }));
+
+      expect(responses.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
+      const ids = new Set(responses.map((response) => response.json().id));
+      expect(ids.size).toBe(1);
+      const [count] = await fx.sql<{ n: string }[]>`
+        SELECT count(*)::text AS n FROM core.object_uploads WHERE id = ${[...ids][0]!}
+      `;
+      expect(count?.n).toBe("1");
+    });
+
+    it("refuses the same bytes with a different sensitivity: 409 UPLOAD_SENSITIVITY_MISMATCH, not the existing row", async () => {
+      const body = {
+        contentBase64: Buffer.from(`site photo ${Date.now()}`).toString("base64"),
+        sensitivity: "restricted",
+      };
+      const first = await upload(stewardToken, body);
+      expect(first.statusCode).toBe(200);
+
+      // Handing back the restricted row would let the caller believe the file is now public,
+      // or the other way round.
+      const differently = await upload(stewardToken, { ...body, sensitivity: "public" });
+      expect(differently.statusCode).toBe(409);
+      expect(differently.json()).toMatchObject({
+        code: "UPLOAD_SENSITIVITY_MISMATCH",
+        details: {
+          uploadId: first.json().id,
+          sensitivity: "restricted",
+          requestedSensitivity: "public",
+        },
+      });
+
+      const same = await upload(stewardToken, body);
+      expect(same.statusCode).toBe(200);
+      expect(same.json().id).toBe(first.json().id);
+
+      const [row] = await fx.sql<{ sensitivity: string }[]>`
+        SELECT sensitivity::text AS sensitivity FROM core.object_uploads WHERE id = ${first.json().id}
+      `;
+      expect(row?.sensitivity).toBe("restricted");
+    });
+  });
+
   describe("multipart streaming", () => {
     function streamUpload(token: string, content: string, filename = "big.pdf") {
       const boundary = "----mpcboundary";
@@ -282,6 +409,30 @@ describeDb("uploads", () => {
       // If the paths hashed differently, one file would become two pieces of evidence.
       expect(viaBase64.contentHash).toBe(viaStream.contentHash);
       expect(viaBase64.id).toBe(viaStream.id);
+    });
+
+    it("identical streamed uploads at the same moment all get the one upload, never a 500", async () => {
+      const content = `simultaneous stream ${Date.now()}`;
+      const responses = await heldAtInsert(8, () => streamUpload(stewardToken, content));
+
+      expect(responses.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
+      expect(new Set(responses.map((response) => response.json().id)).size).toBe(1);
+    });
+
+    it("refuses streamed bytes that already exist as public: the stream path is always restricted", async () => {
+      const content = `public notice ${Date.now()}`;
+      const existing = await upload(stewardToken, {
+        contentBase64: Buffer.from(content).toString("base64"),
+        sensitivity: "public",
+      });
+      expect(existing.statusCode).toBe(200);
+
+      const streamed = await streamUpload(stewardToken, content);
+      expect(streamed.statusCode).toBe(409);
+      expect(streamed.json()).toMatchObject({
+        code: "UPLOAD_SENSITIVITY_MISMATCH",
+        details: { uploadId: existing.json().id, sensitivity: "public", requestedSensitivity: "restricted" },
+      });
     });
 
     it("rejects a request without a file part", async () => {

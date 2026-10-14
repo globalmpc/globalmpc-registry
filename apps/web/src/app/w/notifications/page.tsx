@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { TruncatedNotice } from "@/components/TruncatedNotice";
 
 /**
  * Notifications — spec 12 §12.4.
@@ -36,12 +37,16 @@ const KIND_LABEL: Record<Notification["kind"], string> = {
 export default function NotificationsPage() {
   const { token, session, loading: sessionLoading } = useSession();
   const [items, setItems] = useState<Notification[]>([]);
+  // The server caps the list and says so. An unread count from a capped list is a floor.
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
   const reload = useCallback(async () => {
     if (!token) return;
     try {
-      setItems((await listNotifications(token)).items);
+      const page = await listNotifications(token);
+      setItems(page.items);
+      setTruncated(page.truncated);
       setError(null);
     } catch (caught) {
       setError(caught);
@@ -66,7 +71,7 @@ export default function NotificationsPage() {
           <h1>Notifications</h1>
           <p className="sub">
             What changed that you would otherwise have to notice by reopening a screen. {unread.length}{" "}
-            unread.
+            unread{truncated ? " among those listed" : ""}.
           </p>
         </div>
       </div>
@@ -79,6 +84,10 @@ export default function NotificationsPage() {
       </div>
 
       {error ? <ErrorNotice error={error} /> : null}
+
+      {truncated ? (
+        <TruncatedNotice shown={items.length} noun="notifications, newest first" testId="notifications-truncated" />
+      ) : null}
 
       <div className="panel">
         {items.length === 0 ? (

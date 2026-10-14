@@ -2,10 +2,6 @@
 
 ## Before you start
 
-This repository describes a **pre-issuance financial product**. A wrong sentence is
-a compliance problem, not just bad prose — prohibited-language linting
-(`pnpm check:copy`) runs as a CI gate over UI copy and API messages.
-
 The specification documents themselves are not published. Notation such as
 `spec 05 §5.3` or `OD-17` in comments is explained in
 [`docs/spec-sections.md`](docs/spec-sections.md). The rule in this repository is that
@@ -37,14 +33,8 @@ DATABASE_URL="postgres://postgres@localhost:5432/mpc_test" pnpm test
 pnpm check                                 # must pass before a PR
 ```
 
-`pnpm check` covers typecheck · tests · OpenAPI drift · prohibited language · brand
-assets · README counts · compose volume paths · public hygiene. Contracts: `cd contracts && forge test`.
-
-**Everything here is published.** Write in English only, and do not reference internal
-trackers, internal audit labels, workstation paths, or personal addresses — cite the
-documented notation or state the reason in place. `pnpm check:public` (also run by the
-`@mpc/config` tests) enforces it; private names can be added at run time through
-`PUBLIC_HYGIENE_EXTRA_PATTERNS`, one regular expression per line.
+`pnpm check` covers typecheck, tests, OpenAPI drift and brand assets.
+Contracts: `cd contracts && forge test`.
 
 **A green run without `DATABASE_URL` is not green**: tenant-isolation and append-only
 tests are silently skipped.
@@ -53,7 +43,6 @@ tests are silently skipped.
 
 - One PR does one thing. Do not mix cleanup with behaviour changes
 - If you change behaviour, include **a test that fails when that behaviour is wrong**
-- If you change the test count, sync the README with `pnpm check:counts --write`
 - Comments state **why**, not what. The code already says what
 - Commit messages explain in the body what changed and why
 

@@ -132,6 +132,23 @@ export const SOURCE_RESULT_BEHAVIOUR: Readonly<Record<SourceResult, SourceResult
   },
 };
 
+/**
+ * Where a receipt's processing stops — spec 04 §4.9 (Source Receipt lifecycle), 07 §7.13.
+ *
+ * Processing state is orthogonal to the result: it says how far the response got through the
+ * pipeline, not what the source said. A response whose schema drifted or whose signature failed
+ * is **quarantined** — it was received but never normalized, so no value in it may be read as
+ * an observation. Every other result was classified into one of the 12 outcomes.
+ *
+ * `reconciled` is not reachable at insert time. It is the outcome of a reconciliation task, and
+ * receipts are append-only, so it is never written back onto the receipt row.
+ */
+export function receiptProcessingStateFor(result: SourceResult): "classified" | "quarantined" {
+  return result === "schema_changed" || result === "signature_invalid"
+    ? "quarantined"
+    : "classified";
+}
+
 export function isSourceResult(value: string): value is SourceResult {
   return (SOURCE_RESULTS as readonly string[]).includes(value);
 }

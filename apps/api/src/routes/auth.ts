@@ -1,9 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { ACTION_POLICIES, siweNonceRequest, siweVerifyRequest } from "@mpc/api-contract";
+import { withTenant } from "@mpc/db";
+import { ROLE_SELF_BOUND, recordAudit } from "../audit.js";
 import { holdsActionRole } from "../plugins/authorize.js";
 import type { AppConfig } from "../config.js";
 import { badRequest } from "../errors.js";
+import { hashUserAgent } from "../device.js";
 import { SIWE_STATEMENT, issueNonce, resolveSession, verifySiwe } from "../plugins/session.js";
 import {
   extractBearerToken,
@@ -70,6 +73,33 @@ export async function registerAuthRoutes(
     // client only here, once; the server stores only its hash.
     const issued = await issueSessionToken(sql, session.walletAddress, session.chainId);
 
+    /**
+     * Sign-in is recorded — 02 §2.7, 10 §10.3. Who held a session when matters as much as what
+     * they changed with it.
+     *
+     * A wallet not yet bound to a workspace has no tenant, and the audit trail is per tenant;
+     * such a sign-in grants public reads only and is not recorded here.
+     */
+    if (session.tenantId !== null) {
+      const tenantId = session.tenantId;
+      await withTenant(sql, { tenantId }, (tx) =>
+        recordAudit(tx, {
+          tenantId,
+          session: {
+            ...session,
+            device: { userAgentHash: hashUserAgent(request.headers["user-agent"]) },
+          },
+          effectiveRole: ROLE_SELF_BOUND,
+          command: "auth.session.created",
+          resourceType: "session",
+          resourceId: issued.sessionId,
+          correlationId: request.context.correlationId,
+          requestIp: request.clientIp,
+          detail: { chainId: session.chainId, assuranceLevel: session.assuranceLevel },
+        }),
+      );
+    }
+
     return {
       ...session,
       sessionToken: issued.token,
@@ -86,6 +116,24 @@ export async function registerAuthRoutes(
   app.post("/api/v1/auth/logout", async (request) => {
     const token = extractBearerToken(request.headers.authorization);
     const revoked = token ? await revokeSessionToken(sql, token) : false;
+
+    // Only a revocation that happened is recorded; a logout with a dead token changed nothing.
+    const session = request.session;
+    if (revoked && session && session.tenantId !== null) {
+      const tenantId = session.tenantId;
+      await withTenant(sql, { tenantId }, (tx) =>
+        recordAudit(tx, {
+          tenantId,
+          session,
+          effectiveRole: ROLE_SELF_BOUND,
+          command: "auth.session.revoked",
+          resourceType: "session",
+          correlationId: request.context.correlationId,
+          requestIp: request.clientIp,
+        }),
+      );
+    }
+
     return { revoked, requestId: request.context.requestId };
   });
 

@@ -137,6 +137,39 @@ describeDb("Authority Registry", () => {
     expect(body.limitations.join(" ")).toContain("does not promise");
   });
 
+  // 12 §12.13 R5 gate item 8: each stage is reported as itself, with when it was reached.
+  it("reports the integration stage and counts every stage separately", async () => {
+    const body = (
+      await app.inject({
+        method: "GET",
+        url: "/api/v1/jurisdictions/mng/profile",
+        headers: { authorization: `Bearer ${token}` },
+      })
+    ).json();
+
+    const planned = (body.authorities as { name: string; integrationStage: string }[]).find(
+      (item) => item.name === "Planned Registry",
+    );
+    expect(planned?.integrationStage).toBe("planned");
+    expect(Object.keys(body.stageCounts)).toEqual([
+      "planned",
+      "feasibility_checked",
+      "access_confirmed",
+      "tested",
+      "active",
+      "degraded",
+      "disabled",
+      "none",
+    ]);
+    expect(body.stageCounts.active).toBe(body.activeCount);
+
+    const active = (
+      body.authorities as { integrationStage: string; integrationStageSince: string | null }[]
+    ).find((item) => item.integrationStage === "active");
+    // The stage history records when it was reached.
+    expect(active?.integrationStageSince).not.toBeNull();
+  });
+
   it("another tenant's authority is not visible", async () => {
     const response = await app.inject({
       method: "GET",
@@ -222,8 +255,10 @@ describeDb("Asset/Offering gate (OD-07)", () => {
     `;
     for (const key of keys) {
       await fx.sql`
-        INSERT INTO core.project_facts (id, tenant_id, project_id, fact_key, status, evidence_ref)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${projectId}, ${key}, 'confirmed', ${randomUUID()})
+        INSERT INTO core.project_facts (
+          id, tenant_id, project_id, fact_key, status, evidence_ref, evidence_kind
+        )
+        VALUES (${randomUUID()}, ${fx.tenantA}, ${projectId}, ${key}, 'confirmed', ${randomUUID()}, 'upload')
       `;
     }
     return projectId;

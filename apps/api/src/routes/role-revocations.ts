@@ -215,7 +215,7 @@ export async function registerRoleRevocationRoutes(
 
     const { requestId, asOf, correlationId } = request.context;
     return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
         await serializeRoleChanges(tx, tenantId);
         const binding = await lockBinding(tx, tenantId, parsed.data.roleBindingId);
         // Checked at proposal too: a proposal no one could ever approve only waits forever.
@@ -281,7 +281,7 @@ export async function registerRoleRevocationRoutes(
 
       const { requestId, asOf, correlationId } = request.context;
       return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           await serializeRoleChanges(tx, tenantId);
           const [current] = await tx<
             Pick<RevocationRow, "id" | "role_binding_id" | "requested_by_subject_id" | "state" | "version">[]

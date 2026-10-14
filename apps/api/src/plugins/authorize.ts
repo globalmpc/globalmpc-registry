@@ -63,10 +63,33 @@ type Binding = Session["roleBindings"][number];
  * same tenant could upload to company A's project.
  */
 function scopeOf(session: Session, binding: Binding): ProjectScope {
+  return withinJurisdiction(session, binding, baseScopeOf(session, binding));
+}
+
+function baseScopeOf(session: Session, binding: Binding): ProjectScope {
   if (binding.projectId !== null) return [binding.projectId];
   if (TENANT_WIDE_ROLES.includes(binding.role)) return "all";
   if (binding.organizationId === null) return [];
   return session.organizationProjectIds?.[binding.organizationId] ?? [];
+}
+
+/**
+ * Narrows a jurisdiction-scoped binding to projects hosted in its jurisdictions — 02 §2.5.
+ *
+ * The decision formula checks the jurisdiction of a single resource; lists are filtered by
+ * scope instead, so the scope has to carry the same limit. Otherwise a scoped reviewer's project
+ * list would show projects the reviewer is then refused on.
+ */
+function withinJurisdiction(session: Session, binding: Binding, scope: ProjectScope): ProjectScope {
+  const jurisdiction = binding.jurisdiction;
+  if (jurisdiction === undefined || jurisdiction === null) return scope;
+
+  const hosts = session.projectJurisdictions ?? {};
+  const inScope = (projectId: string) => {
+    const host = hosts[projectId];
+    return host !== undefined && jurisdiction.includes(host);
+  };
+  return scope === "all" ? Object.keys(hosts).filter(inScope) : scope.filter(inScope);
 }
 
 /** Bindings of the roles permitted for this action. */
@@ -127,11 +150,14 @@ export function bindingToAuthorizationContext(
     role: binding.role,
     assuranceLevel: session.assuranceLevel,
     actorTenantId: session.tenantId ?? "",
-    actorProjectIds: scopeOf(session, binding),
+    // The jurisdiction limit is judged by the decision itself, so a single-resource denial says
+    // JURISDICTION_SCOPE_MISMATCH rather than a project-scope reason.
+    actorProjectIds: baseScopeOf(session, binding),
     sensitivityClearance: facts.sensitivityClearance,
     hasRequiredCredential: facts.hasRequiredCredential,
     hasRequiredAssignment: facts.hasRequiredAssignment,
     conflictStatus: facts.conflictStatus,
+    jurisdictionScope: binding.jurisdiction ?? null,
   };
 }
 
@@ -184,6 +210,19 @@ export function projectResource(
   return { ...RESOURCE_DEFAULTS, ...overrides, tenantId, projectId };
 }
 
+/**
+ * Fills a project resource's host jurisdiction from the session when the route did not.
+ *
+ * Routes build resources with `projectResource(tenantId, projectId)` and do not look up the
+ * project's host country. Only jurisdiction-scoped sessions carry the lookup; for them an unknown
+ * project stays `null`, which the decision treats as a mismatch.
+ */
+function withResourceJurisdiction(session: Session, resource: ResourceContext): ResourceContext {
+  if (resource.jurisdiction !== undefined || resource.projectId === null) return resource;
+  if (session.projectJurisdictions === undefined) return resource;
+  return { ...resource, jurisdiction: session.projectJurisdictions[resource.projectId] ?? null };
+}
+
 /** Session with no roles. Having a wallet bound is not a role. */
 const PUBLIC_READER: Binding = {
   role: "public_reader",
@@ -221,12 +260,13 @@ export function assertAuthorized(
   const candidates = session.roleBindings.length > 0 ? session.roleBindings : [PUBLIC_READER];
 
   let lastDenial: ReturnType<typeof authorize> | null = null;
+  const located = withResourceJurisdiction(session, resource);
 
   for (const binding of candidates) {
     const decision = authorize(
       policy,
       bindingToAuthorizationContext(session, binding, facts),
-      resource,
+      located,
     );
     if (decision.allow) return binding.role;
     lastDenial = decision;

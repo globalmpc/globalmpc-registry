@@ -43,6 +43,15 @@ const schema = z.object({
    * **No value turns it off.** Allowing 0 turns "switch it off for a moment" into permanent.
    */
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+  /**
+   * Cap for the unauthenticated public routes (`/api/v1/public/*`) — 07 §7.1 "public and
+   * authenticated APIs run with separate rate limits".
+   *
+   * Counted in its own pool per IP, so public browsing cannot use up a signed-in user's share
+   * and the reverse. Unset, it takes `RATE_LIMIT_MAX`: splitting the pools must not by itself
+   * change any number a deployment already runs with.
+   */
+  PUBLIC_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
   /** Cap for the login path. Much narrower: it creates rows or verifies signatures without auth. */
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
 
@@ -218,6 +227,7 @@ export interface AppConfig {
   readonly sessionSecret: string;
   readonly nodeEnv: "development" | "test" | "production";
   readonly rateLimitMax: number;
+  readonly publicRateLimitMax: number;
   readonly authRateLimitMax: number;
   /** Proxy hops trusted when determining the requester. 0 means the header is not trusted. */
   readonly trustedProxyHops: number;
@@ -345,6 +355,7 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
     sessionSecret: value.SESSION_SECRET,
     nodeEnv: value.NODE_ENV,
     rateLimitMax: value.RATE_LIMIT_MAX,
+    publicRateLimitMax: value.PUBLIC_RATE_LIMIT_MAX ?? value.RATE_LIMIT_MAX,
     authRateLimitMax: value.AUTH_RATE_LIMIT_MAX,
     trustedProxyHops: value.TRUSTED_PROXY_HOPS,
     trustedProxyCidrs: value.TRUSTED_PROXY_CIDRS.split(",")

@@ -21,6 +21,8 @@
     { "path": "./packages/config" },
     { "path": "./packages/storage" },
     { "path": "./apps/api" },
-    { "path": "./apps/worker" }
+    { "path": "./apps/jobs-worker" },
+    { "path": "./apps/anchor-worker" },
+    { "path": "./apps/scan-worker" }
   ]
 }

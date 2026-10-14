@@ -17,9 +17,10 @@
 /**
  * Authenticated workspace navigation — spec 11 §11.2.
  *
- * This list does not map one-to-one to the spec's ten items. `Data Room`, `Verification`, and
- * `Readiness & Gates` are project sub-screens, so there is nowhere to go before a project is
- * chosen — in the global nav they become links with no answer to "whose Data Room?".
+ * `Data Room`, `Verification`, and `Readiness & Gates` are project sub-screens. Their global
+ * entries open a project picker that answers "whose Data Room?" and lists only the projects the
+ * session can open, so the nav matches the spec's ten items without links that lead nowhere.
+ * `Authorities` sits beside `Integrations`: the authority catalog is its own screen (§11.10).
  *
  * **Menus outside the user's roles are hidden** (§11.2). `requires` is the API action the
  * screen calls, filtered against the action list the session provides (`actions` from `/auth/session`).
@@ -39,9 +40,13 @@ export const NAV: readonly NavEntry[] = [
   { href: "/w/activity", label: "My Activity", requires: "subject" },
   { href: "/w/notifications", label: "Notifications", requires: "project.read" },
   { href: "/w/projects", label: "Projects", requires: "project.read" },
+  { href: "/w/data-room", label: "Data Room", requires: "evidence.read" },
+  { href: "/w/verification", label: "Verification", requires: "verification.read" },
+  { href: "/w/readiness", label: "Readiness & Gates", requires: "readiness.read" },
   { href: "/w/registries", label: "Registries", requires: "registry.read" },
   { href: "/w/anchors", label: "Anchor", requires: "registry.read" },
   { href: "/w/integrations", label: "Integrations", requires: "authority.read" },
+  { href: "/w/authorities", label: "Authorities", requires: "authority.read" },
   { href: "/w/governance", label: "Governance", requires: "governance.read" },
   { href: "/w/audit", label: "Audit", requires: "audit.read" },
   { href: "/w/admin", label: "Admin", requires: "admin.read" },

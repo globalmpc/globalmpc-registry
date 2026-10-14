@@ -81,6 +81,13 @@ export function ErrorNotice({ error }: { error: unknown }) {
         </div>
       ) : null}
 
+      {envelope.details?.restrictionId ? (
+        <div className="meta" style={{ color: "inherit" }}>
+          {/* The same ID the blackout notice shows. There is no way around it before release. */}
+          Restriction ID: <span className="mono">{envelope.details.restrictionId}</span>
+        </div>
+      ) : null}
+
       {envelope.details?.hint ? (
         <div className="meta" style={{ color: "inherit" }}>
           {envelope.details.hint}

@@ -1,0 +1,22 @@
+{
+  "name": "@mpc/jobs-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "outbox:replay": "tsx src/outbox-replay-cli.ts"
+  },
+  "dependencies": {
+    "@mpc/config": "workspace:*",
+    "@mpc/db": "workspace:*",
+    "postgres": "^3.4.9",
+    "tsx": "4.23.15",
+    "@mpc/canonical": "workspace:*"
+  }
+}

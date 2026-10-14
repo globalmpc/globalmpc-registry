@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { TestAccount } from "./helpers/db.js";
+import { SECOND_PERSON_ROLES } from "@mpc/api-contract";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
@@ -32,6 +33,8 @@ describeDb("platform administration", () => {
   let operatorAToken: string;
   let operatorBToken: string;
   let stewardToken: string;
+  /** Subject of operatorBToken — a second admin in tenant A. */
+  let operatorSubjectB: string;
 
   beforeAll(async () => {
     fx = await setupFixture();
@@ -44,6 +47,7 @@ describeDb("platform administration", () => {
     // was possible only through the CLI.
     const second = newAccount();
     const subjectId = randomUUID();
+    operatorSubjectB = subjectId;
     await fx.sql`
       INSERT INTO core.subjects (id, tenant_id, kind, display_name)
       VALUES (${subjectId}, ${fx.tenantA}, 'person', 'Operator Second')
@@ -131,6 +135,208 @@ describeDb("platform administration", () => {
     expect(self.json().code).toBe("ROLE_GRANT_SELF_APPROVAL");
   });
 
+  it("does not let the target of a proposal approve their own grant", async () => {
+    // Operator A proposes a role for operator B. If B could approve it, the "second person"
+    // would be the beneficiary — one person deciding what they receive.
+    const grant = (
+      await post(operatorAToken, "/api/v1/admin/role-grants", {
+        subjectId: operatorSubjectB,
+        role: "auditor",
+        reason: "audit duty for the second operator",
+      })
+    ).json();
+    expect(grant.state).toBe("pending");
+
+    const self = await post(
+      operatorBToken,
+      `/api/v1/admin/role-grants/${grant.id}/decision`,
+      { decision: "approve", reason: "this is my own grant" },
+      `"${grant.version}"`,
+    );
+
+    expect(self.statusCode).toBe(422);
+    expect(self.json().code).toBe("ROLE_GRANT_SELF_TARGET");
+  });
+
+  it("the DB refuses a grant decided by its own target", async () => {
+    const grant = (
+      await post(operatorAToken, "/api/v1/admin/role-grants", {
+        subjectId: operatorSubjectB,
+        role: "data_steward",
+        reason: "evidence duty for the second operator",
+      })
+    ).json();
+    expect(grant.state).toBe("pending");
+
+    await expect(
+      fx.sql`
+        UPDATE core.role_grant_requests
+        SET state = 'rejected', decided_by_subject_id = ${operatorSubjectB}, decided_at = now(),
+            decision_reason = 'bypassing the route'
+        WHERE id = ${grant.id}
+      `,
+    ).rejects.toThrow(/role_grant_not_self_target/);
+  });
+
+  /**
+   * The binding guard checks roles held at bind time. Reversing the order — bind an operator's
+   * key to a subject with no roles, then grant it a second-person role — would pass it, so the
+   * grant refuses a subject whose active key was bound from the UI.
+   */
+  describe("granting a second-person role to a subject with a UI-bound key", () => {
+    async function uiBoundSubject(label: string): Promise<string> {
+      const subject = (
+        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: label })
+      ).json();
+      const bound = await post(operatorAToken, `/api/v1/admin/subjects/${subject.id}/wallets`, {
+        walletAddress: newAccount().address,
+        chainId: 31337,
+        assuranceLevel: "high_assurance",
+        justification: "bound before any role",
+      });
+      expect(bound.statusCode).toBe(200);
+      return subject.id as string;
+    }
+
+    async function proposeAndApprove(subjectId: string, role: string) {
+      const grant = (
+        await post(operatorAToken, "/api/v1/admin/role-grants", {
+          subjectId,
+          role,
+          reason: "role after a UI binding",
+        })
+      ).json();
+      expect(grant.state).toBe("pending");
+      return post(
+        operatorBToken,
+        `/api/v1/admin/role-grants/${grant.id}/decision`,
+        { decision: "approve", reason: "verified" },
+        `"${grant.version}"`,
+      );
+    }
+
+    it("refuses approving a second-person role", async () => {
+      const subjectId = await uiBoundSubject("bound then promoted");
+      const decided = await proposeAndApprove(subjectId, "disclosure_approver");
+
+      expect(decided.statusCode).toBe(422);
+      expect(decided.json().code).toBe("ROLE_GRANT_UI_BOUND_SUBJECT");
+    });
+
+    it("still grants a role outside the second-person set", async () => {
+      const subjectId = await uiBoundSubject("bound then voter");
+      const decided = await proposeAndApprove(subjectId, "protocol_voter");
+
+      expect(decided.statusCode).toBe(200);
+      expect(decided.json().state).toBe("approved");
+    });
+  });
+
+  /**
+   * Write skew between the two guards. Binding checks "no second-person role" and inserts a
+   * wallet; approving checks "no UI-bound wallet" and inserts a role. Run together under READ
+   * COMMITTED, each misses the other's uncommitted row and both pass.
+   *
+   * Each test plays one side in a transaction that holds the subject row, the lock both routes
+   * take, and runs the other side through the API while it is open. The request must wait for
+   * the lock, then see the committed row and refuse.
+   */
+  describe("concurrent binding and granting on one subject", () => {
+    /** Starts `request` inside an open transaction and reports whether it settled before commit. */
+    async function whileHeld(
+      subjectId: string,
+      writeOtherSide: (tx: typeof fx.sql) => Promise<unknown>,
+      request: () => ReturnType<typeof post>,
+    ) {
+      let settled = false;
+      const { pending } = await fx.sql.begin(async (tx) => {
+        await tx`SELECT id FROM core.subjects WHERE id = ${subjectId} FOR NO KEY UPDATE`;
+        await writeOtherSide(tx as unknown as typeof fx.sql);
+        const started = request();
+        void started.then(() => {
+          settled = true;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return { pending: started };
+      });
+      const settledBeforeCommit = settled;
+      return { response: await pending, settledBeforeCommit };
+    }
+
+    it("a bind waits for a concurrent grant and then refuses", async () => {
+      const subject = (
+        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "bind racing grant" })
+      ).json();
+
+      const { response, settledBeforeCommit } = await whileHeld(
+        subject.id,
+        (tx) => tx`
+          INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
+          VALUES (${randomUUID()}, ${fx.tenantA}, ${subject.id}, ${fx.orgA}, 'disclosure_approver')
+        `,
+        () =>
+          post(operatorAToken, `/api/v1/admin/subjects/${subject.id}/wallets`, {
+            walletAddress: newAccount().address,
+            chainId: 31337,
+            assuranceLevel: "high_assurance",
+            justification: "racing a grant",
+          }),
+      );
+
+      expect(settledBeforeCommit).toBe(false);
+      expect(response.statusCode).toBe(403);
+      expect(response.json().code).toBe("WALLET_BIND_ADMIN_SUBJECT");
+    });
+
+    it("a grant approval waits for a concurrent bind and then refuses", async () => {
+      const subject = (
+        await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "grant racing bind" })
+      ).json();
+      const grant = (
+        await post(operatorAToken, "/api/v1/admin/role-grants", {
+          subjectId: subject.id,
+          role: "disclosure_approver",
+          reason: "racing a bind",
+        })
+      ).json();
+      expect(grant.state).toBe("pending");
+
+      const walletId = randomUUID();
+      const { response, settledBeforeCommit } = await whileHeld(
+        subject.id,
+        async (tx) => {
+          await tx`
+            INSERT INTO core.wallet_identities (
+              id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+            ) VALUES (
+              ${walletId}, ${fx.tenantA}, ${subject.id}, ${newAccount().address},
+              31337, 'high_assurance', now()
+            )
+          `;
+          await tx`
+            INSERT INTO audit.events (
+              tenant_id, actor_subject_id, command, resource_type, resource_id, correlation_id
+            ) VALUES (
+              ${fx.tenantA}, ${fx.operatorSubjectA}, 'admin.wallet.bound', 'wallet_identity',
+              ${walletId}, 'race-test'
+            )
+          `;
+        },
+        () =>
+          post(
+            operatorBToken,
+            `/api/v1/admin/role-grants/${grant.id}/decision`,
+            { decision: "approve", reason: "racing a bind" },
+            `"${grant.version}"`,
+          ),
+      );
+
+      expect(settledBeforeCommit).toBe(false);
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("ROLE_GRANT_UI_BOUND_SUBJECT");
+    });
+  });
+
   it("grants the role once another person approves", async () => {
     const subject = (
       await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "grant target B" })
@@ -212,6 +418,40 @@ describeDb("platform administration", () => {
       expect(response.statusCode).toBe(403);
       expect(response.json().code).toBe("WALLET_BIND_ADMIN_SUBJECT");
     });
+
+    /**
+     * The same collapse through the second person of any other two-person rule. An operator who
+     * binds their key to a disclosure approver publishes their own draft; to a registry
+     * approver, approves their own registry proposal; to a data steward, confirms a manual
+     * receipt and second-reviews it as themselves.
+     */
+    it.each([...SECOND_PERSON_ROLES])(
+      "does not bind a wallet from the screen to a subject holding %s",
+      async (role) => {
+        const subject = (
+          await post(operatorAToken, "/api/v1/admin/subjects", { displayName: `holder of ${role}` })
+        ).json();
+        await fx.sql`
+          INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
+          VALUES (${randomUUID()}, ${fx.tenantA}, ${subject.id}, ${fx.orgA}, ${role})
+        `;
+
+        const response = await post(
+          operatorAToken,
+          `/api/v1/admin/subjects/${subject.id}/wallets`,
+          {
+            walletAddress: newAccount().address,
+            chainId: 31337,
+            assuranceLevel: "high_assurance",
+            justification: "attempt to act as the second person",
+          },
+        );
+
+        expect(response.statusCode).toBe(403);
+        expect(response.json().code).toBe("WALLET_BIND_ADMIN_SUBJECT");
+        expect(response.json().details.role).toBe(role);
+      },
+    );
 
     it("does not disable one's own wallet — the last operator cannot remove themselves", async () => {
       const subjects = (await get(operatorAToken, "/api/v1/admin/subjects")).json() as {

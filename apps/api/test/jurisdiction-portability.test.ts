@@ -5,6 +5,7 @@ import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from "./helpers/db.js";
 import { projectKeyOf, publishProject } from "./helpers/registry.js";
+import { decideSigned } from "./helpers/gate-decision.js";
 import rulesFixture from "../../../packages/policy/test/fixtures/registry-gate.rules.json" with { type: "json" };
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
@@ -177,8 +178,18 @@ describeDb("second-jurisdiction portability (AC-25)", () => {
     expect(response.statusCode).toBe(200);
     // Checks that **evaluation works**, not whether it passes. Whether the synthetic
     // project lacks evidence is out of scope here.
-    expect(["ok", "gap", "blocked"]).toContain(response.json().status);
+    expect(["ok", "watch", "gap", "not_evaluable"]).toContain(response.json().status);
     expect(response.json().policySetId).toBe(policySetId);
+    // The synthetic jurisdiction's own reviewed profile records its environmental basis
+    // (beforeAll), so the requirement is evaluated on evidence — here, the missing baseline
+    // claim — rather than on another country's law or on no basis at all.
+    const environmental = response
+      .json()
+      .requirementResults.find(
+        (result: { requirementId: string }) => result.requirementId === "environmental-baseline",
+      );
+    expect(environmental.status).toBe("gap");
+    expect(environmental.missing).toEqual(["environmental_baseline"]);
   });
 
   it("publishes a synthetic-jurisdiction record to the Registry and reads it publicly", async () => {
@@ -221,7 +232,7 @@ describeDb("second-jurisdiction portability (AC-25)", () => {
       `/api/v1/projects/${projectId}/readiness-assessments`,
       { policySetId },
     );
-    const response = await post(approverToken, `/api/v1/projects/${projectId}/gate-decisions`, {
+    const response = await decideSigned(app, approverToken, fx.approverA, projectId, {
       gateId: "registry_publication",
       inputAssessmentId: assessment.json().id,
       // A gap blocks go (AC-03). This checks that deciding works, so it picks

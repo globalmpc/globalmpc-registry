@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { BlackoutNotice } from "@/components/BlackoutNotice";
 
 /**
  * Public publication and anchor — spec 02 §2.8, 05 §5.6·§5.7·§5.9, 07 §7.2, 08 §8.11.
@@ -189,6 +190,8 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
 
       <div className="panel">
         <h2>3. Publish</h2>
+        {/* Next to the action it may block (11 §11.12). The server enforces it either way. */}
+        <BlackoutNotice token={token} projectId={id} />
         {ownDraft ? (
           <p className="sub" style={{ marginTop: 0 }}>
             You drafted this. Another Disclosure Approver publishes it.

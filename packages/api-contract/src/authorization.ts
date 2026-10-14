@@ -11,8 +11,8 @@ import { satisfiesAssurance, ROLE_MINIMUM_ASSURANCE, type AssuranceLevel } from 
  *        AND resource_state_allows_action
  *        AND no_conflict_or_separation_violation
  *
- * Evaluates the seven conditions in order and **preserves the first failure
- * reason**. §11.7 requires "Permission: the required role and the access request
+ * Evaluates the seven conditions, plus the `jurisdiction[]` attribute of §2.5, in order and
+ * **preserves the first failure reason**. §11.7 requires "Permission: the required role and the access request
  * path", so the denial reason must reach the UI. With a bare boolean, the user
  * would not know what to do next.
  */
@@ -22,6 +22,7 @@ export type DenyReason =
   | "ASSURANCE_LEVEL_INSUFFICIENT"
   | "TENANT_SCOPE_MISMATCH"
   | "PROJECT_SCOPE_MISMATCH"
+  | "JURISDICTION_SCOPE_MISMATCH"
   | "SENSITIVITY_CLEARANCE_INSUFFICIENT"
   | "CREDENTIAL_OR_ASSIGNMENT_INVALID"
   | "RESOURCE_STATE_FORBIDS_ACTION"
@@ -103,6 +104,13 @@ export interface AuthorizationContext {
   readonly hasRequiredCredential: boolean;
   readonly hasRequiredAssignment: boolean;
   readonly conflictStatus: "none" | "disclosed_resolved" | "unresolved";
+  /**
+   * Jurisdictions this binding is limited to — 02 §2.5 `jurisdiction[]`.
+   *
+   * `null` or absent: the binding is not scoped by jurisdiction and the check is skipped, which
+   * is how every binding behaved before the attribute existed.
+   */
+  readonly jurisdictionScope?: readonly string[] | null;
 }
 
 export interface ResourceContext {
@@ -116,11 +124,30 @@ export interface ResourceContext {
   readonly requiresAssignment: boolean;
   /** Whether this action is subject to conflict-of-interest separation rules (02 §2.4). */
   readonly separationSensitive: boolean;
+  /**
+   * Host jurisdiction of the project this resource belongs to (ISO 3166-1 alpha-3).
+   *
+   * `null` or absent for tenant-level resources, or when it was not looked up. A
+   * jurisdiction-scoped binding treats both as a mismatch — an unknown location is not a match.
+   */
+  readonly jurisdiction?: string | null;
+  /**
+   * A tenant-level list whose rows the route filters by project scope (`visibleProjectScope`),
+   * which already narrows jurisdiction-scoped bindings to their jurisdictions. Only such lists
+   * let a scoped binding through at tenant level; every other tenant-level action stays closed.
+   */
+  readonly filteredByProjectScope?: boolean;
 }
 
 export interface ActionPolicy {
   readonly action: string;
   readonly allowedRoles: readonly string[];
+  /**
+   * Set when this action is the **second person** of a two-person rule — it decides, publishes
+   * or confirms what someone else started, and must not be that someone. The value names the
+   * rule. See `SECOND_PERSON_ROLES`.
+   */
+  readonly secondPerson?: string;
 }
 
 export type AuthorizationDecision =
@@ -173,6 +200,26 @@ export function authorize(
       reason: "PROJECT_SCOPE_MISMATCH",
       accessRequestPath: ACCESS_REQUEST_PATHS.project(resource.projectId),
     };
+  }
+
+  /**
+   * Jurisdiction condition — 02 §2.5.
+   *
+   * **Fails closed for scoped bindings.** A binding limited to some jurisdictions passes only
+   * when the resource's host jurisdiction is known and listed. A tenant-level resource has no
+   * host jurisdiction, so a scoped binding cannot act on it: treating "no location" as "any
+   * location" would let the narrowest binding reach the widest resources. The one exception is
+   * a list the route filters by project scope, where the filter itself applies the limit.
+   */
+  if (
+    actor.jurisdictionScope !== undefined &&
+    actor.jurisdictionScope !== null &&
+    !(resource.projectId === null && resource.filteredByProjectScope === true) &&
+    (resource.jurisdiction === undefined ||
+      resource.jurisdiction === null ||
+      !actor.jurisdictionScope.includes(resource.jurisdiction))
+  ) {
+    return { allow: false, reason: "JURISDICTION_SCOPE_MISMATCH" };
   }
 
   if (!actor.sensitivityClearance.includes(resource.sensitivity)) {
@@ -302,6 +349,29 @@ function governanceActions(): Record<string, ActionPolicy> {
 export const DISCLOSURE_APPROVER_ROLES: readonly string[] = ["disclosure_approver"];
 
 /**
+ * The elevated role of an approved break-glass elevation — 02 §2.6.
+ *
+ * Not in 02 §2.2 and not in `ROLE_MINIMUM_ASSURANCE`, so it cannot be proposed as a standing
+ * role grant (the grant route refuses unknown roles). It is also absent from
+ * `TENANT_WIDE_ROLES`, so it reaches no project: the emergency actions are tenant-level.
+ */
+export const BREAK_GLASS_ROLE = "break_glass";
+
+/**
+ * Every action the `break_glass` role may perform.
+ *
+ * 02 §2.6 lists pause, credential revoke, key disable and access quarantine, and forbids changing
+ * evidence, readiness, votes or financial entitlements. The standing `security_operator` role
+ * already holds pause (`project.lifecycle.suspend`) and key disable (`admin.wallet.manage`); what
+ * it lacks is an immediate access cut, because revoking a role normally takes two people. A test
+ * keeps this list and `ACTION_POLICIES` in step.
+ */
+export const BREAK_GLASS_ACTIONS: readonly string[] = ["break_glass.quarantine"];
+
+/** 02 §2.6: an incident record is due within 24 hours of the elevation taking effect. */
+export const BREAK_GLASS_INCIDENT_DUE_HOURS = 24;
+
+/**
  * Allowed roles per action — 02 §2.3 permission table.
  *
  * `readiness.override` is absent by design. No role may modify a readiness
@@ -330,6 +400,58 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   "project.create": {
     action: "project.create",
     allowedRoles: ["mpc_operator", "project_admin", "project_sponsor_operator"],
+  },
+  /**
+   * Project identity edits — name and minerals only (07 §7.2 `PATCH /projects/{id}`).
+   *
+   * The owner organization and the reference label are not editable through this action: moving
+   * the owner changes who reaches the project, and the label is fixed (05 §5.10).
+   */
+  "project.update": {
+    action: "project.update",
+    allowedRoles: ["mpc_operator", "project_admin"],
+  },
+  /**
+   * Submit a project party — 02 §2.3 ("Project Registry: project parties request").
+   *
+   * A submitted party is `pending`. Parties may name themselves; that is a self-statement
+   * (05 §5.11), and confirming it is `project.fact.record`, which none of the party roles hold.
+   */
+  "project.party.submit": {
+    action: "project.party.submit",
+    allowedRoles: [
+      "project_admin",
+      "project_sponsor_operator",
+      "spv_representative",
+      "issuer_officer",
+      "data_steward",
+    ],
+  },
+  /**
+   * Record a confirmed/pending matrix fact or a party's confirmation — 04 §4.2, 11 §11.5.
+   *
+   * Curation, not submission (02 §2.3 "Project Registry: steward curate"). Only the steward holds
+   * it, so a party cannot confirm facts about its own project. `mpc_operator` is absent: it runs
+   * the publish workflow, and confirming the facts it then publishes would merge two checks.
+   */
+  "project.fact.record": {
+    action: "project.fact.record",
+    allowedRoles: ["data_steward"],
+  },
+  /** Ask for Project Registry registration — 07 §7.2. Asking is not publishing. */
+  "project.registration.request": {
+    action: "project.registration.request",
+    allowedRoles: ["project_admin", "project_sponsor_operator"],
+  },
+  /**
+   * Stakeholder/obligation event history — 12 §12.7.
+   *
+   * The sponsor submits relationship and consent material (02 §2.2); the steward curates.
+   * Recording an event as `confirmed` additionally needs `project.fact.record` — the route checks it.
+   */
+  "project.stakeholder.record": {
+    action: "project.stakeholder.record",
+    allowedRoles: ["data_steward", "project_sponsor_operator"],
   },
   "source.upload": {
     action: "source.upload",
@@ -377,6 +499,7 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
    */
   "authority.review": {
     action: "authority.review",
+    secondPerson: "registrant ≠ approver (route SEPARATION_OF_DUTIES)",
     allowedRoles: ["reviewer_legal", "reviewer_assurance", "auditor"],
   },
   /**
@@ -388,6 +511,7 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
    */
   "connection.configure": {
     action: "connection.configure",
+    secondPerson: "reviewer ≠ activator (route CONNECTION_REVIEW_SAME_PERSON)",
     allowedRoles: ["mpc_operator", "security_operator"],
   },
   /**
@@ -404,6 +528,7 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
    */
   "source.collect": {
     action: "source.collect",
+    secondPerson: "first ≠ second confirmer (source_receipt_second_reviewer_differs, 0021)",
     allowedRoles: ["data_steward", "mpc_operator"],
   },
   "claim.curate": {
@@ -448,7 +573,31 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   },
   "attestation.sign": {
     action: "attestation.sign",
+    secondPerson: "claim submitter ≠ reviewer (02 §2.4, separation-sensitive resource)",
     allowedRoles: ["reviewer_cp_qp", "reviewer_lab", "reviewer_legal", "reviewer_assurance"],
+  },
+  /**
+   * Withdraw one's own signed attestation — 07 §7.2 `POST /attestations/{id}/revoke`.
+   *
+   * The same roles that sign, and the route further requires the signer. Operations roles are
+   * absent: `break_glass` cannot change an attestation (02 §2.8).
+   */
+  "attestation.revoke": {
+    action: "attestation.revoke",
+    allowedRoles: ["reviewer_cp_qp", "reviewer_lab", "reviewer_legal", "reviewer_assurance"],
+  },
+  /**
+   * Credential status change — expire, suspend, revoke, lift a suspension (02 §2.8 "credential
+   * check", REQ-DAPP-042·044).
+   *
+   * The Credential Verifier is the role that approves credentials into the registry.
+   * `security_operator` is here for `break_glass` credential revocation (02 §2.6); the route
+   * limits it to revoke and suspend.
+   */
+  "credential.status.change": {
+    action: "credential.status.change",
+    secondPerson: "credential holder ≠ changer (route CREDENTIAL_SELF_STATUS_CHANGE)",
+    allowedRoles: [...REGISTRY_APPROVER_ROLES, "security_operator"],
   },
   "readiness.recompute": {
     action: "readiness.recompute",
@@ -456,6 +605,7 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   },
   "gate.decide": {
     action: "gate.decide",
+    secondPerson: "independent gate decision (02 §2.4, separation-sensitive resource)",
     allowedRoles: ["gate_approver"],
   },
   /**
@@ -472,6 +622,7 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   },
   "registry.publish": {
     action: "registry.publish",
+    secondPerson: "drafter ≠ publisher (registry_draft_two_person, 0056)",
     allowedRoles: DISCLOSURE_APPROVER_ROLES,
   },
   "registry.revoke": {
@@ -518,6 +669,19 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     action: "audit.read",
     allowedRoles: ["auditor", "security_operator", "mpc_operator"],
   },
+  /**
+   * Bulk audit export — 12 §12.4. Narrower than reading: an export leaves the system as a file,
+   * so it is held to the two roles whose job is review (02 §2.2 auditor, security_operator).
+   */
+  "audit.export": {
+    action: "audit.export",
+    allowedRoles: ["auditor", "security_operator"],
+  },
+  /**
+   * Project export package — 07 §7.9. Anyone who can read the project may ask; the package is
+   * redacted to the requester's clearance, so asking never widens what they can see.
+   */
+  "project.export": { action: "project.export", allowedRoles: WORKSPACE_READERS },
 
   /**
    * Platform administration — 02 §2.8.
@@ -560,6 +724,7 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   },
   "admin.role.approve": {
     action: "admin.role.approve",
+    secondPerson: "proposer ≠ decider (role_grant_two_person 0028, role_revocation_two_person 0042, role_grant_not_self_target 0076)",
     allowedRoles: ["mpc_operator", "security_operator"],
   },
   /**
@@ -597,6 +762,7 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   },
   "review_registry.approve": {
     action: "review_registry.approve",
+    secondPerson: "proposer ≠ approver (registry_proposal_two_person, 0043)",
     allowedRoles: REGISTRY_APPROVER_ROLES,
   },
 
@@ -618,8 +784,80 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   },
   "project.lifecycle.advance": {
     action: "project.lifecycle.advance",
+    secondPerson: "suspender ≠ reinstater (route LIFECYCLE_RESUME_SELF)",
     // Whoever makes gate and issuance decisions performs this transition. An
     // operator alone cannot open an offering.
     allowedRoles: ["issuer_officer", "gate_approver"],
   },
+
+  /**
+   * Source connection security review — 02 §2.8 "security and data rights review".
+   *
+   * Separate from `connection.configure`. With one permission the person who configures a
+   * connection would also be the one who clears it; the route additionally refuses activation
+   * by the reviewer, so review and activation are always two people.
+   */
+  "connection.security_review": {
+    action: "connection.security_review",
+    secondPerson: "reviewer ≠ activator (route CONNECTION_REVIEW_SAME_PERSON)",
+    allowedRoles: ["security_operator"],
+  },
+
+  /**
+   * Break-glass elevation management — 02 §2.6.
+   *
+   * Only `security_operator` holders request, approve, record the incident and release. The
+   * requester is the one elevated; the DB refuses approval or release by that same person
+   * (`break_glass_two_person`). Auditors read.
+   */
+  "break_glass.read": {
+    action: "break_glass.read",
+    allowedRoles: ["security_operator", "auditor"],
+  },
+  "break_glass.request": {
+    action: "break_glass.request",
+    allowedRoles: ["security_operator"],
+  },
+  "break_glass.approve": {
+    action: "break_glass.approve",
+    secondPerson: "elevated subject ≠ approver (break_glass_two_person, 0073)",
+    allowedRoles: ["security_operator"],
+  },
+  "break_glass.incident": {
+    action: "break_glass.incident",
+    allowedRoles: ["security_operator"],
+  },
+  "break_glass.release": {
+    action: "break_glass.release",
+    secondPerson: "elevated subject ≠ releaser (break_glass_release_two_person, 0073)",
+    allowedRoles: ["security_operator"],
+  },
+  /**
+   * Access quarantine under an active elevation — 02 §2.6 "access quarantine".
+   *
+   * **Only the `break_glass` role holds it,** and that role is never a standing binding: the
+   * session carries it only while an approved elevation is unexpired, unreleased and not
+   * overdue on its incident record.
+   */
+  "break_glass.quarantine": {
+    action: "break_glass.quarantine",
+    allowedRoles: [BREAK_GLASS_ROLE],
+  },
 };
+
+/**
+ * Every role that can act as the second person of a two-person rule — derived from the
+ * `secondPerson` marks above, so a role added to a marked action is covered without a second
+ * edit.
+ *
+ * A UI wallet binding is a one-person act. An operator who binds their own key to a holder of
+ * one of these roles stands on both sides of a rule, so the admin routes refuse that binding
+ * and refuse granting these roles to a subject whose key was bound from the UI.
+ */
+export const SECOND_PERSON_ROLES: readonly string[] = [
+  ...new Set(
+    Object.values(ACTION_POLICIES)
+      .filter((policy) => policy.secondPerson !== undefined)
+      .flatMap((policy) => policy.allowedRoles),
+  ),
+].sort();

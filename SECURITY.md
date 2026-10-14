@@ -2,36 +2,34 @@
 
 ## Reporting a vulnerability
 
-**Do not open a public issue, pull request, or discussion.** Report privately through
-**Security → Report a vulnerability** (GitHub private vulnerability reporting) on this repository.
+Report privately through **Security → Report a vulnerability** on the public mirror,
+[globalmpc/globalmpc-registry](https://github.com/globalmpc/globalmpc-registry).
+This requires private vulnerability reporting to be enabled on that repository. If the option
+is unavailable, arrange a private reporting channel with the maintainers before sharing details.
 
-Please include:
-
-- affected component and commit
-- reproduction steps (minimal input)
-- expected impact
-
-We will follow up inside the advisory. Please keep details private until a fix is released.
+**Do not disclose vulnerabilities in public issues, pull requests or discussions.** Include
+the affected component and commit, reproduction steps, and expected impact. Keep sensitive
+details private until a fix and coordinated disclosure are agreed with the maintainers.
 
 ## Scope
 
 | In scope | Path |
 |---|---|
-| Smart contracts | `contracts/src/` |
-| API · Web · Worker | `apps/` |
+| Smart contracts and deployment scripts | `contracts/src/`, `contracts/script/` |
+| API, web and workers | `apps/` |
 | Shared packages | `packages/` |
+| Dependency and build configuration | Package manifests, lockfiles, `.gitmodules`, `contracts/foundry.toml`, CI workflows |
 | Deployment configuration | `Dockerfile`, `docker-compose.yml`, `deploy/` |
 
-Out of scope:
+OpenZeppelin is installed by pnpm; forge-std is a Git submodule. Report defects in upstream
+libraries to their maintainers. Vulnerabilities in this project's integration, configuration
+or use of those libraries remain in scope here.
 
-- `contracts/lib/` — vendored third-party libraries (OpenZeppelin, forge-std). Report upstream.
-- `deploy/local-secrets/` — publicly known local-only defaults (anvil default account key, MinIO default credentials).
-
-## Threat model
-
-What is protected, the trust boundaries, and what is and is not mitigated:
-[`docs/security/threat-model.md`](docs/security/threat-model.md).
+The known development values in `deploy/local-secrets/` are not leaked production credentials.
+Their exposure as real production credentials or use in a production deployment is in scope.
 
 ## Supported versions
 
-Only the latest commit on `main` is supported.
+The latest `main` revision is supported. The public repository mirrors this project; include
+the commit from the checkout you tested when reporting an issue. BSC contracts are not yet
+deployed, so there is no supported on-chain deployment address.

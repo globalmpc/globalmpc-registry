@@ -101,6 +101,10 @@ test.describe("accessibility (WCAG 2.2 AA)", () => {
     await page.getByRole("textbox", { name: "Project key" }).fill(`A11Y-${Date.now()}`);
     await page.getByRole("textbox", { name: "Name" }).fill("For the accessibility check");
     await page.getByRole("textbox", { name: "Minerals (comma separated)" }).fill("copper");
+    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
+      "aaaaaaaa-0000-0000-0000-000000000001",
+    );
     await page.getByRole("button", { name: "Register" }).click();
     // Without waiting for navigation, the URL is still `/new`.
     await expect(page).toHaveURL(/\/w\/projects\/[0-9a-f-]{36}$/);
@@ -108,12 +112,46 @@ test.describe("accessibility (WCAG 2.2 AA)", () => {
 
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/data-room`);
+    await page.getByRole("textbox", { name: "Query field" }).fill("licenseNumber");
+    await page.getByRole("textbox", { name: "Query value" }).fill("A11Y-1");
     await page.getByRole("button", { name: "Look up the official source" }).click();
     await page.getByRole("button", { name: "Add a mining right claim" }).click();
     await expect(page.getByText("mining_right_registration")).toBeVisible();
 
     const result = await analyze(page);
     expect(describe(result.violations)).toBe("");
+  });
+
+  test("Project Overview and Claim Detail — matrix, parties, registries and claim sections", async ({ page }) => {
+    await connectAs(page, "Operator A");
+    await page.goto("/w/projects/new");
+    await page.getByRole("textbox", { name: "Project key" }).fill(`A11Y-OV-${Date.now()}`);
+    await page.getByRole("textbox", { name: "Name" }).fill("For the overview check");
+    await page.getByRole("checkbox", { name: "Synthetic test project" }).check();
+    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
+      "aaaaaaaa-0000-0000-0000-000000000001",
+    );
+    await page.getByRole("button", { name: "Register" }).click();
+    await expect(page).toHaveURL(/\/w\/projects\/[0-9a-f-]{36}$/);
+    const projectId = new URL(page.url()).pathname.split("/").pop() as string;
+
+    // The steward sees the record forms as well as the tables.
+    await connectAs(page, "Steward A");
+    // Let the sign-in finish before leaving /connect; navigating mid sign-in drops the session.
+    await expect(page).toHaveURL(/\/w\/projects$/);
+    await page.goto(`/w/projects/${projectId}`);
+    await expect(page.getByTestId("fact-matrix")).toBeVisible();
+    await expect(page.getByTestId("stakeholder-history")).not.toContainText("Loading");
+    const overview = await analyze(page);
+    expect(describe(overview.violations)).toBe("");
+
+    await page.goto(`/w/projects/${projectId}/data-room`);
+    await page.getByRole("button", { name: "Add a mining right claim" }).click();
+    await page.getByRole("link", { name: "mining_right_registration" }).first().click();
+    await expect(page.getByTestId("claim-detail")).toBeVisible();
+    const claim = await analyze(page);
+    expect(describe(claim.violations)).toBe("");
   });
 
   test("error display", async ({ page }) => {
@@ -142,7 +180,16 @@ test.describe("accessibility (WCAG 2.2 AA)", () => {
   });
 
   /** The new workspace aggregate screens. */
-  for (const path of ["/w/work", "/w/notifications", "/w/registries", "/w/integrations"]) {
+  for (const path of [
+    "/w/work",
+    "/w/notifications",
+    "/w/registries",
+    "/w/integrations",
+    "/w/authorities",
+    "/w/data-room",
+    "/w/verification",
+    "/w/readiness",
+  ]) {
     test(`workspace — ${path}`, async ({ page }) => {
       await connectAs(page, "Operator A");
       await page.goto(path);
@@ -165,6 +212,10 @@ test.describe("accessibility (WCAG 2.2 AA)", () => {
     await page.goto("/w/projects/new");
     await page.getByRole("textbox", { name: "Project key" }).fill(`A11Y-AUDIT-${Date.now()}`);
     await page.getByRole("textbox", { name: "Name" }).fill("For the audit check");
+    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
+      "aaaaaaaa-0000-0000-0000-000000000001",
+    );
     await page.getByRole("button", { name: "Register" }).click();
 
     await page.goto("/w/audit");

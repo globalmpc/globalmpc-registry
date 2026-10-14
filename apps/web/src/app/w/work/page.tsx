@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { getMyWork, type MyWork } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { TruncatedNotice } from "@/components/TruncatedNotice";
 
 /**
  * My Work — spec 11 §11.2.
@@ -156,6 +157,13 @@ export default function MyWorkPage() {
             </table>
           </div>
         )}
+        {work?.unassignedTruncated ? (
+          <TruncatedNotice
+            shown={work.unassigned.filter((item) => item.kind === "stale_signal").length}
+            noun="stale signals, oldest first"
+            testId="work-unassigned-truncated"
+          />
+        ) : null}
       </div>
     </>
   );

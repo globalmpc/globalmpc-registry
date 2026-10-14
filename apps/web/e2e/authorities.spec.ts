@@ -32,6 +32,10 @@ test.describe("Authority Registry", () => {
     // What is not confirmed is shown alongside.
     await expect(table).toContainText("economic_viability");
 
+    // Each integration stage is named as itself (R5 gate item 8) — planned is not "in use".
+    await expect(table).toContainText("Stage: Planned");
+    await expect(page.getByTestId("stage-counts")).toContainText("Access confirmed");
+
     // It is visible that the active count is lower than the total.
     await expect(page.getByTestId("profile-summary")).toContainText("Callable");
 

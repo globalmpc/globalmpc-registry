@@ -4,6 +4,7 @@ import { ROUTES, findRoutesWithoutAction } from "../src/routes.js";
 import {
   ACCESS_REQUEST_PATHS,
   ACTION_POLICIES,
+  SECOND_PERSON_ROLES,
   authorize,
   governanceAction,
   type AuthorizationContext,
@@ -22,6 +23,33 @@ import {
   recordExecutionRequest,
 } from "../src/resources.js";
 import { errorEnvelope, safetyFields, sourceStatusView } from "../src/common.js";
+
+/**
+ * Second-person actions — the deciding side of a two-person rule.
+ *
+ * The UI refuses wallet binding to holders of these roles (and refuses granting them to a
+ * subject whose key an operator bound), so a missed action leaves its rule collapsible by one
+ * operator. A decision verb without the marker fails here.
+ */
+describe("second-person actions", () => {
+  const DECISION_VERB = /\.(approve|publish|decide|review|release|security_review)$/;
+
+  it("every decision action is marked as a second-person action", () => {
+    const unmarked = Object.values(ACTION_POLICIES)
+      .filter((policy) => DECISION_VERB.test(policy.action) && !policy.secondPerson)
+      .map((policy) => policy.action);
+    expect(unmarked).toEqual([]);
+  });
+
+  it("the refused roles cover every role of every marked action", () => {
+    for (const policy of Object.values(ACTION_POLICIES)) {
+      if (!policy.secondPerson) continue;
+      for (const role of policy.allowedRoles) {
+        expect(SECOND_PERSON_ROLES, `${policy.action} → ${role}`).toContain(role);
+      }
+    }
+  });
+});
 
 describe("route definitions", () => {
   it("every mutation route has an action", () => {

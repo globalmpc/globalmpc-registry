@@ -15,6 +15,9 @@ import {
   listUploads,
   promoteUpload,
   getDocumentGraph,
+  getJurisdictionProfile,
+  getProject,
+  type AuthorityEntry,
   type Claim,
   type DocumentNode,
   type ObjectUpload,
@@ -23,10 +26,12 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { GradeBadge, SourceResultBadge } from "@/components/StatusBadge";
 import { validityText } from "@/lib/documents";
 import { PHOTO_ACCEPT, UPLOAD_ACCEPT } from "@/lib/uploads";
-import type { Grade, SourceResult } from "@mpc/domain";
+import { keccak256 } from "@mpc/canonical";
+import { SOURCE_RESULTS, type Grade, type SourceResult } from "@mpc/domain";
 
 /**
  * Data Room — spec 11 §11.3.
@@ -49,6 +54,23 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
   // Open impacts and server-side day counts per document. The upload list itself does not
   // carry them — they depend on links, not on the file.
   const [nodes, setNodes] = useState<Record<string, DocumentNode>>({});
+  // Connections of the project's jurisdiction. Receipts are recorded against one the user
+  // picks — never a fixed demo id (REQ-DAPP-049).
+  const [sources, setSources] = useState<AuthorityEntry[]>([]);
+  const [connectionId, setConnectionId] = useState("");
+  const [queryField, setQueryField] = useState("");
+  const [queryValue, setQueryValue] = useState("");
+  const [manualResult, setManualResult] = useState<SourceResult>("source_returned_no_record");
+  const [documentRef, setDocumentRef] = useState("");
+  const [documentUploadId, setDocumentUploadId] = useState("");
+  const [originalText, setOriginalText] = useState("");
+  const [limitation, setLimitation] = useState("");
+  // Capped lists say so. Files page by cursor; the panels carry a flag and a count.
+  const [uploadCursor, setUploadCursor] = useState<string | null>(null);
+  const [uploadTotal, setUploadTotal] = useState(0);
+  const [receiptTotal, setReceiptTotal] = useState<number | null>(null);
+  const [claimTotal, setClaimTotal] = useState<number | null>(null);
+  const [graphLimit, setGraphLimit] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -57,17 +79,32 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
     if (!token) return;
     setLoading(true);
     try {
-      const [receiptData, claimData, uploadData, graphData] = await Promise.all([
+      const [receiptData, claimData, uploadData, graphData, project] = await Promise.all([
         listSourceReceipts(token, id),
         listClaims(token, id),
         listUploads(token, id),
         getDocumentGraph(token, id),
+        getProject(token, id),
       ]);
+      // The project's own jurisdiction — a receipt names a source the project can be looked up in.
+      const profile = await getJurisdictionProfile(token, project.hostCountryIso3);
+      const withConnection = profile.authorities.filter((entry) => entry.connectionId !== null);
+      setSources(withConnection);
+      setConnectionId((current) =>
+        current !== "" && withConnection.some((entry) => entry.connectionId === current)
+          ? current
+          : (withConnection[0]?.connectionId ?? ""),
+      );
       setReceipts(receiptData.items);
+      setReceiptTotal(receiptData.truncated ? receiptData.total : null);
       setClaims(claimData.items);
+      setClaimTotal(claimData.truncated ? claimData.total : null);
       setUploads(uploadData.items);
+      setUploadCursor(uploadData.nextCursor);
+      setUploadTotal(uploadData.total);
       setScanner(uploadData.scanner);
       setNodes(Object.fromEntries(graphData.nodes.map((node) => [node.uploadId, node])));
+      setGraphLimit(graphData.truncated ? graphData.limit : null);
       setError(null);
     } catch (caught) {
       setError(caught);
@@ -80,6 +117,33 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
     if (!sessionLoading) void load();
   }, [load, sessionLoading]);
 
+  const selectedSource = sources.find((entry) => entry.connectionId === connectionId) ?? null;
+  const query =
+    queryField.trim() !== "" && queryValue.trim() !== ""
+      ? { [queryField.trim()]: queryValue.trim() }
+      : null;
+  // Only a scanned file can stand behind a receipt; the server refuses the rest.
+  const evidenceUploads = uploads.filter(
+    (upload) => upload.state === "scanned_clean" || upload.state === "promoted",
+  );
+
+  /** The next page of files, appended. The cursor comes from the server and goes back as is. */
+  async function loadMoreUploads() {
+    if (!token || !uploadCursor) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const page = await listUploads(token, id, uploadCursor);
+      setUploads((current) => [...current, ...page.items]);
+      setUploadCursor(page.nextCursor);
+      setUploadTotal(page.total);
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /**
    * **Actually calls** the official source.
    *
@@ -88,59 +152,46 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
    * comes only from the answer the server gets by calling the source — if it cannot answer, that fact is recorded.
    */
   async function lookUpSource() {
-    if (!token) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await collectFromSource(
-        token,
-        DEMO_CONNECTION_ID,
-        id,
-        { licenseNumber: "MV-012345" },
-        newIdempotencyKey(),
-      );
-      await load();
-    } catch (caught) {
-      setError(caught);
-    } finally {
-      setBusy(false);
-    }
+    if (!selectedSource || !query) return;
+    await step((activeToken) =>
+      collectFromSource(activeToken, connectionId, id, query, newIdempotencyKey()),
+    );
   }
 
-  async function addReceipt(result: string) {
-    if (!token) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await createSourceReceipt(
-        token,
+  /**
+   * Records what a person saw at the source — REQ-DAPP-032, REQ-DAPP-049.
+   *
+   * Everything here is what the person entered or chose: the connection (and so its authority),
+   * the query, the reference, and the original. The raw hash is the scanned document's (the
+   * server takes it) or a hash of the text as received; with neither, no original is recorded
+   * rather than a placeholder. Freshness is the server's to compute.
+   */
+  async function recordManualResult() {
+    if (!selectedSource || !query || documentRef.trim() === "") return;
+    const text = originalText.trim();
+    await step((activeToken) =>
+      createSourceReceipt(
+        activeToken,
         id,
         {
-          connectionId: DEMO_CONNECTION_ID,
-          authorityId: DEMO_AUTHORITY_ID,
-          result,
-          collectionMethod: "authenticated_api",
-          queryBasis: { licenseNumber: "MV-012345" },
-          endpointOrDocumentRef: "https://registry.example/api/licenses/MV-012345",
-          authenticationMethod: "mtls+oauth2",
-          rawHash: `0x${"ab".repeat(32)}`,
-          sourceSchemaVersion: "2026-01",
-          adapterVersion: "1.0.0",
-          termsLicense: "data sharing agreement 2026-01",
-          commercialReuse: "unconfirmed",
-          disclosurePermission: "restricted",
+          connectionId,
+          authorityId: selectedSource.id,
+          result: manualResult,
+          collectionMethod: "manual_official_registry_confirmation",
+          queryBasis: query,
+          endpointOrDocumentRef: documentRef.trim(),
+          authenticationMethod: "manual_verification",
+          rawHash:
+            documentUploadId === "" && text !== ""
+              ? keccak256(new TextEncoder().encode(text))
+              : null,
+          documentUploadId: documentUploadId === "" ? null : documentUploadId,
           asOf: new Date().toISOString(),
-          freshnessStatus: "fresh",
-          limitations: ["This lookup confirms mining right registration status only"],
+          limitations: limitation.trim() === "" ? [] : [limitation.trim()],
         },
         newIdempotencyKey(),
-      );
-      await load();
-    } catch (caught) {
-      setError(caught);
-    } finally {
-      setBusy(false);
-    }
+      ),
+    );
   }
 
   async function addClaim() {
@@ -156,7 +207,8 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
           valueText: `MV-${Math.floor(Math.random() * 900000 + 100000)}`,
           sourceCoordinate: { document: "license-extract", page: "1" },
           evidenceTier: "P1",
-          verificationState: "analyst_checked",
+          // No verification state: a claim starts unreviewed and moves only when a review is
+          // signed (REQ-DAPP-004).
         },
         newIdempotencyKey(),
       );
@@ -377,7 +429,8 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                     </td>
                     <td className="mono meta">{Math.ceil(upload.byteSize / 1024)} KB</td>
                     <td className="mono" data-testid={`upload-impacts-${upload.id}`}>
-                      {nodes[upload.id]?.openImpactCount ?? 0}
+                      {/* Not 0 when the graph did not carry this document: unknown is not none. */}
+                      {nodes[upload.id]?.openImpactCount ?? "—"}
                     </td>
                     <td className="meta">{upload.nextActions.join(", ") || "—"}</td>
                     <td>
@@ -442,6 +495,29 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
           </div>
         )}
 
+        {uploadCursor ? (
+          <TruncatedNotice
+            shown={uploads.length}
+            total={uploadTotal}
+            noun="files"
+            testId="uploads-truncated"
+          >
+            <button
+              data-testid="uploads-load-more"
+              disabled={busy}
+              onClick={() => void loadMoreUploads()}
+            >
+              {busy ? "Loading…" : "Load more files"}
+            </button>
+          </TruncatedNotice>
+        ) : null}
+        {graphLimit !== null ? (
+          <p className="meta" data-testid="uploads-graph-truncated">
+            Open impacts are counted for the newest {graphLimit.toLocaleString("en-US")} documents.
+            Older files show — here; their own page has the count.
+          </p>
+        ) : null}
+
         <p className="meta" style={{ marginTop: 10 }}>
           {/* No path reverses an infected verdict — enforced by the state machine, not permissions. */}
           A separate worker runs the scan; this screen cannot produce the result. A file judged
@@ -467,17 +543,138 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
           registered key. The buttons below record what actually happened.
         </p>
 
-        <div className="row" style={{ marginBottom: 14 }}>
-          <button onClick={() => void lookUpSource()} disabled={busy}>
-            Look up the official source
-          </button>
-          <button onClick={() => void addReceipt("source_returned_no_record")} disabled={busy}>
-            Record “no record”
-          </button>
-          <button onClick={() => void addReceipt("source_unavailable")} disabled={busy}>
-            Record “source unavailable”
-          </button>
-        </div>
+        {sources.length === 0 ? (
+          <p className="sub" data-testid="no-source-connection">
+            This project’s jurisdiction has no registered source connection, so there is nothing
+            to look up or record against. Register a connection first.
+          </p>
+        ) : (
+          <>
+            <div className="field">
+              <label htmlFor="source-connection">Source connection</label>
+              <select
+                id="source-connection"
+                value={connectionId}
+                disabled={busy}
+                onChange={(event) => setConnectionId(event.target.value)}
+              >
+                {sources.map((entry) => (
+                  <option key={entry.connectionId} value={entry.connectionId ?? ""}>
+                    {entry.name} · {entry.connectionKey} ({entry.adapterState})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="row">
+              <div className="field">
+                <label htmlFor="query-field">Query field</label>
+                <input
+                  id="query-field"
+                  value={queryField}
+                  onChange={(event) => setQueryField(event.target.value)}
+                  placeholder="The identifier the source is searched by"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="query-value">Query value</label>
+                <input
+                  id="query-value"
+                  value={queryValue}
+                  onChange={(event) => setQueryValue(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="row" style={{ marginBottom: 14 }}>
+              <button
+                onClick={() => void lookUpSource()}
+                disabled={busy || !selectedSource || !query}
+              >
+                Look up the official source
+              </button>
+              {selectedSource && !selectedSource.callable && selectedSource.nextAction ? (
+                <span className="meta">{selectedSource.nextAction}</span>
+              ) : null}
+            </div>
+
+            <h3>Record a manual check</h3>
+            <p className="meta" style={{ marginTop: 0 }}>
+              For what you saw at the source yourself. A confirmation cannot be recorded here; it
+              needs the server lookup, a verified signed document, or a second person’s review.
+            </p>
+            <div className="field">
+              <label htmlFor="manual-result">Result</label>
+              <select
+                id="manual-result"
+                value={manualResult}
+                onChange={(event) => setManualResult(event.target.value as SourceResult)}
+              >
+                {SOURCE_RESULTS.filter((result) => result !== "confirmed_from_source").map(
+                  (result) => (
+                    <option key={result} value={result}>
+                      {result}
+                    </option>
+                  ),
+                )}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="document-ref">Document or page reference</label>
+              <input
+                id="document-ref"
+                value={documentRef}
+                onChange={(event) => setDocumentRef(event.target.value)}
+                placeholder="Where the result was seen"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="document-upload">Supporting document</label>
+              <select
+                id="document-upload"
+                value={documentUploadId}
+                onChange={(event) => setDocumentUploadId(event.target.value)}
+              >
+                <option value="">None</option>
+                {evidenceUploads.map((upload) => (
+                  <option key={upload.id} value={upload.id}>
+                    {upload.originalFilename ?? upload.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {documentUploadId === "" ? (
+              <div className="field">
+                <label htmlFor="original-text">Original as received (optional)</label>
+                <textarea
+                  id="original-text"
+                  rows={3}
+                  value={originalText}
+                  onChange={(event) => setOriginalText(event.target.value)}
+                  placeholder="Paste the source's answer to keep its hash"
+                />
+              </div>
+            ) : null}
+            <div className="field">
+              <label htmlFor="limitation">What this record does not show (optional)</label>
+              <input
+                id="limitation"
+                value={limitation}
+                onChange={(event) => setLimitation(event.target.value)}
+              />
+            </div>
+            <div className="row" style={{ marginBottom: 14 }}>
+              <button
+                onClick={() => void recordManualResult()}
+                disabled={busy || !selectedSource || !query || documentRef.trim() === ""}
+              >
+                Record the result
+              </button>
+              <span className="meta">
+                Without a document or pasted original, the receipt says no original was kept.
+              </span>
+            </div>
+          </>
+        )}
 
         {loading ? (
           <p className="sub">Loading…</p>
@@ -495,6 +692,8 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                   <th>Retry</th>
                   <th>Collection method</th>
                   <th>As of</th>
+                  <th>Freshness</th>
+                  <th>Original</th>
                   <th>Limitations</th>
                 </tr>
               </thead>
@@ -511,6 +710,11 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                     </td>
                     <td className="mono meta">{receipt.collectionMethod}</td>
                     <td className="mono meta">{receipt.asOf.slice(0, 10)}</td>
+                    <td className="mono meta">{receipt.freshnessStatus}</td>
+                    <td className="mono meta">
+                      {/* No original is a fact about the receipt, not a blank. */}
+                      {receipt.rawHash ? `${receipt.rawHash.slice(0, 10)}…` : "none kept"}
+                    </td>
                     <td className="meta">{receipt.limitations.join("; ") || "—"}</td>
                   </tr>
                 ))}
@@ -518,6 +722,14 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
             </table>
           </div>
         )}
+        {receiptTotal !== null ? (
+          <TruncatedNotice
+            shown={receipts.length}
+            total={receiptTotal}
+            noun="source receipts, newest first"
+            testId="receipts-truncated"
+          />
+        ) : null}
       </div>
 
       <div className="panel">
@@ -583,6 +795,14 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
             </table>
           </div>
         )}
+        {claimTotal !== null ? (
+          <TruncatedNotice
+            shown={claims.length}
+            total={claimTotal}
+            noun="claims, by claim type"
+            testId="claims-truncated"
+          />
+        ) : null}
 
         <p className="meta" style={{ marginTop: 10 }}>
           Recording a conflict recomputes the grade immediately. If someone changed the claim
@@ -605,7 +825,3 @@ function uploadColor(state: string): string {
   if (state === "scanned_clean") return "var(--foreground)";
   return "var(--alert)";
 }
-
-/** Demo authority and connection created by seed. Replaced by the real Mongolia profile in R5. */
-const DEMO_AUTHORITY_ID = "cccccccc-0000-0000-0000-000000000001";
-const DEMO_CONNECTION_ID = "cccccccc-0000-0000-0000-000000000002";

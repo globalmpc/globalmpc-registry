@@ -100,6 +100,15 @@ export default function AuthoritiesPage() {
               <dd className="mono" style={{ color: "var(--muted-foreground)" }}>
                 {profile.pendingCount}
               </dd>
+              <dt>By stage</dt>
+              <dd data-testid="stage-counts">
+                {/* Every stage counted on its own — a tested integration is not an integration in use. */}
+                {STAGE_ORDER.map((stage) => (
+                  <div key={stage} className="meta">
+                    {STAGE_LABEL[stage]}: <span className="mono">{profile.stageCounts[stage] ?? 0}</span>
+                  </div>
+                ))}
+              </dd>
             </dl>
           </div>
 
@@ -138,6 +147,17 @@ export default function AuthoritiesPage() {
                         {authority.adapterStateReason ? (
                           <div className="meta">{authority.adapterStateReason}</div>
                         ) : null}
+                        <div className="meta" data-testid={`integration-stage-${authority.id}`}>
+                          Stage: {STAGE_LABEL[authority.integrationStage]}
+                          {authority.integrationStageSince
+                            ? ` since ${authority.integrationStageSince.slice(0, 10)}`
+                            : ""}
+                        </div>
+                        {authority.reconciliationRequired ? (
+                          <div className="meta" style={{ color: "var(--alert)" }}>
+                            Paused until someone reconciles the last failed lookup
+                          </div>
+                        ) : null}
                       </td>
                       <td className="meta">{authority.nextAction ?? "—"}</td>
                     </tr>
@@ -158,6 +178,34 @@ export default function AuthoritiesPage() {
     </>
   );
 }
+
+/**
+ * Integration stages — 12 §12.13 R5 gate item 8, 11 §11.12.
+ *
+ * Only `active` reads as in use. Every earlier stage names itself, so an integration that has
+ * been tested but not switched on is never shown as connected.
+ */
+const STAGE_ORDER = [
+  "planned",
+  "feasibility_checked",
+  "access_confirmed",
+  "tested",
+  "active",
+  "degraded",
+  "disabled",
+  "none",
+] as const;
+
+const STAGE_LABEL: Record<(typeof STAGE_ORDER)[number], string> = {
+  planned: "Planned",
+  feasibility_checked: "Feasibility checked",
+  access_confirmed: "Access confirmed",
+  tested: "Tested",
+  active: "In use",
+  degraded: "Degraded — collection paused",
+  disabled: "Disabled",
+  none: "No integration",
+};
 
 function adapterColor(state: string): string {
   if (state === "active") return "var(--positive)";

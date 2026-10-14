@@ -63,17 +63,50 @@ Set `ANCHOR_DAILY_SPEND_CAP_WEI` as an **integer in wei**. Notations such as `0.
 `1e17` are rejected. **There is no default** — starting with it empty makes the anchor
 worker refuse to run. A default would let a deployment ship with no one having chosen a cap.
 
-`apps/worker/test/anchor-config.test.ts` re-checks the multiplication.
+`apps/anchor-worker/test/anchor-config.test.ts` re-checks the multiplication.
 
 Record the chosen value and its basis (what the submissions-per-day figure was taken from) in
 the operations log. A value set without its basis cannot later answer why that number.
 
 ### What the code does
 
-`checkSubmitAllowed` in `apps/worker/src/anchor-state.ts` checks three things right before
+`checkSubmitAllowed` in `apps/anchor-worker/src/anchor-state.ts` checks three things right before
 a submission.
 
-1. `DAILY_SPEND_CAP_REACHED` — blocks when the total burned today (UTC) is at or above the cap
+1. `DAILY_SPEND_CAP_REACHED` — blocks when this submission could carry the day past the cap:
+
+   ```
+   spent today (UTC, receipts in chain.gas_spend)
+     + Σ open sends: gas_limit × max_fee_per_gas      (chain.anchor_sends)
+     + open sends without a gas limit × block gas limit × ANCHOR_FEE_CAP_GWEI × 1e9
+     + ANCHOR_GAS_LIMIT × min(quoted max fee, ANCHOR_FEE_CAP_GWEI × 1e9)
+     > ANCHOR_DAILY_SPEND_CAP_WEI
+   ```
+
+   Every send is signed first and written to `chain.anchor_sends` (hash, signer, nonce, gas
+   limit, max fee) **before** it is broadcast, and stays open — counted at its most — until it
+   is settled by evidence only:
+
+   - `receipt` — its receipt is recorded in `chain.gas_spend` at its actual cost;
+   - `nonce_consumed` — the signer's nonce at a block `ANCHOR_CONFIRMATIONS` deep is past this
+     send's nonce and the send has no receipt: another transaction took the nonce.
+
+   Neither time nor the state of the `chain.transactions` row settles a send. A dropped row, or
+   one reset by a resubmission, keeps counting until one of the two above holds; a failed
+   lookup leaves it open — only the node's "not found" answer counts as "no receipt"; any other
+   failure of the receipt or transaction lookup keeps the send open. Every send carries `ANCHOR_GAS_LIMIT` (default 200,000) as its gas
+   limit. The check and the send run under a per-chain advisory lock, so several workers cannot
+   spend the same headroom.
+
+   Sends carried over by migration 0079 recorded no gas limit or nonce; they count at the block
+   gas limit until their receipt arrives. One that will never be mined (dropped before the
+   ledger existed) can only be settled by hand, after checking the signer's nonce on chain:
+
+   ```sql
+   UPDATE chain.anchor_sends SET settled_at = now(), settled_reason = 'operator'
+   WHERE chain_id = <chain> AND tx_hash = '<hash>' AND settled_at IS NULL;
+   ```
+
 2. `FEE_ABOVE_CAP` — blocks when this submission's gas price exceeds `ANCHOR_FEE_CAP_GWEI`
 3. `MAX_ATTEMPTS_REACHED` — the same batch is not resubmitted more than `ANCHOR_MAX_ATTEMPTS` times
 
@@ -83,9 +116,17 @@ date changes.
 
 ### What this cap does not count
 
-- **Submissions whose receipt has not arrived yet.** The actual cost is known only once
-  the transaction is in a block. Exposure in that window is bounded by
-  `ANCHOR_FEE_CAP_GWEI × ANCHOR_MAX_ATTEMPTS`.
+- **Submissions whose receipt has not arrived yet — at their actual cost.** They are reserved at
+  their most (above) until settled. The cap must fit at least two sends at the fee cap
+  (`2 × ANCHOR_GAS_LIMIT × ANCHOR_FEE_CAP_GWEI × 1e9`) — the worker refuses to start below it:
+  a broadcast that failed stays open until the next send reuses its nonce, and with room for
+  only one, that next send never goes out.
+- **Signer key rotation.** Sends of the old key stay open until that key's nonce is taken at
+  depth or their receipt arrives; a new key never takes an old key's nonce. An old send that
+  will never be mined is settled by hand (above), after checking the old key's nonce on chain.
+- **A send lost between broadcast and the ledger** cannot happen: the ledger row is committed
+  first. The reverse — a ledger row whose broadcast never left — stays open until its nonce is
+  reused.
 - **Gas burned by attempts reverted by a reorg.** Only the last receipt remains on the row.
 - **The multisig proposal path.** Proposals do not spend this wallet's gas. Multisig
   owners execute them, and the loss cap on that side is the owner set and the threshold.
@@ -141,3 +182,33 @@ the commit history even after removal.
 
 The configuration is checked with the official `amtool` from the same image used in
 deployment — `scripts/ops/check-alertmanager.sh`.
+
+## Independent workers
+
+| Service | App | Runtime access |
+|---|---|---|
+| `jobs-worker` | `apps/jobs-worker` | Worker DB and configured webhook signing references |
+| `anchor-worker` | `apps/anchor-worker` | Worker DB, chain RPC and anchor signing key |
+| `scan-worker` | `apps/scan-worker` | Worker DB, quarantine storage, ClamAV and scan service identity |
+
+Build the three images from the same repository revision and lockfile:
+
+```sh
+docker compose build jobs-worker anchor-worker scan-worker
+docker compose up -d jobs-worker anchor-worker scan-worker
+```
+
+`deploy/workers.Dockerfile` selects an app with `WORKER` and uses `pnpm deploy --prod --legacy`
+to package only that app and its production dependencies, including the TS runtime. Worker
+images do not contain the web app or other worker apps. API and web keep the root Dockerfile.
+
+Compose provides an init process, a read-only filesystem, writable `/tmp`, and a 60-second
+shutdown grace period. Each loop refreshes its own health file after recording its DB heartbeat,
+so a healthy replica cannot mask a stalled container. Idle loops are healthy; missing or stale
+files are unhealthy. Compose does not automatically restart an unhealthy running container;
+`restart: unless-stopped` restarts exited processes. Monitor health and the existing backlog alerts.
+
+Jobs retains the `outbox` heartbeat kind for existing metrics and alerts. When upgrading an
+existing local stack, remove its old `outbox-worker` container so it does not run beside jobs.
+Update external service-name references to `jobs-worker`. Local Compose remains a demo stack;
+production hostnames and credentials are supplied separately.

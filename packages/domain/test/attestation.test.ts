@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  canChangeCredentialStatus,
   canonicalAcceptanceBlockers,
+  evaluateAuthorityBasis,
+  type AuthorityFacts,
   checkAttestationSignable,
   evaluateCredentialApplicability,
   type AttestationSignRequest,
@@ -16,6 +19,7 @@ const SIGNABLE: AttestationSignRequest = {
   hasActiveAssignment: true,
   schemaState: "active",
   signerSubmittedEvidence: false,
+  independenceReviewed: true,
 };
 
 describe("AC-01 — cannot sign without limitations", () => {
@@ -200,5 +204,108 @@ describe("AC-15·AC-16 — the four facts are distinct", () => {
         claimWithinAuthorityScope: false,
       }),
     ).toHaveLength(5);
+  });
+});
+
+describe("02 §2.4 — an assignment whose independence was not reviewed cannot be signed on", () => {
+  it("rejects when independence was not reviewed", () => {
+    const result = checkAttestationSignable({ ...SIGNABLE, independenceReviewed: false });
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) expect(result.reason).toBe("ATTESTATION_INDEPENDENCE_NOT_REVIEWED");
+  });
+});
+
+describe("AC-15·AC-16 — authority basis", () => {
+  const ISSUER: AuthorityFacts = {
+    state: "accepted",
+    validFrom: "2020-01-01",
+    validUntil: null,
+    recognizedScope: ["mining_right_registration", "resource_estimate"],
+  };
+  const BASE = {
+    issuer: ISSUER,
+    sourceAuthorities: [],
+    claimTypes: ["mining_right_registration"],
+    credentialScope: ["mining_right_registration"],
+    asOf: "2026-09-23",
+  };
+
+  it("accepts an accepted issuer recognized for every claim type", () => {
+    const basis = evaluateAuthorityBasis(BASE);
+    expect(basis.authorityAccepted).toBe(true);
+    expect(basis.claimWithinAuthorityScope).toBe(true);
+    expect(basis.credentialScopeCoversClaims).toBe(true);
+  });
+
+  it("AC-16: a proposed, suspended or expired issuer is not accepted", () => {
+    for (const state of ["proposed", "under_review", "suspended", "expired", "revoked", "superseded"] as const) {
+      expect(evaluateAuthorityBasis({ ...BASE, issuer: { ...ISSUER, state } }).authorityAccepted).toBe(false);
+    }
+  });
+
+  it("AC-16: an accepted issuer outside its validity period is not accepted", () => {
+    const lapsed = evaluateAuthorityBasis({ ...BASE, issuer: { ...ISSUER, validUntil: "2025-12-31" } });
+    expect(lapsed.authorityAccepted).toBe(false);
+  });
+
+  it("AC-16: a suspended source authority blocks the basis even with an accepted issuer", () => {
+    const basis = evaluateAuthorityBasis({
+      ...BASE,
+      sourceAuthorities: [{ ...ISSUER, state: "suspended" }],
+    });
+    expect(basis.authorityAccepted).toBe(false);
+  });
+
+  it("a credential with no linked issuer is neither accepted nor in scope", () => {
+    const basis = evaluateAuthorityBasis({ ...BASE, issuer: null });
+    expect(basis.authorityAccepted).toBe(false);
+    expect(basis.claimWithinAuthorityScope).toBe(false);
+  });
+
+  it("AC-15: a claim type outside the issuer's recognized scope is reported", () => {
+    const basis = evaluateAuthorityBasis({
+      ...BASE,
+      claimTypes: ["mining_right_registration", "environmental_permit"],
+      credentialScope: ["mining_right_registration", "environmental_permit"],
+    });
+    expect(basis.claimWithinAuthorityScope).toBe(false);
+    expect(basis.outsideAuthorityScope).toEqual(["environmental_permit"]);
+  });
+
+  it("credential scope must cover every claim type — non-empty is not enough", () => {
+    const basis = evaluateAuthorityBasis({ ...BASE, credentialScope: ["resource_estimate"] });
+    expect(basis.credentialScopeCoversClaims).toBe(false);
+    expect(basis.outsideCredentialScope).toEqual(["mining_right_registration"]);
+  });
+
+  it("feeds canonicalAcceptanceBlockers", () => {
+    const basis = evaluateAuthorityBasis({ ...BASE, issuer: { ...ISSUER, state: "suspended" } });
+    expect(
+      canonicalAcceptanceBlockers({
+        signatureValid: true,
+        authorityAccepted: basis.authorityAccepted,
+        credentialValid: true,
+        assignedToThisCase: true,
+        claimWithinAuthorityScope: basis.claimWithinAuthorityScope,
+      }),
+    ).toEqual(["AUTHORITY_NOT_ACCEPTED"]);
+  });
+});
+
+describe("credential status transitions", () => {
+  it("revoked is terminal", () => {
+    for (const to of ["valid", "expired", "suspended", "unknown"] as const) {
+      expect(canChangeCredentialStatus("revoked", to)).toBe(false);
+    }
+  });
+
+  it("a suspension can be lifted, an expiry cannot be undone", () => {
+    expect(canChangeCredentialStatus("suspended", "valid")).toBe(true);
+    expect(canChangeCredentialStatus("expired", "valid")).toBe(false);
+    expect(canChangeCredentialStatus("expired", "revoked")).toBe(true);
+  });
+
+  it("a status cannot change to itself", () => {
+    expect(canChangeCredentialStatus("valid", "valid")).toBe(false);
   });
 });

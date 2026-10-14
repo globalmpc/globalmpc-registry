@@ -307,7 +307,7 @@ describe("receipt body", () => {
     );
 
     // There is no raw body. Do not fill with zeros to fake "a hash exists".
-    expect(body["rawHash"]).toBe(`0x${"0".repeat(64)}`);
+    expect(body["rawHash"]).toBeNull();
     expect(body["freshnessStatus"]).toBe("unknown");
   });
 });

@@ -15,7 +15,9 @@ export const projectSummary = z.object({
   name: z.string(),
   hostCountryIso3: z.string().length(3),
   minerals: z.array(z.string()),
-  referenceStatus: z.enum(["none", "official_reference"]),
+  referenceStatus: z.enum(["none", "official_reference", "synthetic_test_project"]),
+  /** The `relationship` row of the confirmed/pending matrix; `pending` until someone records it. */
+  relationshipStatus: z.enum(["confirmed", "pending", "rejected", "not_applicable"]),
   lifecycleState: z.enum([
     "draft",
     "registered",
@@ -40,6 +42,11 @@ export const createProjectRequest = z.object({
   hostCountryIso3: z.string().length(3),
   minerals: z.array(z.string()).default([]),
   ownerOrganizationId: z.string(),
+  /**
+   * 05 §5.10 — a synthetic fixture is labelled at creation and stays so. `official_reference` is
+   * not offered: who designates the Reference is not decided (12 §12.7 "Reference owner").
+   */
+  referenceStatus: z.enum(["none", "synthetic_test_project"]).default("none"),
 });
 
 /**
@@ -61,7 +68,8 @@ export const sourceReceipt = z
     projectId: z.string().nullable(),
     connectionId: z.string(),
     authorityId: z.string(),
-    rawHash: hex32,
+    /** `null` when no original was received — never a placeholder hash (REQ-DAPP-049). */
+    rawHash: hex32.nullable(),
     queryBasis: z.record(z.unknown()),
     endpointOrDocumentRef: z.string(),
     authenticationMethod: z.string(),
@@ -70,6 +78,12 @@ export const sourceReceipt = z
     receivedAt: isoDateTime,
     effectiveAt: isoDateTime.nullable(),
     correlationId: z.string(),
+    /**
+     * How far the response got through processing (04 §4.9). `quarantined` means its values
+     * were never normalized and must not be read as observations. Null on receipts stored
+     * before this was recorded.
+     */
+    processingState: z.string().nullable(),
   })
   .merge(sourceStatusView);
 
@@ -97,7 +111,25 @@ export const claim = z.object({
   stale: z.boolean(),
   staleSince: z.string().nullable(),
   staleReason: z.string().nullable(),
+  /** Version chain — REQ-DAPP-006. A corrected claim points at its successor; it is not edited. */
+  supersedesClaimId: z.string().nullable(),
+  supersededByClaimId: z.string().nullable(),
   version: z.number().int().positive(),
+});
+
+/**
+ * Correct a claim — a new claim version that supersedes the old one (REQ-DAPP-006).
+ *
+ * The new version starts `unreviewed`: its value is new, and no one has reviewed it yet.
+ */
+export const correctClaimRequest = z.object({
+  valueText: z.string().min(1),
+  unit: z.string().nullable().default(null),
+  asOf: z.string().date().nullable().default(null),
+  sourceCoordinate: z.record(z.string()),
+  sourceReceiptId: z.string().uuid().nullable().default(null),
+  evidenceTier: z.enum(["P1", "P2", "P3", "P4", "P5"]).nullable().default(null),
+  reason: z.string().min(1, "The reason for the correction cannot be empty"),
 });
 
 /**
@@ -180,6 +212,13 @@ export const objectUpload = z.object({
   validUntil: z.string().nullable(),
   /** The earlier upload this one replaces. Takes effect on promotion. */
   supersedesUploadId: z.string().nullable(),
+  /**
+   * When the document was revoked. A revoked document is kept and still readable; nothing may
+   * rest on it any more. Set once — a correction is a new version, not an undo.
+   */
+  revokedAt: isoDateTime.nullable(),
+  revokedBy: z.string().nullable(),
+  revocationReason: z.string().nullable(),
   /** What can be done next from this state. Not left to guesswork. */
   nextActions: z.array(z.string()),
   version: z.number().int().positive(),
@@ -246,6 +285,18 @@ export const outboxBacklog = z.object({
   oldestPendingAgeSeconds: z.number().int().nullable(),
   publishedLastHour: z.number().int(),
   byEventType: z.array(z.object({ eventType: z.string(), pending: z.number().int() })),
+  /**
+   * Events set aside after the attempt cap. They do not clear on their own — an operator
+   * replays them — so they are counted apart from the delayed backlog above.
+   */
+  deadLettered: z.number().int(),
+  deadLetteredByEventType: z.array(
+    z.object({
+      eventType: z.string(),
+      deadLettered: z.number().int(),
+      lastError: z.string().nullable(),
+    }),
+  ),
 });
 
 /**
@@ -266,6 +317,8 @@ export const verificationCaseSummary = z.object({
   /** Reviewer assigned to this case. The UI checks whether the logged-in user is that reviewer. */
   reviewerSubjectId: z.string(),
   assignedAt: isoDateTime,
+  /** False when the reviewer was removed and nobody has been assigned since. */
+  assignmentActive: z.boolean(),
   /** Incremented on every state transition. If-Match checks this value. */
   version: z.number().int().positive(),
   /** Past states and reasons. The path persists even after going back. */
@@ -379,6 +432,71 @@ export const createAttestationRequest = z.object({
   findings: z.array(z.record(z.unknown())).default([]),
   citations: z.array(z.record(z.unknown())).default([]),
   limitations: z.string().min(1, "limitations cannot be empty"),
+  /** The signed attestation this corrects. It becomes `superseded` when this one is signed. */
+  supersedesId: z.string().uuid().nullable().default(null),
+});
+
+/** Withdraw a signed attestation. The signed body stays; a reason is recorded (07 §7.2). */
+export const revokeAttestationRequest = z.object({
+  reason: z.string().min(1, "The reason for revoking cannot be empty"),
+});
+
+export const attestationRevocation = z.object({
+  id: z.string(),
+  state: z.literal("revoked"),
+  previousState: z.string(),
+  revocationReason: z.string(),
+  caseState: z.string(),
+  /** Claims reassessed without the revoked attestation. */
+  claims: z.array(
+    z.object({ claimId: z.string(), verificationState: z.string(), grade: z.string() }),
+  ),
+});
+
+/** Remove a reviewer from a case. The assignment row stays with the reason. */
+export const revokeAssignmentRequest = z.object({
+  reason: z.string().min(1, "The reason for removing the reviewer cannot be empty"),
+});
+
+/**
+ * Appoint a different reviewer. The replacement passes the same credential, authority and
+ * independence checks as the first appointment (02 §2.4).
+ */
+export const reassignReviewerRequest = z.object({
+  reviewerSubjectId: z.string().uuid(),
+  credentialId: z.string().uuid(),
+  conflictStatus: z.enum(["none", "disclosed_resolved", "unresolved"]),
+  reason: z.string().min(1, "The reason for reassigning cannot be empty"),
+});
+
+export const assignmentChange = z.object({
+  id: z.string(),
+  caseId: z.string(),
+  reviewerSubjectId: z.string(),
+  active: z.boolean(),
+  revokeReason: z.string().optional(),
+  replacedAssignmentId: z.string().optional(),
+  /** False when a fact the independence rules need is missing — signing is then blocked. */
+  independenceReviewed: z.boolean().optional(),
+  independenceGaps: z.array(z.string()).optional(),
+});
+
+/**
+ * Credential status change — 02 §2.8. `revoked` is terminal; a suspension can be lifted.
+ * Past attestations keep the status they were signed under (AC-17).
+ */
+export const changeCredentialStatusRequest = z.object({
+  status: z.enum(["valid", "expired", "revoked", "suspended"]),
+  reason: z.string().min(1, "The reason for the status change cannot be empty"),
+});
+
+export const credentialStatusChange = z.object({
+  id: z.string(),
+  subjectId: z.string(),
+  previousStatus: z.string(),
+  currentStatus: z.enum(["valid", "expired", "revoked", "suspended", "unknown"]),
+  revokedAt: isoDateTime.nullable(),
+  version: z.number().int().positive(),
 });
 
 /** Readiness Assessment — 05 §5.4. */
@@ -389,6 +507,10 @@ export const requirementResult = z.object({
   applicable: z.boolean(),
   reasonCode: z.string(),
   missing: z.array(z.string()),
+  /** AC-34: why the requirement is where it is and what would move it. */
+  cause: z.string(),
+  neededEvidence: z.array(z.string()),
+  nextAction: z.string().nullable(),
 });
 
 export const readinessAssessment = z
@@ -420,16 +542,28 @@ export const gateDecision = z.object({
   rationale: z.string().min(1),
   assumptions: z.array(z.string()),
   conditions: z.array(z.string()),
+  /** Recovered from the signature — the deciding subject's wallet (§11.3). */
+  signerWalletAddress: walletAddress,
   signedAt: isoDateTime,
 });
 
-export const createGateDecisionRequest = z.object({
+/** The decision content. The signature request and the signed submission carry the same. */
+const gateDecisionContent = z.object({
   gateId: z.string(),
   decision: z.enum(GATE_DECISIONS),
   inputAssessmentId: z.string(),
   rationale: z.string().min(1),
   assumptions: z.array(z.string()).default([]),
+  /** Required for watch → go (§11.3). */
   conditions: z.array(z.string()).default([]),
+});
+
+export const createGateDecisionSignatureRequest = gateDecisionContent;
+
+export const createGateDecisionRequest = gateDecisionContent.extend({
+  signatureRequestId: z.string(),
+  /** EIP-712 signature by the deciding subject's wallet. Never empty. */
+  signature: z.string().regex(/^0x[0-9a-f]+$/),
 });
 
 /**
@@ -602,9 +736,10 @@ export const authorityVersionEntry = z.object({
 /**
  * Connection configuration — 02 §2.8.
  *
- * `state` can be set to `active` directly, but the DB rejects it unless the
- * authority is `accepted`. §2.8 requires that **API success cannot be turned
- * into authority approval**.
+ * `state: active` is accepted only on update, and the DB rejects it unless the
+ * authority is `accepted` and a security operator approved this connection
+ * version (`POST .../security-reviews`). §2.8 requires that **API success cannot
+ * be turned into authority approval**, and that configuration is reviewed.
  *
  * Credential values are not accepted, only `secretReference` — a value passing
  * through the API would end up in request logs and error reports.
@@ -680,6 +815,28 @@ export const authorityEntry = z.object({
   /** Connection status. Only `active` is actually called. */
   adapterState: z.enum(["active", "manual", "pending_access", "blocked", "none"]),
   adapterStateReason: z.string().nullable(),
+  connectionId: z.string().nullable(),
+  /**
+   * Integration stage — 12 §12.13 R5 gate item 8.
+   *
+   * The connection lifecycle as recorded, not interpreted: only `active` is called; every
+   * earlier stage is shown as that stage, never as "connected". `none` means no connection
+   * exists.
+   */
+  integrationStage: z.enum([
+    "planned",
+    "feasibility_checked",
+    "access_confirmed",
+    "tested",
+    "active",
+    "degraded",
+    "disabled",
+    "none",
+  ]),
+  /** When the current stage was reached, from the stage history. Null if not recorded. */
+  integrationStageSince: z.string().nullable(),
+  /** An open reconciliation task exists — the connection is paused until someone resolves it. */
+  reconciliationRequired: z.boolean(),
   connectionKey: z.string().nullable(),
   /** Whether this source can be called now. If not, says what to do next. */
   callable: z.boolean(),
@@ -693,6 +850,8 @@ export const jurisdictionProfileView = z.object({
   activeCount: z.number().int(),
   manualCount: z.number().int(),
   pendingCount: z.number().int(),
+  /** Count per integration stage. Evidence for the R5 gate — no stage is folded into another. */
+  stageCounts: z.record(z.number().int()),
   /** What this profile does not promise. Does not overstate unconfirmed integrations (R5 gate). */
   limitations: z.array(z.string()),
 });
@@ -1053,6 +1212,22 @@ export const publicRegistryList = z.object({
   /** Sort order is fixed. Clients cannot choose it; the response states what it is sorted by. */
   sort: z.literal("publishedAt:desc,entryId:desc"),
 });
+
+/**
+ * Path parameters of the public registry routes.
+ *
+ * `registryType` is the `core.registry_type` enum. An unknown value is the caller's mistake and
+ * is answered with a 400 before it reaches the DB cast, which would otherwise fail as a 500.
+ */
+export const publicRegistryPathParams = z
+  .object({
+    registryType: z.enum(["project", "verification", "asset"]),
+  })
+  .strict();
+
+export const publicRegistryEntryPathParams = publicRegistryPathParams
+  .extend({ publicKey: z.string().min(1) })
+  .strict();
 
 /** Public list query — 07 §7.1. Parameters not listed here are rejected, not ignored. */
 export const publicRegistryListQuery = z
@@ -1450,6 +1625,8 @@ export const roleGrantRequest = z.object({
   subjectName: z.string(),
   role: z.string(),
   projectId: z.string().nullable(),
+  /** Jurisdictions the granted binding is limited to (02 §2.5). Null: not scoped. */
+  jurisdiction: z.array(z.string()).nullable(),
   reason: z.string(),
   requestedBySubjectId: z.string(),
   requestedAt: isoDateTime,
@@ -1465,6 +1642,15 @@ export const createRoleGrantRequest = z.object({
   role: z.string().min(1),
   projectId: z.string().uuid().optional(),
   organizationId: z.string().uuid().optional(),
+  /**
+   * Limit the binding to projects hosted in these jurisdictions (02 §2.5), as ISO 3166-1
+   * alpha-3 codes — the same form as a project's host country. Omit for an unscoped binding.
+   */
+  jurisdiction: z
+    .array(z.string().regex(/^[A-Z]{3}$/, "Use an ISO 3166-1 alpha-3 code"))
+    .min(1)
+    .max(50)
+    .optional(),
   reason: z.string().min(1).max(1000),
 });
 
@@ -1568,6 +1754,11 @@ export const registryProposal = z.object({
 export const proposeCredentialRequest = z.object({
   subjectId: z.string().uuid(),
   issuerReference: z.string().min(1).max(500),
+  /**
+   * The authority that issued the credential. Its acceptance state and recognized scope decide
+   * whether the credential can be a review basis (AC-15·AC-16); free text cannot be asked that.
+   */
+  issuerAuthorityId: z.string().uuid(),
   credentialType: z.string().min(1).max(200),
   credentialScope: z.array(z.string().min(1)).max(100),
   jurisdiction: z.array(z.string().min(1)).max(50),
@@ -1770,6 +1961,8 @@ export const myWork = z.object({
       since: isoDateTime,
     }),
   ),
+  /** `true` when open stale signals exist beyond those in `unassigned`. Oldest are listed. */
+  unassignedTruncated: z.boolean(),
 });
 
 /**
@@ -1952,6 +2145,9 @@ export const documentNode = z.object({
   supersedesUploadId: z.string().nullable(),
   /** The promoted upload that replaced this one. A replaced document is kept, not deleted. */
   supersededByUploadId: z.string().nullable(),
+  /** Revoked documents stay in the graph, marked. Nothing new may rest on them. */
+  revokedAt: isoDateTime.nullable(),
+  revocationReason: z.string().nullable(),
   openImpactCount: z.number().int().nonnegative(),
   version: z.number().int().positive(),
 });
@@ -1972,9 +2168,17 @@ export const documentLink = z.object({
 });
 
 export const documentGraph = z.object({
+  /** The newest documents up to `limit`, plus the focused one and its neighbours if asked. */
   nodes: documentNode.array(),
-  /** Active links only. Removed ones stay in the database for the record. */
+  /**
+   * Active links whose two ends are both in `nodes`. Removed ones stay in the database for the
+   * record. A link to a node outside the payload would point at nothing the client can draw.
+   */
   links: documentLink.array(),
+  /** `true` when the project has documents that are not in `nodes`. */
+  truncated: z.boolean(),
+  limit: z.number().int().positive(),
+  totalNodes: z.number().int().nonnegative(),
 });
 
 export const createDocumentLinkRequest = z
@@ -1991,6 +2195,21 @@ export const createDocumentLinkRequest = z
 export const removeDocumentLinkRequest = z
   .object({ reason: z.string().trim().min(1).max(500) })
   .strict();
+
+/**
+ * Revoke a promoted document (spec 03, correction and revocation). The reason is required and kept with the document.
+ *
+ * Free text: error, forgery and key compromise are the cases spec 03 names, but there is no settled
+ * reason list, so none is imposed here.
+ */
+export const revokeDocumentRequest = z
+  .object({ reason: z.string().trim().min(1).max(1000) })
+  .strict();
+
+/** The revoked document, and how many documents were asked for a second look because of it. */
+export const documentRevocation = objectUpload.extend({
+  impactsRecorded: z.number().int().nonnegative(),
+});
 
 /** Documents that would need a second look if this one changed. Nothing is recorded. */
 export const documentImpactPreview = z.object({
@@ -2017,7 +2236,7 @@ export const documentImpact = z.object({
   uploadId: z.string(),
   originUploadId: z.string(),
   successorUploadId: z.string().nullable(),
-  cause: z.enum(["superseded", "expired"]),
+  cause: z.enum(["superseded", "expired", "revoked"]),
   depth: z.number().int().nonnegative(),
   viaUploadId: z.string().nullable(),
   viaKind: documentLinkKind.nullable(),
@@ -2034,7 +2253,12 @@ export const documentImpact = z.object({
 
 export const documentImpactList = z.object({
   items: documentImpact.array(),
+  /** Counted over the whole project, not over `items`. */
   openCount: z.number().int().nonnegative(),
+  /** `true` when impacts exist beyond `items`. Open ones are listed first. */
+  truncated: z.boolean(),
+  limit: z.number().int().positive(),
+  total: z.number().int().nonnegative(),
 });
 
 /**

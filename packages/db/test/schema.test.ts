@@ -148,6 +148,49 @@ describeDb("schema, RLS, guards", () => {
         ),
       ).rejects.toThrow();
     });
+
+    /**
+     * `0002` enabled RLS by looping over `core` and `chain` only, so `audit.events` — which has a
+     * `tenant_id` like every other tenant table — was left out. Every route filters it by tenant
+     * by hand; the policy makes a route that forgets the filter return nothing instead of
+     * another tenant's audit trail.
+     */
+    it("every table with tenant_id has RLS enabled and forced", async () => {
+      const unprotected = await sql<{ table: string }[]>`
+        SELECT c.oid::regclass::text AS table
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id' AND NOT a.attisdropped
+        WHERE n.nspname IN ('core', 'chain', 'audit')
+          AND c.relkind = 'r'
+          AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
+        ORDER BY 1
+      `;
+      expect(unprotected.map((row) => row.table)).toEqual([]);
+    });
+
+    it("another tenant's audit events are invisible even without a tenant filter", async () => {
+      const correlationId = `rls-audit-${randomUUID()}`;
+      await sql`
+        INSERT INTO audit.events (tenant_id, command, resource_type, correlation_id)
+        VALUES (${TENANT_B}, 'project.registered', 'project', ${correlationId})
+      `;
+      const rows = await withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
+        tx`SELECT id FROM audit.events WHERE correlation_id = ${correlationId}`,
+      );
+      expect(rows).toHaveLength(0);
+    });
+
+    it("cannot INSERT an audit event for another tenant", async () => {
+      await expect(
+        withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
+          tx`
+            INSERT INTO audit.events (tenant_id, command, resource_type, correlation_id)
+            VALUES (${TENANT_B}, 'project.registered', 'project', 'cross-tenant-audit')
+          `,
+        ),
+      ).rejects.toThrow(/row-level security/);
+    });
   });
 
   describe("audit is append-only (02 §2.7)", () => {
@@ -181,6 +224,51 @@ describeDb("schema, RLS, guards", () => {
       `;
       expect(role!.usesuper).toBe(true);
       await expect(sql`DELETE FROM audit.events`).rejects.toThrow(/append-only/);
+    });
+
+    /**
+     * TRUNCATE fires no DELETE trigger, so a row-level DELETE guard alone lets the table owner
+     * empty it in one statement. Each attempt runs in a transaction that is rolled back either
+     * way, so a missing guard fails the test without wiping the rows later tests use.
+     */
+    const truncateRolledBack = (statement: string) =>
+      sql.begin(async (tx) => {
+        await tx.unsafe(statement);
+        throw new Error("TRUNCATE was not rejected");
+      });
+
+    it("TRUNCATE is rejected — even for superuser", async () => {
+      await expect(truncateRolledBack("TRUNCATE audit.events")).rejects.toThrow(/append-only/);
+    });
+
+    it("TRUNCATE … CASCADE from a parent table is rejected at the append-only child", async () => {
+      await expect(truncateRolledBack("TRUNCATE core.tenants CASCADE")).rejects.toThrow(
+        /append-only/,
+      );
+    });
+
+    /**
+     * Every table whose rows are guarded against DELETE is append-only in the sense that matters
+     * here, and TRUNCATE bypasses that guard. A new table that gets a DELETE guard but no TRUNCATE
+     * guard fails here.
+     */
+    it("every table with a DELETE-rejecting trigger also rejects TRUNCATE", async () => {
+      const unguarded = await sql<{ table: string }[]>`
+        SELECT DISTINCT d.tgrelid::regclass::text AS table
+        FROM pg_trigger d
+        WHERE NOT d.tgisinternal
+          AND (d.tgtype & 2) <> 0 -- BEFORE
+          AND (d.tgtype & 8) <> 0 -- DELETE
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_trigger t
+            WHERE t.tgrelid = d.tgrelid
+              AND NOT t.tgisinternal
+              AND (t.tgtype & 2) <> 0  -- BEFORE
+              AND (t.tgtype & 32) <> 0 -- TRUNCATE
+          )
+        ORDER BY 1
+      `;
+      expect(unguarded.map((row) => row.table)).toEqual([]);
     });
   });
 

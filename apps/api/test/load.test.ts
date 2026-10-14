@@ -99,7 +99,6 @@ describeDb("invariants under concurrency", () => {
           valueText: `LOAD-${Date.now()}`,
           sourceCoordinate: { document: "extract", page: "1" },
           evidenceTier: "P1",
-          verificationState: "analyst_checked",
         },
       })
     ).json();

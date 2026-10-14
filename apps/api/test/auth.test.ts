@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { createSiweMessage } from "viem/siwe";
@@ -90,6 +91,34 @@ describeDb("SIWE authentication", () => {
       expect(session.subjectId).toBeNull();
       expect(session.roleBindings).toEqual([]);
     });
+
+    it.each(["Audit test browser/1.0", ""])(
+      "records the observed sign-in user-agent hash for %s",
+      async (userAgent) => {
+        const { nonce: value, statement } = await nonce(fx.operatorA.account.address);
+        const text = message({ address: fx.operatorA.account.address, nonce: value, statement });
+        const signature = await fx.operatorA.account.signMessage({ message: text });
+        const response = await app.inject({
+          method: "POST",
+          url: "/api/v1/auth/siwe/verify",
+          headers: { "user-agent": userAgent },
+          payload: { message: text, signature },
+        });
+        expect(response.statusCode).toBe(200);
+        const session = response.json();
+        expect(session).not.toHaveProperty("device");
+        const rows = await fx.sql`
+          SELECT command, user_agent_hash FROM audit.events
+          WHERE tenant_id = ${fx.tenantA} AND correlation_id = ${session.requestId}
+        `;
+        expect(rows).toEqual([{
+          command: "auth.session.created",
+          user_agent_hash: userAgent === ""
+            ? null
+            : createHash("sha256").update(userAgent).digest("hex"),
+        }]);
+      },
+    );
 
     it("issues a session token after signature verification", async () => {
       const { nonce: value, statement } = await nonce();

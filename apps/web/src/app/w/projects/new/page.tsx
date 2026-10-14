@@ -29,6 +29,7 @@ export default function NewProjectPage() {
   const [minerals, setMinerals] = useState("copper");
   const [organizations, setOrganizations] = useState<OrganizationOption[] | null>(null);
   const [ownerOrganizationId, setOwnerOrganizationId] = useState("");
+  const [synthetic, setSynthetic] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
   // Keep one key per form instance. If the user clicks submit twice,
@@ -77,6 +78,7 @@ export default function NewProjectPage() {
             .map((item) => item.trim())
             .filter(Boolean),
           ownerOrganizationId,
+          referenceStatus: synthetic ? "synthetic_test_project" : "none",
         },
         idempotencyKey,
       );
@@ -175,6 +177,21 @@ export default function NewProjectPage() {
           <div className="meta mono" data-testid="owner-organization-id">
             {ownerOrganizationId || "—"}
           </div>
+        </div>
+
+        <div className="field">
+          <label className="row" style={{ gap: 6 }}>
+            <input
+              type="checkbox"
+              style={{ width: "auto" }}
+              checked={synthetic}
+              onChange={(event) => setSynthetic(event.target.checked)}
+            />
+            Synthetic test project
+          </label>
+          {/* 05 §5.10: the label is fixed at creation and never inherits a real project's
+              relationships, rights or readiness. */}
+          <div className="meta">Fixed once registered. A synthetic project is test data, not a real project.</div>
         </div>
 
         <div className="row">

@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
+import { SOURCE_RESULTS, SOURCE_RESULT_BEHAVIOUR, receiptProcessingStateFor } from "@mpc/domain";
 import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
@@ -47,19 +49,45 @@ describeDb("source lookup", () => {
     await fx.close();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     calls = [];
     nextResponse = () => new Response(JSON.stringify({ licenseId: "MN-1" }), { status: 200 });
+    // A degrading result pauses the shared connection (AC-19). Each test starts from a live one.
+    await fx.sql`
+      UPDATE core.source_reconciliation_tasks
+      SET state = 'resolved', resolved_at = now(), resolved_by = ${fx.operatorSubjectA},
+          resolution = 'test reset'
+      WHERE connection_id = ${fx.connectionA} AND state = 'open'
+    `;
+    await fx.sql`UPDATE core.source_connections SET state = 'active' WHERE id = ${fx.connectionA}`;
   });
 
-  function collect(token: string, connectionId = fx.connectionA) {
+  function collect(token: string, connectionId = fx.connectionA, projectId = fx.projectA) {
     return app.inject({
       method: "POST",
       url: `/api/v1/source-connections/${connectionId}/collect`,
       headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
-      payload: { projectId: fx.projectA, queryBasis: { licenseNumber: "MN-1" } },
+      payload: { projectId, queryBasis: { licenseNumber: "MN-1" } },
     });
   }
+
+  /**
+   * The receipt is written to the project named in the body, so that project is what gets
+   * authorized. A steward bound to one project must not create receipts in another project of
+   * the same tenant.
+   */
+  it("does not collect into a project outside the caller's scope", async () => {
+    const scopedToken = await signIn(app, fx.scopedStewardA);
+
+    const outside = await collect(scopedToken, fx.connectionA, fx.otherProjectA);
+    expect(outside.statusCode).toBe(403);
+    expect(outside.json().details.reason).toBe("PROJECT_SCOPE_MISMATCH");
+    // Refused before the source was called — no request, no receipt.
+    expect(calls).toHaveLength(0);
+
+    const inside = await collect(scopedToken, fx.connectionA, fx.projectA);
+    expect(inside.statusCode).toBe(200);
+  });
 
   it("records 200 with a matching schema as confirmed", async () => {
     const response = await collect(stewardToken);
@@ -107,12 +135,12 @@ describeDb("source lookup", () => {
     nextResponse = () => new Response("", { status: 404 });
     const receiptId = (await collect(stewardToken)).json().receiptId;
 
-    const [row] = await fx.sql<{ result: string; raw_hash: string }[]>`
+    const [row] = await fx.sql<{ result: string; raw_hash: string | null }[]>`
       SELECT result, raw_hash FROM core.source_receipts WHERE id = ${receiptId}
     `;
     expect(row?.result).toBe("source_returned_no_record");
     // Without a raw body, no fake hash is made.
-    expect(row?.raw_hash).toBe(`0x${"0".repeat(64)}`);
+    expect(row?.raw_hash).toBeNull();
   });
 
   it("updates last_success_at only when confirmed", async () => {
@@ -127,6 +155,15 @@ describeDb("source lookup", () => {
     // Recording an outage response as the success time makes "when did we last get an
     // answer" false.
     expect(after?.last_success_at).toBeNull();
+
+    // The 503 paused the connection (AC-19). Reconcile it so the next lookup can run.
+    await fx.sql`
+      UPDATE core.source_reconciliation_tasks
+      SET state = 'resolved', resolved_at = now(), resolved_by = ${fx.operatorSubjectA},
+          resolution = 'outage confirmed'
+      WHERE connection_id = ${fx.connectionA} AND state = 'open'
+    `;
+    await fx.sql`UPDATE core.source_connections SET state = 'active' WHERE id = ${fx.connectionA}`;
 
     // Confirmation requires the declared fields. `{ok:true}` is now schema_changed.
     nextResponse = () => new Response(JSON.stringify({ licenseId: "MN-1" }), { status: 200 });
@@ -208,6 +245,133 @@ describeDb("source lookup", () => {
     await fx.sql`UPDATE core.source_connections SET state = 'active' WHERE id = ${fx.connectionA}`;
   });
 
+  /**
+   * AC-19 — a degrading result pauses the connection and asks for reconciliation.
+   *
+   * Before, `schema_changed` left the connection `active` and collection kept going.
+   */
+  describe("degradation and reconciliation (AC-19)", () => {
+    async function connectionState(): Promise<string> {
+      const [row] = await fx.sql<{ state: string }[]>`
+        SELECT state::text FROM core.source_connections WHERE id = ${fx.connectionA}
+      `;
+      return row!.state;
+    }
+
+    it("degrades the connection and opens a task on schema drift", async () => {
+      nextResponse = () => new Response(JSON.stringify({ unexpected: 1 }), { status: 200 });
+      const body = (await collect(stewardToken)).json();
+      expect(body.result).toBe("schema_changed");
+
+      expect(await connectionState()).toBe("degraded");
+
+      const tasks = (
+        await app.inject({
+          method: "GET",
+          url: `/api/v1/source-connections/${fx.connectionA}/reconciliation-tasks`,
+          headers: { authorization: `Bearer ${operatorToken}` },
+        })
+      ).json().items as { state: string; receiptId: string; triggerResult: string }[];
+      const open = tasks.filter((task) => task.state === "open");
+      expect(open).toHaveLength(1);
+      expect(open[0]?.receiptId).toBe(body.receiptId);
+      expect(open[0]?.triggerResult).toBe("schema_changed");
+    });
+
+    it("pauses ingestion — the next lookup is not sent", async () => {
+      nextResponse = () => new Response("", { status: 503 });
+      await collect(stewardToken);
+      calls = [];
+
+      const response = await collect(stewardToken);
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("SOURCE_NOT_CALLABLE");
+      expect(calls).toHaveLength(0);
+    });
+
+    it("does not degrade on a result that is a fact about the record", async () => {
+      nextResponse = () => new Response("", { status: 404 });
+      await collect(stewardToken);
+      expect(await connectionState()).toBe("active");
+    });
+
+    it("quarantines a drifted response and classifies the rest", async () => {
+      nextResponse = () => new Response(JSON.stringify({ unexpected: 1 }), { status: 200 });
+      const drifted = (await collect(stewardToken)).json().receiptId;
+      await fx.sql`
+        UPDATE core.source_reconciliation_tasks
+        SET state = 'resolved', resolved_at = now(), resolved_by = ${fx.operatorSubjectA},
+            resolution = 'reset'
+        WHERE connection_id = ${fx.connectionA} AND state = 'open'
+      `;
+      await fx.sql`UPDATE core.source_connections SET state = 'active' WHERE id = ${fx.connectionA}`;
+
+      nextResponse = () => new Response("", { status: 404 });
+      const noRecord = (await collect(stewardToken)).json().receiptId;
+
+      const rows = await fx.sql<{ id: string; processing_state: string }[]>`
+        SELECT id, processing_state FROM core.source_receipts WHERE id IN (${drifted}, ${noRecord})
+      `;
+      const byId = Object.fromEntries(rows.map((row) => [row.id, row.processing_state]));
+      expect(byId[drifted]).toBe("quarantined");
+      expect(byId[noRecord]).toBe("classified");
+    });
+
+    it("keeps the connection paused until the task is resolved", async () => {
+      nextResponse = () => new Response("", { status: 503 });
+      await collect(stewardToken);
+
+      const [connection] = await fx.sql<{ version: number }[]>`
+        SELECT version FROM core.source_connections WHERE id = ${fx.connectionA}
+      `;
+      const reactivate = (version: number) =>
+        app.inject({
+          method: "PATCH",
+          url: `/api/v1/source-connections/${fx.connectionA}`,
+          headers: {
+            authorization: `Bearer ${operatorToken}`,
+            "idempotency-key": idempotencyKey(),
+            "if-match": `"${version}"`,
+          },
+          payload: { state: "active", reason: "source is back" },
+        });
+
+      const early = await reactivate(connection!.version);
+      expect(early.statusCode).toBe(409);
+      expect(early.json().code).toBe("RECONCILIATION_REQUIRED");
+
+      const taskId = early.json().details.taskId as string;
+      const [task] = await fx.sql<{ version: number }[]>`
+        SELECT version FROM core.source_reconciliation_tasks WHERE id = ${taskId}
+      `;
+      const resolved = await app.inject({
+        method: "POST",
+        url: `/api/v1/source-reconciliation-tasks/${taskId}/resolve`,
+        headers: {
+          authorization: `Bearer ${operatorToken}`,
+          "idempotency-key": idempotencyKey(),
+          "if-match": `"${task!.version}"`,
+        },
+        payload: { resolution: "Outage confirmed with the registry; no schema change" },
+      });
+      expect(resolved.statusCode).toBe(200);
+      expect(resolved.json().state).toBe("resolved");
+
+      // Going live again is an activation: the degraded version needs its own security review,
+      // by someone other than the operator who reactivates.
+      await fx.sql`
+        INSERT INTO core.connection_security_reviews (
+          id, tenant_id, connection_id, connection_version, decision, reason,
+          reviewed_by_subject_id
+        ) VALUES (
+          ${randomUUID()}, ${fx.tenantA}, ${fx.connectionA}, ${connection!.version}, 'approved',
+          'reviewed after the outage', ${fx.stewardSubjectA}
+        )
+      `;
+      expect((await reactivate(connection!.version)).statusCode).toBe(200);
+    });
+  });
+
   it("does not let a role without lookup permission call", async () => {
     const response = await app.inject({
       method: "POST",
@@ -275,6 +439,18 @@ describeDb("connection configuration constraints", () => {
 
   afterAll(async () => {
     await fx.close();
+  });
+
+  // The DB applies these on every insert path; they must say what the domain says (0060, 0061).
+  it("SQL degradation and processing rules match the domain for all 12 results", async () => {
+    for (const result of SOURCE_RESULTS) {
+      const [row] = await fx.sql<{ degrades: boolean; processing: string }[]>`
+        SELECT core.source_result_degrades_connection(${result}::core.source_result) AS degrades,
+               core.receipt_processing_state_for(${result}::core.source_result) AS processing
+      `;
+      expect(row?.degrades, result).toBe(SOURCE_RESULT_BEHAVIOUR[result].degradesConnection);
+      expect(row?.processing, result).toBe(receiptProcessingStateFor(result));
+    }
   });
 
   it("cannot become active without a call target", async () => {

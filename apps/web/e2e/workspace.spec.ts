@@ -66,6 +66,10 @@ test.describe("project registration", () => {
     await page.getByRole("textbox", { name: "Project key" }).fill(key);
     await page.getByRole("textbox", { name: "Name" }).fill("Created by E2E");
     await page.getByRole("textbox", { name: "Minerals (comma separated)" }).fill("copper, gold");
+    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
+      "aaaaaaaa-0000-0000-0000-000000000001",
+    );
     await page.getByRole("button", { name: "Register" }).click();
 
     await expect(page).toHaveURL(/\/w\/projects\/[0-9a-f-]{36}$/);
@@ -88,6 +92,10 @@ test.describe("project registration", () => {
     await page.getByRole("button", { name: "New project" }).click();
     await page.getByRole("textbox", { name: "Project key" }).fill(key);
     await page.getByRole("textbox", { name: "Name" }).fill("For the list check");
+    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
+      "aaaaaaaa-0000-0000-0000-000000000001",
+    );
     await page.getByRole("button", { name: "Register" }).click();
     await expect(page).toHaveURL(/\/w\/projects\/[0-9a-f-]{36}$/);
 
@@ -106,11 +114,16 @@ test.describe("owner organization", () => {
     await page.goto("/w/projects/new");
 
     const picker = page.getByRole("combobox", { name: "Owning organization" });
-    // Tenant A has one organization, so it is preselected.
-    await expect(picker).toHaveValue("aaaaaaaa-0000-0000-0000-000000000001");
+    // Tenant A has two organizations — the operator's and the reviewer's firm — so nothing is
+    // preselected: registering under the wrong one makes another company a party.
+    await expect(picker).toHaveValue("");
     await expect(picker).toContainText("MPC Operations tenant-a");
+    await expect(picker).toContainText("Independent Review Firm");
     // Tenant B's organization is never offered.
     await expect(picker).not.toContainText("tenant-b");
+    await expect(page.getByRole("button", { name: "Register" })).toBeDisabled();
+
+    await picker.selectOption("aaaaaaaa-0000-0000-0000-000000000001");
     await expect(page.getByRole("button", { name: "Register" })).toBeEnabled();
   });
 });

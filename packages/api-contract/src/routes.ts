@@ -1,4 +1,16 @@
 import { z } from "zod";
+import { RESTRICTION_ROUTES } from "./restrictions.js";
+import {
+  breakGlassElevation,
+  connectionSecurityReview,
+  createConnectionSecurityReviewRequest,
+  decideBreakGlassRequest,
+  quarantineAccessRequest,
+  quarantineAccessResult,
+  recordBreakGlassIncidentRequest,
+  releaseBreakGlassRequest,
+  requestBreakGlassRequest,
+} from "./platform.js";
 import {
   myActivity,
   myActivityQuery,
@@ -19,10 +31,21 @@ import {
   documentLink,
   documentLinkRule,
   removeDocumentLinkRequest,
+  documentRevocation,
+  revokeDocumentRequest,
   resolveDocumentImpactsRequest,
   retireDocumentLinkRuleRequest,
   updateDocumentProfileRequest,
 } from "./resources.js";
+import {
+  createDocumentRequirementRequest,
+  documentList,
+  documentListQuery,
+  documentRequirement,
+  documentRequirementList,
+  documentStatusSummary,
+  retireDocumentRequirementRequest,
+} from "./document-status.js";
 import {
   adminSubject,
   anchorBatchStatus,
@@ -48,6 +71,7 @@ import {
   scannerStatus,
   uploadDownloadLink,
   createGateDecisionRequest,
+  createGateDecisionSignatureRequest,
   createProjectRequest,
   createRoleGrantRequest,
   createNotificationSinkRequest,
@@ -86,6 +110,8 @@ import {
   publicProposalList,
   publicRegistryList,
   publicRegistryListQuery,
+  publicRegistryEntryPathParams,
+  publicRegistryPathParams,
   readinessAssessment,
   registryEntryVersion,
   registryEntrySummary,
@@ -102,8 +128,30 @@ import {
   transitionCaseRequest,
   verificationAttestation,
   verificationCaseSummary,
+  assignmentChange,
+  attestationRevocation,
+  changeCredentialStatusRequest,
+  correctClaimRequest,
+  credentialStatusChange,
+  reassignReviewerRequest,
+  revokeAssignmentRequest,
+  revokeAttestationRequest,
 } from "./resources.js";
+import { auditExport, auditExportQuery, projectExportJob } from "./exports.js";
 import {
+  anchorBatchStatusList,
+  claimList,
+  documentGraphQuery,
+  governanceProposalList,
+  notificationList,
+  projectSummaryList,
+  sourceReceiptList,
+  uploadList,
+  projectListItemList,
+  uploadListQuery,
+} from "./lists.js";
+import {
+  gateDecisionSignatureRequestResponse,
   sessionResponse,
   signatureRequestResponse,
   siweNonceRequest,
@@ -111,6 +159,7 @@ import {
   siweVerifyRequest,
   submitSignatureRequest,
 } from "./auth.js";
+import { PROJECT_REGISTRY_ROUTES, projectListQuery } from "./project-registry.js";
 
 /**
  * Route definitions — spec 07 §7.2.
@@ -154,6 +203,14 @@ export interface RouteDefinition {
    * send.
    */
   readonly querySchema?: z.ZodTypeAny;
+  /**
+   * Path parameter contract, for parameters narrower than a plain string.
+   *
+   * Without it OpenAPI states every path parameter as `string`, and a client learns which values
+   * exist only from a 400. Parameters named `...Id` are UUIDs checked centrally by the API and
+   * need no entry here.
+   */
+  readonly paramsSchema?: z.ZodTypeAny;
   readonly responseSchema: z.ZodTypeAny;
 }
 
@@ -227,14 +284,15 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/projects",
-    summary: "List projects in the current tenant",
+    summary: "List projects in the current tenant — filters narrow within the caller's scope",
     operationId: "listProjects",
     public: false,
     mutation: false,
     requiresIfMatch: false,
     action: null,
     implemented: true,
-    responseSchema: projectSummary.array(),
+    querySchema: projectListQuery,
+    responseSchema: projectListItemList,
   },
   {
     method: "get",
@@ -260,6 +318,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     implemented: true,
     responseSchema: organizationSummary.array(),
   },
+  ...PROJECT_REGISTRY_ROUTES,
 
   // --- Evidence -----------------------------------------------------------
   {
@@ -272,7 +331,8 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: null,
     implemented: true,
-    responseSchema: sourceReceipt.array(),
+    // Newest 100. `truncated` says when older ones were left out.
+    responseSchema: sourceReceiptList,
   },
   {
     method: "get",
@@ -284,7 +344,8 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: null,
     implemented: true,
-    responseSchema: claim.array(),
+    // First 200 by claim type. `truncated` says when more exist.
+    responseSchema: claimList,
   },
 
   {
@@ -325,6 +386,21 @@ export const ROUTES: readonly RouteDefinition[] = [
     implemented: true,
     responseSchema: claim,
   },
+  {
+    method: "post",
+    path: "/api/v1/claims/{claimId}/versions",
+    summary: "Correct a claim — a new version supersedes it; the old value is never edited",
+    operationId: "correctClaim",
+    public: false,
+    mutation: true,
+    // Two corrections of one claim would fork its history. The caller states which version it
+    // is correcting.
+    requiresIfMatch: true,
+    action: "claim.curate",
+    implemented: true,
+    requestSchema: correctClaimRequest,
+    responseSchema: claim,
+  },
 
   // --- Uploads --------------------------------------------------------------
   {
@@ -338,8 +414,9 @@ export const ROUTES: readonly RouteDefinition[] = [
     action: null,
     implemented: true,
     // Returns `items` and `scanner` together. From the list alone, "waiting" and
-    // "nobody to scan" look the same.
-    responseSchema: z.object({ items: objectUpload.array(), scanner: scannerStatus }),
+    // "nobody to scan" look the same. Paged by cursor — a project can hold thousands.
+    querySchema: uploadListQuery,
+    responseSchema: uploadList,
   },
   {
     method: "post",
@@ -520,6 +597,62 @@ export const ROUTES: readonly RouteDefinition[] = [
     requestSchema: submitSignatureRequest,
     responseSchema: verificationAttestation,
   },
+  {
+    method: "post",
+    path: "/api/v1/attestations/{attestationId}/revoke",
+    summary: "Revoke your own signed attestation — the signed body stays, a reason is recorded",
+    operationId: "revokeAttestation",
+    public: false,
+    mutation: true,
+    // The state machine is the concurrency guard: a second revocation finds `revoked` and is
+    // refused, so there is no version to race on.
+    requiresIfMatch: false,
+    action: "attestation.revoke",
+    implemented: true,
+    requestSchema: revokeAttestationRequest,
+    responseSchema: attestationRevocation,
+  },
+  {
+    method: "post",
+    path: "/api/v1/assignments/{assignmentId}/revoke",
+    summary: "Remove the reviewer from a case — the assignment row stays with its reason",
+    operationId: "revokeAssignment",
+    public: false,
+    mutation: true,
+    requiresIfMatch: false,
+    action: "claim.curate",
+    implemented: true,
+    requestSchema: revokeAssignmentRequest,
+    responseSchema: assignmentChange,
+  },
+  {
+    method: "post",
+    path: "/api/v1/assignments/{assignmentId}/reassignments",
+    summary: "Appoint a different reviewer — the replacement passes the same independence checks",
+    operationId: "reassignReviewer",
+    public: false,
+    mutation: true,
+    // The path names the assignment being replaced; a reassignment that lost a race finds it is
+    // no longer the latest and is refused.
+    requiresIfMatch: false,
+    action: "claim.curate",
+    implemented: true,
+    requestSchema: reassignReviewerRequest,
+    responseSchema: assignmentChange,
+  },
+  {
+    method: "post",
+    path: "/api/v1/credentials/{credentialId}/status",
+    summary: "Change a credential's status — expire, suspend, revoke or lift a suspension",
+    operationId: "changeCredentialStatus",
+    public: false,
+    mutation: true,
+    requiresIfMatch: true,
+    action: "credential.status.change",
+    implemented: true,
+    requestSchema: changeCredentialStatusRequest,
+    responseSchema: credentialStatusChange,
+  },
 
   {
     method: "post",
@@ -563,8 +696,21 @@ export const ROUTES: readonly RouteDefinition[] = [
   },
   {
     method: "post",
+    path: "/api/v1/projects/{projectId}/gate-decisions/signature-requests",
+    summary: "Create an EIP-712 signature request for a gate decision — the server never signs on your behalf",
+    operationId: "createGateDecisionSignatureRequest",
+    public: false,
+    mutation: true,
+    requiresIfMatch: false,
+    action: "gate.decide",
+    implemented: true,
+    requestSchema: createGateDecisionSignatureRequest,
+    responseSchema: gateDecisionSignatureRequestResponse,
+  },
+  {
+    method: "post",
     path: "/api/v1/projects/{projectId}/gate-decisions",
-    summary: "Record a human gate decision",
+    summary: "Record a human gate decision signed by the approver's wallet",
     operationId: "createGateDecision",
     public: false,
     mutation: true,
@@ -653,7 +799,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: null,
     implemented: true,
-    responseSchema: anchorBatchStatus.array(),
+    responseSchema: anchorBatchStatusList,
   },
   {
     method: "post",
@@ -739,6 +885,23 @@ export const ROUTES: readonly RouteDefinition[] = [
     responseSchema: objectUpload,
   },
   {
+    method: "post",
+    path: "/api/v1/uploads/{uploadId}/revoke",
+    summary:
+      "Revoke a promoted document with a reason — kept and marked, never deleted; what rests on it is flagged",
+    operationId: "revokeDocument",
+    public: false,
+    mutation: true,
+    // A profile change or a new version may have landed since the read. State the intended version.
+    requiresIfMatch: true,
+    // `POST /sources/{id}/revoke` of spec 07 §7.2; a source document is an upload here. Same
+    // permission as replacing it with a new version — the other way a document is taken out of use.
+    action: "source.upload",
+    implemented: true,
+    requestSchema: revokeDocumentRequest,
+    responseSchema: documentRevocation,
+  },
+  {
     method: "get",
     path: "/api/v1/projects/{projectId}/document-graph",
     summary: "Documents of a project with their active links, validity, and open impacts",
@@ -748,6 +911,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: null,
     implemented: true,
+    querySchema: documentGraphQuery,
     responseSchema: documentGraph,
   },
   {
@@ -850,6 +1014,74 @@ export const ROUTES: readonly RouteDefinition[] = [
     implemented: true,
     requestSchema: retireDocumentLinkRuleRequest,
     responseSchema: documentLinkRule,
+  },
+
+  // --- Document status ------------------------------------------------------
+  //
+  // Which document types a project expects, and where its documents stand. Counted on the
+  // server and paged, so a project with thousands of documents is shown whole.
+  {
+    method: "get",
+    path: "/api/v1/projects/{projectId}/document-requirements",
+    summary: "Document types the project expects, with their tier",
+    operationId: "listDocumentRequirements",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: null,
+    implemented: true,
+    responseSchema: documentRequirementList,
+  },
+  {
+    method: "post",
+    path: "/api/v1/projects/{projectId}/document-requirements",
+    summary: "Declare a document type the project expects and how much it matters",
+    operationId: "createDocumentRequirement",
+    public: false,
+    mutation: true,
+    requiresIfMatch: false,
+    action: "source.upload",
+    implemented: true,
+    requestSchema: createDocumentRequirementRequest,
+    responseSchema: documentRequirement,
+  },
+  {
+    method: "post",
+    path: "/api/v1/document-requirements/{requirementId}/retirement",
+    summary: "Retire a document requirement with a reason — it is never deleted",
+    operationId: "retireDocumentRequirement",
+    public: false,
+    mutation: true,
+    requiresIfMatch: false,
+    action: "source.upload",
+    implemented: true,
+    requestSchema: retireDocumentRequirementRequest,
+    responseSchema: documentRequirement,
+  },
+  {
+    method: "get",
+    path: "/api/v1/projects/{projectId}/document-status",
+    summary: "Counts of current, expired, replaced and pending documents, and requirement coverage",
+    operationId: "getDocumentStatusSummary",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: null,
+    implemented: true,
+    responseSchema: documentStatusSummary,
+  },
+  {
+    method: "get",
+    path: "/api/v1/projects/{projectId}/documents",
+    summary: "Documents of a project, filtered by status, type or tier, one page at a time",
+    operationId: "listProjectDocuments",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: null,
+    implemented: true,
+    querySchema: documentListQuery,
+    responseSchema: documentList,
   },
 
   // --- Asset/Offering gate (R6, OD-07) --------------------------------------
@@ -1003,6 +1235,19 @@ export const ROUTES: readonly RouteDefinition[] = [
     responseSchema: sourceConnectionEntry,
   },
   {
+    method: "post",
+    path: "/api/v1/source-connections/{connectionId}/security-reviews",
+    summary: "Security review of one connection version — required before activation",
+    operationId: "reviewSourceConnectionSecurity",
+    public: false,
+    mutation: true,
+    requiresIfMatch: true,
+    action: "connection.security_review",
+    implemented: true,
+    requestSchema: createConnectionSecurityReviewRequest,
+    responseSchema: connectionSecurityReview,
+  },
+  {
     method: "get",
     path: "/api/v1/jurisdictions/{jurisdiction}/profile",
     summary: "Connection status per jurisdiction — does not overstate unconfirmed integrations",
@@ -1028,6 +1273,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requestSchema: sourceCollectRequest,
     responseSchema: sourceCollectResult,
   },
+  ...RESTRICTION_ROUTES,
 
   // --- Governance (R4) ----------------------------------------------------
   {
@@ -1040,7 +1286,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: null,
     implemented: true,
-    responseSchema: governanceProposal.array(),
+    responseSchema: governanceProposalList,
   },
   {
     method: "get",
@@ -1156,7 +1402,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: "project.read",
     implemented: true,
-    responseSchema: notification.array(),
+    responseSchema: notificationList,
   },
   {
     method: "post",
@@ -1342,6 +1588,88 @@ export const ROUTES: readonly RouteDefinition[] = [
     responseSchema: roleRevocationRequest,
   },
 
+  // --- Break-glass elevation (02 §2.6) ------------------------------------------------------
+  //
+  // A time-boxed elevation approved by a second person. It unlocks only the emergency actions
+  // in `BREAK_GLASS_ACTIONS`. See `apps/api/src/routes/break-glass.ts`.
+  {
+    method: "get",
+    path: "/api/v1/admin/break-glass",
+    summary: "List break-glass elevations with their expiry and incident deadline",
+    operationId: "listBreakGlassElevations",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: "break_glass.read",
+    implemented: true,
+    responseSchema: breakGlassElevation.array(),
+  },
+  {
+    method: "post",
+    path: "/api/v1/admin/break-glass",
+    summary: "Request a break-glass elevation for yourself — purpose, target and expiry required",
+    operationId: "requestBreakGlass",
+    public: false,
+    mutation: true,
+    requiresIfMatch: false,
+    action: "break_glass.request",
+    implemented: true,
+    requestSchema: requestBreakGlassRequest,
+    responseSchema: breakGlassElevation,
+  },
+  {
+    method: "post",
+    path: "/api/v1/admin/break-glass/{elevationId}/decision",
+    summary: "Approve or reject an elevation — not by the person elevated",
+    operationId: "decideBreakGlass",
+    public: false,
+    mutation: true,
+    requiresIfMatch: true,
+    action: "break_glass.approve",
+    implemented: true,
+    requestSchema: decideBreakGlassRequest,
+    responseSchema: breakGlassElevation,
+  },
+  {
+    method: "post",
+    path: "/api/v1/admin/break-glass/{elevationId}/incident",
+    summary: "Record the incident an elevation was used for — due within 24 hours",
+    operationId: "recordBreakGlassIncident",
+    public: false,
+    mutation: true,
+    requiresIfMatch: true,
+    action: "break_glass.incident",
+    implemented: true,
+    requestSchema: recordBreakGlassIncidentRequest,
+    responseSchema: breakGlassElevation,
+  },
+  {
+    method: "post",
+    path: "/api/v1/admin/break-glass/{elevationId}/release",
+    summary: "Release an elevation — cause and recovery verification, not by the person elevated",
+    operationId: "releaseBreakGlass",
+    public: false,
+    mutation: true,
+    requiresIfMatch: true,
+    action: "break_glass.release",
+    implemented: true,
+    requestSchema: releaseBreakGlassRequest,
+    responseSchema: breakGlassElevation,
+  },
+  {
+    method: "post",
+    path: "/api/v1/admin/break-glass/quarantine",
+    summary: "Quarantine a subject's access at once — only under an effective elevation",
+    operationId: "quarantineAccess",
+    public: false,
+    mutation: true,
+    requiresIfMatch: false,
+    action: "break_glass.quarantine",
+    implemented: true,
+    requestSchema: quarantineAccessRequest,
+    responseSchema: quarantineAccessResult,
+  },
+
   // --- Review registries (02 §2.8) ---------------------------------------------------------
   ...reviewRegistryRoutes("credentials", "Credential", "credential", proposeCredentialRequest),
   ...reviewRegistryRoutes(
@@ -1383,6 +1711,43 @@ export const ROUTES: readonly RouteDefinition[] = [
     implemented: true,
     responseSchema: outboxBacklog,
   },
+  {
+    method: "get",
+    path: "/api/v1/audit-events/export",
+    summary: "Export the audit log as JSON Lines with a sha256 manifest — the export is audited",
+    operationId: "exportAuditEvents",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: "audit.export",
+    implemented: true,
+    querySchema: auditExportQuery,
+    responseSchema: auditExport,
+  },
+  {
+    method: "post",
+    path: "/api/v1/projects/{projectId}/exports",
+    summary: "Request a project export package — asynchronous, redacted to the requester's clearance",
+    operationId: "createProjectExport",
+    public: false,
+    mutation: true,
+    requiresIfMatch: false,
+    action: "project.export",
+    implemented: true,
+    responseSchema: projectExportJob,
+  },
+  {
+    method: "get",
+    path: "/api/v1/projects/{projectId}/exports/{exportId}",
+    summary: "Read an export job and, once built, its package — only the requester can read it",
+    operationId: "getProjectExport",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: "project.export",
+    implemented: true,
+    responseSchema: projectExportJob,
+  },
 
   // --- Public (unauthenticated) -----------------------------------------------------
   {
@@ -1395,6 +1760,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: null,
     implemented: true,
+    paramsSchema: publicRegistryPathParams,
     querySchema: publicRegistryListQuery,
     responseSchema: publicRegistryList,
   },
@@ -1408,6 +1774,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: null,
     implemented: true,
+    paramsSchema: publicRegistryEntryPathParams,
     responseSchema: publicProjection,
   },
   {

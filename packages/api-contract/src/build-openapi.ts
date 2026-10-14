@@ -27,20 +27,46 @@ function schemaFor(schema: Parameters<typeof zodToJsonSchema>[0], name: string):
   });
 }
 
-function pathParameters(routePath: string): unknown[] {
+/** Properties of an object schema, unwrapped from zod-to-json-schema's `definitions` wrapper. */
+function objectProperties(
+  schema: Parameters<typeof zodToJsonSchema>[0],
+  name: string,
+): { readonly properties?: Record<string, unknown>; readonly required?: readonly string[] } {
+  // Given `name`, zod-to-json-schema wraps the schema under `definitions`.
+  // Parameters need the inner object, so unwrap one level.
+  const wrapper = schemaFor(schema, name) as { readonly definitions?: Record<string, unknown> };
+  return (wrapper.definitions?.[name] ?? {}) as {
+    readonly properties?: Record<string, unknown>;
+    readonly required?: readonly string[];
+  };
+}
+
+function pathParameters(
+  routePath: string,
+  paramsSchema: Parameters<typeof zodToJsonSchema>[0] | undefined,
+  operationId: string,
+): unknown[] {
+  const declared = paramsSchema
+    ? (objectProperties(paramsSchema, `${operationId}Params`).properties ?? {})
+    : {};
   const matches = routePath.match(/\{([^}]+)\}/g) ?? [];
-  return matches.map((match) => ({
-    name: match.slice(1, -1),
-    in: "path",
-    required: true,
-    schema: { type: "string" },
-  }));
+  return matches.map((match) => {
+    const name = match.slice(1, -1);
+    return {
+      name,
+      in: "path",
+      required: true,
+      schema: declared[name] ?? { type: "string" },
+    };
+  });
 }
 
 const paths: Record<string, Record<string, unknown>> = {};
 
 for (const route of ROUTES) {
-  const parameters: unknown[] = [...pathParameters(route.path)];
+  const parameters: unknown[] = [
+    ...pathParameters(route.path, route.paramsSchema, route.operationId),
+  ];
 
   if (route.mutation) {
     parameters.push({
@@ -55,15 +81,7 @@ for (const route of ROUTES) {
   // Expand the query string contract into OpenAPI parameters. The server rejects
   // parameters not listed here, so absence from the list means "cannot be sent".
   if (route.querySchema !== undefined) {
-    // Given `name`, zod-to-json-schema wraps the schema under `definitions`.
-    // Parameters need the inner object, so unwrap one level.
-    const wrapper = schemaFor(route.querySchema, `${route.operationId}Query`) as {
-      readonly definitions?: Record<string, unknown>;
-    };
-    const jsonSchema = (wrapper.definitions?.[`${route.operationId}Query`] ?? {}) as {
-      readonly properties?: Record<string, unknown>;
-      readonly required?: readonly string[];
-    };
+    const jsonSchema = objectProperties(route.querySchema, `${route.operationId}Query`);
     for (const [name, schema] of Object.entries(jsonSchema.properties ?? {})) {
       parameters.push({
         name,

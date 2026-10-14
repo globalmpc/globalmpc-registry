@@ -3,6 +3,7 @@ export {
   SOURCE_RESULT_BEHAVIOUR,
   COLLECTION_METHODS,
   isSourceResult,
+  receiptProcessingStateFor,
   type SourceResult,
   type SourceResultBehaviour,
   type CollectionMethod,
@@ -90,7 +91,31 @@ export {
   type OngoingApplicability,
   type AcceptanceFacts,
   type AcceptanceBlocker,
+  CREDENTIAL_STATUS_TRANSITIONS,
+  canChangeCredentialStatus,
+  evaluateAuthorityBasis,
+  isAuthorityInForce,
+  type AuthorityState,
+  type AuthorityFacts,
+  type AuthorityBasis,
+  type AuthorityBasisInput,
 } from "./attestation.js";
+
+export {
+  reviewIndependence,
+  type IndependenceFacts,
+  type IndependenceReview,
+  type IndependenceViolation,
+  type IndependenceGap,
+} from "./independence.js";
+
+export {
+  ARTIFACT_LIFECYCLE_STATES,
+  STANDING_ATTESTATION_STATES,
+  artifactLifecycleMachine,
+  deriveVerificationState,
+  type ArtifactLifecycleState,
+} from "./provenance-axes.js";
 
 export {
   SENSITIVITY_LEVELS,
@@ -99,6 +124,9 @@ export {
   isPublicField,
   checkPublishable,
   checkRestrictedAction,
+  RESTRICTABLE_ACTION_TYPES,
+  isRestrictableAction,
+  type RestrictableActionType,
   type Sensitivity,
   type PublicField,
   type PublicationGuardInput,
@@ -160,3 +188,16 @@ export {
   type LifecycleGuardFacts,
   type LifecycleGuardResult,
 } from "./lifecycle-guards.js";
+
+export {
+  DOCUMENT_REQUIREMENT_TIERS,
+  DOCUMENT_STATUSES,
+  REQUIREMENT_STATUSES,
+  requirementStatus,
+  summarizeTiers,
+  type DocumentRequirementTier,
+  type DocumentStatus,
+  type RequirementStatus,
+  type RequirementCounts,
+  type TierSummary,
+} from "./document-requirements.js";

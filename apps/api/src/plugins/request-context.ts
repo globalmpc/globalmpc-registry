@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { badRequest } from "../errors.js";
+import { hashUserAgent } from "../device.js";
 
 /**
  * 07 §7.1: every response has `requestId` and `asOf`, and errors have `correlationId`.
@@ -38,6 +39,20 @@ export async function registerRequestContext(app: FastifyInstance): Promise<void
     request.context = newRequestContext(typeof header === "string" ? header : undefined);
     reply.header("X-Request-Id", request.context.requestId);
     reply.header("X-Correlation-Id", request.context.correlationId);
+  });
+
+  /**
+   * Device facts for the audit record (02 §2.7), attached to the session every audit call
+   * already receives. Doing it once here keeps dozens of `recordAudit` call sites unchanged —
+   * a call site that forgot to pass it would silently record nothing.
+   */
+  app.addHook("preHandler", async (request) => {
+    if (!request.session) return;
+    const userAgent = request.headers["user-agent"];
+    request.session = {
+      ...request.session,
+      device: { userAgentHash: hashUserAgent(typeof userAgent === "string" ? userAgent : undefined) },
+    };
   });
 
   /**

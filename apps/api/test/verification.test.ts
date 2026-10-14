@@ -108,7 +108,6 @@ describeDb("Verification and EIP-712 signature", () => {
         valueText: "MV-012345",
         sourceCoordinate: { document: "extract", page: "1" },
         evidenceTier: "P1",
-        verificationState: "analyst_checked",
       },
     });
     claimId = claim.json().id;
@@ -130,6 +129,7 @@ describeDb("Verification and EIP-712 signature", () => {
         claimIds: [claimId],
         reviewerSubjectId: fx.reviewerSubjectA,
         credentialId: fx.credentialA,
+        conflictStatus: "none",
       },
     });
     return response.json() as { id: string; assignmentId: string; evidenceSnapshotHash: string };
@@ -205,6 +205,7 @@ describeDb("Verification and EIP-712 signature", () => {
         claimIds: [],
         reviewerSubjectId: fx.reviewerSubjectA,
         credentialId: fx.credentialA,
+        conflictStatus: "none",
       },
     });
     expect(response.statusCode).toBe(400);

@@ -152,7 +152,11 @@ interface KindSpec<Body extends { rationale: string }, Stored extends Record<str
 
 const storedCredential = proposeCredentialRequest
   .omit({ rationale: true })
-  .extend({ organizationId: z.string().uuid().nullable() });
+  .extend({
+    organizationId: z.string().uuid().nullable(),
+    // Proposals stored before the issuer link was required have none.
+    issuerAuthorityId: z.string().uuid().nullable().default(null),
+  });
 type StoredCredential = z.infer<typeof storedCredential>;
 
 const CREDENTIAL: KindSpec<z.infer<typeof proposeCredentialRequest>, StoredCredential> = {
@@ -169,6 +173,13 @@ const CREDENTIAL: KindSpec<z.infer<typeof proposeCredentialRequest>, StoredCrede
       SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${body.subjectId}
     `;
     if (!subject) throw notFound("Subject not found");
+
+    // The issuer must be a registered authority of this tenant. Its state is judged when the
+    // credential is used, not here: an authority can be accepted or suspended after this.
+    const [issuer] = await tx<{ id: string }[]>`
+      SELECT id FROM core.authorities WHERE tenant_id = ${tenantId} AND id = ${body.issuerAuthorityId}
+    `;
+    if (!issuer) throw notFound("Issuing authority not found");
 
     // Resolved now and stored, so the approver sees the organization that will be recorded.
     const organizationId = await holderOrganization(tx, tenantId, body.subjectId);
@@ -471,7 +482,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
 
     const { requestId, asOf, correlationId } = request.context;
     return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
         const prepared = await spec.prepare(tx, tenantId, body, new Date(asOf));
         if (!prepared.ok) throw unprocessable(prepared.code, prepared.message, prepared.details);
         const { itemKey, effectiveFrom, payload } = prepared.value;
@@ -558,7 +569,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
 
       const { requestId, asOf, correlationId } = request.context;
       return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           const proposal = await lockProposal(tx, tenantId, spec.kind, request.params.proposalId);
           if (!proposal) throw notFound("Proposal not found");
           assertVersionMatches(expected, proposal.version, "registry_proposal");

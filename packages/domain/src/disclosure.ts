@@ -177,6 +177,35 @@ export function checkPublishable(input: PublicationGuardInput): PublicationCheck
  * During an active restriction, designated actions are rejected with the same restriction ID not
  * only in the UI but also in the API and the contract adapter. Hiding a button is not a control.
  */
+/**
+ * Actions a restriction may name — the closed list of blackout-checked actions in R0–R5.
+ *
+ * A restriction naming an action with no check behind it would read as a control that does not
+ * exist, so creation rejects anything outside this list. Asset-token actions (transfer,
+ * subscription, redemption) are not here: those paths are not built (OD-07, R6), and listing them
+ * would promise a block on a route that returns 404 anyway.
+ *
+ * Suspension is deliberately absent. It reduces risk, and a blackout must never stand in the way
+ * of taking a project down.
+ */
+export const RESTRICTABLE_ACTION_TYPES = [
+  "registry.publish",
+  "project.lifecycle.offering_open",
+  "project.lifecycle.offering_closed",
+  "project.lifecycle.active",
+  "project.lifecycle.branch_vote",
+  "project.lifecycle.continuing",
+  "project.lifecycle.divested",
+  "project.lifecycle.closure",
+  "project.lifecycle.retired",
+] as const;
+
+export type RestrictableActionType = (typeof RESTRICTABLE_ACTION_TYPES)[number];
+
+export function isRestrictableAction(value: string): value is RestrictableActionType {
+  return (RESTRICTABLE_ACTION_TYPES as readonly string[]).includes(value);
+}
+
 export interface DisclosureRestriction {
   readonly restrictionId: string;
   readonly subjectScope: readonly string[];

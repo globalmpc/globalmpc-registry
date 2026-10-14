@@ -3,6 +3,7 @@ import {
   SOURCE_RESULTS,
   SOURCE_RESULT_BEHAVIOUR,
   isSourceResult,
+  receiptProcessingStateFor,
 } from "../src/source-result.js";
 
 describe("canonical source result enum — 13 §13.13", () => {
@@ -97,5 +98,14 @@ describe("security-related results", () => {
     expect(SOURCE_RESULT_BEHAVIOUR.legal_interpretation_required.nextAction).toBe(
       "escalate_to_legal",
     );
+  });
+});
+
+describe("receipt processing state — 04 §4.9", () => {
+  it("quarantines only responses that were never trusted enough to normalize", () => {
+    const quarantined = SOURCE_RESULTS.filter(
+      (result) => receiptProcessingStateFor(result) === "quarantined",
+    );
+    expect(quarantined).toEqual(["signature_invalid", "schema_changed"]);
   });
 });

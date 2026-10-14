@@ -9,7 +9,9 @@ import {
   visibleProjectScope,
 } from "../plugins/authorize.js";
 import { requireMutationContext, requireReadContext } from "./shared.js";
+import { recordAudit } from "../audit.js";
 import { notFound } from "../errors.js";
+import { capRows } from "../list-window.js";
 import type { Session } from "../plugins/session.js";
 
 /**
@@ -48,6 +50,23 @@ function visibleNotificationFilter(tx: postgres.TransactionSql, session: Session
  * aggregate screen gains mutations, authorization checks split into two places.
  */
 
+/**
+ * Cap on the notification list.
+ *
+ * A flag rather than pages: the list is read newest first and older notifications have
+ * usually been acted on. Past the cap the response says `truncated`, so an unread count taken
+ * from the list is not mistaken for the whole count.
+ */
+const NOTIFICATION_LIST_LIMIT = 100;
+
+/**
+ * Cap on open stale signals in "My Work", oldest first.
+ *
+ * Past the cap the response says `unassignedTruncated`, so the list is not read as the whole
+ * backlog of work nobody has taken.
+ */
+const UNASSIGNED_SIGNAL_LIMIT = 50;
+
 export async function registerWorkspaceRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
@@ -57,7 +76,11 @@ export async function registerWorkspaceRoutes(
     assertAuthorized(
       session,
       "registry.read",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      tenantResource(tenantId, {
+        state: "active",
+        statesAllowingAction: ["active"],
+        filteredByProjectScope: true,
+      }),
       sessionFacts(session),
     );
 
@@ -122,7 +145,11 @@ export async function registerWorkspaceRoutes(
     assertAuthorized(
       session,
       "project.read",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      tenantResource(tenantId, {
+        state: "active",
+        statesAllowingAction: ["active"],
+        filteredByProjectScope: true,
+      }),
       sessionFacts(session),
     );
 
@@ -189,9 +216,10 @@ export async function registerWorkspaceRoutes(
         FROM core.evidence_stale_signals
         WHERE tenant_id = ${tenantId} AND resolution = 'open'
           AND ${visible === "all" ? tx`TRUE` : tx`project_id = ANY(${visible as string[]}::uuid[])`}
-        ORDER BY detected_at
-        LIMIT 50
+        ORDER BY detected_at, id
+        LIMIT ${UNASSIGNED_SIGNAL_LIMIT + 1}
       `;
+      const signalWindow = capRows(staleSignals, UNASSIGNED_SIGNAL_LIMIT);
 
       // Pending proposals I did not make = what I can decide.
       // Without a deciding role they are not decidable by me — listing them would only leak who receives which role.
@@ -223,7 +251,7 @@ export async function registerWorkspaceRoutes(
           since: row.requested_at.toISOString(),
         })),
         unassigned: [
-          ...staleSignals.map((row) => ({
+          ...signalWindow.items.map((row) => ({
             kind: "stale_signal" as const,
             id: row.id,
             projectId: row.project_id,
@@ -238,6 +266,8 @@ export async function registerWorkspaceRoutes(
             since: row.requested_at.toISOString(),
           })),
         ],
+        // Oldest signals first; past the cap the newer ones are not in `unassigned`.
+        unassignedTruncated: signalWindow.truncated,
         requestId,
         asOf,
       };
@@ -259,7 +289,11 @@ export async function registerWorkspaceRoutes(
     assertAuthorized(
       session,
       "project.read",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      tenantResource(tenantId, {
+        state: "active",
+        statesAllowingAction: ["active"],
+        filteredByProjectScope: true,
+      }),
       sessionFacts(session),
     );
 
@@ -287,12 +321,15 @@ export async function registerWorkspaceRoutes(
         ON r.notification_id = n.id AND r.subject_id = ${subjectId}
       WHERE n.tenant_id = ${tenantId}
         AND ${visibleNotificationFilter(tx, session)}
-      ORDER BY n.occurred_at DESC
-      LIMIT 100
+      ORDER BY n.occurred_at DESC, n.id DESC
+      LIMIT ${NOTIFICATION_LIST_LIMIT + 1}
     `);
+    const window = capRows(rows, NOTIFICATION_LIST_LIMIT);
 
     return {
-      items: rows.map((row) => ({
+      truncated: window.truncated,
+      limit: window.limit,
+      items: window.items.map((row) => ({
         id: row.id,
         kind: row.kind,
         audience: row.subject_id === null ? ("role" as const) : ("you" as const),
@@ -312,14 +349,18 @@ export async function registerWorkspaceRoutes(
     "/api/v1/notifications/:notificationId/read",
     async (request) => {
       const { session, tenantId } = requireMutationContext(request);
-      assertAuthorized(
+      const effectiveRole = assertAuthorized(
         session,
         "project.read",
-        tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+        tenantResource(tenantId, {
+          state: "active",
+          statesAllowingAction: ["active"],
+          filteredByProjectScope: true,
+        }),
         sessionFacts(session),
       );
 
-      const { requestId, asOf } = request.context;
+      const { requestId, asOf, correlationId } = request.context;
       const subjectId = session.subjectId;
 
       return withTenant(sql, { tenantId }, async (tx) => {
@@ -350,11 +391,29 @@ export async function registerWorkspaceRoutes(
          * If my reading a role notification cleared it for others, no one would look again
          * when I did not handle it.
          */
-        await tx`
+        const inserted = await tx`
           INSERT INTO core.notification_reads (notification_id, subject_id, tenant_id)
           VALUES (${found.id}, ${subjectId}, ${tenantId})
           ON CONFLICT DO NOTHING
+          RETURNING notification_id
         `;
+
+        // Acknowledging a notification is the record that someone saw a revoke or a gap
+        // (02 §2.7). Only the first read is recorded; a repeat changes nothing.
+        if (inserted.length > 0) {
+          await recordAudit(tx, {
+            tenantId,
+            ...(found.project_id ? { projectId: found.project_id } : {}),
+            session,
+            effectiveRole,
+            command: "notification.read",
+            resourceType: "notification",
+            resourceId: found.id,
+            correlationId,
+            requestIp: request.clientIp,
+            detail: { kind: found.kind },
+          });
+        }
 
         return {
           id: found.id,

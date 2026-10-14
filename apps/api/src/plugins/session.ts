@@ -2,7 +2,12 @@ import { randomBytes } from "node:crypto";
 import type postgres from "postgres";
 import { recoverMessageAddress } from "viem";
 import { parseSiweMessage } from "viem/siwe";
-import { TENANT_WIDE_ROLES, type AssuranceLevel } from "@mpc/api-contract";
+import {
+  BREAK_GLASS_INCIDENT_DUE_HOURS,
+  BREAK_GLASS_ROLE,
+  TENANT_WIDE_ROLES,
+  type AssuranceLevel,
+} from "@mpc/api-contract";
 import { withTenant } from "@mpc/db";
 import type { AppConfig } from "../config.js";
 import { unauthorized } from "../errors.js";
@@ -17,6 +22,12 @@ export interface Session {
     readonly role: string;
     readonly organizationId: string | null;
     readonly projectId: string | null;
+    /**
+     * Jurisdictions the binding is limited to (02 §2.5). `null` or absent: not scoped.
+     */
+    readonly jurisdiction?: readonly string[] | null;
+    /** Set only on the `break_glass` binding: the elevation that grants it. */
+    readonly elevationId?: string;
   }[];
   readonly projectIds: readonly string[];
   /**
@@ -26,6 +37,15 @@ export interface Session {
    * it reaches no project (narrowed, not widened).
    */
   readonly organizationProjectIds?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * Project ID → host jurisdiction, for the tenant's projects.
+   *
+   * Loaded only when a binding is jurisdiction-scoped. If absent, a scoped binding reaches no
+   * project (narrowed, not widened).
+   */
+  readonly projectJurisdictions?: Readonly<Record<string, string>>;
+  /** Device facts the server can see, for the audit record (02 §2.7). Filled per request. */
+  readonly device?: { readonly userAgentHash: string | null };
 }
 
 const NONCE_TTL_MS = 10 * 60 * 1000;
@@ -164,10 +184,22 @@ export async function resolveSession(
   }
 
   const bindings = await sql<
-    { role: string; organization_id: string | null; project_id: string | null }[]
+    {
+      role: string;
+      organization_id: string | null;
+      project_id: string | null;
+      jurisdiction: string[] | null;
+    }[]
   >`
     SELECT * FROM core.resolve_role_bindings(${identity.subject_id})
   `;
+
+  // Only a current `security_operator` holder can be elevated. Revoking that role ends any
+  // elevation with it, and sessions without it skip the lookup.
+  const elevation = bindings.some((row) => row.role === "security_operator")
+    ? await resolveBreakGlassElevation(sql, identity.tenant_id, identity.subject_id)
+    : null;
+  const scoped = bindings.some((row) => row.jurisdiction !== null);
 
   return {
     walletAddress,
@@ -175,16 +207,78 @@ export async function resolveSession(
     subjectId: identity.subject_id,
     tenantId: identity.tenant_id,
     assuranceLevel: identity.assurance_level,
-    roleBindings: bindings.map((row) => ({
-      role: row.role,
-      organizationId: row.organization_id,
-      projectId: row.project_id,
-    })),
+    roleBindings: [
+      ...bindings.map((row) => ({
+        role: row.role,
+        organizationId: row.organization_id,
+        projectId: row.project_id,
+        // Only scoped bindings carry the key, so unscoped ones read exactly as before.
+        ...(row.jurisdiction !== null ? { jurisdiction: row.jurisdiction } : {}),
+      })),
+      ...(elevation
+        ? [{ role: BREAK_GLASS_ROLE, organizationId: null, projectId: null, elevationId: elevation }]
+        : []),
+    ],
     projectIds: bindings
       .map((row) => row.project_id)
       .filter((value): value is string => value !== null),
     organizationProjectIds: await resolveOrganizationProjects(sql, identity.tenant_id, bindings),
+    ...(scoped
+      ? {
+          projectJurisdictions: await resolveProjectJurisdictions(
+            sql,
+            identity.tenant_id,
+            [...new Set(bindings.flatMap((row) => row.jurisdiction ?? []))],
+          ),
+        }
+      : {}),
   };
+}
+
+/**
+ * The subject's effective break-glass elevation, if any — 02 §2.6.
+ *
+ * **Expiry is evaluated here, on every request,** against the database clock. Nothing has to run
+ * for an elevation to end: once `expires_at` passes, the next request resolves without the
+ * `break_glass` binding. The same holds for an elevation whose incident record is overdue.
+ */
+async function resolveBreakGlassElevation(
+  sql: postgres.Sql,
+  tenantId: string,
+  subjectId: string,
+): Promise<string | null> {
+  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+    tx<{ id: string }[]>`
+      SELECT id FROM core.break_glass_elevations
+      WHERE subject_id = ${subjectId}
+        AND state = 'active'
+        AND expires_at > now()
+        AND (
+          incident_recorded_at IS NOT NULL
+          OR decided_at + make_interval(hours => ${BREAK_GLASS_INCIDENT_DUE_HOURS}) > now()
+        )
+      LIMIT 1
+    `,
+  );
+  return row?.id ?? null;
+}
+
+/** Host jurisdiction of every project in the tenant. Read only for jurisdiction-scoped sessions. */
+async function resolveProjectJurisdictions(
+  sql: postgres.Sql,
+  tenantId: string,
+  jurisdictions: readonly string[],
+): Promise<Readonly<Record<string, string>>> {
+  // Only projects inside the scoped bindings' jurisdictions. One outside them is absent, which
+  // the decision reads as a mismatch, the same answer its host country would give. Unscoped
+  // bindings do not read the jurisdiction at all.
+  const rows = await withTenant(sql, { tenantId }, (tx) =>
+    tx<{ id: string; host_country_iso3: string }[]>`
+      SELECT id, host_country_iso3 FROM core.projects
+      WHERE host_country_iso3 = ANY(${jurisdictions as string[]}::text[])
+    `,
+  );
+  return Object.fromEntries(rows.map((row) => [row.id, row.host_country_iso3]));
 }
 
 /**

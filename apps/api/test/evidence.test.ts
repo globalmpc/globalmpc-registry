@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { SOURCE_RESULTS, SOURCE_RESULT_BEHAVIOUR } from "@mpc/domain";
@@ -52,7 +53,6 @@ describeDb("Source Receipt", () => {
       commercialReuse: "unconfirmed",
       disclosurePermission: "restricted",
       asOf: "2026-08-01T00:00:00.000Z",
-      freshnessStatus: "fresh",
       limitations: ["This lookup confirms mining right registration status only"],
       ...overrides,
     };
@@ -126,9 +126,91 @@ describeDb("Source Receipt", () => {
     ).rejects.toThrow(/cannot be modified or deleted/);
   });
 
-  it("cannot register without a raw hash", async () => {
+  /**
+   * REQ-DAPP-049: a missing original is recorded as missing.
+   *
+   * A lookup that returned nothing has no original to hash. Requiring a hash made callers
+   * invent one — the Data Room sent a fixed `0xabab…` — which reads as the hash of a document
+   * that does not exist.
+   */
+  it("records an absent original as absent, not as a hash", async () => {
     const response = await create(tokens.stewardA, receiptBody({ rawHash: undefined }));
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().rawHash).toBeNull();
+  });
+
+  it("refuses a zero hash — it stands for no original", async () => {
+    const response = await create(tokens.stewardA, receiptBody({ rawHash: `0x${"0".repeat(64)}` }));
     expect(response.statusCode).toBe(400);
+  });
+
+  it("refuses a client-sent freshness — the server computes it", async () => {
+    const response = await create(tokens.stewardA, receiptBody({ freshnessStatus: "fresh" }));
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe("FRESHNESS_IS_SERVER_COMPUTED");
+
+    // With no freshness rule for this source (OD-16 pending), the honest value is unknown.
+    const created = await create(tokens.stewardA, receiptBody());
+    expect(created.json().freshnessStatus).toBe("unknown");
+  });
+
+  it("refuses an authority that is not the connection's", async () => {
+    const response = await create(tokens.stewardA, receiptBody({ authorityId: randomUUID() }));
+    expect(response.statusCode).toBe(422);
+    expect(response.json().code).toBe("CONNECTION_AUTHORITY_MISMATCH");
+  });
+
+  it("refuses a connection that does not exist in the tenant", async () => {
+    const response = await create(tokens.stewardA, receiptBody({ connectionId: randomUUID() }));
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("takes terms, reuse, disclosure and versions from the connection when not sent", async () => {
+    const response = await create(
+      tokens.stewardA,
+      receiptBody({
+        termsLicense: undefined,
+        commercialReuse: undefined,
+        disclosurePermission: undefined,
+        sourceSchemaVersion: undefined,
+        adapterVersion: undefined,
+      }),
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    const [connection] = await fx.sql<{ terms_license: string; adapter_version: string }[]>`
+      SELECT terms_license, adapter_version FROM core.source_connections WHERE id = ${fx.connectionA}
+    `;
+    expect(response.json().termsLicense).toBe(connection!.terms_license);
+    expect(response.json().adapterVersion).toBe(connection!.adapter_version);
+  });
+
+  it("binds the raw hash to a scanned document when one is referenced", async () => {
+    const uploadId = randomUUID();
+    const contentHash = `0x${randomUUID().replace(/-/g, "").padEnd(64, "7")}`;
+    await fx.sql`
+      INSERT INTO core.object_uploads (
+        id, tenant_id, project_id, object_key, content_hash, byte_size, content_type,
+        sensitivity, state
+      ) VALUES (
+        ${uploadId}, ${fx.tenantA}, ${fx.projectA}, ${`objects/${uploadId}`}, ${contentHash},
+        10, 'application/pdf', 'restricted', 'scanned_clean'
+      )
+    `;
+
+    const bound = await create(
+      tokens.stewardA,
+      receiptBody({ rawHash: undefined, documentUploadId: uploadId }),
+    );
+    expect(bound.statusCode, bound.body).toBe(200);
+    expect(bound.json().rawHash).toBe(contentHash);
+
+    // A hash that disagrees with the referenced document is not silently replaced.
+    const disagreeing = await create(
+      tokens.stewardA,
+      receiptBody({ rawHash: `0x${"cd".repeat(32)}`, documentUploadId: uploadId }),
+    );
+    expect(disagreeing.statusCode).toBe(422);
+    expect(disagreeing.json().code).toBe("RAW_HASH_DOCUMENT_MISMATCH");
   });
 
   it("rejects a malformed raw hash", async () => {
@@ -236,8 +318,6 @@ describeDb("Claim", () => {
       asOf: "2026-08-01",
       sourceCoordinate: { document: "license-extract", page: "1" },
       evidenceTier: "P1",
-      verificationState: "analyst_checked",
-      attestationTypes: [],
       ...overrides,
     };
   }
@@ -251,22 +331,40 @@ describeDb("Claim", () => {
     });
   }
 
-  it("computes the grade by domain rules and stores it", async () => {
-    const response = await create(tokens.stewardA,
-      claimBody({
-        evidenceTier: "P1",
-        verificationState: "independently_assured",
-        attestationTypes: ["professional_signoff", "independent_assurance"],
-      }),
-    );
-    expect(response.json().grade).toBe("verified");
+  it("REQ-DAPP-004: a new claim starts unreviewed and unverified", async () => {
+    const response = await create(tokens.stewardA, claimBody({ evidenceTier: "P1" }));
+    expect(response.statusCode).toBe(200);
+    expect(response.json().verificationState).toBe("unreviewed");
+    expect(response.json().grade).toBe("unverified");
   });
 
-  it("lowers the grade when the evidence tier is low", async () => {
-    const response = await create(tokens.stewardA,
-      claimBody({ evidenceTier: "P4", verificationState: "machine_checked" }),
-    );
-    expect(response.json().grade).toBe("self_reported");
+  it("REQ-DAPP-004: the submitter cannot declare a verification state or attestations", async () => {
+    for (const declared of [
+      { verificationState: "independently_assured" },
+      { attestationTypes: ["professional_signoff", "independent_assurance"] },
+    ]) {
+      const response = await create(tokens.stewardA, claimBody(declared));
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("CLAIM_ASSESSMENT_NOT_SETTABLE");
+    }
+  });
+
+  it("records who submitted the claim and the first entry of each axis history", async () => {
+    const created = (await create(tokens.stewardA, claimBody({ evidenceTier: "P2" }))).json();
+
+    const [row] = await fx.sql<{ submitted_by: string }[]>`
+      SELECT submitted_by FROM core.claims WHERE id = ${created.id}
+    `;
+    expect(row!.submitted_by).toBe(fx.stewardSubjectA);
+
+    const history = await fx.sql<{ axis: string; to_value: string; cause: string }[]>`
+      SELECT axis, to_value, cause FROM core.provenance_axis_history
+      WHERE subject_id = ${created.id} ORDER BY axis
+    `;
+    expect(history).toEqual([
+      { axis: "evidence_tier", to_value: "P2", cause: "claim_submitted" },
+      { axis: "verification_state", to_value: "unreviewed", cause: "claim_submitted" },
+    ]);
   });
 
   it("is unverified without evidence", async () => {
@@ -276,17 +374,13 @@ describeDb("Claim", () => {
     expect(response.json().grade).toBe("unverified");
   });
 
-  it("recomputes the grade when an unresolved conflict appears", async () => {
-    const created = (
-      await create(tokens.stewardA,
-        claimBody({
-          evidenceTier: "P1",
-          verificationState: "independently_assured",
-          attestationTypes: ["professional_signoff", "independent_assurance"],
-        }),
-      )
-    ).json();
-    expect(created.grade).toBe("verified");
+  it("recomputes the grade from standing attestations when a conflict appears", async () => {
+    const created = (await create(tokens.stewardA, claimBody({ evidenceTier: "P1" }))).json();
+    // A claim recorded before assessments were derived: `verified` stored, no attestation behind it.
+    await fx.sql`
+      UPDATE core.claims SET verification_state = 'independently_assured', grade = 'verified'
+      WHERE id = ${created.id}
+    `;
 
     const conflicted = await app.inject({
       method: "POST",
@@ -300,7 +394,7 @@ describeDb("Claim", () => {
     });
 
     expect(conflicted.statusCode).toBe(200);
-    // Attestations are unchanged, but an unresolved conflict breaks verified.
+    // No signed attestation stands behind the stored `verified`, and a conflict is now open.
     expect(conflicted.json().grade).toBe("partially_verified");
   });
 

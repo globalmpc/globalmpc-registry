@@ -101,14 +101,12 @@ describeDb("Evidence channel", () => {
         queryBasis: { licenseNumber: "MN-1" },
         endpointOrDocumentRef: "https://registry.example.test/x",
         authenticationMethod: "mtls",
-        rawHash: `0x${"ab".repeat(32)}`,
         sourceSchemaVersion: "1",
         adapterVersion: "1",
         termsLicense: "data sharing agreement",
         commercialReuse: "unconfirmed",
         disclosurePermission: "restricted",
         asOf: new Date().toISOString(),
-        freshnessStatus: "fresh",
         limitations: ["economic_viability"],
         ...overrides,
       },
@@ -206,6 +204,45 @@ describeDb("Evidence channel", () => {
 
       expect(response.statusCode).toBe(422);
       expect(response.json().code).toBe("UPLOAD_NOT_VERIFIABLE");
+    });
+
+    it("a revoked document cannot be confirmation evidence, even with a valid signature", async () => {
+      const document = Buffer.from("registry-issued document later found forged");
+      const uploadId = await uploadClean(document, "application/pdf");
+      const scanned = await fx.sql<{ version: number }[]>`
+        SELECT version FROM core.object_uploads WHERE id = ${uploadId}
+      `;
+      const promoted = await app.inject({
+        method: "POST",
+        url: `/api/v1/uploads/${uploadId}/promote`,
+        headers: {
+          authorization: `Bearer ${steward}`,
+          "idempotency-key": idempotencyKey(),
+          "if-match": `"${scanned[0]!.version}"`,
+        },
+        payload: {},
+      });
+      expect(promoted.statusCode).toBe(200);
+      const revoked = await app.inject({
+        method: "POST",
+        url: `/api/v1/uploads/${uploadId}/revoke`,
+        headers: {
+          authorization: `Bearer ${steward}`,
+          "idempotency-key": idempotencyKey(),
+          "if-match": `"${promoted.json().version}"`,
+        },
+        payload: { reason: "The issuing office disowned this document" },
+      });
+      expect(revoked.statusCode).toBe(200);
+
+      const response = await createReceipt(steward, {
+        collectionMethod: "verifiable_signed_document",
+        documentUploadId: uploadId,
+        signatureBase64: cryptoSign(null, document, authorityKeys.privateKey).toString("base64"),
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("UPLOAD_REVOKED");
     });
 
     it("does not confirm without a registered public key", async () => {
@@ -421,6 +458,98 @@ describeDb("Evidence channel", () => {
 
       expect((await send()).statusCode).toBe(200);
       expect((await send()).statusCode).toBe(409);
+    });
+
+    it("does not second-review a receipt of a project outside the caller's scope", async () => {
+      // stewardA's organization owns both projects; scopedStewardA reaches only projectA.
+      const created = await app.inject({
+        method: "POST",
+        url: `/api/v1/projects/${fx.otherProjectA}/source-receipts`,
+        headers: { authorization: `Bearer ${steward}`, "idempotency-key": idempotencyKey() },
+        payload: {
+          connectionId: fx.connectionA,
+          authorityId: fx.authorityA,
+          result: "manual_review_required",
+          collectionMethod: "manual_official_registry_confirmation",
+          queryBasis: { licenseNumber: "MN-1" },
+          endpointOrDocumentRef: "https://registry.example.test/x",
+          authenticationMethod: "mtls",
+          sourceSchemaVersion: "1",
+          adapterVersion: "1",
+          termsLicense: "data sharing agreement",
+          commercialReuse: "unconfirmed",
+          disclosurePermission: "restricted",
+          asOf: new Date().toISOString(),
+          limitations: ["economic_viability"],
+        },
+      });
+      expect(created.statusCode).toBe(200);
+
+      const scopedToken = await signIn(app, fx.scopedStewardA);
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/source-receipts/${created.json().id}/second-review`,
+        headers: { authorization: `Bearer ${scopedToken}`, "idempotency-key": idempotencyKey() },
+        payload: { observation: "confirmed", confirmed: true },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json().details.reason).toBe("PROJECT_SCOPE_MISMATCH");
+    });
+
+    /**
+     * Two concurrent second reviews both found "no follow-up yet" and both inserted one. The
+     * original then had two successors, possibly with opposite results.
+     *
+     * The race is made deterministic: a competing follow-up is inserted in a transaction that
+     * stays open while the request runs, so the request's read cannot see it.
+     */
+    it("a concurrent second review does not leave two follow-ups", async () => {
+      const created = await createReceipt(steward, {
+        collectionMethod: "manual_official_registry_confirmation",
+        result: "manual_review_required",
+      });
+      expect(created.statusCode).toBe(200);
+      const originalId = created.json().id as string;
+
+      const { pending } = await fx.sql.begin(async (tx) => {
+        await tx`
+          INSERT INTO core.source_receipts (
+            id, tenant_id, project_id, connection_id, authority_id, collection_method,
+            result, query_basis, endpoint_or_document_ref, authentication_method,
+            raw_hash, source_schema_version, adapter_version, terms_license,
+            commercial_reuse, disclosure_permission, received_at, as_of,
+            freshness_status, correlation_id, first_confirmed_by, second_confirmed_by,
+            second_confirmed_at, supersedes_receipt_id
+          ) VALUES (
+            gen_random_uuid(), ${fx.tenantA}, ${fx.projectA}, ${fx.connectionA},
+            ${fx.authorityA}, 'manual_official_registry_confirmation',
+            'conflicting', '{}'::jsonb, 'doc', 'none',
+            ${`0x${"ef".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
+            now(), now(), 'fresh', 'test', ${fx.stewardSubjectA}, ${fx.reviewerSubjectA},
+            now(), ${originalId}
+          )
+        `;
+        const request = app.inject({
+          method: "POST",
+          url: `/api/v1/source-receipts/${originalId}/second-review`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() },
+          payload: { observation: "concurrent review", confirmed: true },
+        });
+        // Let the request reach its INSERT before the competing follow-up commits.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        // Wrapped so `begin` commits without waiting for the request.
+        return { pending: request };
+      });
+
+      const response = await pending;
+      expect(response.statusCode).toBe(409);
+      expect(response.json().code).toBe("SECOND_REVIEW_ALREADY_DONE");
+
+      const followUps = await fx.sql`
+        SELECT id FROM core.source_receipts WHERE supersedes_receipt_id = ${originalId}
+      `;
+      expect(followUps).toHaveLength(1);
     });
 
     it("the API channel has no second review", async () => {

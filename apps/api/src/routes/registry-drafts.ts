@@ -200,7 +200,7 @@ export async function registerRegistryDraftRoutes(
     const record = data.containsPersonLevelIdentifier ? data.personIdentifierRecord! : null;
 
     const { requestId, asOf, correlationId } = request.context;
-    const requestHash = hashRequest(request.body);
+    const requestHash = hashRequest(request);
 
     return withTenant(sql, { tenantId }, (tx) =>
       withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -397,7 +397,7 @@ export async function registerRegistryDraftRoutes(
       const { requestId, asOf, correlationId } = request.context;
 
       return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           const draft = await lockDraft(tx, tenantId, request.params.draftId);
           if (!draft) throw notFound("Draft not found");
           assertVersionMatches(expected, draft.version, "registry_publication_draft");

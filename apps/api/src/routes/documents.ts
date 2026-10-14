@@ -4,12 +4,14 @@ import { withTenant } from "@mpc/db";
 import {
   createDocumentLinkRequest,
   createDocumentLinkRuleRequest,
+  documentGraphQuery,
   removeDocumentLinkRequest,
   resolveDocumentImpactsRequest,
   retireDocumentLinkRuleRequest,
   updateDocumentProfileRequest,
 } from "@mpc/api-contract";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { capRows } from "../list-window.js";
 import {
   assertAuthorized,
   projectResource,
@@ -86,6 +88,8 @@ interface NodeRow {
   readonly days_until_expiry: number | null;
   readonly supersedes_upload_id: string | null;
   readonly superseded_by: string | null;
+  readonly revoked_at: Date | null;
+  readonly revocation_reason: string | null;
   readonly open_impacts: number;
   readonly version: number;
 }
@@ -101,6 +105,8 @@ function toNodeView(row: NodeRow) {
     daysUntilExpiry: row.days_until_expiry,
     supersedesUploadId: row.supersedes_upload_id,
     supersededByUploadId: row.superseded_by,
+    revokedAt: row.revoked_at?.toISOString() ?? null,
+    revocationReason: row.revocation_reason,
     openImpactCount: row.open_impacts,
     version: row.version,
   };
@@ -200,7 +206,7 @@ function toRuleView(row: RuleRow) {
  * Links, judgments, and rules record who made them. A session without a subject would store an
  * anonymous judgment, which is worse than refusing it.
  */
-function requireSubject(session: EnrolledSession): string {
+export function requireSubject(session: EnrolledSession): string {
   if (!session.subjectId) {
     throw forbidden(
       "SUBJECT_REQUIRED",
@@ -353,6 +359,22 @@ async function checkExpiryAround(tx: postgres.TransactionSql, uploadId: string):
   `;
 }
 
+/**
+ * Cap on graph nodes.
+ *
+ * The graph is a lookup for labels, validity, and links, not a document list; the Data Room
+ * pages through documents separately. Past the cap the response says `truncated`.
+ */
+const DOCUMENT_GRAPH_LIMIT = 500;
+
+/**
+ * Cap on the impact list.
+ *
+ * A flag rather than pages: the screen is a work queue with open impacts first, and judging
+ * them brings the rest into view. `total` and `openCount` say how far the queue goes.
+ */
+const DOCUMENT_IMPACT_LIMIT = 500;
+
 export async function registerDocumentRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
@@ -391,7 +413,7 @@ export async function registerDocumentRoutes(
       );
       const subjectId = requireSubject(session);
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -408,6 +430,13 @@ export async function registerDocumentRoutes(
               "DOCUMENT_NOT_USABLE",
               "A file that failed scanning or was rejected is not a document anyone relies on",
               { uploadId: row.id, state: row.state },
+            );
+          }
+          if (row.revoked_at !== null) {
+            throw conflict(
+              "DOCUMENT_REVOKED",
+              "This document was revoked and is kept as it was. Upload a corrected version instead",
+              { uploadId: row.id, revokedAt: row.revoked_at.toISOString() },
             );
           }
 
@@ -500,33 +529,75 @@ export async function registerDocumentRoutes(
       );
       const { requestId, asOf } = request.context;
 
-      const { nodes, links } = await withTenant(sql, { tenantId }, async (tx) => {
+      const parsed = documentGraphQuery.safeParse(request.query);
+      if (!parsed.success) {
+        throw badRequest("REQUEST_INVALID", "Query parameters are invalid", {
+          issues: parsed.error.issues,
+        });
+      }
+      const focus = parsed.data.focus ?? null;
+
+      const { nodes, links, totalNodes } = await withTenant(sql, { tenantId }, async (tx) => {
+        /**
+         * Newest documents up to the cap, plus the focused one and its direct neighbours.
+         *
+         * The document page draws one document's links. If that document is older than the
+         * newest 500, the cap alone would drop it and its links, and the page would read as
+         * "no relations".
+         */
         const nodeRows = await tx<NodeRow[]>`
+          WITH newest AS (
+            SELECT id FROM core.object_uploads
+            WHERE project_id = ${projectId}
+            ORDER BY uploaded_at DESC, id DESC
+            LIMIT ${DOCUMENT_GRAPH_LIMIT}
+          ),
+          focused AS (
+            SELECT ${focus}::uuid AS id WHERE ${focus}::uuid IS NOT NULL
+            UNION
+            SELECT CASE WHEN l.upstream_upload_id = ${focus}::uuid
+                        THEN l.downstream_upload_id ELSE l.upstream_upload_id END
+            FROM core.document_links l
+            WHERE l.project_id = ${projectId} AND l.removed_at IS NULL
+              AND ${focus}::uuid IN (l.upstream_upload_id, l.downstream_upload_id)
+          )
           SELECT u.id, u.original_filename, u.state::text AS state, u.document_type,
                  to_char(u.valid_until, 'YYYY-MM-DD') AS valid_until,
                  coalesce(u.valid_until < current_date, false) AS expired,
                  (u.valid_until - current_date) AS days_until_expiry,
                  u.supersedes_upload_id,
                  core.document_successor(u.id) AS superseded_by,
+                 u.revoked_at, u.revocation_reason,
                  (SELECT count(*)::int FROM core.document_impacts i
                    WHERE i.upload_id = u.id AND i.resolution = 'open') AS open_impacts,
                  u.version
           FROM core.object_uploads u
           WHERE u.project_id = ${projectId}
-          ORDER BY u.uploaded_at DESC
-          LIMIT 500
+            AND u.id IN (SELECT id FROM newest UNION SELECT id FROM focused)
+          ORDER BY u.uploaded_at DESC, u.id DESC
         `;
+        // Only links whose two ends are in the payload. A link to a node the client never
+        // received points at nothing it can draw or label.
+        const ids = nodeRows.map((row) => row.id);
         const linkRows = await tx<LinkRow[]>`
           SELECT * FROM core.document_links
           WHERE project_id = ${projectId} AND removed_at IS NULL
-          ORDER BY created_at
+            AND upstream_upload_id = ANY(${ids}::uuid[])
+            AND downstream_upload_id = ANY(${ids}::uuid[])
+          ORDER BY created_at, id
         `;
-        return { nodes: nodeRows, links: linkRows };
+        const [count] = await tx<{ total: number }[]>`
+          SELECT count(*)::int AS total FROM core.object_uploads WHERE project_id = ${projectId}
+        `;
+        return { nodes: nodeRows, links: linkRows, totalNodes: count?.total ?? 0 };
       });
 
       return {
         nodes: nodes.map(toNodeView),
         links: links.map(toLinkView),
+        truncated: totalNodes > nodes.length,
+        limit: DOCUMENT_GRAPH_LIMIT,
+        totalNodes,
         requestId,
         asOf,
       };
@@ -560,16 +631,26 @@ export async function registerDocumentRoutes(
       }
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
           const ends = await tx<
-            { id: string; project_id: string; state: string; successor: string | null }[]
+            {
+              id: string;
+              project_id: string;
+              state: string;
+              successor: string | null;
+              revoked_at: Date | null;
+            }[]
           >`
-            SELECT id, project_id, state::text AS state, core.document_successor(id) AS successor
+            SELECT id, project_id, state::text AS state, core.document_successor(id) AS successor,
+                   revoked_at
             FROM core.object_uploads
             WHERE id IN (${upstreamUploadId}, ${downstreamUploadId})
+            -- Waits for a revocation in flight (it holds FOR UPDATE) and then reads its result;
+            -- otherwise the link could land on a revoked document after its impacts were walked.
+            FOR SHARE
           `;
 
           for (const uploadId of [upstreamUploadId, downstreamUploadId]) {
@@ -582,6 +663,14 @@ export async function registerDocumentRoutes(
                 "DOCUMENT_NOT_USABLE",
                 "A file that failed scanning or was rejected is not a document anyone relies on",
                 { uploadId, state: end.state },
+              );
+            }
+            // A revoked document must not become the basis of anything new (04 §4.6 rule 3).
+            if (end.revoked_at !== null) {
+              throw conflict(
+                "DOCUMENT_REVOKED",
+                "This document was revoked. Link a corrected version instead",
+                { uploadId, revokedAt: end.revoked_at.toISOString() },
               );
             }
             // Links on a replaced version would move nowhere; the current version is the one
@@ -680,7 +769,7 @@ export async function registerDocumentRoutes(
       );
       const subjectId = requireSubject(session);
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -784,23 +873,33 @@ export async function registerDocumentRoutes(
       );
       const { requestId, asOf } = request.context;
 
-      const { rows, openCount } = await withTenant(sql, { tenantId }, async (tx) => {
+      const { rows, openCount, total } = await withTenant(sql, { tenantId }, async (tx) => {
         const impactRows = await tx<ImpactRow[]>`
           SELECT * FROM core.document_impacts
           WHERE project_id = ${projectId}
           -- Open ones first. Judged ones stay listed: how the last change was judged is the
-          -- best guide to judging the next one.
-          ORDER BY (resolution = 'open') DESC, detected_at DESC, depth
-          LIMIT 500
+          -- best guide to judging the next one. The id makes the order total.
+          ORDER BY (resolution = 'open') DESC, detected_at DESC, depth, id
+          LIMIT ${DOCUMENT_IMPACT_LIMIT + 1}
         `;
-        const [count] = await tx<{ open: number }[]>`
-          SELECT count(*)::int AS open FROM core.document_impacts
-          WHERE project_id = ${projectId} AND resolution = 'open'
+        const [count] = await tx<{ open: number; total: number }[]>`
+          SELECT count(*) FILTER (WHERE resolution = 'open')::int AS open, count(*)::int AS total
+          FROM core.document_impacts
+          WHERE project_id = ${projectId}
         `;
-        return { rows: impactRows, openCount: count?.open ?? 0 };
+        return { rows: impactRows, openCount: count?.open ?? 0, total: count?.total ?? 0 };
       });
 
-      return { items: rows.map(toImpactView), openCount, requestId, asOf };
+      const window = capRows(rows, DOCUMENT_IMPACT_LIMIT);
+      return {
+        items: window.items.map(toImpactView),
+        openCount,
+        truncated: window.truncated,
+        limit: window.limit,
+        total,
+        requestId,
+        asOf,
+      };
     },
   );
 
@@ -825,7 +924,7 @@ export async function registerDocumentRoutes(
       );
       const subjectId = requireSubject(session);
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
       const ids = [...new Set(parsed.data.impactIds)];
 
       return withTenant(sql, { tenantId }, (tx) =>
@@ -944,7 +1043,7 @@ export async function registerDocumentRoutes(
     );
     const subjectId = requireSubject(session);
     const { requestId, asOf, correlationId } = request.context;
-    const requestHash = hashRequest(request.body);
+    const requestHash = hashRequest(request);
     const { upstreamType, downstreamType, kind, note } = parsed.data;
 
     if (upstreamType.toLowerCase() === downstreamType.toLowerCase()) {
@@ -1036,7 +1135,7 @@ export async function registerDocumentRoutes(
       );
       const subjectId = requireSubject(session);
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {

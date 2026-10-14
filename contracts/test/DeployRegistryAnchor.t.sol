@@ -11,7 +11,17 @@ contract DeployRegistryAnchorHarness is DeployRegistryAnchor {
     function roleFromEnv(string memory name) external view returns (address) {
         return requiredRole(name);
     }
+
+    function deployWith(uint256 deployerKey, address admin, address submitter, address pauser)
+        external
+        returns (RegistryAnchorV1)
+    {
+        return deploy(deployerKey, admin, submitter, pauser);
+    }
 }
+
+/// @dev Stands in for a Safe: any address with code.
+contract SafeStandIn {}
 
 /// @notice The deployment script names every role holder explicitly.
 ///
@@ -61,6 +71,35 @@ contract DeployRegistryAnchorTest is Test {
         assertFalse(anchor.hasRole(anchor.ANCHOR_SUBMITTER_ROLE(), deployer));
         assertFalse(anchor.hasRole(anchor.PAUSER_ROLE(), deployer));
     }
+
+    /// @dev Off the local chain the submitter must be a contract (the Safe). An EOA submitter
+    ///      there means one key anchors alone — the worker refuses that too, but the role grant
+    ///      on chain is what decides who can submit.
+    function test_RevertWhen_SubmitterIsAnEoaOffTheLocalChain() public {
+        vm.chainId(56);
+        vm.expectRevert(bytes(SUBMITTER_NOT_CONTRACT));
+        script.deployWith(0xA11CE, address(0xA1), address(0xB2), address(0xC3));
+    }
+
+    function test_DeploysWithAContractSubmitterOffTheLocalChain() public {
+        address safe = address(new SafeStandIn());
+        vm.chainId(56);
+
+        RegistryAnchorV1 anchor = script.deployWith(0xA11CE, address(0xA1), safe, address(0xC3));
+
+        assertTrue(anchor.hasRole(anchor.ANCHOR_SUBMITTER_ROLE(), safe));
+    }
+
+    function test_DeploysWithAnEoaSubmitterOnTheLocalChain() public {
+        vm.chainId(31337);
+
+        RegistryAnchorV1 anchor = script.deployWith(0xA11CE, address(0xA1), address(0xB2), address(0xC3));
+
+        assertTrue(anchor.hasRole(anchor.ANCHOR_SUBMITTER_ROLE(), address(0xB2)));
+    }
+
+    string internal constant SUBMITTER_NOT_CONTRACT =
+        "ANCHOR_SUBMITTER must be a contract (the Safe multisig) outside the local chain 31337.";
 
     function _missing(string memory name) private pure returns (string memory) {
         return string.concat(

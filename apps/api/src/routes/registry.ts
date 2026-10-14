@@ -14,6 +14,7 @@ import {
 } from "@mpc/api-contract";
 import type { AppConfig } from "../config.js";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
+import { capRows } from "../list-window.js";
 import {
   assertAuthorized,
   sessionFacts,
@@ -22,6 +23,7 @@ import {
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
+import { assertActionNotRestricted } from "../restrictions.js";
 import {
   assertVersionMatches,
   etagOf,
@@ -59,6 +61,26 @@ import {
  * - An inclusion proof is returned with what it does **not** prove (AC-23).
  */
 
+/**
+ * Cap on the anchor batch list.
+ *
+ * A flag rather than pages: the screen polls every five seconds and is about recent batches.
+ * Past the cap the response says `truncated`, because an older batch that needs attention would
+ * otherwise vanish from the screen without a trace.
+ */
+const ANCHOR_BATCH_LIST_LIMIT = 100;
+
+/** One wording for a taken key, whether this tenant or another one holds it. */
+const REGISTRY_KEY_TAKEN_MESSAGE = "This public key belongs to another subject";
+
+function isRegistryKeyViolation(caught: unknown): boolean {
+  const error = caught as { code?: unknown; constraint_name?: unknown } | null;
+  return (
+    error?.code === "23505" &&
+    error.constraint_name === "registry_entries_registry_type_public_key_key"
+  );
+}
+
 export async function registerRegistryRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
@@ -93,12 +115,13 @@ export async function registerRegistryRoutes(
       const publisher = subjectOf(session);
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
           const draft = await lockDraft(tx, tenantId, request.params.draftId);
           if (!draft) throw notFound("Draft not found");
+          // A blackout on the project blocks publication (11 §11.12), checked at the publish step.
           assertVersionMatches(expectedDraftVersion, draft.version, "registry_publication_draft");
 
           if (draft.state !== "pending") {
@@ -142,6 +165,15 @@ export async function registerRegistryRoutes(
             tenantId,
             draft.registry_type,
             draft.subject_id,
+          );
+          // A blackout on the project blocks publication (11 §11.12) whatever the registry: a
+          // verification entry is about an attestation in that project.
+          await assertActionNotRestricted(
+            tx,
+            tenantId,
+            subject.projectId,
+            "registry.publish",
+            session.subjectId,
           );
           const staleFields = [
             ...(subject.sourceSnapshotHash === draft.source_snapshot_hash
@@ -206,11 +238,18 @@ export async function registerRegistryRoutes(
             WHERE registry_type = ${draft.registry_type} AND public_key = ${draft.public_key}
           `;
           if (existingEntry && existingEntry.subject_id !== draft.subject_id) {
-            throw conflict("REGISTRY_KEY_TAKEN", "This public key belongs to another subject");
+            throw conflict("REGISTRY_KEY_TAKEN", REGISTRY_KEY_TAKEN_MESSAGE);
           }
 
           const entryId = existingEntry?.id ?? randomUUID();
           if (!existingEntry) {
+            /**
+             * `UNIQUE (registry_type, public_key)` spans tenants on purpose: the public URL is
+             * `/registries/{type}/{publicKey}` with no tenant in it, so one key must name one
+             * entry. Another tenant's entry is invisible under RLS, so the lookup above misses it
+             * and the constraint is what refuses it — answered as the same conflict, in the same
+             * words, so the response does not reveal that another tenant holds the key.
+             */
             await tx`
               INSERT INTO core.registry_entries (
                 id, tenant_id, registry_type, subject_id, public_key
@@ -218,7 +257,12 @@ export async function registerRegistryRoutes(
                 ${entryId}, ${tenantId}, ${draft.registry_type}, ${draft.subject_id},
                 ${draft.public_key}
               )
-            `;
+            `.catch((caught: unknown) => {
+              if (isRegistryKeyViolation(caught)) {
+                throw conflict("REGISTRY_KEY_TAKEN", REGISTRY_KEY_TAKEN_MESSAGE);
+              }
+              throw caught;
+            });
           }
 
           const [previous] = await tx<{ id: string; version: number }[]>`
@@ -386,7 +430,7 @@ export async function registerRegistryRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -458,7 +502,7 @@ export async function registerRegistryRoutes(
     );
 
     const { requestId, asOf, correlationId } = request.context;
-    const requestHash = hashRequest(request.body ?? {});
+    const requestHash = hashRequest(request);
 
     return withTenant(sql, { tenantId }, (tx) =>
       withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -601,13 +645,16 @@ export async function registerRegistryRoutes(
         LEFT JOIN chain.transactions t ON t.batch_id = b.id
         LEFT JOIN chain.anchor_proposals p
           ON p.transaction_id = t.id AND p.state = 'proposed'
-        ORDER BY b.created_at DESC
-        LIMIT 100
+        ORDER BY b.created_at DESC, b.id DESC
+        LIMIT ${ANCHOR_BATCH_LIST_LIMIT + 1}
       `,
     );
+    const window = capRows(rows, ANCHOR_BATCH_LIST_LIMIT);
 
     return {
-      items: rows.map((row) => ({
+      truncated: window.truncated,
+      limit: window.limit,
+      items: window.items.map((row) => ({
         id: row.id,
         batchId: row.batch_id,
         root: row.merkle_root,
@@ -671,7 +718,7 @@ export async function registerRegistryRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body ?? {});
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {

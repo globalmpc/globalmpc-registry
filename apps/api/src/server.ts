@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type postgres from "postgres";
 import type { AppConfig } from "./config.js";
 import { registerRequestContext } from "./plugins/request-context.js";
@@ -7,6 +7,8 @@ import { registerSecurityHeaders } from "./plugins/security-headers.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProjectRoutes } from "./routes/projects.js";
+import { registerProjectPartyRoutes } from "./routes/project-parties.js";
+import { registerClaimDetailRoutes } from "./routes/claim-detail.js";
 import { registerEvidenceRoutes } from "./routes/evidence.js";
 import { registerVerificationRoutes } from "./routes/verification.js";
 import { registerReviewOptionRoutes } from "./routes/review-options.js";
@@ -15,10 +17,13 @@ import { registerRegistryRoutes } from "./routes/registry.js";
 import { registerPublicRoutes } from "./routes/public.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRoleRevocationRoutes } from "./routes/role-revocations.js";
+import { registerBreakGlassRoutes } from "./routes/break-glass.js";
+import { registerConnectionReviewRoutes } from "./routes/connection-review.js";
 import { registerReviewRegistryRoutes } from "./routes/review-registry.js";
 import { registerWorkspaceRoutes } from "./routes/workspace.js";
 import { registerLifecycleRoutes } from "./routes/lifecycle.js";
 import { registerObservabilityRoutes } from "./routes/observability.js";
+import { registerExportRoutes } from "./routes/exports.js";
 import { registerGovernanceRoutes, type GovernanceChain } from "./routes/governance.js";
 import { registerAuthorityRoutes } from "./routes/authorities.js";
 import { registerSecondReviewRoute, registerSourceCollectRoutes } from "./routes/source-collect.js";
@@ -26,6 +31,11 @@ import type { SourceFetch } from "./services/source-fetch.js";
 import { registerAuthorityAdminRoutes } from "./routes/authority-admin.js";
 import { registerStaleSignalRoutes } from "./routes/stale-signals.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
+import { registerDisclosureRestrictionRoutes } from "./routes/disclosure-restrictions.js";
+import { registerSourceReconciliationRoutes } from "./routes/source-reconciliation.js";
+import { registerBlockedAttemptRecorder } from "./restrictions.js";
+import { registerDocumentStatusRoutes } from "./routes/document-status.js";
+import { registerDocumentRevocationRoutes } from "./routes/document-revocation.js";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import { createMetricsRegistry } from "./metrics.js";
@@ -182,6 +192,8 @@ export async function buildServer(
 
   await registerRequestContext(app);
   await registerErrorHandler(app);
+  // Before any route: a blackout refusal from any route is kept in the history (AC-30).
+  registerBlockedAttemptRecorder(app, sql);
 
   /**
    * Security response headers — 10 §10.6.
@@ -229,9 +241,16 @@ export async function buildServer(
     request.clientIp = resolveEdgeClient(request.headers, request.ip);
   });
 
+  /**
+   * Public and authenticated routes count in separate pools (07 §7.1). The pool is chosen by
+   * the matched route, which is known before any session lookup.
+   */
+  const isPublicRoute = (request: FastifyRequest) =>
+    request.routeOptions.url?.startsWith("/api/v1/public/") === true;
+
   await app.register(rateLimit, {
     global: true,
-    max: config.rateLimitMax,
+    max: (request) => (isPublicRoute(request) ? config.publicRateLimitMax : config.rateLimitMax),
     timeWindow: "1 minute",
     /**
      * An unverified Bearer value is not an identity. Only the IP determined through the trusted
@@ -242,7 +261,7 @@ export async function buildServer(
       // Report the first moment the cap key falls to a private address. That state runs without
       // errors, so unless the server says so, nobody in deployment notices.
       warnUnroutableClient(request.clientIp);
-      return request.clientIp;
+      return isPublicRoute(request) ? `public:${request.clientIp}` : request.clientIp;
     },
     // Do not count the ops endpoint. The scrape interval would eat the cap.
     allowList: (request) =>
@@ -304,18 +323,23 @@ export async function buildServer(
   await registerHealthRoutes(app, sql, metrics, createOpsEndpointGuard(config.opsEndpointCidrs));
   await registerAuthRoutes(app, sql, config);
   await registerProjectRoutes(app, sql);
+  await registerProjectPartyRoutes(app, sql);
+  await registerClaimDetailRoutes(app, sql);
   await registerEvidenceRoutes(app, sql, objectStore);
   await registerVerificationRoutes(app, sql, config);
   await registerReviewOptionRoutes(app, sql);
-  await registerReadinessRoutes(app, sql);
+  await registerReadinessRoutes(app, sql, config);
   await registerRegistryRoutes(app, sql, config);
   await registerPublicRoutes(app, sql, config);
   await registerAdminRoutes(app, sql);
   await registerRoleRevocationRoutes(app, sql);
+  await registerBreakGlassRoutes(app, sql);
+  await registerConnectionReviewRoutes(app, sql);
   await registerReviewRegistryRoutes(app, sql);
   await registerWorkspaceRoutes(app, sql);
   await registerLifecycleRoutes(app, sql);
   await registerObservabilityRoutes(app, sql);
+  await registerExportRoutes(app, sql);
   await registerGovernanceRoutes(app, sql, governanceChain);
   await registerAuthorityRoutes(app, sql);
   await registerSourceCollectRoutes(app, sql, deps.fetchImpl, deps.resolveHost);
@@ -323,6 +347,10 @@ export async function buildServer(
   await registerSecondReviewRoute(app, sql);
   await registerStaleSignalRoutes(app, sql);
   await registerDocumentRoutes(app, sql);
+  await registerDisclosureRestrictionRoutes(app, sql);
+  await registerSourceReconciliationRoutes(app, sql);
+  await registerDocumentStatusRoutes(app, sql);
+  await registerDocumentRevocationRoutes(app, sql);
   // multipart is used only by the upload route. It is registered globally, but only one route
   // reads file parts, so body parsing for other routes is unaffected.
   await app.register(multipart);

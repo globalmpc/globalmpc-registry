@@ -1,12 +1,11 @@
-# MPC dApp — shared image for API, worker, and web
+# MPC dApp — API and web image; workers use deploy/workers.Dockerfile
 #
 # **The build context is the repository root.**
 #
 #   docker build -t mpc-dapp .
 #
-# One image holds all three processes; the run command picks one. Split images could drift
-# for the same commit, and in a monorepo you would have to track which ones to rebuild when a
-# shared package changes.
+# API and web share this image. Worker images are built independently from the same
+# repository and lockfile, with only their production dependency closure.
 #
 # **No secrets go into the build.** Image layers persist even after deletion. Every secret is
 # injected at runtime via `file:`/`env:` references (packages/config).
@@ -77,6 +76,5 @@ USER mpc
 
 # The process is chosen at run time:
 #   api    — pnpm --filter @mpc/api start
-#   worker — pnpm --filter @mpc/worker start:anchor
 #   web    — pnpm --filter @mpc/web exec next start
 CMD ["pnpm", "--filter", "@mpc/api", "start"]

@@ -50,6 +50,12 @@ function parseDate(value: string): Date | null {
 export interface CredentialFields {
   /** Issuing body and credential number. Must be strings a human can cross-check. */
   readonly issuerReference: string;
+  /**
+   * The issuing authority's record. Without it the credential cannot be a review basis: whether
+   * its issuer is accepted and recognized for a claim type cannot be asked of free text
+   * (AC-15·AC-16). Optional here because the bootstrap path may not know it yet.
+   */
+  readonly issuerAuthorityId?: string | null;
   /** `competent_person`·`laboratory`·`legal_practitioner`, etc. */
   readonly credentialType: string;
   /** Claim types this credential covers. Empty blocks signing. */
@@ -62,6 +68,7 @@ export interface CredentialFields {
 
 export interface ValidCredential {
   readonly issuerReference: string;
+  readonly issuerAuthorityId: string | null;
   readonly credentialType: string;
   readonly credentialScope: readonly string[];
   readonly jurisdiction: readonly string[];
@@ -87,6 +94,7 @@ export function validateCredential(input: CredentialFields, now: Date): Validate
 
   const fields = {
     issuerReference: input.issuerReference,
+    issuerAuthorityId: input.issuerAuthorityId ?? null,
     credentialType: input.credentialType,
     credentialScope: [...input.credentialScope],
     jurisdiction: [...input.jurisdiction],
@@ -159,12 +167,12 @@ export async function materializeCredential(tx: Tx, row: CredentialRow): Promise
   const { credential } = row;
   await tx`
     INSERT INTO core.credentials (
-      id, tenant_id, subject_id, organization_id, issuer_reference,
+      id, tenant_id, subject_id, organization_id, issuer_reference, issuer_authority_id,
       credential_type, credential_scope, jurisdiction, issued_at, expires_at,
       current_status
     ) VALUES (
       ${row.id}, ${row.tenantId}, ${row.subjectId}, ${row.organizationId},
-      ${credential.issuerReference}, ${credential.credentialType},
+      ${credential.issuerReference}, ${credential.issuerAuthorityId}, ${credential.credentialType},
       ${credential.credentialScope as string[]}, ${credential.jurisdiction as string[]},
       ${credential.issuedAt}, ${credential.expiresAt}, 'valid'
     )

@@ -9,6 +9,7 @@ import {
   getDocumentImpactPreview,
   newIdempotencyKey,
   removeDocumentLink,
+  revokeDocument,
   updateDocumentProfile,
   type DocumentGraph,
   type DocumentImpactPreview,
@@ -19,6 +20,7 @@ import {
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { DocumentTree } from "@/components/DocumentTree";
+import { TruncatedNotice } from "@/components/TruncatedNotice";
 import {
   KIND_EXPLANATION,
   KIND_LABEL,
@@ -63,6 +65,8 @@ export default function DocumentPage({
   const [removeFor, setRemoveFor] = useState<DocumentLink | null>(null);
   const [removeReason, setRemoveReason] = useState("");
 
+  const [revokeReason, setRevokeReason] = useState("");
+
   const [versionFile, setVersionFile] = useState<File | null>(null);
   // Both pickers feed the one pending version. A file input keeps its own selection, so picking
   // on one clears the other — otherwise the page shows two files while only the last is uploaded.
@@ -75,7 +79,9 @@ export default function DocumentPage({
     if (!token) return;
     try {
       const [graphData, previewData] = await Promise.all([
-        getDocumentGraph(token, id),
+        // Focused: this document and its neighbours come back even when they are older than the
+        // newest ones the graph carries. Without it an old document's page shows no links.
+        getDocumentGraph(token, id, uploadId),
         getDocumentImpactPreview(token, uploadId),
       ]);
       setGraph(graphData);
@@ -126,6 +132,7 @@ export default function DocumentPage({
     (node) =>
       node.uploadId !== uploadId &&
       node.supersededByUploadId === null &&
+      node.revokedAt === null &&
       !UNUSABLE_STATES.has(node.state),
   );
 
@@ -145,7 +152,10 @@ export default function DocumentPage({
   const profileChanged = Object.keys(profileChanges).length > 0;
 
   const replaced = self?.supersededByUploadId ?? null;
+  const revoked = self?.revokedAt ?? null;
   const usable = self ? !UNUSABLE_STATES.has(self.state) : false;
+  // A revoked document is kept as it was; only a corrected version moves things on.
+  const editable = usable && !revoked;
 
   return (
     <>
@@ -171,6 +181,14 @@ export default function DocumentPage({
           <div className="title">A newer version replaced this document</div>
           Its links moved to the new version. This page is kept so the history stays readable.{" "}
           <Link href={`/w/projects/${id}/documents/${replaced}`}>Open the current version →</Link>
+        </div>
+      ) : null}
+
+      {revoked ? (
+        <div className="notice" data-testid="document-revoked">
+          <div className="title">This document was revoked</div>
+          Reason: {self?.revocationReason}. It is kept on record, but nothing new can rest on it.
+          Upload a corrected version below — the links move to it once it is promoted.
         </div>
       ) : null}
 
@@ -223,7 +241,7 @@ export default function DocumentPage({
                 list="document-types"
                 maxLength={80}
                 value={typeDraft}
-                disabled={!usable}
+                disabled={!editable}
                 placeholder="e.g. Exploration license"
                 onChange={(event) => setTypeDraft(event.target.value)}
               />
@@ -241,11 +259,11 @@ export default function DocumentPage({
                 id="document-valid-until"
                 type="date"
                 value={validDraft}
-                disabled={!usable}
+                disabled={!editable}
                 onChange={(event) => setValidDraft(event.target.value)}
               />
             </div>
-            <button className="primary" type="submit" disabled={busy || !usable || !profileChanged}>
+            <button className="primary" type="submit" disabled={busy || !editable || !profileChanged}>
               Save profile
             </button>
           </form>
@@ -326,9 +344,19 @@ export default function DocumentPage({
         </div>
       ) : null}
 
-      {self && usable && !replaced ? (
+      {self && editable && !replaced ? (
         <div className="panel">
           <h2>Add a link</h2>
+          {graph?.truncated ? (
+            <TruncatedNotice
+              shown={graph.nodes.length}
+              total={graph.totalNodes}
+              noun="documents in the list below"
+              testId="link-candidates-truncated"
+            >
+              It holds the newest documents and the ones already linked to this one.
+            </TruncatedNotice>
+          ) : null}
           {candidates.length === 0 ? (
             <p className="sub" style={{ margin: 0 }}>
               No other current document in this project to link to.
@@ -536,6 +564,46 @@ export default function DocumentPage({
             </div>
             <button className="primary" type="submit" disabled={busy || versionFile === null}>
               Upload new version
+            </button>
+          </form>
+        </div>
+      ) : null}
+
+      {self && self.state === "promoted" && !revoked ? (
+        <div className="panel">
+          <h2>Revoke this document</h2>
+          <p className="sub" style={{ marginTop: 0 }}>
+            For a document found to be wrong — issued in error, forged, or signed with a key that
+            leaked. It is not deleted: it stays on record, marked, with your reason. The documents
+            resting on it are flagged for a second look, and nothing new can rest on it. This
+            cannot be undone; a correction is uploaded as a new version.
+          </p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void step(async (activeToken) => {
+                await revokeDocument(
+                  activeToken,
+                  uploadId,
+                  self.version,
+                  revokeReason.trim(),
+                  newIdempotencyKey(),
+                );
+                setRevokeReason("");
+              });
+            }}
+          >
+            <div className="field">
+              <label htmlFor="revoke-reason">Why this document is revoked</label>
+              <input
+                id="revoke-reason"
+                value={revokeReason}
+                maxLength={1000}
+                onChange={(event) => setRevokeReason(event.target.value)}
+              />
+            </div>
+            <button type="submit" disabled={busy || revokeReason.trim() === ""}>
+              Revoke document
             </button>
           </form>
         </div>

@@ -191,4 +191,19 @@ describeDb("public Registry list and search", () => {
     expect(response.statusCode).toBe(200);
     expect(ours(response.json().items)).toEqual([]);
   });
+
+  /**
+   * `registryType` is cast to the `core.registry_type` enum in the DB. An unknown value used to
+   * reach that cast and come back as a 500 `INTERNAL_ERROR` marked retryable — the caller sent a
+   * wrong path, and retrying it fails the same way.
+   */
+  it.each([
+    ["the list", "/api/v1/public/registries/foo"],
+    ["a single entry", "/api/v1/public/registries/foo/ANY-KEY"],
+  ])("rejects an unknown registryType on %s with a 400", async (_, url) => {
+    const response = await app.inject({ method: "GET", url });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "PATH_PARAM_INVALID", retryable: false });
+  });
 });

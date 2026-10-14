@@ -9,12 +9,13 @@ import {
   SOURCE_RESULTS,
   SOURCE_RESULT_BEHAVIOUR,
   computeClaimGrade,
-  type AttestationType,
   type EvidenceTier,
   type SourceResult,
   type VerificationState,
 } from "@mpc/domain";
-import { badRequest, notFound, unprocessable } from "../errors.js";
+import { correctClaimRequest } from "@mpc/api-contract";
+import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
+import { capRows } from "../list-window.js";
 import {
   assertAuthorized,
   projectResource,
@@ -31,6 +32,7 @@ import {
 } from "../services/source-verification.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
+import { recomputeGrade, setProvenanceCause } from "../services/claim-state.js";
 import {
   assertVersionMatches,
   requireIfMatch,
@@ -84,16 +86,32 @@ const createReceiptSchema = z.object({
   queryBasis: z.record(z.string()),
   endpointOrDocumentRef: z.string().min(1),
   authenticationMethod: z.enum(AUTHENTICATION_METHODS),
-  rawHash: hex32,
-  sourceSchemaVersion: z.string().min(1),
-  adapterVersion: z.string().min(1),
+  /**
+   * Hash of the original the requester holds — REQ-DAPP-049.
+   *
+   * `null` when no original was received (source unavailable, no answer): absent is recorded
+   * as absent. 32 zero bytes are refused because they read as the hash of an original that does
+   * not exist. When `documentUploadId` is sent, the server takes the document's hash instead.
+   */
+  rawHash: hex32
+    .refine((value) => !/^0x0{64}$/.test(value), "A zero hash stands for no original; send null")
+    .nullable()
+    .default(null),
+  /**
+   * Terms, reuse, disclosure and versions belong to the connection. Sent values override (a
+   * manual record may rest on a different document); omitted ones come from the connection
+   * instead of a value the screen made up.
+   */
+  sourceSchemaVersion: z.string().min(1).optional(),
+  adapterVersion: z.string().min(1).optional(),
   normalizationVersion: z.string().nullable().default(null),
-  termsLicense: z.string().min(1),
-  commercialReuse: z.enum(["confirmed", "unconfirmed", "prohibited"]),
-  disclosurePermission: z.enum(["public", "restricted", "confidential", "pii", "whistleblower"]),
+  termsLicense: z.string().min(1).optional(),
+  commercialReuse: z.enum(["confirmed", "unconfirmed", "prohibited"]).optional(),
+  disclosurePermission: z
+    .enum(["public", "restricted", "confidential", "pii", "whistleblower"])
+    .optional(),
   asOf: z.string().datetime(),
   effectiveAt: z.string().datetime().nullable().default(null),
-  freshnessStatus: z.enum(["fresh", "aging", "stale", "unknown"]),
   /**
    * Per-channel evidence **inputs** — AC-29.
    *
@@ -136,6 +154,13 @@ const createClaimSchema = z
      */
     sourceReceiptId: z.string().uuid().nullable().default(null),
     evidenceTier: z.enum(["P1", "P2", "P3", "P4", "P5"]).nullable().default(null),
+    /**
+     * Accepted only as `unreviewed`, and `attestationTypes` only empty (REQ-DAPP-004).
+     *
+     * These used to be taken from the submitter as given, so a claim could arrive already
+     * `independently_assured` with attestations nobody signed. The fields stay in the request so
+     * that a client still sending them is told why, instead of having them silently dropped.
+     */
     verificationState: z
       .enum([
         "unreviewed",
@@ -177,7 +202,7 @@ interface ReceiptRow {
   authority_id: string;
   collection_method: string;
   result: SourceResult;
-  raw_hash: string;
+  raw_hash: string | null;
   source_schema_version: string;
   adapter_version: string;
   terms_license: string;
@@ -188,6 +213,7 @@ interface ReceiptRow {
   freshness_status: string;
   correlation_id: string;
   limitations: string[];
+  processing_state?: string | null;
 }
 
 function toReceiptView(row: ReceiptRow, requestId: string, asOf: string) {
@@ -214,6 +240,8 @@ function toReceiptView(row: ReceiptRow, requestId: string, asOf: string) {
     freshnessStatus: row.freshness_status,
     correlationId: row.correlation_id,
     limitations: row.limitations,
+    // Set by the DB on insert (0061). `quarantined` values must not be read as observations.
+    processingState: row.processing_state ?? null,
     requestId,
     responseAsOf: asOf,
   };
@@ -234,6 +262,8 @@ interface ClaimRow {
   source_receipt_id: string | null;
   stale_since: Date | null;
   stale_reason: string | null;
+  supersedes_claim_id: string | null;
+  superseded_by_claim_id: string | null;
   version: number;
 }
 
@@ -261,50 +291,12 @@ function toClaimView(row: ClaimRow, requestId: string, asOf: string) {
     stale: row.stale_since !== null,
     staleSince: row.stale_since?.toISOString() ?? null,
     staleReason: row.stale_reason,
+    supersedesClaimId: row.supersedes_claim_id,
+    supersededByClaimId: row.superseded_by_claim_id,
     version: row.version,
     requestId,
     responseAsOf: asOf,
   };
-}
-
-/** Recomputes the grade from the claim's attestation and conflict state. */
-async function recomputeGrade(
-  tx: postgres.TransactionSql,
-  claimId: string,
-): Promise<string> {
-  const [claim] = await tx<
-    {
-      evidence_tier: EvidenceTier | null;
-      verification_state: VerificationState;
-      excluded_by_rule: boolean;
-    }[]
-  >`
-    SELECT evidence_tier, verification_state, excluded_by_rule
-    FROM core.claims WHERE id = ${claimId}
-  `;
-  if (!claim) throw notFound("Claim not found");
-
-  const attestations = await tx<{ attestation_type: AttestationType }[]>`
-    SELECT DISTINCT a.attestation_type
-    FROM core.verification_attestations a
-    WHERE ${claimId}::uuid = ANY(a.claim_scope) AND a.state IN ('signed', 'active')
-  `;
-
-  const [conflicts] = await tx<{ count: string }[]>`
-    SELECT count(*)::text AS count FROM core.claim_conflicts
-    WHERE claim_id = ${claimId} AND resolved_at IS NULL
-  `;
-
-  const grade = computeClaimGrade({
-    verificationState: claim.verification_state,
-    evidenceTier: claim.evidence_tier,
-    attestationTypes: attestations.map((row) => row.attestation_type),
-    unresolvedConflictCount: Number(conflicts?.count ?? "0"),
-    excludedByRule: claim.excluded_by_rule,
-  });
-
-  await tx`UPDATE core.claims SET grade = ${grade}, version = version + 1 WHERE id = ${claimId}`;
-  return grade;
 }
 
 /**
@@ -349,6 +341,7 @@ interface UploadForVerification {
   readonly content_type: string;
   readonly byte_size: string;
   readonly state: string;
+  readonly revoked_at: Date | null;
 }
 
 /** Upload states usable as confirmation evidence. An unscanned file is not evidence. */
@@ -360,7 +353,7 @@ async function loadVerifiableUpload(
   uploadId: string,
 ): Promise<UploadForVerification> {
   const [upload] = await tx<UploadForVerification[]>`
-    SELECT id, object_key, content_hash, content_type, byte_size, state::text AS state
+    SELECT id, object_key, content_hash, content_type, byte_size, state::text AS state, revoked_at
     FROM core.object_uploads
     WHERE id = ${uploadId} AND project_id = ${projectId}
   `;
@@ -373,6 +366,13 @@ async function loadVerifiableUpload(
       "An upload that has not passed scanning cannot be confirmation evidence",
       { state: upload.state, nextAction: "Retry after scanning completes" },
     );
+  }
+  if (upload.revoked_at !== null) {
+    // A revoked document cannot be an active basis (04 §4.6 rule 3), however valid its signature.
+    throw unprocessable("UPLOAD_REVOKED", "A revoked document cannot be confirmation evidence", {
+      revokedAt: upload.revoked_at.toISOString(),
+      nextAction: "Use the corrected version of this document",
+    });
   }
   return upload;
 }
@@ -596,6 +596,16 @@ async function extractBulkEvidence(
   };
 }
 
+/**
+ * Caps on the Data Room's receipt and claim panels.
+ *
+ * A flag rather than pages: both are panels on a screen whose document list already pages,
+ * and a project carries far fewer of these than documents. Past the cap the response says
+ * `truncated` and `total`, so the panel can say rows were left out.
+ */
+const SOURCE_RECEIPT_LIMIT = 100;
+const CLAIM_LIMIT = 200;
+
 export async function registerEvidenceRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
@@ -615,18 +625,27 @@ export async function registerEvidenceRoutes(
         sessionFacts(session),
       );
 
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
-        tx<ReceiptRow[]>`
+      const { rows, total } = await withTenant(sql, { tenantId }, async (tx) => {
+        const page = await tx<ReceiptRow[]>`
           SELECT * FROM core.source_receipts
           WHERE project_id = ${request.params.projectId}
-          ORDER BY as_of DESC LIMIT 100
-        `,
-      );
+          ORDER BY as_of DESC, id DESC LIMIT ${SOURCE_RECEIPT_LIMIT + 1}
+        `;
+        const [count] = await tx<{ total: number }[]>`
+          SELECT count(*)::int AS total FROM core.source_receipts
+          WHERE project_id = ${request.params.projectId}
+        `;
+        return { rows: page, total: count?.total ?? 0 };
+      });
+      const window = capRows(rows, SOURCE_RECEIPT_LIMIT);
 
       return {
-        items: rows.map((row) =>
+        items: window.items.map((row) =>
           toReceiptView(row, request.context.requestId, request.context.asOf),
         ),
+        truncated: window.truncated,
+        limit: window.limit,
+        total,
         requestId: request.context.requestId,
         asOf: request.context.asOf,
       };
@@ -637,6 +656,23 @@ export async function registerEvidenceRoutes(
     "/api/v1/projects/:projectId/source-receipts",
     async (request) => {
       const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+
+      /**
+       * Freshness is the server's to compute — REQ-DAPP-049.
+       *
+       * A requester writing `fresh` states an age nobody measured. Refused rather than ignored,
+       * so a caller that still sends it learns why its value is not what was stored.
+       */
+      if (
+        request.body !== null &&
+        typeof request.body === "object" &&
+        "freshnessStatus" in (request.body as Record<string, unknown>)
+      ) {
+        throw badRequest(
+          "FRESHNESS_IS_SERVER_COMPUTED",
+          "freshnessStatus is computed by the server and cannot be sent",
+        );
+      }
 
       const parsed = createReceiptSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -653,12 +689,38 @@ export async function registerEvidenceRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
           const id = randomUUID();
           const data = parsed.data;
+
+          // The receipt is bound to a real connection of this tenant and to that connection's
+          // authority. Naming another authority would attribute the answer to someone else.
+          const [connection] = await tx<
+            {
+              authority_id: string;
+              terms_license: string;
+              commercial_reuse: string;
+              disclosure_permission: string;
+              source_schema_version: string;
+              adapter_version: string;
+            }[]
+          >`
+            SELECT authority_id, terms_license, commercial_reuse,
+                   disclosure_permission::text AS disclosure_permission,
+                   source_schema_version, adapter_version
+            FROM core.source_connections WHERE id = ${data.connectionId}
+          `;
+          if (!connection) throw notFound("Connection not found");
+          if (connection.authority_id !== data.authorityId) {
+            throw unprocessable(
+              "CONNECTION_AUTHORITY_MISMATCH",
+              "The authority is not the one this connection reaches",
+              { connectionAuthorityId: connection.authority_id },
+            );
+          }
 
           /**
            * The server produces confirmation evidence — AC-29.
@@ -708,11 +770,32 @@ export async function registerEvidenceRoutes(
           /**
            * Binds the raw hash to the document.
            *
-           * The requester-supplied `rawHash` is not used on the confirmation path — if that value
-           * were unrelated to the document, "re-fetch the original for this hash and compare"
-           * would not hold.
+           * With a referenced document — on any result — the hash is the document's, taken from
+           * the scanned upload. A requester hash that disagrees is refused rather than replaced:
+           * if that value were unrelated to the document, "re-fetch the original for this hash
+           * and compare" would not hold, and silently swapping it hides the disagreement.
            */
-          const rawHash = evidence.rawHash ?? data.rawHash;
+          const documentHash =
+            evidence.rawHash ??
+            (data.documentUploadId
+              ? (await loadVerifiableUpload(tx, request.params.projectId, data.documentUploadId))
+                  .content_hash
+              : null);
+          if (documentHash !== null && data.rawHash !== null && data.rawHash !== documentHash) {
+            throw unprocessable(
+              "RAW_HASH_DOCUMENT_MISMATCH",
+              "The raw hash does not match the referenced document",
+              { documentHash },
+            );
+          }
+          const rawHash = documentHash ?? data.rawHash;
+
+          /**
+           * Freshness is computed here, not sent. How old is too old is a per-source rule the
+           * jurisdiction profile owns (OD-16 is still pending), and without that rule the only
+           * honest value is `unknown`.
+           */
+          const freshnessStatus = "unknown";
 
           const [receipt] = await tx<ReceiptRow[]>`
             INSERT INTO core.source_receipts (
@@ -726,10 +809,13 @@ export async function registerEvidenceRoutes(
               ${id}, ${tenantId}, ${request.params.projectId}, ${data.connectionId},
               ${data.authorityId}, ${data.collectionMethod}, ${data.result},
               ${tx.json(data.queryBasis)}, ${data.endpointOrDocumentRef},
-              ${data.authenticationMethod}, ${rawHash}, ${data.sourceSchemaVersion},
-              ${data.adapterVersion}, ${data.normalizationVersion}, ${data.termsLicense},
-              ${data.commercialReuse}, ${data.disclosurePermission},
-              now(), ${data.asOf}, ${data.effectiveAt}, ${data.freshnessStatus},
+              ${data.authenticationMethod}, ${rawHash},
+              ${data.sourceSchemaVersion ?? connection.source_schema_version},
+              ${data.adapterVersion ?? connection.adapter_version}, ${data.normalizationVersion},
+              ${data.termsLicense ?? connection.terms_license},
+              ${data.commercialReuse ?? connection.commercial_reuse},
+              ${data.disclosurePermission ?? connection.disclosure_permission},
+              now(), ${data.asOf}, ${data.effectiveAt}, ${freshnessStatus},
               ${correlationId}, ${data.limitations},
               ${tx.json(channelEvidence as never)}, ${session.subjectId}
             )
@@ -780,16 +866,27 @@ export async function registerEvidenceRoutes(
         sessionFacts(session),
       );
 
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
-        tx<ClaimRow[]>`
+      const { rows, total } = await withTenant(sql, { tenantId }, async (tx) => {
+        const page = await tx<ClaimRow[]>`
           SELECT * FROM core.claims
           WHERE project_id = ${request.params.projectId}
-          ORDER BY claim_type LIMIT 200
-        `,
-      );
+          ORDER BY claim_type, id LIMIT ${CLAIM_LIMIT + 1}
+        `;
+        const [count] = await tx<{ total: number }[]>`
+          SELECT count(*)::int AS total FROM core.claims
+          WHERE project_id = ${request.params.projectId}
+        `;
+        return { rows: page, total: count?.total ?? 0 };
+      });
+      const window = capRows(rows, CLAIM_LIMIT);
 
       return {
-        items: rows.map((row) => toClaimView(row, request.context.requestId, request.context.asOf)),
+        items: window.items.map((row) =>
+          toClaimView(row, request.context.requestId, request.context.asOf),
+        ),
+        truncated: window.truncated,
+        limit: window.limit,
+        total,
         requestId: request.context.requestId,
         asOf: request.context.asOf,
       };
@@ -816,32 +913,43 @@ export async function registerEvidenceRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
           const id = randomUUID();
           const data = parsed.data;
 
+          // The verification state is an outcome of review; a submitter cannot declare it.
+          if (data.verificationState !== "unreviewed" || data.attestationTypes.length > 0) {
+            throw unprocessable(
+              "CLAIM_ASSESSMENT_NOT_SETTABLE",
+              "A claim starts unreviewed. Its verification state moves only when an attestation is signed, revoked or superseded",
+              { verificationState: data.verificationState, attestationTypes: data.attestationTypes },
+            );
+          }
+
           // Domain rules compute the grade.
           const grade = computeClaimGrade({
-            verificationState: data.verificationState,
+            verificationState: "unreviewed",
             evidenceTier: data.evidenceTier,
-            attestationTypes: data.attestationTypes,
+            attestationTypes: [],
             unresolvedConflictCount: 0,
             excludedByRule: false,
           });
 
+          await setProvenanceCause(tx, "claim_submitted", session.subjectId ?? null);
+          // `submitted_by` is what lets 02 §2.4 rule 1 tell whether a reviewer judges their own evidence.
           const [claim] = await tx<ClaimRow[]>`
             INSERT INTO core.claims (
               id, tenant_id, project_id, claim_type, value_text, unit, as_of,
               source_coordinate, evidence_tier, verification_state, grade,
-              source_receipt_id
+              source_receipt_id, submitted_by
             ) VALUES (
               ${id}, ${tenantId}, ${request.params.projectId}, ${data.claimType},
               ${data.valueText}, ${data.unit}, ${data.asOf},
               ${tx.json(data.sourceCoordinate)}, ${data.evidenceTier},
-              ${data.verificationState}, ${grade}, ${data.sourceReceiptId}
+              'unreviewed', ${grade}, ${data.sourceReceiptId}, ${session.subjectId ?? null}
             )
             RETURNING *
           `;
@@ -899,7 +1007,7 @@ export async function registerEvidenceRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -944,6 +1052,136 @@ export async function registerEvidenceRoutes(
             aggregateId: request.params.claimId,
             aggregateVersion: claim!.version,
             payload: { grade, reason: "conflict_recorded" },
+            correlationId,
+          });
+
+          return toClaimView(claim!, requestId, asOf);
+        }),
+      );
+    },
+  );
+
+  /**
+   * Corrects a claim — REQ-DAPP-006, invariant 4.
+   *
+   * The old claim is not edited (migration 0063 rejects it). The correction is a new claim of the
+   * same type that supersedes it; the old one records its successor and is marked stale, which
+   * moves active attestations over it to re-review (AC-21). The new version starts `unreviewed`:
+   * its value is new and no one has reviewed it.
+   */
+  app.post<{ Params: { claimId: string } }>(
+    "/api/v1/claims/:claimId/versions",
+    async (request) => {
+      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const expectedVersion = requireIfMatch(request);
+
+      const parsed = correctClaimRequest.safeParse(request.body);
+      if (!parsed.success) {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
+          issues: parsed.error.issues,
+        });
+      }
+      const data = parsed.data;
+      if (/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(data.valueText) && !data.unit?.trim()) {
+        throw badRequest("REQUEST_INVALID", "A numeric claim requires a unit");
+      }
+
+      const projectId = await claimProjectId(sql, tenantId, request.params.claimId);
+      const effectiveRole = assertAuthorized(
+        session,
+        "claim.curate",
+        projectResource(tenantId, projectId),
+        sessionFacts(session),
+      );
+
+      const { requestId, asOf, correlationId } = request.context;
+
+      return withTenant(sql, { tenantId }, (tx) =>
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+          const [previous] = await tx<(ClaimRow & { superseded_by_claim_id: string | null })[]>`
+            SELECT * FROM core.claims WHERE id = ${request.params.claimId} FOR UPDATE
+          `;
+          if (!previous) throw notFound("Claim not found");
+          assertVersionMatches(expectedVersion, previous.version, "claim");
+          if (previous.superseded_by_claim_id !== null) {
+            throw conflict("CLAIM_ALREADY_SUPERSEDED", "This claim was already corrected", {
+              supersededByClaimId: previous.superseded_by_claim_id,
+            });
+          }
+
+          const id = randomUUID();
+          const grade = computeClaimGrade({
+            verificationState: "unreviewed",
+            evidenceTier: data.evidenceTier,
+            attestationTypes: [],
+            unresolvedConflictCount: 0,
+            excludedByRule: false,
+          });
+
+          await setProvenanceCause(tx, `claim_corrected:${previous.id}`, session.subjectId ?? null);
+          const [claim] = await tx<ClaimRow[]>`
+            INSERT INTO core.claims (
+              id, tenant_id, project_id, claim_type, value_text, unit, as_of,
+              source_coordinate, evidence_tier, verification_state, grade,
+              source_receipt_id, submitted_by, supersedes_claim_id, correction_reason
+            ) VALUES (
+              ${id}, ${tenantId}, ${projectId}, ${previous.claim_type},
+              ${data.valueText}, ${data.unit}, ${data.asOf},
+              ${tx.json(data.sourceCoordinate)}, ${data.evidenceTier},
+              'unreviewed', ${grade}, ${data.sourceReceiptId}, ${session.subjectId ?? null},
+              ${previous.id}, ${data.reason}
+            )
+            RETURNING *
+          `;
+
+          // Stale, so the propagation trigger (0023) sends active attestations over the old value
+          // to re-review. Its signatures and history stay.
+          await tx`
+            UPDATE core.claims
+            SET superseded_by_claim_id = ${id}, superseded_at = now(),
+                stale_since = coalesce(stale_since, now()),
+                stale_reason = coalesce(stale_reason, ${`Superseded by claim ${id}: ${data.reason}`}),
+                version = version + 1
+            WHERE id = ${previous.id}
+          `;
+
+          await tx`
+            INSERT INTO core.lineage_edges (id, tenant_id, from_id, to_id, relation_type)
+            VALUES (${randomUUID()}, ${tenantId}, ${id}, ${previous.id}, 'supersedes')
+          `;
+
+          await recordAudit(tx, {
+            effectiveRole,
+            tenantId,
+            projectId,
+            session,
+            command: "claim.corrected",
+            resourceType: "claim",
+            resourceId: id,
+            beforeVersion: previous.version,
+            afterVersion: 1,
+            reason: data.reason,
+            correlationId,
+            requestIp: request.clientIp,
+            detail: { supersedesClaimId: previous.id, claimType: previous.claim_type, grade },
+          });
+
+          await enqueueEvent(tx, {
+            tenantId,
+            eventType: "evidence.version.superseded",
+            aggregateId: previous.id,
+            aggregateVersion: previous.version + 1,
+            projectId,
+            payload: { claimId: previous.id, supersededBy: id },
+            correlationId,
+          });
+          await enqueueEvent(tx, {
+            tenantId,
+            eventType: "provenance.grade.changed",
+            aggregateId: id,
+            aggregateVersion: 1,
+            projectId,
+            payload: { claimType: previous.claim_type, grade, supersedesClaimId: previous.id },
             correlationId,
           });
 

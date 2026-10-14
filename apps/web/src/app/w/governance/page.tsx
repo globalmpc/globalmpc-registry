@@ -19,6 +19,7 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { GovernanceCentralizationPanel } from "@/components/GovernanceCentralization";
 
 /** Proposal types per space — the domain's allowlists (09 §9.2·§9.3). */
@@ -58,6 +59,8 @@ export default function GovernancePage() {
    * votes cast as the denominator always meets quorum, so `no_quorum` could never occur.
    */
   const [eligibleWeight, setEligibleWeight] = useState("");
+  // The server caps the list and says so.
+  const [truncated, setTruncated] = useState(false);
   const [reason, setReason] = useState("");
   const [space, setSpace] = useState<"protocol" | "project">("protocol");
   const [projectId, setProjectId] = useState("");
@@ -77,7 +80,9 @@ export default function GovernancePage() {
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      setProposals((await listProposals(token)).items);
+      const page = await listProposals(token);
+      setProposals(page.items);
+      setTruncated(page.truncated);
       setError(null);
     } catch (caught) {
       setError(caught);
@@ -147,6 +152,10 @@ export default function GovernancePage() {
       </div>
 
       {error ? <ErrorNotice error={error} /> : null}
+
+      {truncated ? (
+        <TruncatedNotice shown={proposals.length} noun="proposals, newest first" testId="proposals-truncated" />
+      ) : null}
 
       <div className="notice" style={{ color: "var(--alert)" }} data-testid="governance-boundary">
         <div className="title">What this decision does not create</div>

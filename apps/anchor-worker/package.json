@@ -1,0 +1,21 @@
+{
+  "name": "@mpc/anchor-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mpc/config": "workspace:*",
+    "@mpc/db": "workspace:*",
+    "postgres": "^3.4.9",
+    "tsx": "4.23.15",
+    "viem": "2.57.5"
+  }
+}

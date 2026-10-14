@@ -36,12 +36,30 @@ is no way back from that except changing the address.
 ### 1. Confirm what is being deployed
 
 ```bash
+# Start at the repository root, on the release commit validated in staging.
+foundryup --install v1.8.5
+git submodule update --init --recursive
+pnpm install --frozen-lockfile
+
+# Record these with the staging and production build evidence.
+forge --version
+git submodule status --recursive
+pnpm why @openzeppelin/contracts
+
 cd contracts
 forge build --sizes
 forge test -vv        # every test must pass
 ```
 
 The commit deployed must be **the commit that ran on staging.** Record `git rev-parse HEAD`.
+Staging must have run the build using **Foundry 1.8.5, OpenZeppelin Contracts 5.6.1 and
+forge-std v1.17.0**, with Solidity 0.8.28 and the compiler settings in `foundry.toml`.
+Check the recorded tool version, lockfile and submodule revision against that staging build.
+
+Treat the move from OpenZeppelin 5.4.0 to 5.6.1 as a new dependency build requiring staging
+validation. Unchanged application Solidity sources alone do not establish that compiled
+bytecode is unchanged. Validation of the earlier dependency set does not validate this one;
+complete staging validation again before promoting it.
 
 ### 2. Prepare the role addresses
 
@@ -50,6 +68,9 @@ export ANCHOR_ADMIN=0x...      # Safe multisig
 export ANCHOR_SUBMITTER=0x...  # Safe multisig
 export ANCHOR_PAUSER=0x...     # security response organization
 ```
+
+Outside the local chain (31337) the script reverts unless `ANCHOR_SUBMITTER` has contract code.
+Deploy the Safe first; an EOA or a Safe address not yet deployed is refused.
 
 If the three are the same, the script prints `WARNING: single-key deployment. Local/testnet only.`
 **Stop if that warning appears** — on mainnet, that layout is not the intent.

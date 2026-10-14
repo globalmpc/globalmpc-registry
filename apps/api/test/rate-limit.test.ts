@@ -82,6 +82,50 @@ describe("pre-validation request cap", () => {
 });
 
 /**
+ * Public and authenticated routes count in separate pools — 07 §7.1.
+ *
+ * Runs without a DB like the group above: only the status that decides "capped or not" matters.
+ */
+describe("separate public and authenticated pools", () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    const fakeSql = (async () => []) as unknown as postgres.Sql;
+    app = await buildServer(
+      loadConfig(
+        testEnv({
+          DATABASE_URL: "postgres://unused",
+          RATE_LIMIT_MAX: "2",
+          PUBLIC_RATE_LIMIT_MAX: "1",
+          AUTH_RATE_LIMIT_MAX: "2",
+        }),
+      ),
+      fakeSql,
+    );
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const from = { "x-forwarded-for": "203.0.113.30" };
+  const publicRead = () =>
+    app.inject({ method: "GET", url: "/api/v1/public/registries/project", headers: from });
+  const sessionRead = () =>
+    app.inject({ method: "GET", url: "/api/v1/auth/session", headers: from });
+
+  it("each pool has its own cap, and using up one leaves the other", async () => {
+    expect((await publicRead()).statusCode).not.toBe(429);
+    expect((await publicRead()).statusCode).toBe(429);
+
+    // Same IP, other pool: still open up to its own cap.
+    expect((await sessionRead()).statusCode).toBe(200);
+    expect((await sessionRead()).statusCode).toBe(200);
+    expect((await sessionRead()).statusCode).toBe(429);
+  });
+});
+
+/**
  * Request cap — 06 §6.9.
  *
  * The contract states that unauthenticated paths have a separate cap. Other tests run

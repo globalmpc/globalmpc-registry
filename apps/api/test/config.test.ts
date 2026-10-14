@@ -18,6 +18,14 @@ describe("loadConfig", () => {
     expect(config.siweDomain).toBe("localhost:3000");
   });
 
+  it("the public route cap defaults to the authenticated cap and can be set apart", () => {
+    // Splitting the pools must not by itself change the numbers a deployment runs with.
+    expect(loadConfig({ ...VALID, RATE_LIMIT_MAX: "120" }).publicRateLimitMax).toBe(120);
+    expect(
+      loadConfig({ ...VALID, RATE_LIMIT_MAX: "120", PUBLIC_RATE_LIMIT_MAX: "40" }),
+    ).toMatchObject({ rateLimitMax: 120, publicRateLimitMax: 40 });
+  });
+
   /**
    * Deploy platforms inject declared variables as empty strings even with no value. A compose-based
    * platform may inject the variable list extracted from compose into every container, so the

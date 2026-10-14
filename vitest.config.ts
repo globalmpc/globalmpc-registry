@@ -1,8 +1,30 @@
 import { defineConfig } from "vitest/config";
+import { readdirSync, readFileSync } from "node:fs";
+
+// Referenced directories do not inherit the root configuration in Vitest 5.
+// Inline projects retain the shared single-worker budget across every DB suite.
+const roots = [
+  ...readdirSync("packages", { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `packages/${entry.name}`),
+  "apps/api", "apps/jobs-worker", "apps/anchor-worker", "apps/scan-worker",
+];
 
 export default defineConfig({
   test: {
-    projects: ["packages/*", "apps/api", "apps/worker", "apps/web"],
+    projects: [
+      ...roots.map((root) => ({
+        extends: true as const,
+        test: {
+          root,
+          name: JSON.parse(readFileSync(`${root}/package.json`, "utf8")).name as string,
+        },
+      })),
+      {
+        extends: "./apps/web/vitest.config.ts",
+        test: { root: "apps/web", fileParallelism: false, maxWorkers: 1 },
+      },
+    ],
     /**
      * The DB tests share one PostgreSQL instance.
      * `packages/db` verifies the schema lifecycle itself and therefore runs DROP SCHEMA;
@@ -20,6 +42,5 @@ export default defineConfig({
      */
     fileParallelism: false,
     maxWorkers: 1,
-    minWorkers: 1,
   },
 });

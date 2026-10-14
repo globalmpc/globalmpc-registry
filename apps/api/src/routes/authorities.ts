@@ -43,8 +43,35 @@ interface AuthorityRow {
   readonly state: string;
   readonly valid_from: Date;
   readonly valid_until: Date | null;
+  readonly connection_id: string | null;
   readonly connection_key: string | null;
   readonly connection_state: string | null;
+  readonly stage_since: Date | null;
+  readonly reconciliation_required: boolean;
+}
+
+/**
+ * The stages 12 §12.13 R5 gate item 8 asks evidence for, plus the two exits and "no connection".
+ * Every stage is counted on its own — folding `tested` into `active` is the overstatement the
+ * gate forbids.
+ */
+const INTEGRATION_STAGES = [
+  "planned",
+  "feasibility_checked",
+  "access_confirmed",
+  "tested",
+  "active",
+  "degraded",
+  "disabled",
+  "none",
+] as const;
+type IntegrationStage = (typeof INTEGRATION_STAGES)[number];
+
+function toStage(connectionState: string | null): IntegrationStage {
+  // An unknown value is never shown as a stage it did not reach.
+  return (INTEGRATION_STAGES as readonly string[]).includes(connectionState ?? "none")
+    ? ((connectionState ?? "none") as IntegrationStage)
+    : "planned";
 }
 
 function toView(row: AuthorityRow) {
@@ -79,11 +106,30 @@ function toView(row: AuthorityRow) {
     validUntil: row.valid_until?.toISOString().slice(0, 10) ?? null,
     adapterState,
     adapterStateReason: reason || null,
+    // The Data Room records receipts against a connection the user picks from this list, not a
+    // fixed demo id — so the id is part of the view.
+    connectionId: row.connection_id,
+    integrationStage: toStage(row.connection_state),
+    integrationStageSince: row.stage_since?.toISOString() ?? null,
+    reconciliationRequired: row.reconciliation_required,
     connectionKey: row.connection_key,
     callable: availability.callable,
     nextAction: availability.callable ? null : availability.nextAction,
   };
 }
+
+/**
+ * When the current stage was reached, and whether a reconciliation task is open.
+ *
+ * Read from the stage history (0060). A connection whose history does not reach back returns
+ * null rather than its creation time — the creation time is not when the stage was reached.
+ */
+const STAGE_EVIDENCE_COLUMNS = `
+  (SELECT max(t.occurred_at) FROM core.source_connection_transitions t
+    WHERE t.connection_id = c.id AND t.to_state = c.state) AS stage_since,
+  EXISTS (SELECT 1 FROM core.source_reconciliation_tasks r
+    WHERE r.connection_id = c.id AND r.state = 'open') AS reconciliation_required
+`;
 
 const PROFILE_LIMITATIONS = [
   "Connection state reflects access only; it does not mean the source vouches for the facts",
@@ -111,7 +157,8 @@ export async function registerAuthorityRoutes(
         SELECT a.id, a.name, a.jurisdiction, a.proves, a.does_not_prove,
                a.recognized_scope, a.verification_method, a.state,
                a.valid_from, a.valid_until,
-               c.connection_key, c.state::text AS connection_state
+               c.id AS connection_id, c.connection_key, c.state::text AS connection_state,
+               ${tx.unsafe(STAGE_EVIDENCE_COLUMNS)}
         FROM core.authorities a
         LEFT JOIN core.source_connections c ON c.authority_id = a.id
         ORDER BY a.jurisdiction, a.name
@@ -200,7 +247,8 @@ export async function registerAuthorityRoutes(
           SELECT a.id, a.name, a.jurisdiction, a.proves, a.does_not_prove,
                  a.recognized_scope, a.verification_method, a.state,
                  a.valid_from, a.valid_until,
-                 c.connection_key, c.state::text AS connection_state
+                 c.id AS connection_id, c.connection_key, c.state::text AS connection_state,
+                 ${tx.unsafe(STAGE_EVIDENCE_COLUMNS)}
           FROM core.authorities a
           LEFT JOIN core.source_connections c ON c.authority_id = a.id
           WHERE a.jurisdiction = ${request.params.jurisdiction.toUpperCase()}
@@ -218,6 +266,12 @@ export async function registerAuthorityRoutes(
         pendingCount: authorities.filter((item) =>
           ["pending_access", "blocked", "none"].includes(item.adapterState),
         ).length,
+        stageCounts: Object.fromEntries(
+          INTEGRATION_STAGES.map((stage) => [
+            stage,
+            authorities.filter((item) => item.integrationStage === stage).length,
+          ]),
+        ),
         limitations: [...PROFILE_LIMITATIONS],
         requestId,
         asOf,

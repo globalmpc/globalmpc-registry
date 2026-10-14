@@ -49,6 +49,7 @@ export type GateDenyReason =
   | "GATE_GAP_BLOCKS_GO"
   | "GATE_NOT_EVALUABLE_BLOCKS_GO"
   | "GATE_WATCH_REQUIRES_RATIONALE"
+  | "GATE_WATCH_REQUIRES_CONDITIONS"
   | "GATE_MISSING_ASSESSMENT";
 
 export interface GateDecisionRequest {
@@ -58,6 +59,13 @@ export interface GateDecisionRequest {
   readonly hasAssessment: boolean;
   /** Required when promoting watch → go (§11.3). */
   readonly rationale: string | null;
+  /**
+   * What must keep holding after a watch → go (§11.3). Absent means none.
+   *
+   * A watch is "go, but keep an eye on it". Without a stated condition nobody knows what to
+   * keep an eye on, and the watch quietly becomes an ok.
+   */
+  readonly conditions?: readonly string[];
 }
 
 export type GateDecisionCheck =
@@ -110,6 +118,15 @@ export function checkGateDecision(request: GateDecisionRequest): GateDecisionChe
     return {
       allowed: false,
       reason: "GATE_WATCH_REQUIRES_RATIONALE",
+      blockingRequirementIndexes: watches,
+    };
+  }
+
+  const conditions = (request.conditions ?? []).filter((condition) => condition.trim() !== "");
+  if (watches.length > 0 && conditions.length === 0) {
+    return {
+      allowed: false,
+      reason: "GATE_WATCH_REQUIRES_CONDITIONS",
       blockingRequirementIndexes: watches,
     };
   }

@@ -11,9 +11,14 @@
     "migrate": "tsx src/cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "login-roles": "tsx src/login-roles-cli.ts"
+    "login-roles": "tsx src/login-roles-cli.ts",
+    "rollback-check": "tsx src/rollback-check-cli.ts"
   },
   "dependencies": {
-    "postgres": "^3.4.5"
-  }
+    "postgres": "^3.4.9"
+  },
+  "files": [
+    "src",
+    "migrations"
+  ]
 }

@@ -57,6 +57,10 @@ test.describe("field uploads on a phone", () => {
     await page.getByRole("textbox", { name: "Project key" }).fill(projectKey);
     await page.getByRole("textbox", { name: "Name" }).fill("Field upload mine");
     await page.getByRole("textbox", { name: "Minerals (comma separated)" }).fill("copper");
+    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
+      "aaaaaaaa-0000-0000-0000-000000000001",
+    );
     await page.getByRole("button", { name: "Register" }).click();
     await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;

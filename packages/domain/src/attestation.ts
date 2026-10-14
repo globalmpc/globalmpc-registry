@@ -17,7 +17,8 @@ export type AttestationDenyReason =
   | "ATTESTATION_SCOPE_MISMATCH"
   | "ATTESTATION_SCHEMA_NOT_ACTIVE"
   | "ATTESTATION_EMPTY_CLAIM_SCOPE"
-  | "ATTESTATION_SELF_ASSURANCE";
+  | "ATTESTATION_SELF_ASSURANCE"
+  | "ATTESTATION_INDEPENDENCE_NOT_REVIEWED";
 
 export interface AttestationSignRequest {
   readonly attestationType: AttestationType;
@@ -39,6 +40,12 @@ export interface AttestationSignRequest {
    * The submitter cannot give `independent_assurance` (02 §2.4 rule 1).
    */
   readonly signerSubmittedEvidence: boolean;
+  /**
+   * Did the server evaluate 02 §2.4 rules 1·2 for this assignment and find nothing it could not
+   * evaluate? An assignment whose independence could not be judged is not a basis for signing —
+   * "not checked" must not read as "independent".
+   */
+  readonly independenceReviewed: boolean;
 }
 
 export type AttestationSignCheck =
@@ -71,6 +78,9 @@ export function checkAttestationSignable(
   }
   if (request.attestationType === "independent_assurance" && request.signerSubmittedEvidence) {
     return { allowed: false, reason: "ATTESTATION_SELF_ASSURANCE" };
+  }
+  if (!request.independenceReviewed) {
+    return { allowed: false, reason: "ATTESTATION_INDEPENDENCE_NOT_REVIEWED" };
   }
   return { allowed: true };
 }
@@ -162,4 +172,108 @@ export function canonicalAcceptanceBlockers(facts: AcceptanceFacts): AcceptanceB
   if (!facts.assignedToThisCase) blockers.push("NOT_ASSIGNED");
   if (!facts.claimWithinAuthorityScope) blockers.push("CLAIM_OUTSIDE_AUTHORITY_SCOPE");
   return blockers;
+}
+
+/**
+ * The authority facts behind `authorityAccepted` and `claimWithinAuthorityScope` — AC-15·AC-16.
+ *
+ * `canonicalAcceptanceBlockers` takes booleans; this is where they come from, so that every
+ * caller derives them the same way instead of each route deciding what "accepted" means.
+ */
+export type AuthorityState =
+  | "proposed"
+  | "under_review"
+  | "accepted"
+  | "suspended"
+  | "expired"
+  | "revoked"
+  | "superseded";
+
+export interface AuthorityFacts {
+  readonly state: AuthorityState;
+  /** ISO date (YYYY-MM-DD). */
+  readonly validFrom: string;
+  readonly validUntil: string | null;
+  readonly recognizedScope: readonly string[];
+}
+
+export interface AuthorityBasisInput {
+  /**
+   * The authority that issued the reviewer's credential. `null` when the credential is not
+   * linked to one — an issuer nobody can look up is not an accepted issuer.
+   */
+  readonly issuer: AuthorityFacts | null;
+  /** Authorities behind the source receipts the reviewed claims rest on (AC-16 "source"). */
+  readonly sourceAuthorities: readonly AuthorityFacts[];
+  /** Claim types under review. */
+  readonly claimTypes: readonly string[];
+  readonly credentialScope: readonly string[];
+  /** ISO date (YYYY-MM-DD) the basis is judged on. */
+  readonly asOf: string;
+}
+
+export interface AuthorityBasis {
+  readonly authorityAccepted: boolean;
+  readonly claimWithinAuthorityScope: boolean;
+  readonly credentialScopeCoversClaims: boolean;
+  /** Claim types the issuer is not recognized for. Shown so the reviewer knows what to fix. */
+  readonly outsideAuthorityScope: readonly string[];
+  /** Claim types the credential does not cover. */
+  readonly outsideCredentialScope: readonly string[];
+}
+
+/** Accepted, and inside its validity period on `asOf`. An expired period is not acceptance. */
+export function isAuthorityInForce(authority: AuthorityFacts, asOf: string): boolean {
+  if (authority.state !== "accepted") return false;
+  if (authority.validFrom > asOf) return false;
+  return authority.validUntil === null || authority.validUntil >= asOf;
+}
+
+export function evaluateAuthorityBasis(input: AuthorityBasisInput): AuthorityBasis {
+  const claimTypes = [...new Set(input.claimTypes)].sort();
+  const outsideCredentialScope = claimTypes.filter(
+    (type) => !input.credentialScope.includes(type),
+  );
+  // Without an issuer, every claim type is outside its recognized scope — nothing vouches for it.
+  const outsideAuthorityScope = input.issuer
+    ? claimTypes.filter((type) => !input.issuer!.recognizedScope.includes(type))
+    : claimTypes;
+
+  const issuerInForce = input.issuer !== null && isAuthorityInForce(input.issuer, input.asOf);
+  const sourcesInForce = input.sourceAuthorities.every((source) =>
+    isAuthorityInForce(source, input.asOf),
+  );
+
+  return {
+    authorityAccepted: issuerInForce && sourcesInForce,
+    // An empty claim set covers nothing; the empty-scope check reports it separately.
+    claimWithinAuthorityScope: claimTypes.length > 0 && outsideAuthorityScope.length === 0,
+    credentialScopeCoversClaims: claimTypes.length > 0 && outsideCredentialScope.length === 0,
+    outsideAuthorityScope,
+    outsideCredentialScope,
+  };
+}
+
+/**
+ * Credential status changes — 02 §2.6·§2.8, REQ-DAPP-042·044.
+ *
+ * `revoked` is terminal: the issuer voided the credential, and bringing it back would rewrite
+ * that fact. `suspended` can be lifted. `expired` can still be revoked (an issuer may void an
+ * expired credential) but not revived — a renewed credential is a new registration.
+ */
+export const CREDENTIAL_STATUS_TRANSITIONS: Readonly<
+  Record<CredentialCurrentStatus, readonly CredentialCurrentStatus[]>
+> = {
+  valid: ["expired", "revoked", "suspended"],
+  suspended: ["valid", "expired", "revoked"],
+  expired: ["revoked"],
+  unknown: ["valid", "expired", "revoked", "suspended"],
+  revoked: [],
+};
+
+export function canChangeCredentialStatus(
+  from: CredentialCurrentStatus,
+  to: CredentialCurrentStatus,
+): boolean {
+  return CREDENTIAL_STATUS_TRANSITIONS[from].includes(to);
 }

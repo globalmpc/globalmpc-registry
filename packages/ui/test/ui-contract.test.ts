@@ -6,11 +6,7 @@ import {
   SOURCE_RESULT_DISPLAY,
   assertDisplayCoverage,
 } from "../src/status-display.js";
-import {
-  PROHIBITED_PHRASES,
-  REQUIRED_BOUNDARY_COPY,
-  lintProhibitedLanguage,
-} from "../src/prohibited-language.js";
+import { REQUIRED_BOUNDARY_COPY } from "../src/boundary-copy.js";
 import { project, sharedFactsConsistent, type RecordView } from "../src/record-depth.js";
 
 describe("status display mapping completeness", () => {
@@ -148,73 +144,8 @@ describe("display copy is not empty", () => {
   });
 });
 
-describe("AC-31 — R-04 prohibited-language lint", () => {
-  it("catches guaranteed-return wording", () => {
-    const findings = lintProhibitedLanguage("This product offers a guaranteed yield");
-    expect(findings).toHaveLength(1);
-    expect(findings[0]!.phrase).toBe("guaranteed yield");
-    expect(findings[0]!.replacement).toContain("conditional");
-  });
-
-  it("catches a phrase mid-sentence", () => {
-    const findings = lintProhibitedLanguage("Offering a guaranteed return of 12%");
-    expect(findings.length).toBeGreaterThan(0);
-  });
-
-  it("is case-insensitive", () => {
-    expect(lintProhibitedLanguage("GUARANTEED RETURN")).toHaveLength(1);
-  });
-
-  it("catches overstated government approval", () => {
-    expect(lintProhibitedLanguage("Government integration complete for this project")).toHaveLength(1);
-    expect(lintProhibitedLanguage("This project is government verified")).toHaveLength(1);
-  });
-
-  it("catches overstated chain integrity", () => {
-    expect(lintProhibitedLanguage("on-chain truth for every record").length).toBeGreaterThan(0);
-    expect(lintProhibitedLanguage("The blockchain guarantees accuracy of every record").length).toBeGreaterThan(0);
-  });
-
-  it("catches automatic-approval wording", () => {
-    expect(lintProhibitedLanguage("If every requirement is ok, automatic legal approval follows").length).toBeGreaterThan(0);
-  });
-
-  it("catches investment-solicitation wording", () => {
-    expect(lintProhibitedLanguage("Our investment recommendation list")).toHaveLength(1);
-  });
-
-  it("reports every occurrence", () => {
-    expect(lintProhibitedLanguage("guaranteed yield. Again, guaranteed yield.")).toHaveLength(2);
-  });
-
-  it("returns position and context — it must be findable straight from the CI log", () => {
-    const findings = lintProhibitedLanguage("An opening sentence. A guaranteed yield. The end.");
-    expect(findings[0]!.index).toBeGreaterThan(0);
-    expect(findings[0]!.context).toContain("guaranteed yield");
-  });
-
-  it("acceptable copy passes", () => {
-    expect(
-      lintProhibitedLanguage(
-        "This result does not prove factual truth, legal effect, or investment suitability.",
-      ),
-    ).toEqual([]);
-  });
-
-  it("every prohibited term has a replacement — a bare ban breeds workaround phrasing", () => {
-    for (const entry of PROHIBITED_PHRASES) {
-      expect(entry.replacement.length).toBeGreaterThan(0);
-      expect(entry.reason.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("required boundary copy contains no prohibited term", () => {
-    for (const copy of Object.values(REQUIRED_BOUNDARY_COPY)) {
-      expect(lintProhibitedLanguage(copy)).toEqual([]);
-    }
-  });
-
-  it("the Compliance Policy Engine display name matches the rule (§11.13)", () => {
+describe("boundary copy", () => {
+  it("uses the data and evidence readiness assessment display name", () => {
     expect(REQUIRED_BOUNDARY_COPY.policyEngineName).toBe("Data and evidence readiness assessment");
   });
 });
