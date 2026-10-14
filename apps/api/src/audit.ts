@@ -1,5 +1,6 @@
 import type postgres from "postgres";
 import type { Session } from "./plugins/session.js";
+import { classifyIp } from "./device.js";
 
 /**
  * Audit record — 02 §2.7.
@@ -28,6 +29,14 @@ export const ROLE_ASSIGNMENT_BOUND = "assignment_bound";
  * no authorization decision is invented either.
  */
 export const ROLE_DEPLOY_BOUND = "deploy_bound";
+
+/**
+ * Path allowed because the actor acts **on their own session** — signing in and signing out.
+ *
+ * No role policy decides these: any wallet may sign in, and anyone may end their own session.
+ * Recording a role here would claim an authorization decision that was never made.
+ */
+export const ROLE_SELF_BOUND = "self_bound";
 
 export interface AuditEntry {
   readonly tenantId: string;
@@ -59,7 +68,7 @@ export async function recordAudit(
     INSERT INTO audit.events (
       tenant_id, project_id, actor_subject_id, actor_wallet, effective_role,
       command, resource_type, resource_id, before_version, after_version,
-      reason, correlation_id, request_ip, detail
+      reason, correlation_id, request_ip, detail, request_ip_class, user_agent_hash
     ) VALUES (
       ${entry.tenantId},
       ${entry.projectId ?? null},
@@ -74,7 +83,9 @@ export async function recordAudit(
       ${entry.reason ?? null},
       ${entry.correlationId},
       ${entry.requestIp ?? null},
-      ${tx.json((entry.detail ?? {}) as never)}
+      ${tx.json((entry.detail ?? {}) as never)},
+      ${classifyIp(entry.requestIp)},
+      ${entry.session.device?.userAgentHash ?? null}
     )
   `;
 }

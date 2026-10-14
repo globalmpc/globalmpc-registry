@@ -17,6 +17,7 @@ import { assertAuthorized, projectResource, sessionFacts } from "../plugins/auth
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
+import { assertActionNotRestricted } from "../restrictions.js";
 import {
   assertVersionMatches,
   etagOf,
@@ -226,7 +227,7 @@ export async function registerLifecycleRoutes(
 
       const { requestId, asOf, correlationId } = request.context;
       return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           const [project] = await tx<ProjectRow[]>`
             SELECT id, lifecycle_state, prior_lifecycle_state, suspended_by_subject_id, version
             FROM core.projects
@@ -245,6 +246,7 @@ export async function registerLifecycleRoutes(
               allowed: [...allowed],
             });
           }
+          await assertActionNotRestricted(tx, tenantId, project.id, `project.lifecycle.${toState}`, session.subjectId);
 
           /**
            * Reinstatement goes only to the state before suspension, or to closure (§4.3).

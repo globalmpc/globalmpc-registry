@@ -25,3 +25,5 @@ export {
   type AssessmentInput,
   type Assessment,
 } from "./engine.js";
+
+export { explainRequirementResult, type RequirementExplanation } from "./explain.js";

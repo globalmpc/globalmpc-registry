@@ -64,10 +64,22 @@ export interface TestFixture {
   readonly connectionA: string;
   /** Active attestation schema of tenant A */
   readonly schemaA: string;
-  /** Valid credential of reviewerA */
+  /** Valid credential of reviewerA, issued by `issuerAuthorityA` */
   readonly credentialA: string;
+  /**
+   * Accepted authority that issued `credentialA`, recognized for the fixture claim types.
+   * AC-15·AC-16 judge a credential by its issuer, so the fixture credential needs one.
+   */
+  readonly issuerAuthorityA: string;
+  /**
+   * reviewerA's organization. Not `orgA`, which owns the fixture projects — a reviewer from the
+   * operating organization is not independent (02 §2.4 rule 2).
+   */
+  readonly reviewOrgA: string;
   /** Subject id of reviewerA */
   readonly reviewerSubjectA: string;
+  /** Subject id of stewardA — the submitter of claims the steward creates (02 §2.4 rule 1) */
+  readonly stewardSubjectA: string;
   close(): Promise<void>;
 }
 
@@ -238,6 +250,12 @@ export async function setupFixture(): Promise<TestFixture> {
   const auditorSubject = randomUUID();
   const disclosureApproverSubject = randomUUID();
 
+  const reviewOrgA = randomUUID();
+  await sql`
+    INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
+    VALUES (${reviewOrgA}, ${tenantA}, 'Independent Review Firm A', 'AUS')
+  `;
+
   for (const [subject, wallet, label, role, assurance] of [
     [reviewerSubjectA, reviewerA, "Reviewer A", "reviewer_cp_qp", "high_assurance"],
     [approverSubject, approverA, "Approver A", "gate_approver", "high_assurance"],
@@ -268,20 +286,35 @@ export async function setupFixture(): Promise<TestFixture> {
         ${randomUUID()}, ${tenantA}, ${subject}, ${wallet.address}, 31337, ${assurance}, now()
       )
     `;
+    const organization = subject === reviewerSubjectA ? reviewOrgA : orgA;
     await sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${tenantA}, ${subject}, ${orgA}, ${role})
+      VALUES (${randomUUID()}, ${tenantA}, ${subject}, ${organization}, ${role})
     `;
   }
+
+  const issuerAuthorityA = randomUUID();
+  await sql`
+    INSERT INTO core.authorities (
+      id, tenant_id, name, jurisdiction, proves, does_not_prove,
+      recognized_scope, verification_method, public_disclosure_level, valid_from, state
+    ) VALUES (
+      ${issuerAuthorityA}, ${tenantA}, 'Professional Institute', 'AUS',
+      ARRAY['member_competence'],
+      ARRAY['opinion_accuracy','rights_completeness'],
+      ARRAY['resource_estimate','mining_right_registration'],
+      'verifiable_signed_document', 'public', '2000-01-01', 'accepted'
+    )
+  `;
 
   const credentialA = randomUUID();
   await sql`
     INSERT INTO core.credentials (
-      id, tenant_id, subject_id, organization_id, issuer_reference,
+      id, tenant_id, subject_id, organization_id, issuer_reference, issuer_authority_id,
       credential_type, credential_scope, jurisdiction, issued_at, expires_at, current_status
     ) VALUES (
-      ${credentialA}, ${tenantA}, ${reviewerSubjectA}, ${orgA}, 'AusIMM',
-      'competent_person', ARRAY['resource_estimate','mining_right_registration'],
+      ${credentialA}, ${tenantA}, ${reviewerSubjectA}, ${reviewOrgA}, 'AusIMM',
+      ${issuerAuthorityA}, 'competent_person', ARRAY['resource_estimate','mining_right_registration'],
       ARRAY['MNG'], now() - interval '1 year', now() + interval '1 year', 'valid'
     )
   `;
@@ -400,7 +433,10 @@ export async function setupFixture(): Promise<TestFixture> {
     connectionA,
     schemaA,
     credentialA,
+    issuerAuthorityA,
+    reviewOrgA,
     reviewerSubjectA,
+    stewardSubjectA: stewardSubject,
     async close() {
       await appSql.end();
       await sql.end();

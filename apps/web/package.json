@@ -18,21 +18,21 @@
     "@mpc/design": "link:../../design-system",
     "@mpc/domain": "workspace:*",
     "@mpc/ui": "workspace:*",
-    "next": "16.3.8",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
-    "viem": "^2.21.0"
+    "next": "16.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "viem": "2.57.5"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
     "@mpc/db": "workspace:*",
-    "@playwright/test": "^1.62.1",
-    "@types/node": "^22.13.0",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "postgres": "^3.4.5",
-    "tsx": "^4.23.12",
-    "typescript": "^5.7.3",
-    "viem": "^2.21.0"
+    "@playwright/test": "1.64.0",
+    "@types/node": "22.20.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "postgres": "^3.4.9",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "viem": "2.57.5"
   }
 }

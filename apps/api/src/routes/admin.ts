@@ -12,7 +12,7 @@ import {
   decideRoleGrantRequest,
   disableWalletRequest,
 } from "@mpc/api-contract";
-import { ACTION_POLICIES } from "@mpc/api-contract";
+import { SECOND_PERSON_ROLES } from "@mpc/api-contract";
 import {
   assertEndpointShape,
   isAllowedWebhookSecretReference,
@@ -88,6 +88,7 @@ interface GrantRow {
   subject_name: string;
   role: string;
   project_id: string | null;
+  jurisdiction: string[] | null;
   reason: string;
   requested_by_subject_id: string;
   requested_at: Date;
@@ -105,6 +106,7 @@ function toGrant(row: GrantRow, requestId: string, asOf: string) {
     subjectName: row.subject_name,
     role: row.role,
     projectId: row.project_id,
+    jurisdiction: row.jurisdiction,
     reason: row.reason,
     requestedBySubjectId: row.requested_by_subject_id,
     requestedAt: row.requested_at.toISOString(),
@@ -120,9 +122,6 @@ function toGrant(row: GrantRow, requestId: string, asOf: string) {
 
 /** Levels a bind may carry. Read from the contract so the route and OpenAPI cannot diverge. */
 const ASSURANCE_LEVELS: readonly string[] = bindWalletRequest.shape.assuranceLevel.options;
-
-/** Roles that can approve role grants — their wallets are not bound from the UI. */
-const ADMIN_ROLES: readonly string[] = ACTION_POLICIES["admin.role.approve"]?.allowedRoles ?? [];
 
 export async function registerAdminRoutes(
   app: FastifyInstance,
@@ -245,7 +244,7 @@ export async function registerAdminRoutes(
 
     const { requestId, asOf, correlationId } = request.context;
     return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
         const id = randomUUID();
         await tx`
           INSERT INTO core.subjects (id, tenant_id, kind, display_name)
@@ -301,32 +300,45 @@ export async function registerAdminRoutes(
       const address = parsed.data.walletAddress.toLowerCase();
 
       return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+          /**
+           * Holds the subject row until commit. The role check below and the grant decision's
+           * UI-bound-key check each read what the other writes; without a shared lock both pass
+           * under READ COMMITTED and the subject ends up with an operator's key and an approval
+           * role. `NO KEY UPDATE` leaves FK inserts that reference the subject unblocked.
+           */
           const [subject] = await tx<{ id: string }[]>`
             SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${request.params.subjectId}
+            FOR NO KEY UPDATE
           `;
           if (!subject) throw notFound("Subject not found");
 
           /**
-           * Wallets are not bound from the UI to subjects with admin authority.
+           * Wallets are not bound from the UI to subjects that can be a second person.
            *
            * Binding a wallet is a one-person act. If operator A binds their wallet to operator B,
            * A logs in as B and approves their own proposal — the two-person rule for role grants
-           * collapses into one person. An operator key rotation creates a new subject through
-           * bootstrap (infrastructure access) and disables the old wallet.
-           * Recovery for people without roles (AC-27) still works.
+           * collapses into one person. The same holds for every other two-person rule: bound to
+           * a disclosure approver, A publishes their own draft (see `SECOND_PERSON_ROLES`).
+           * A key rotation for such a subject creates a new subject through bootstrap
+           * (infrastructure access) and disables the old wallet.
+           * Recovery for people without these roles (AC-27) still works.
            */
           const [adminBinding] = await tx<{ role: string }[]>`
             SELECT role FROM core.role_bindings
             WHERE tenant_id = ${tenantId} AND subject_id = ${request.params.subjectId}
-              AND revoked_at IS NULL AND role = ANY(${[...ADMIN_ROLES]})
+              AND revoked_at IS NULL AND role = ANY(${[...SECOND_PERSON_ROLES]})
+            ORDER BY role
             LIMIT 1
           `;
           if (adminBinding) {
             throw forbidden(
               "WALLET_BIND_ADMIN_SUBJECT",
-              "A wallet cannot be bound from the UI to a subject with admin authority",
-              { hint: "Operator key rotation creates a new subject via bootstrap and disables the old wallet" },
+              "A wallet cannot be bound from the UI to a subject with admin or approval authority",
+              {
+                role: adminBinding.role,
+                hint: "Key rotation for this subject creates a new subject via bootstrap and disables the old wallet",
+              },
             );
           }
 
@@ -412,7 +424,7 @@ export async function registerAdminRoutes(
 
       const { requestId, asOf, correlationId } = request.context;
       return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           const [wallet] = await tx<WalletRow[]>`
             SELECT id, subject_id, wallet_address, chain_id, assurance_level,
                    bound_at, disabled_at, version
@@ -533,7 +545,7 @@ export async function registerAdminRoutes(
 
     const { requestId, asOf, correlationId } = request.context;
     return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
         const [subject] = await tx<{ id: string }[]>`
           SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${parsed.data.subjectId}
         `;
@@ -544,11 +556,12 @@ export async function registerAdminRoutes(
           await tx`
             INSERT INTO core.role_grant_requests (
               id, tenant_id, subject_id, organization_id, project_id, role, reason,
-              requested_by_subject_id
+              requested_by_subject_id, jurisdiction
             ) VALUES (
               ${id}, ${tenantId}, ${parsed.data.subjectId},
               ${parsed.data.organizationId ?? null}, ${parsed.data.projectId ?? null},
-              ${parsed.data.role}, ${parsed.data.reason}, ${session.subjectId}
+              ${parsed.data.role}, ${parsed.data.reason}, ${session.subjectId},
+              ${parsed.data.jurisdiction ?? null}
             )
           `;
         } catch (caught) {
@@ -606,7 +619,7 @@ export async function registerAdminRoutes(
 
       const { requestId, asOf, correlationId } = request.context;
       return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           const [grant] = await tx<(GrantRow & { organization_id: string | null })[]>`
             SELECT g.*, s.display_name AS subject_name
             FROM core.role_grant_requests g
@@ -637,6 +650,61 @@ export async function registerAdminRoutes(
             );
           }
 
+          /**
+           * The person receiving the role does not decide it either.
+           *
+           * Otherwise A proposes a role for B and B approves what B receives — two people on the
+           * record, one of whom decided their own grant. `role_grant_not_self_target` (0076)
+           * holds the same rule in the DB.
+           */
+          if (grant.subject_id === session.subjectId) {
+            throw unprocessable(
+              "ROLE_GRANT_SELF_TARGET",
+              "The subject of a proposal cannot decide it",
+              { hint: "An admin holder other than the proposer and the subject decides" },
+            );
+          }
+
+          /**
+           * A second-person role is not granted to a subject whose active key was bound from
+           * the UI.
+           *
+           * The bind route refuses subjects that already hold these roles, so the order can be
+           * reversed: bind an operator's own key to a subject with no roles, then grant it one.
+           * Who bound the key is only in the audit record, and refusing just the binder would
+           * still leave the key with an operator nobody on this grant can vouch for. Refusing
+           * any UI-bound key is simpler and holds either way — such a subject gets a fresh key
+           * through bootstrap, as an operator key rotation does.
+           */
+          if (parsed.data.decision === "approve" && SECOND_PERSON_ROLES.includes(grant.role)) {
+            // Same subject-row lock as the bind route, so a concurrent bind is seen, not missed.
+            await tx`
+              SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${grant.subject_id}
+              FOR NO KEY UPDATE
+            `;
+            const [uiBound] = await tx<{ id: string }[]>`
+              SELECT w.id FROM core.wallet_identities w
+              WHERE w.tenant_id = ${tenantId} AND w.subject_id = ${grant.subject_id}
+                AND w.disabled_at IS NULL
+                AND EXISTS (
+                  SELECT 1 FROM audit.events e
+                  WHERE e.tenant_id = ${tenantId} AND e.command = 'admin.wallet.bound'
+                    AND e.resource_id = w.id
+                )
+              LIMIT 1
+            `;
+            if (uiBound) {
+              throw unprocessable(
+                "ROLE_GRANT_UI_BOUND_SUBJECT",
+                "This role cannot be granted to a subject whose key was bound from the UI",
+                {
+                  role: grant.role,
+                  hint: "Create the subject with its key through bootstrap, then grant the role",
+                },
+              );
+            }
+          }
+
           const approved = parsed.data.decision === "approve";
           let bindingId: string | null = null;
 
@@ -644,10 +712,10 @@ export async function registerAdminRoutes(
             bindingId = randomUUID();
             await tx`
               INSERT INTO core.role_bindings (
-                id, tenant_id, subject_id, organization_id, project_id, role
+                id, tenant_id, subject_id, organization_id, project_id, role, jurisdiction
               ) VALUES (
                 ${bindingId}, ${tenantId}, ${grant.subject_id}, ${grant.organization_id},
-                ${grant.project_id}, ${grant.role}
+                ${grant.project_id}, ${grant.role}, ${grant.jurisdiction}
               )
             `;
           }
@@ -813,7 +881,7 @@ export async function registerAdminRoutes(
 
     const { requestId, asOf, correlationId } = request.context;
     return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
         const id = randomUUID();
         try {
           await tx`
@@ -866,7 +934,7 @@ export async function registerAdminRoutes(
 
       const { requestId, asOf, correlationId } = request.context;
       return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request.body), async () => {
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           const [current] = await tx<{ id: string; version: number }[]>`
             SELECT id, version FROM core.notification_sinks
             WHERE tenant_id = ${tenantId} AND id = ${request.params.sinkId}

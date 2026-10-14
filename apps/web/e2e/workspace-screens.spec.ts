@@ -17,9 +17,13 @@ test.describe("workspace navigation", () => {
       "My Work",
       "Notifications",
       "Projects",
+      "Data Room",
+      "Verification",
+      "Readiness & Gates",
       "Registries",
       "Anchor",
       "Integrations",
+      "Authorities",
       "Governance",
       "Audit",
       "Admin",
@@ -129,6 +133,10 @@ test.describe("Claim Detail", () => {
     await page.goto("/w/projects/new");
     await page.getByRole("textbox", { name: "Project key" }).fill(projectKey);
     await page.getByRole("textbox", { name: "Name" }).fill("Claim detail check");
+    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
+      "aaaaaaaa-0000-0000-0000-000000000001",
+    );
     await page.getByRole("button", { name: "Register" }).click();
     await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;

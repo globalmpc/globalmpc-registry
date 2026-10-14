@@ -38,7 +38,7 @@
     "test": "vitest run test"
   },
   "devDependencies": {
-    "@types/node": "22.12.0",
-    "vitest": "4.1.10"
+    "@types/node": "22.20.1",
+    "vitest": "5.0.4"
   }
 }

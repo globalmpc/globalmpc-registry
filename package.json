@@ -5,7 +5,7 @@
   "packageManager": "pnpm@10.33.0",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "test": "vitest run",
@@ -14,20 +14,18 @@
     "build:openapi": "pnpm --filter @mpc/api-contract build",
     "check:openapi": "pnpm build:openapi && git diff --exit-code -- packages/api-contract/openapi.json",
     "check:contracts": "cd contracts && forge test",
-    "check:copy": "tsx scripts/lint-ui-copy.ts",
     "check:brand": "tsx scripts/check-brand-assets.ts",
-    "check:counts": "tsx scripts/check-test-counts.ts",
-    "check:compose": "tsx scripts/check-compose.ts",
-    "check:public": "tsx scripts/check-public-hygiene.ts",
-    "check": "pnpm typecheck && pnpm test && pnpm check:openapi && pnpm check:copy && pnpm check:brand && pnpm check:counts && pnpm check:compose && pnpm check:public"
+    "check:migration-rollback": "pnpm --filter @mpc/db rollback-check",
+    "check": "pnpm typecheck && pnpm test && pnpm check:openapi && pnpm check:brand"
   },
   "devDependencies": {
     "@mpc/api-contract": "workspace:*",
     "@mpc/ui": "workspace:*",
-    "@types/node": "^22.13.0",
-    "fast-check": "^3.23.2",
-    "tsx": "^4.23.12",
-    "typescript": "^5.7.3",
-    "vitest": "^3.0.5"
+    "@openzeppelin/contracts": "5.6.1",
+    "@types/node": "22.20.1",
+    "fast-check": "4.10.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
   }
 }

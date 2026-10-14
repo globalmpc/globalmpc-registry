@@ -1,3 +1,5 @@
+import type { CountedListWindow, ListWindow } from "./lists";
+
 /**
  * API client.
  *
@@ -20,6 +22,8 @@ export interface ApiErrorEnvelope {
     expectedVersion?: string;
     currentVersion?: string;
     hint?: string;
+    /** Set when an active blackout refused the action (AC-30). The screen shows this same ID. */
+    restrictionId?: string;
   };
   retryable: boolean;
   correlationId: string;
@@ -155,12 +159,14 @@ export async function getSession(token: string | null): Promise<SessionInfo> {
   return parse<SessionInfo>(response);
 }
 
-export async function listProjects(token: string): Promise<{ items: ProjectSummary[] }> {
+export async function listProjects(
+  token: string,
+): Promise<{ items: ProjectSummary[] } & ListWindow> {
   const response = await apiFetch("/api/v1/projects", {
     headers: authHeader(token),
     cache: "no-store",
   });
-  return parse<{ items: ProjectSummary[] }>(response);
+  return parse<{ items: ProjectSummary[] } & ListWindow>(response);
 }
 
 export async function getProject(token: string, id: string): Promise<ProjectSummary> {
@@ -198,6 +204,8 @@ export interface CreateProjectInput {
   hostCountryIso3: string;
   minerals: string[];
   ownerOrganizationId: string;
+  /** 05 §5.10 — fixed at creation. `official_reference` is not offered. */
+  referenceStatus?: "none" | "synthetic_test_project";
 }
 
 export async function createProject(
@@ -232,7 +240,8 @@ export interface SourceReceipt {
   nextAction: string;
   permitsCanonicalAcceptance: boolean;
   collectionMethod: string;
-  rawHash: string;
+  /** `null` when no original was received — never a placeholder hash. */
+  rawHash: string | null;
   asOf: string;
   freshnessStatus: string;
   limitations: string[];
@@ -253,23 +262,23 @@ export interface Claim {
 export async function listSourceReceipts(
   token: string,
   projectId: string,
-): Promise<{ items: SourceReceipt[] }> {
+): Promise<{ items: SourceReceipt[] } & CountedListWindow> {
   const response = await apiFetch(`/api/v1/projects/${projectId}/source-receipts`, {
     headers: authHeader(token),
     cache: "no-store",
   });
-  return parse<{ items: SourceReceipt[] }>(response);
+  return parse<{ items: SourceReceipt[] } & CountedListWindow>(response);
 }
 
 export async function listClaims(
   token: string,
   projectId: string,
-): Promise<{ items: Claim[] }> {
+): Promise<{ items: Claim[] } & CountedListWindow> {
   const response = await apiFetch(`/api/v1/projects/${projectId}/claims`, {
     headers: authHeader(token),
     cache: "no-store",
   });
-  return parse<{ items: Claim[] }>(response);
+  return parse<{ items: Claim[] } & CountedListWindow>(response);
 }
 
 export async function createSourceReceipt(
@@ -370,6 +379,10 @@ export interface ObjectUpload {
   validUntil: string | null;
   /** The earlier upload this one replaces. Takes effect only when this one is promoted. */
   supersedesUploadId: string | null;
+  /** Set once when the document is revoked. It stays readable; nothing new may rest on it. */
+  revokedAt: string | null;
+  revokedBy: string | null;
+  revocationReason: string | null;
   nextActions: string[];
   version: number;
 }
@@ -380,15 +393,25 @@ export interface ScannerStatus {
   detail: string;
 }
 
+export interface UploadPage extends CountedListWindow {
+  items: ObjectUpload[];
+  scanner: ScannerStatus;
+  /** Opaque. Send it back unchanged for the next page; `null` on the last one. */
+  nextCursor: string | null;
+}
+
+/** One page of the project's documents, newest first. Omit `cursor` for the first page. */
 export async function listUploads(
   token: string,
   projectId: string,
-): Promise<{ items: ObjectUpload[]; scanner: ScannerStatus }> {
-  const response = await apiFetch(`/api/v1/projects/${projectId}/uploads`, {
+  cursor?: string,
+): Promise<UploadPage> {
+  const query = cursor ? `?${new URLSearchParams({ cursor }).toString()}` : "";
+  const response = await apiFetch(`/api/v1/projects/${projectId}/uploads${query}`, {
     headers: authHeader(token),
     cache: "no-store",
   });
-  return parse<{ items: ObjectUpload[]; scanner: ScannerStatus }>(response);
+  return parse<UploadPage>(response);
 }
 
 /**
@@ -537,6 +560,8 @@ export interface DocumentNode {
   daysUntilExpiry: number | null;
   supersedesUploadId: string | null;
   supersededByUploadId: string | null;
+  revokedAt: string | null;
+  revocationReason: string | null;
   openImpactCount: number;
   version: number;
 }
@@ -557,9 +582,12 @@ export interface DocumentLink {
   removalReason: string | null;
 }
 
-export interface DocumentGraph {
+export interface DocumentGraph extends ListWindow {
+  /** Newest documents up to `limit`, plus the focused one and its neighbours when asked. */
   nodes: DocumentNode[];
+  /** Only links whose two ends are in `nodes`. */
   links: DocumentLink[];
+  totalNodes: number;
 }
 
 export interface DocumentImpactPreviewItem {
@@ -580,7 +608,7 @@ export interface DocumentImpact {
   uploadId: string;
   originUploadId: string;
   successorUploadId: string | null;
-  cause: "superseded" | "expired";
+  cause: "superseded" | "expired" | "revoked";
   depth: number;
   viaUploadId: string | null;
   viaKind: DocumentLinkKind | null;
@@ -632,8 +660,41 @@ export async function updateDocumentProfile(
   return parse<ObjectUpload>(response);
 }
 
-export async function getDocumentGraph(token: string, projectId: string): Promise<DocumentGraph> {
-  const response = await apiFetch(`/api/v1/projects/${projectId}/document-graph`, {
+/**
+ * Revoke a promoted document with a reason. The document is kept and marked; what rests on it
+ * is flagged for a second look. A correction is a new version, not an undo.
+ */
+export async function revokeDocument(
+  token: string,
+  uploadId: string,
+  version: number,
+  reason: string,
+  key: string,
+): Promise<ObjectUpload & { impactsRecorded: number }> {
+  const response = await apiFetch(`/api/v1/uploads/${uploadId}/revoke`, {
+    method: "POST",
+    headers: {
+      ...authHeader(token),
+      "content-type": "application/json",
+      "idempotency-key": key,
+      "if-match": `"${version}"`,
+    },
+    body: JSON.stringify({ reason }),
+  });
+  return parse<ObjectUpload & { impactsRecorded: number }>(response);
+}
+
+/**
+ * `focus` keeps one document and its direct neighbours in the payload even when they are older
+ * than the newest ones the graph carries — the document page needs its own links in full.
+ */
+export async function getDocumentGraph(
+  token: string,
+  projectId: string,
+  focus?: string,
+): Promise<DocumentGraph> {
+  const query = focus ? `?${new URLSearchParams({ focus }).toString()}` : "";
+  const response = await apiFetch(`/api/v1/projects/${projectId}/document-graph${query}`, {
     headers: authHeader(token),
     cache: "no-store",
   });
@@ -687,12 +748,12 @@ export async function getDocumentImpactPreview(
 export async function listDocumentImpacts(
   token: string,
   projectId: string,
-): Promise<{ items: DocumentImpact[]; openCount: number }> {
+): Promise<{ items: DocumentImpact[]; openCount: number } & CountedListWindow> {
   const response = await apiFetch(`/api/v1/projects/${projectId}/document-impacts`, {
     headers: authHeader(token),
     cache: "no-store",
   });
-  return parse<{ items: DocumentImpact[]; openCount: number }>(response);
+  return parse<{ items: DocumentImpact[]; openCount: number } & CountedListWindow>(response);
 }
 
 /** All or nothing on the server: one closed or missing impact refuses the whole batch. */
@@ -756,6 +817,156 @@ export async function retireDocumentLinkRule(
   return parse<DocumentLinkRule>(response);
 }
 
+// --- Document status ---------------------------------------------------------
+
+export type DocumentRequirementTier = "required" | "user_benefit" | "presentation" | "management";
+export type DocumentStatus = "current" | "expired" | "superseded" | "pending" | "unusable";
+export type RequirementStatus = "met" | "expired" | "pending" | "missing";
+
+export interface DocumentRequirement {
+  id: string;
+  projectId: string;
+  documentType: string;
+  tier: DocumentRequirementTier;
+  note: string | null;
+  createdBy: string;
+  createdAt: string;
+  retiredAt: string | null;
+  retirementNote: string | null;
+}
+
+export interface DocumentRequirementProgress {
+  requirement: DocumentRequirement;
+  status: RequirementStatus;
+  currentCount: number;
+  expiredCount: number;
+  pendingCount: number;
+  supersededCount: number;
+  nearestValidUntil: string | null;
+  daysUntilExpiry: number | null;
+}
+
+export interface DocumentStatusSummary {
+  projectId: string;
+  today: string;
+  totals: {
+    all: number;
+    current: number;
+    expired: number;
+    superseded: number;
+    pending: number;
+    unusable: number;
+    untyped: number;
+    withoutValidUntil: number;
+    openImpacts: number;
+  };
+  tiers: {
+    tier: DocumentRequirementTier;
+    declared: number;
+    met: number;
+    expired: number;
+    pending: number;
+    missing: number;
+    incomplete: boolean;
+  }[];
+  requirements: DocumentRequirementProgress[];
+  undeclaredTypes: {
+    documentType: string;
+    currentCount: number;
+    expiredCount: number;
+    supersededCount: number;
+    pendingCount: number;
+  }[];
+  undeclaredTypesTruncated: boolean;
+  nextExpiries: {
+    uploadId: string;
+    documentType: string | null;
+    validUntil: string;
+    daysUntilExpiry: number;
+  }[];
+}
+
+export interface DocumentListItem {
+  uploadId: string;
+  originalFilename: string | null;
+  state: string;
+  status: DocumentStatus;
+  documentType: string | null;
+  tier: DocumentRequirementTier | null;
+  validUntil: string | null;
+  daysUntilExpiry: number | null;
+  supersededByUploadId: string | null;
+  openImpactCount: number;
+  uploadedAt: string;
+  version: number;
+}
+
+export interface DocumentListFilter {
+  status?: DocumentStatus;
+  documentType?: string;
+  tier?: DocumentRequirementTier | "undeclared";
+  expiresWithinDays?: number;
+  limit?: number;
+  cursor?: string;
+}
+
+export async function getDocumentStatusSummary(
+  token: string,
+  projectId: string,
+): Promise<DocumentStatusSummary> {
+  const response = await apiFetch(`/api/v1/projects/${projectId}/document-status`, {
+    headers: authHeader(token),
+    cache: "no-store",
+  });
+  return parse<DocumentStatusSummary>(response);
+}
+
+/** One page. Follow `nextCursor` for the rest — the server never cuts the list silently. */
+export async function listProjectDocuments(
+  token: string,
+  projectId: string,
+  filter: DocumentListFilter,
+): Promise<{ items: DocumentListItem[]; nextCursor: string | null }> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filter)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  const query = params.toString();
+  const response = await apiFetch(
+    `/api/v1/projects/${projectId}/documents${query ? `?${query}` : ""}`,
+    { headers: authHeader(token), cache: "no-store" },
+  );
+  return parse<{ items: DocumentListItem[]; nextCursor: string | null }>(response);
+}
+
+export async function declareDocumentRequirement(
+  token: string,
+  projectId: string,
+  input: { documentType: string; tier: DocumentRequirementTier; note: string | null },
+  key: string,
+): Promise<DocumentRequirement> {
+  const response = await apiFetch(`/api/v1/projects/${projectId}/document-requirements`, {
+    method: "POST",
+    headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+    body: JSON.stringify(input),
+  });
+  return parse<DocumentRequirement>(response);
+}
+
+export async function retireDocumentRequirement(
+  token: string,
+  requirementId: string,
+  reason: string,
+  key: string,
+): Promise<DocumentRequirement> {
+  const response = await apiFetch(`/api/v1/document-requirements/${requirementId}/retirement`, {
+    method: "POST",
+    headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+    body: JSON.stringify({ reason }),
+  });
+  return parse<DocumentRequirement>(response);
+}
+
 // --- Readiness / Gate -------------------------------------------------------
 
 export interface RequirementResult {
@@ -764,6 +975,10 @@ export interface RequirementResult {
   applicable: boolean;
   reasonCode: string;
   missing: string[];
+  /** AC-34: why the requirement is where it is and what would move it. */
+  cause: string;
+  neededEvidence: string[];
+  nextAction: string | null;
 }
 
 export interface ReadinessAssessment {
@@ -808,13 +1023,57 @@ export interface GateDecision {
   id: string;
   decision: string;
   rationale: string;
+  assumptions: string[];
+  conditions: string[];
+  signerWalletAddress: string;
   signedAt: string;
+}
+
+/** The decision as the approver states it. The signature commits to exactly this. */
+export interface GateDecisionContent {
+  gateId: string;
+  decision: "go" | "hold" | "rework" | "stop";
+  inputAssessmentId: string;
+  rationale: string;
+  assumptions: string[];
+  conditions: string[];
+}
+
+export interface GateDecisionSignatureRequest {
+  signatureRequestId: string;
+  humanReadablePayload: string;
+  typedData: SignatureRequest["typedData"];
+  payloadHash: string;
+  expiresAt: string;
+}
+
+/**
+ * Gate decision signature request — spec 11 §11.3.
+ *
+ * The server refuses here what it would refuse on submission, so nobody is asked to sign a
+ * decision that cannot be recorded.
+ */
+export async function requestGateDecisionSignature(
+  token: string,
+  projectId: string,
+  content: GateDecisionContent,
+  key: string,
+): Promise<GateDecisionSignatureRequest> {
+  const response = await apiFetch(
+    `/api/v1/projects/${projectId}/gate-decisions/signature-requests`,
+    {
+      method: "POST",
+      headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
+      body: JSON.stringify(content),
+    },
+  );
+  return parse<GateDecisionSignatureRequest>(response);
 }
 
 export async function recordGateDecision(
   token: string,
   projectId: string,
-  input: Record<string, unknown>,
+  input: GateDecisionContent & { signatureRequestId: string; signature: string },
   key: string,
 ): Promise<GateDecision> {
   const response = await apiFetch(`/api/v1/projects/${projectId}/gate-decisions`, {
@@ -1209,6 +1468,8 @@ export interface OutboxBacklog {
   oldestPendingAgeSeconds: number | null;
   publishedLastHour: number;
   byEventType: { eventType: string; pending: number }[];
+  deadLettered: number;
+  deadLetteredByEventType: { eventType: string; deadLettered: number; lastError: string | null }[];
 }
 
 export async function getOutboxBacklog(token: string): Promise<OutboxBacklog> {
@@ -1261,12 +1522,14 @@ export interface AnchorBatchStatus extends AnchorBatch {
  * It must be possible to see what happened after a batch was created. If status is hidden,
  * a blocked submission cannot be told apart from one awaiting confirmation.
  */
-export async function listAnchorBatches(token: string): Promise<{ items: AnchorBatchStatus[] }> {
+export async function listAnchorBatches(
+  token: string,
+): Promise<{ items: AnchorBatchStatus[] } & ListWindow> {
   const response = await apiFetch("/api/v1/anchor-batches", {
     headers: authHeader(token),
     cache: "no-store",
   });
-  return parse<{ items: AnchorBatchStatus[] }>(response);
+  return parse<{ items: AnchorBatchStatus[] } & ListWindow>(response);
 }
 
 export async function createAnchorBatch(token: string, key: string): Promise<AnchorBatch> {
@@ -1321,6 +1584,19 @@ export interface AuthorityEntry {
   validUntil: string | null;
   adapterState: "active" | "manual" | "pending_access" | "blocked" | "none";
   adapterStateReason: string | null;
+  connectionId: string | null;
+  /** Connection lifecycle stage as recorded (12 §12.13 R5 gate item 8). */
+  integrationStage:
+    | "planned"
+    | "feasibility_checked"
+    | "access_confirmed"
+    | "tested"
+    | "active"
+    | "degraded"
+    | "disabled"
+    | "none";
+  integrationStageSince: string | null;
+  reconciliationRequired: boolean;
   connectionKey: string | null;
   callable: boolean;
   nextAction: string | null;
@@ -1340,6 +1616,7 @@ export interface JurisdictionProfile {
   activeCount: number;
   manualCount: number;
   pendingCount: number;
+  stageCounts: Record<AuthorityEntry["integrationStage"], number>;
   limitations: string[];
 }
 
@@ -1352,6 +1629,31 @@ export async function getJurisdictionProfile(
     cache: "no-store",
   });
   return parse<JurisdictionProfile>(response);
+}
+
+// --- Material-information blackout (07 §7.14) ------------------------------------
+
+export interface DisclosureRestriction {
+  restrictionId: string;
+  projectId: string;
+  state: "draft" | "active" | "released" | "superseded";
+  restrictedActionTypes: string[];
+  reason: string | null;
+  authority: string;
+  effectiveAt: string | null;
+  expectedNextUpdateAt: string | null;
+  expectedReleaseAt: string | null;
+}
+
+export async function listActiveDisclosureRestrictions(
+  token: string,
+  projectId: string,
+): Promise<{ items: DisclosureRestriction[] }> {
+  const response = await apiFetch(
+    `/api/v1/projects/${projectId}/disclosure-restrictions/active`,
+    { headers: authHeader(token), cache: "no-store" },
+  );
+  return parse<{ items: DisclosureRestriction[] }>(response);
 }
 
 // --- Governance -------------------------------------------------------------
@@ -1426,12 +1728,14 @@ export interface ExecutionRecord {
   recordedAt: string;
 }
 
-export async function listProposals(token: string): Promise<{ items: GovernanceProposal[] }> {
+export async function listProposals(
+  token: string,
+): Promise<{ items: GovernanceProposal[] } & ListWindow> {
   const response = await apiFetch("/api/v1/governance/proposals", {
     headers: authHeader(token),
     cache: "no-store",
   });
-  return parse<{ items: GovernanceProposal[] }>(response);
+  return parse<{ items: GovernanceProposal[] } & ListWindow>(response);
 }
 
 export async function createProposal(
@@ -2028,6 +2332,8 @@ export interface MyWork {
     summary: string;
     since: string;
   }[];
+  /** `true` when open stale signals exist beyond those in `unassigned`. */
+  unassignedTruncated: boolean;
 }
 
 export async function listRegistryEntries(
@@ -2129,12 +2435,14 @@ export interface Notification {
   read: boolean;
 }
 
-export async function listNotifications(token: string): Promise<{ items: Notification[] }> {
+export async function listNotifications(
+  token: string,
+): Promise<{ items: Notification[] } & ListWindow> {
   const response = await apiFetch("/api/v1/notifications", {
     headers: authHeader(token),
     cache: "no-store",
   });
-  return parse<{ items: Notification[] }>(response);
+  return parse<{ items: Notification[] } & ListWindow>(response);
 }
 
 export async function markNotificationRead(

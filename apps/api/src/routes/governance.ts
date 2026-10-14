@@ -17,6 +17,7 @@ import {
   type ProposalState,
 } from "@mpc/domain";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { capRows } from "../list-window.js";
 import {
   assertAuthorized,
   projectResource,
@@ -469,6 +470,14 @@ function proposalResource(tenantId: string, projectId: string | null) {
     : projectResource(tenantId, projectId, { sensitivity: "public" });
 }
 
+/**
+ * Cap on the proposal list.
+ *
+ * A flag rather than pages: proposals arrive slowly and the newest are the ones still open to
+ * act on. Past the cap the response says `truncated` so the screen does not read as complete.
+ */
+const PROPOSAL_LIST_LIMIT = 100;
+
 export async function registerGovernanceRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
@@ -515,20 +524,21 @@ export async function registerGovernanceRoutes(
         SELECT id FROM core.governance_proposals
         WHERE project_id IS NULL
            OR ${visible === "all" ? tx`TRUE` : tx`project_id = ANY(${visible as string[]}::uuid[])`}
-        ORDER BY created_at DESC LIMIT 100
+        ORDER BY created_at DESC, id DESC LIMIT ${PROPOSAL_LIST_LIMIT + 1}
       `,
     );
+    const window = capRows(rows, PROPOSAL_LIST_LIMIT);
 
     const items = await withTenant(sql, { tenantId }, async (tx) => {
       const loaded = [];
-      for (const { id } of rows) {
+      for (const { id } of window.items) {
         const proposal = await loadProposal(tx, id);
         if (proposal) loaded.push(toView(proposal, requestId, asOf));
       }
       return loaded;
     });
 
-    return { items, requestId, asOf };
+    return { items, truncated: window.truncated, limit: window.limit, requestId, asOf };
   });
 
   app.get<{ Params: { proposalId: string } }>(
@@ -618,7 +628,7 @@ export async function registerGovernanceRoutes(
     }
 
     const { requestId, asOf, correlationId } = request.context;
-    const requestHash = hashRequest(request.body);
+    const requestHash = hashRequest(request);
 
     return withTenant(sql, { tenantId }, (tx) =>
       withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -711,7 +721,7 @@ export async function registerGovernanceRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -909,7 +919,7 @@ export async function registerGovernanceRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -1011,7 +1021,7 @@ export async function registerGovernanceRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
       const record = parsed.data;
 
       return withTenant(sql, { tenantId }, (tx) =>

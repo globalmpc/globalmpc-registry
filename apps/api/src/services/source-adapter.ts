@@ -394,8 +394,9 @@ export function buildReceiptBody(
     queryBasis: normalized.queryBasis,
     endpointOrDocumentRef: extra.endpointOrDocumentRef,
     authenticationMethod: extra.authenticationMethod,
-    // A failed lookup has no original. Do not fabricate a hash.
-    rawHash: normalized.rawHash ?? `0x${"0".repeat(64)}`,
+    // A failed lookup has no original. Do not fabricate a hash — absent is recorded as absent
+    // (REQ-DAPP-049); 32 zero bytes read as the hash of an original that does not exist.
+    rawHash: normalized.rawHash,
     sourceSchemaVersion: extra.sourceSchemaVersion,
     adapterVersion: extra.adapterVersion,
     termsLicense: extra.termsLicense,

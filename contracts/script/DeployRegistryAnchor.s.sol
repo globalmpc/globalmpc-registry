@@ -18,14 +18,37 @@ import {RegistryAnchorV1} from "../src/RegistryAnchorV1.sol";
 ///
 ///      Environment variables:
 ///      - `ANCHOR_DEPLOYER_KEY` — deployment and signing key
-///      - `ANCHOR_ADMIN` / `ANCHOR_SUBMITTER` / `ANCHOR_PAUSER` — role holders, all required
+///      - `ANCHOR_ADMIN` / `ANCHOR_SUBMITTER` / `ANCHOR_PAUSER` — role holders, all required.
+///        Outside the local chain (31337) `ANCHOR_SUBMITTER` must be a contract (the Safe).
 contract DeployRegistryAnchor is Script {
+    /// @dev The local development chain (anvil). The only chain where an EOA may hold the
+    ///      submitter role.
+    uint256 internal constant LOCAL_CHAIN_ID = 31337;
+
     function run() external returns (RegistryAnchorV1 anchor) {
         uint256 deployerKey = vm.envUint("ANCHOR_DEPLOYER_KEY");
 
         address admin = requiredRole("ANCHOR_ADMIN");
         address submitter = requiredRole("ANCHOR_SUBMITTER");
         address pauser = requiredRole("ANCHOR_PAUSER");
+
+        anchor = deploy(deployerKey, admin, submitter, pauser);
+    }
+
+    /// @dev Off the local chain the submitter must be a contract — the Safe multisig. An EOA
+    ///      there lets one key anchor alone, which the worker also refuses; but the role grant
+    ///      made here is what the chain enforces, so the script checks it too. A Safe not yet
+    ///      deployed at that address has no code and is refused the same way.
+    function deploy(uint256 deployerKey, address admin, address submitter, address pauser)
+        internal
+        returns (RegistryAnchorV1 anchor)
+    {
+        if (block.chainid != LOCAL_CHAIN_ID) {
+            require(
+                submitter.code.length > 0,
+                "ANCHOR_SUBMITTER must be a contract (the Safe multisig) outside the local chain 31337."
+            );
+        }
 
         vm.startBroadcast(deployerKey);
         anchor = new RegistryAnchorV1(admin, submitter, pauser);

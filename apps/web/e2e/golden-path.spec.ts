@@ -29,6 +29,10 @@ test.describe("golden path", () => {
     await page.getByRole("textbox", { name: "Project key" }).fill(projectKey);
     await page.getByRole("textbox", { name: "Name" }).fill("Golden Path mine");
     await page.getByRole("textbox", { name: "Minerals (comma separated)" }).fill("copper");
+    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
+      "aaaaaaaa-0000-0000-0000-000000000001",
+    );
     await page.getByRole("button", { name: "Register" }).click();
 
     await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
@@ -107,16 +111,31 @@ test.describe("golden path", () => {
      * answer here is not "confirmed" but **"a person must check"**, and that is the
      * fact of this deployment today. The point is not to fabricate a confirmation.
      */
+    // The source is the project's jurisdiction's own connection, picked on screen — not a
+    // fixed demo id — and the query is what the steward typed.
+    const connection = page.getByRole("combobox", { name: "Source connection" });
+    await connection.selectOption("cccccccc-0000-0000-0000-000000000002");
+    await expect(connection).toHaveValue("cccccccc-0000-0000-0000-000000000002");
+    await page.getByRole("textbox", { name: "Query field" }).fill("licenseNumber");
+    await page.getByRole("textbox", { name: "Query value" }).fill(`LIC-${projectKey}`);
     await page.getByRole("button", { name: "Look up the official source" }).click();
     await expect(page.getByText("Manual review required")).toBeVisible();
 
     // The screen distinguishes the 12 outcomes as different facts (AC-18). If "no record"
     // and "cannot confirm" read the same, users keep retrying a record that does not exist.
-    await page.getByRole("button", { name: "Record “no record”" }).click();
+    // A manual record names where the result was seen; the server computes freshness, and
+    // with no original kept the receipt says so instead of carrying a placeholder hash.
+    await page.getByRole("combobox", { name: "Result" }).selectOption("source_returned_no_record");
+    await page
+      .getByRole("textbox", { name: "Document or page reference" })
+      .fill("Registry search screen, licence search");
+    await page.getByRole("button", { name: "Record the result" }).click();
     await expect(page.getByText("No record found for this query")).toBeVisible();
 
-    await page.getByRole("button", { name: "Record “source unavailable”" }).click();
+    await page.getByRole("combobox", { name: "Result" }).selectOption("source_unavailable");
+    await page.getByRole("button", { name: "Record the result" }).click();
     await expect(page.getByText("Source currently unavailable")).toBeVisible();
+    await expect(page.getByText("none kept").first()).toBeVisible();
 
     await page.getByRole("button", { name: "Add a mining right claim" }).click();
     await expect(page.getByText("mining_right_registration")).toBeVisible();
@@ -189,13 +208,30 @@ test.describe("golden path", () => {
     // regex matches two elements. Wait exactly for the heading of the loaded result.
     await expect(page.getByText(/^\d+ requirements block go$/)).toBeVisible();
 
+    // AC-34: a not_evaluable requirement says why, what is needed and what to do next — the
+    // jurisdiction has no recorded environmental basis, and none is assumed.
+    const notEvaluable = page.getByTestId("blocking-environmental-baseline");
+    await expect(notEvaluable).toContainText("not_evaluable");
+    await expect(notEvaluable).toContainText("Cause:");
+    await expect(notEvaluable).toContainText("Needed: environmentalRequirementBasis");
+    await expect(notEvaluable).toContainText("Next:");
+
     await page.getByLabel("Rationale (required)").fill("The basis is insufficient; not advancing to the next stage");
+    await page.getByLabel("Assumptions (one per line)").fill("The licence search reflects the registry today");
+    await page
+      .getByLabel("Conditions (one per line; required for go on watch)")
+      .fill("Re-assess once the jurisdiction profile records an environmental basis");
 
     // With a gap, go is blocked but hold can always be recorded. If bad news cannot be
     // recorded, the state quietly goes stale.
     await expect(page.getByRole("button", { name: "go (blocked)" })).toBeDisabled();
     await page.getByRole("button", { name: "hold", exact: true }).click();
     await expect(page.getByText("Recorded decision")).toBeVisible();
+    // The decision is signed by the approver's own wallet; the server verified the signer.
+    const recorded = page.getByTestId("recorded-decision");
+    await expect(recorded).toContainText("Signed by");
+    await expect(recorded).toContainText("Re-assess once the jurisdiction profile");
+    await expect(recorded).toContainText("not a legal approval");
 
     // --- 7. Draft (mpc_operator) → publish (disclosure_approver) → anchor --
     // 02 §2.8: the person who drafts a public projection does not publish it.

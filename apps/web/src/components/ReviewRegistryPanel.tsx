@@ -68,6 +68,9 @@ const TEMPLATES: Readonly<Record<RegistrySegment, unknown>> = {
   credentials: {
     subjectId: "",
     issuerReference: "",
+    // The issuing authority's id from the authority registry. Its acceptance and recognized
+    // scope decide whether the credential can back a review (AC-15·AC-16).
+    issuerAuthorityId: "",
     credentialType: "competent_person",
     credentialScope: [],
     jurisdiction: ["MNG"],

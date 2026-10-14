@@ -15,7 +15,10 @@
   "dependencies": {
     "@mpc/domain": "workspace:*",
     "@mpc/policy": "workspace:*",
-    "zod": "^3.24.1",
-    "zod-to-json-schema": "^3.24.1"
-  }
+    "zod": "3.25.76",
+    "zod-to-json-schema": "3.25.2"
+  },
+  "files": [
+    "src"
+  ]
 }

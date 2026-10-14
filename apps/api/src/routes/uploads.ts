@@ -4,6 +4,7 @@ import type postgres from "postgres";
 import { z } from "zod";
 import { withTenant } from "@mpc/db";
 import { SENSITIVITY_LEVELS, admitToStorage } from "@mpc/domain";
+import { uploadListQuery } from "@mpc/api-contract";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import {
   assertAuthorized,
@@ -13,6 +14,11 @@ import {
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
+import {
+  CURSOR_TIME_FORMAT,
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+} from "../list-window.js";
 import {
   assertVersionMatches,
   requireIfMatch,
@@ -54,6 +60,12 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /** Multipart cap. It streams to storage, so it can accept more. */
 const MAX_STREAM_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * The streaming path is always restricted. Accepting the sensitive tier needs a secured route
+ * (OD-18), which does not exist yet.
+ */
+const STREAM_SENSITIVITY = "restricted";
 
 /** States that passed the malware scan. Only these get a download link. */
 const DOWNLOADABLE_STATES: ReadonlySet<UploadState> = new Set(["scanned_clean", "promoted"]);
@@ -119,6 +131,34 @@ const scanResultSchema = z.object({
   detail: z.string().optional(),
 });
 
+/**
+ * Identical content is stored once, so a repeat upload is answered with the existing row — but
+ * only when it asks for the same sensitivity. Handing back a row with a different one would let
+ * the caller believe the file is now public, or now restricted, when nothing changed.
+ */
+function assertSameSensitivity(existing: UploadRow, requested: string): void {
+  if (existing.sensitivity !== requested) {
+    throw conflict(
+      "UPLOAD_SENSITIVITY_MISMATCH",
+      "This file is already uploaded with a different sensitivity. Its sensitivity is not changed by uploading it again",
+      { uploadId: existing.id, sensitivity: existing.sensitivity, requestedSensitivity: requested },
+    );
+  }
+}
+
+/** The upload that already holds this content in the project, if any. */
+async function uploadWithContent(
+  tx: postgres.TransactionSql,
+  projectId: string,
+  contentHash: string,
+): Promise<UploadRow | undefined> {
+  const [existing] = await tx<UploadRow[]>`
+    SELECT * FROM core.object_uploads
+    WHERE project_id = ${projectId} AND content_hash = ${contentHash}
+  `;
+  return existing;
+}
+
 export interface UploadRow {
   readonly id: string;
   readonly project_id: string;
@@ -137,6 +177,9 @@ export interface UploadRow {
   /** A DATE column. The driver hands it over as a Date at UTC midnight. */
   readonly valid_until: Date | string | null;
   readonly supersedes_upload_id: string | null;
+  readonly revoked_at: Date | null;
+  readonly revoked_by: string | null;
+  readonly revocation_reason: string | null;
   readonly version: number;
 }
 
@@ -152,7 +195,9 @@ export function calendarDay(value: Date | string | null): string | null {
  * The server provides them so the UI does not guess. The key point is that
  * `scanned_infected` has no "rescan" — no such path exists.
  */
-function nextActions(state: UploadState): string[] {
+function nextActions(state: UploadState, revoked: boolean): string[] {
+  // Kept readable for the record; the way forward is a corrected version, not an undo.
+  if (revoked) return ["Download", "Upload a corrected version that replaces this one"];
   switch (state) {
     case "received":
       return ["Record scan result"];
@@ -187,7 +232,10 @@ function toView(row: UploadRow) {
     documentType: row.document_type,
     validUntil: calendarDay(row.valid_until),
     supersedesUploadId: row.supersedes_upload_id,
-    nextActions: nextActions(row.state),
+    revokedAt: row.revoked_at?.toISOString() ?? null,
+    revokedBy: row.revoked_by,
+    revocationReason: row.revocation_reason,
+    nextActions: nextActions(row.state, row.revoked_at !== null),
     version: row.version,
   };
 }
@@ -282,13 +330,44 @@ export async function registerUploadRoutes(
         sessionFacts(session),
       );
 
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
-        tx<UploadRow[]>`
-          SELECT * FROM core.object_uploads
-          WHERE project_id = ${request.params.projectId}
-          ORDER BY uploaded_at DESC LIMIT 100
-        `,
-      );
+      const parsed = uploadListQuery.safeParse(request.query);
+      if (!parsed.success) {
+        throw badRequest("REQUEST_INVALID", "Query parameters are invalid", {
+          issues: parsed.error.issues,
+        });
+      }
+      const { limit } = parsed.data;
+      const after = parsed.data.cursor ? decodeKeysetCursor(parsed.data.cursor) : null;
+      const { projectId } = request.params;
+
+      const { rows, total } = await withTenant(sql, { tenantId }, async (tx) => {
+        /**
+         * The first page and the later ones are separate statements on purpose. One statement
+         * with `$cursor IS NULL OR (...)` works until the server switches to a generic plan,
+         * which cannot drop the unused branch and stops using the index for it.
+         * The cursor's time goes in as text — see `list-window.ts`.
+         */
+        const page = await tx<(UploadRow & { cursor_at: string })[]>`
+          SELECT u.*, to_char(u.uploaded_at AT TIME ZONE 'UTC', ${CURSOR_TIME_FORMAT}) AS cursor_at
+          FROM core.object_uploads u
+          WHERE u.project_id = ${projectId}
+          ${
+            after
+              ? tx`AND (u.uploaded_at, u.id) < (${after.at}::text::timestamptz, ${after.id}::text::uuid)`
+              : tx``
+          }
+          ORDER BY u.uploaded_at DESC, u.id DESC
+          LIMIT ${limit + 1}
+        `;
+        const [count] = await tx<{ total: number }[]>`
+          SELECT count(*)::int AS total FROM core.object_uploads WHERE project_id = ${projectId}
+        `;
+        return { rows: page, total: count?.total ?? 0 };
+      });
+      const items = rows.slice(0, limit);
+      const last = items.at(-1);
+      const nextCursor =
+        rows.length > limit && last ? encodeKeysetCursor({ at: last.cursor_at, id: last.id }) : null;
 
       /**
        * Is the scanner alive.
@@ -303,7 +382,17 @@ export async function registerUploadRoutes(
        */
       const scanner = await scannerStatus(sql);
 
-      return { items: rows.map(toView), scanner, requestId, asOf };
+      return {
+        items: items.map(toView),
+        scanner,
+        nextCursor,
+        sort: "uploadedAt:desc,id:desc" as const,
+        truncated: nextCursor !== null,
+        limit,
+        total,
+        requestId,
+        asOf,
+      };
     },
   );
 
@@ -356,17 +445,17 @@ export async function registerUploadRoutes(
 
       const contentHash = computeContentHash(bytes);
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
           // If the same content exists, return it. Storing it twice forks evidence and
           // leaves it unclear which copy is under review.
-          const [existing] = await tx<UploadRow[]>`
-            SELECT * FROM core.object_uploads
-            WHERE project_id = ${request.params.projectId} AND content_hash = ${contentHash}
-          `;
-          if (existing) return { ...toView(existing), requestId, asOf };
+          const existing = await uploadWithContent(tx, request.params.projectId, contentHash);
+          if (existing) {
+            assertSameSensitivity(existing, parsed.data.sensitivity);
+            return { ...toView(existing), requestId, asOf };
+          }
 
           const uploadId = randomUUID();
           // Quarantine path. The evidence path is created on promotion.
@@ -385,8 +474,16 @@ export async function registerUploadRoutes(
               ${parsed.data.originalFilename}, ${parsed.data.sensitivity},
               'quarantined', ${session.subjectId ?? null}
             )
+            ON CONFLICT (tenant_id, project_id, content_hash) DO NOTHING
             RETURNING *
           `;
+          if (!row) {
+            // The same content arrived at the same moment and was committed first. The lookup
+            // above ran before it existed; answer as a later duplicate would be answered.
+            const winner = (await uploadWithContent(tx, request.params.projectId, contentHash))!;
+            assertSameSensitivity(winner, parsed.data.sensitivity);
+            return { ...toView(winner), requestId, asOf };
+          }
 
           await recordAudit(tx, {
             effectiveRole,
@@ -405,7 +502,7 @@ export async function registerUploadRoutes(
             },
           });
 
-          return { ...toView(row!), requestId, asOf };
+          return { ...toView(row), requestId, asOf };
         }),
       );
     },
@@ -414,7 +511,7 @@ export async function registerUploadRoutes(
   /**
    * Record scan result.
    *
-   * **This path is called by the scan service.** In the default setup the `@mpc/worker` scan
+   * **This path is called by the scan service.** In the default setup the `@mpc/scan-worker`
    * worker updates the DB directly, so this route is unused. It is kept for attaching an
    * external scan service.
    *
@@ -475,18 +572,21 @@ export async function registerUploadRoutes(
       }
       if (stored.byteSize === 0) throw badRequest("UPLOAD_EMPTY", "Empty files are not accepted");
 
-      const requestHash = hashRequest({ contentHash: stored.contentHash });
+      const requestHash = hashRequest(request, { contentHash: stored.contentHash });
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-          const [existing] = await tx<UploadRow[]>`
-            SELECT * FROM core.object_uploads
-            WHERE project_id = ${request.params.projectId}
-              AND content_hash = ${stored.contentHash}
-          `;
+          const existing = await uploadWithContent(
+            tx,
+            request.params.projectId,
+            stored.contentHash,
+          );
           // The same content already exists. The object just written stays but is unreferenced —
           // deleting it would let a storage error turn into an upload failure.
-          if (existing) return { ...toView(existing), requestId, asOf };
+          if (existing) {
+            assertSameSensitivity(existing, STREAM_SENSITIVITY);
+            return { ...toView(existing), requestId, asOf };
+          }
 
           const [row] = await tx<UploadRow[]>`
             INSERT INTO core.object_uploads (
@@ -495,13 +595,22 @@ export async function registerUploadRoutes(
             ) VALUES (
               ${uploadId}, ${tenantId}, ${request.params.projectId}, ${key},
               ${stored.contentHash}, ${stored.byteSize}, ${stored.contentType},
-              -- The streaming path is always restricted. Accepting the sensitive tier
-              -- needs a secured route (OD-18), which does not exist yet.
-              ${file.filename ?? null}, 'restricted', 'quarantined',
+              ${file.filename ?? null}, ${STREAM_SENSITIVITY}, 'quarantined',
               ${session.subjectId ?? null}
             )
+            ON CONFLICT (tenant_id, project_id, content_hash) DO NOTHING
             RETURNING *
           `;
+          if (!row) {
+            // Committed first by a concurrent upload of the same content; see the base64 path.
+            const winner = (await uploadWithContent(
+              tx,
+              request.params.projectId,
+              stored.contentHash,
+            ))!;
+            assertSameSensitivity(winner, STREAM_SENSITIVITY);
+            return { ...toView(winner), requestId, asOf };
+          }
 
           await recordAudit(tx, {
             effectiveRole,
@@ -517,7 +626,7 @@ export async function registerUploadRoutes(
             detail: { byteSize: stored.byteSize, contentType: stored.contentType, via: "multipart" },
           });
 
-          return { ...toView(row!), requestId, asOf };
+          return { ...toView(row), requestId, asOf };
         }),
       );
     },
@@ -545,7 +654,7 @@ export async function registerUploadRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
       const toState: UploadState =
         parsed.data.result === "clean" ? "scanned_clean" : "scanned_infected";
 
@@ -617,7 +726,7 @@ export async function registerUploadRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body ?? {});
+      const requestHash = hashRequest(request);
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
@@ -712,7 +821,7 @@ export async function registerUploadRoutes(
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body ?? {});
+      const requestHash = hashRequest(request);
       const ttlSeconds = 300;
 
       return withTenant(sql, { tenantId }, (tx) =>

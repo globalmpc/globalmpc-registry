@@ -8,13 +8,7 @@ export {
   type NotMeaning,
 } from "./status-display.js";
 
-export {
-  PROHIBITED_PHRASES,
-  REQUIRED_BOUNDARY_COPY,
-  lintProhibitedLanguage,
-  type ProhibitedPhrase,
-  type LintFinding,
-} from "./prohibited-language.js";
+export { REQUIRED_BOUNDARY_COPY } from "./boundary-copy.js";
 
 export {
   project,

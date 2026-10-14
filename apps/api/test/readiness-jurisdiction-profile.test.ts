@@ -27,6 +27,17 @@ describeDb("readiness reads the jurisdiction profile (OD-43)", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     operatorToken = await signIn(app, fx.operatorA);
+    // The rights requirement also reads `rightsExpiryWithin12Months`, which comes from the
+    // project's `mining_right_expiry` claim. Recording a distant expiry leaves the profile state
+    // as the only basis these tests vary.
+    await fx.sql`
+      INSERT INTO core.claims (
+        id, tenant_id, project_id, claim_type, value_text, as_of, source_coordinate, grade
+      ) VALUES (
+        ${randomUUID()}, ${fx.tenantA}, ${fx.projectA}, 'mining_right_expiry', '2099-12-31',
+        '2026-09-01', ${fx.sql.json({ document: "extract" })}, 'verified'
+      )
+    `;
   });
 
   afterAll(async () => {

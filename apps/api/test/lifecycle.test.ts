@@ -154,9 +154,11 @@ describeDb("project lifecycle", () => {
   async function confirmOfferingPreconditions(projectId: string, except?: string) {
     for (const precondition of OFFERING_PRECONDITIONS.filter((p) => p.key !== except)) {
       await fx.sql`
-        INSERT INTO core.project_facts (id, tenant_id, project_id, fact_key, status, evidence_ref)
+        INSERT INTO core.project_facts (
+          id, tenant_id, project_id, fact_key, status, evidence_ref, evidence_kind
+        )
         VALUES (${randomUUID()}, ${fx.tenantA}, ${projectId}, ${precondition.key},
-                'confirmed', ${randomUUID()})
+                'confirmed', ${randomUUID()}, 'upload')
       `;
     }
   }

@@ -206,3 +206,44 @@ export const ATTESTATION_EIP712_TYPES = {
     { name: "nonce", type: "bytes32" },
   ],
 } as const;
+
+/**
+ * EIP-712 type of a gate decision — spec 11 §11.3.
+ *
+ * Rationale, assumptions and conditions are committed by `payloadHash`, as an attestation's
+ * findings are. The decision value and the assessment it rests on stay readable in the wallet,
+ * because those are what the approver must not sign by mistake.
+ */
+export const GATE_DECISION_EIP712_TYPES = {
+  GateDecision: [
+    { name: "projectId", type: "bytes32" },
+    { name: "gateId", type: "string" },
+    { name: "decision", type: "string" },
+    { name: "inputAssessmentId", type: "bytes32" },
+    { name: "evidenceSnapshotHash", type: "bytes32" },
+    { name: "payloadHash", type: "bytes32" },
+    { name: "issuedAt", type: "uint64" },
+    { name: "expiresAt", type: "uint64" },
+    { name: "nonce", type: "bytes32" },
+  ],
+} as const;
+
+export const gateDecisionSignatureRequestResponse = z.object({
+  signatureRequestId: z.string(),
+  /** Human-readable signing target. Shown before the wallet opens. */
+  humanReadablePayload: z.string(),
+  typedData: z.object({
+    domain: z.object({
+      name: z.literal("MPC Gate Decision"),
+      version: z.string(),
+      chainId: z.number().int().positive(),
+      salt: z.string(),
+    }),
+    primaryType: z.literal("GateDecision"),
+    types: z.record(z.array(z.object({ name: z.string(), type: z.string() }))),
+    message: z.record(z.unknown()),
+  }),
+  payloadHash: z.string(),
+  nonce: z.string(),
+  expiresAt: isoDateTime,
+});

@@ -34,7 +34,6 @@ describeDb("observability", () => {
         valueText: "MV-999999",
         sourceCoordinate: { document: "extract", page: "1" },
         evidenceTier: "P1",
-        verificationState: "analyst_checked",
       },
     });
   });

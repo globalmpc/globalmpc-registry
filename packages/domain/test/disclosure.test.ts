@@ -4,6 +4,7 @@ import {
   PUBLIC_FIELD_ALLOWLIST,
   checkPublishable,
   checkRestrictedAction,
+  RESTRICTABLE_ACTION_TYPES,
   isPublicField,
   type DisclosureRestriction,
   type PublicationGuardInput,
@@ -180,5 +181,18 @@ describe("AC-30 — material-information blackout", () => {
     const result = checkRestrictedAction([active, other], "asset-A", "vote");
     expect(result.blocked).toBe(true);
     if (result.blocked) expect(result.restrictionId).toBe("restriction-002");
+  });
+});
+
+describe("restrictable actions — 07 §7.14", () => {
+  it("never lets a blackout block suspension", () => {
+    // Taking a project down reduces risk; a blackout must not stand in its way.
+    expect(RESTRICTABLE_ACTION_TYPES).not.toContain("project.lifecycle.suspended");
+  });
+
+  it("does not list asset-token actions that have no route (OD-07)", () => {
+    for (const action of RESTRICTABLE_ACTION_TYPES) {
+      expect(action).toMatch(/^(registry\.publish|project\.lifecycle\.)/);
+    }
   });
 });

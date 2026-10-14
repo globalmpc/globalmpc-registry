@@ -21,6 +21,7 @@ import { pinnedFetch, type SourceFetch } from "../services/source-fetch.js";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import {
   assertAuthorized,
+  projectResource,
   sessionFacts,
   tenantResource,
 } from "../plugins/authorize.js";
@@ -167,15 +168,18 @@ export async function registerSourceCollectRoutes(
         });
       }
 
+      // The receipt is written to the project in the body, so that project is what is
+      // authorized. A tenant-level check let a steward create receipts in any project of the
+      // tenant, including another organization's.
       const effectiveRole = assertAuthorized(
         session,
         "source.collect",
-        tenantResource(tenantId),
+        projectResource(tenantId, parsed.data.projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const requestHash = hashRequest(request.body);
+      const requestHash = hashRequest(request);
 
       const [connection] = await withTenant(
         sql,
@@ -417,6 +421,14 @@ export async function registerSourceCollectRoutes(
  * The first checker cannot do it. The DB CHECK blocks the same thing, but tripping it
  * returns a 500 and the caller cannot tell why it was blocked.
  */
+function isUniqueViolation(caught: unknown, constraint: string): boolean {
+  return (
+    caught instanceof Error &&
+    (caught as { code?: string }).code === "23505" &&
+    caught.message.includes(constraint)
+  );
+}
+
 export async function registerSecondReviewRoute(
   app: FastifyInstance,
   sql: postgres.Sql,
@@ -433,13 +445,15 @@ export async function registerSecondReviewRoute(
         });
       }
 
-      const effectiveRole = assertAuthorized(
+      // A different reviewer is required. An unresolved conflict is not a second review.
+      const reviewResource = { separationSensitive: true } as const;
+
+      // Refuses callers without the role before reading anything. Project scope is checked
+      // once the receipt is read.
+      assertAuthorized(
         session,
         "source.collect",
-        tenantResource(tenantId, {
-          // A different reviewer is required. An unresolved conflict is not a second review.
-          separationSensitive: true,
-        }),
+        tenantResource(tenantId, reviewResource),
         sessionFacts(session),
       );
 
@@ -477,6 +491,19 @@ export async function registerSecondReviewRoute(
           FROM core.source_receipts r WHERE r.id = ${request.params.receiptId}
         `;
         if (!receipt) throw notFound("Receipt not found");
+
+        /**
+         * Authorized against the receipt's project — the follow-up is written there too.
+         * A receipt without a project is a tenant-level record, checked as such.
+         */
+        const effectiveRole = assertAuthorized(
+          session,
+          "source.collect",
+          receipt.project_id === null
+            ? tenantResource(tenantId, reviewResource)
+            : projectResource(tenantId, receipt.project_id, reviewResource),
+          sessionFacts(session),
+        );
 
         if (receipt.collection_method !== "manual_official_registry_confirmation") {
           throw unprocessable(
@@ -526,6 +553,10 @@ export async function registerSecondReviewRoute(
          * diverge, that record is the evidence for the decision.
          */
         const id = randomUUID();
+        /**
+         * The read above does not see a concurrent review that has not committed yet. The
+         * unique index (0076) decides that race; the loser gets the same answer as a late one.
+         */
         await tx`
           INSERT INTO core.source_receipts (
             id, tenant_id, project_id, connection_id, authority_id, collection_method,
@@ -551,7 +582,12 @@ export async function registerSecondReviewRoute(
             } as never)},
             ${receipt.first_confirmed_by}, ${session.subjectId}, now(), ${receipt.id}
           )
-        `;
+        `.catch((caught: unknown) => {
+          if (isUniqueViolation(caught, "source_receipts_one_follow_up_idx")) {
+            throw conflict("SECOND_REVIEW_ALREADY_DONE", "Second review is already done");
+          }
+          throw caught;
+        });
 
         await recordAudit(tx, {
           effectiveRole,

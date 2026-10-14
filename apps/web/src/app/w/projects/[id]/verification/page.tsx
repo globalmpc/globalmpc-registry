@@ -25,6 +25,7 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { Address } from "@/components/Address";
 
 /**
@@ -47,6 +48,8 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
   const { token, session, signTypedData } = useSession();
 
   const [claims, setClaims] = useState<Claim[]>([]);
+  // Set when the server capped the claim list: the whole count, else null.
+  const [claimTotal, setClaimTotal] = useState<number | null>(null);
   const [cases, setCases] = useState<VerificationCase[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [verificationCase, setVerificationCase] = useState<VerificationCase | null>(null);
@@ -76,6 +79,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
         listVerificationCases(token, id),
       ]);
       setClaims(claimData.items);
+      setClaimTotal(claimData.truncated ? claimData.total : null);
       setCases(caseData.items);
       return caseData.items;
     } catch (caught) {
@@ -199,6 +203,14 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
             ))}
           </ul>
         )}
+        {claimTotal !== null ? (
+          <TruncatedNotice
+            shown={claims.length}
+            total={claimTotal}
+            noun="claims, by claim type"
+            testId="verification-claims-truncated"
+          />
+        ) : null}
 
         {canAssign ? (
           <div data-testid="assignment-options">

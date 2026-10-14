@@ -111,7 +111,7 @@ echo "Migrate step of $FROM_REF: $from_migrate"
 
 # --- 3. The older release's API and worker suites on the newer schema --------------
 suite_status=0
-(cd "$work/from" && DATABASE_URL="$db_url" npx vitest run --project @mpc/api --project @mpc/worker) \
+(cd "$work/from" && DATABASE_URL="$db_url" npx vitest run --project @mpc/api --project '@mpc/*worker') \
   >"$work/from-suite.log" 2>&1 || suite_status=$?
 files_line=$(grep -E '^ +Test Files' "$work/from-suite.log" | tail -1 | sed -E 's/^ +//' || true)
 tests_line=$(grep -E '^ +Tests ' "$work/from-suite.log" | tail -1 | sed -E 's/^ +//' || true)

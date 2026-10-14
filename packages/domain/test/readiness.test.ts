@@ -122,12 +122,38 @@ describe("watch → go promotion", () => {
     expect(result.allowed).toBe(false);
   });
 
-  it("allows when a rationale is given", () => {
+  it("cannot promote without conditions, even with a rationale (§11.3)", () => {
     const result = checkGateDecision({
       decision: "go",
       requirementStatuses: ["ok", "watch"],
       hasAssessment: true,
-      rationale: "The environmental baseline is monitored under a quarterly re-check condition",
+      rationale: "The environmental baseline is monitored",
+      conditions: [" "],
+    });
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toBe("GATE_WATCH_REQUIRES_CONDITIONS");
+      expect(result.blockingRequirementIndexes).toEqual([1]);
+    }
+  });
+
+  it("allows when a rationale and a condition are given", () => {
+    const result = checkGateDecision({
+      decision: "go",
+      requirementStatuses: ["ok", "watch"],
+      hasAssessment: true,
+      rationale: "The environmental baseline is monitored",
+      conditions: ["Re-check the baseline every quarter"],
+    });
+    expect(result.allowed).toBe(true);
+  });
+
+  it("all ok needs no conditions", () => {
+    const result = checkGateDecision({
+      decision: "go",
+      requirementStatuses: ["ok", "ok"],
+      hasAssessment: true,
+      rationale: "Requirements met",
     });
     expect(result.allowed).toBe(true);
   });
@@ -202,6 +228,7 @@ describe("property — gate decision", () => {
             requirementStatuses: statuses,
             hasAssessment: true,
             rationale: "rationale",
+            conditions: ["condition"],
           });
           expect(result.allowed).toBe(!statuses.some(isGoBlocking));
         },

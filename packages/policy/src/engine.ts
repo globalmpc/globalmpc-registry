@@ -6,7 +6,7 @@ import {
   type Grade,
   type ReadinessStatus,
 } from "@mpc/domain";
-import { evaluatePredicate, type Facts } from "./predicate.js";
+import { collectPredicatePaths, evaluatePredicate, type Facts, type Predicate } from "./predicate.js";
 import type { Requirement, RuleSet } from "./rule-schema.js";
 
 /**
@@ -31,7 +31,19 @@ export interface RequirementFacts {
   /** Evidence age in days, as an integer decimal string. null when unknown. */
   readonly evidenceAgeDays: string | null;
   readonly unresolvedConflictTypes: readonly string[];
-  /** Additional facts referenced by appliesWhen, notEvaluableWhen, and watchWhen. */
+  /**
+   * Claim types whose evidence has gone stale or expired (REQ-DAPP-026, AC-04).
+   *
+   * A stale claim keeps its review history, so its grade can still read as passing. What
+   * changed is the evidence under it, and that is a gap until someone re-establishes it.
+   */
+  readonly staleEvidence: readonly string[];
+  /**
+   * Additional facts referenced by appliesWhen, notEvaluableWhen, and watchWhen.
+   *
+   * `undefined` means "not recorded". A predicate that reads an unrecorded fact makes the
+   * requirement not_evaluable — an absent value never stands in for a default.
+   */
   readonly context: Facts;
 }
 
@@ -95,6 +107,13 @@ export function evaluateRequirement(
     };
   }
 
+  // Whether a requirement applies cannot be decided on a fact nobody recorded. Reading an
+  // absent stage as "does not apply" would pass the requirement without looking at it.
+  const unknownApplicability = absentFacts(requirement.appliesWhen, facts.context);
+  if (unknownApplicability.length > 0) {
+    return notEvaluableFor(base, unknownApplicability);
+  }
+
   if (!evaluatePredicate(requirement.appliesWhen, facts.context)) {
     return {
       ...base,
@@ -105,15 +124,18 @@ export function evaluateRequirement(
     };
   }
 
-  // Having no evaluation basis at all takes precedence over missing evidence.
+  // Having no evaluation basis at all takes precedence over missing evidence. A comparison
+  // such as `jurisdictionProfileState = suspended` is false on an absent value, which would
+  // read as "not suspended" — so an unrecorded fact is itself a missing basis.
+  const unknownBasis = [
+    ...absentFacts(requirement.notEvaluableWhen, facts.context),
+    ...(requirement.watchWhen === null ? [] : absentFacts(requirement.watchWhen, facts.context)),
+  ];
+  if (unknownBasis.length > 0) {
+    return notEvaluableFor(base, unknownBasis);
+  }
   if (evaluatePredicate(requirement.notEvaluableWhen, facts.context)) {
-    return {
-      ...base,
-      status: "not_evaluable",
-      applicable: true,
-      reasonCode: "NO_EVALUATION_BASIS",
-      missing: [],
-    };
+    return notEvaluableFor(base, [...collectPredicatePaths(requirement.notEvaluableWhen)]);
   }
 
   const missingClaimTypes = requirement.requiredClaimTypes.filter(
@@ -126,6 +148,21 @@ export function evaluateRequirement(
       applicable: true,
       reasonCode: "MISSING_REQUIRED_CLAIM_TYPE",
       missing: missingClaimTypes,
+    };
+  }
+
+  // Stale evidence comes before the grade: the grade was earned on evidence that has since
+  // moved, so "grade below minimum" would send people to review the wrong thing.
+  const staleClaimTypes = facts.staleEvidence.filter((claimType) =>
+    requirement.requiredClaimTypes.includes(claimType),
+  );
+  if (staleClaimTypes.length > 0) {
+    return {
+      ...base,
+      status: "gap",
+      applicable: true,
+      reasonCode: "EVIDENCE_STALE",
+      missing: [...new Set(staleClaimTypes)].sort().map((claimType) => `stale:${claimType}`),
     };
   }
 
@@ -203,6 +240,24 @@ export function evaluateRequirement(
     applicable: true,
     reasonCode: "REQUIREMENT_SATISFIED",
     missing: [],
+  };
+}
+
+/** Fact paths a predicate reads that the context does not carry, sorted and unique. */
+function absentFacts(predicate: Predicate, context: Facts): string[] {
+  return [...collectPredicatePaths(predicate)].filter((path) => context[path] === undefined).sort();
+}
+
+function notEvaluableFor(
+  base: { readonly requirementId: string },
+  paths: readonly string[],
+): RequirementResult {
+  return {
+    ...base,
+    status: "not_evaluable",
+    applicable: true,
+    reasonCode: "NO_EVALUATION_BASIS",
+    missing: [...new Set(paths)].sort().map((path) => `fact:${path}`),
   };
 }
 

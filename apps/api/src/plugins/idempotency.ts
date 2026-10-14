@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { FastifyRequest } from "fastify";
 import type postgres from "postgres";
 import { withTenant } from "@mpc/db";
 import { conflict } from "../errors.js";
@@ -9,9 +10,23 @@ import { conflict } from "../errors.js";
  * The same request with the same key returns the stored response as is. A **different**
  * request with the same key is rejected. A client reusing a key while changing the payload is
  * a bug, and silently executing it causes duplicate side effects.
+ *
+ * **What "the same request" covers.** Keys are stored per tenant, so the hash carries the rest:
+ * the method, the path with its parameters filled in, and the acting subject, besides the
+ * payload. Hashing the body alone let the same key and body sent to another resource, or by
+ * another person in the tenant, replay a response that was never theirs. The query string is
+ * left out — mutations do not read it.
+ *
+ * `payload` defaults to the body. Routes whose body is a stream pass what identifies it.
  */
-export function hashRequest(body: unknown): string {
-  return createHash("sha256").update(JSON.stringify(body ?? null)).digest("hex");
+export function hashRequest(request: FastifyRequest, payload: unknown = request.body): string {
+  const scoped = {
+    method: request.method,
+    path: request.url.split("?")[0],
+    subjectId: request.session?.subjectId ?? null,
+    payload: payload ?? null,
+  };
+  return createHash("sha256").update(JSON.stringify(scoped)).digest("hex");
 }
 
 /**

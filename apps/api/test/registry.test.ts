@@ -496,6 +496,42 @@ describeDb("Registry publication and public lookup", () => {
       expect(ours.statusCode).toBe(200);
     });
 
+    /**
+     * The public URL is `/registries/{type}/{publicKey}` with no tenant in it, so a key is unique
+     * across tenants. Another tenant's entry is invisible under RLS, so the publish route's own
+     * lookup misses it and the INSERT hits the unique constraint. That is the same conflict as a
+     * key held by another subject in this tenant, and it must read the same — the answer may not
+     * reveal that another tenant holds the key.
+     */
+    it("a key another tenant already published is refused with the same 409 as in-tenant", async () => {
+      const publicKey = `XTP-${randomUUID().slice(0, 8)}`;
+      const otherProject = randomUUID();
+      await fx.sql`
+        INSERT INTO core.projects (
+          id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        ) VALUES (
+          ${otherProject}, ${fx.tenantB}, ${publicKey}, 'Other tenant', 'MNG', ARRAY['copper'],
+          ${fx.orgB}
+        )
+      `;
+      await fx.sql`
+        INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
+        VALUES (${randomUUID()}, ${fx.tenantB}, 'project', ${otherProject}, ${publicKey})
+      `;
+
+      const drafted = await draft(tokens.operatorA, { publicKey });
+      expect(drafted.statusCode).toBe(200);
+      const response = await publishDraft(app, tokens.disclosureApproverA, drafted.json());
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: "REGISTRY_KEY_TAKEN",
+        message: "This public key belongs to another subject",
+        retryable: false,
+      });
+      expect(response.json().details).toBeUndefined();
+    });
+
     it("a rejected draft publishes nothing and frees the key for a new draft", async () => {
       const publicKey = `REJ-${randomUUID().slice(0, 8)}`;
       const drafted = (await draft(tokens.operatorA, { publicKey })).json();
@@ -607,6 +643,50 @@ describeDb("Registry publication and public lookup", () => {
       });
       expect(pointsAtRevoked.statusCode).toBe(422);
       expect(pointsAtRevoked.json().code).toBe("REGISTRY_SUBJECT_NOT_SIGNED");
+    });
+
+    it("a blackout on the project blocks a verification entry too", async () => {
+      const projectId = await projectWithKey(`VBO-${randomUUID().slice(0, 8)}`);
+      const attestationId = await seedAttestation(projectId, "signed");
+      const created = await app.inject({
+        method: "POST",
+        url: `/api/v1/projects/${projectId}/disclosure-restrictions`,
+        headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
+        payload: {
+          subjectScope: [projectId],
+          restrictedActionTypes: ["registry.publish"],
+          materialInfoRef: "board-minutes-2026-10",
+          reason: "Resource estimate revision pending disclosure",
+          legalBasis: "Listing rule 3.1",
+          authority: "Disclosure committee",
+          expectedNextUpdateAt: "2026-11-01T00:00:00.000Z",
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const activated = await app.inject({
+        method: "POST",
+        url: `/api/v1/disclosure-restrictions/${created.json().restrictionId}/activate`,
+        headers: {
+          authorization: `Bearer ${tokens.operatorA}`,
+          "idempotency-key": idempotencyKey(),
+          "if-match": `"${created.json().version}"`,
+        },
+        payload: { reason: "Material information identified" },
+      });
+      expect(activated.statusCode).toBe(200);
+
+      const drafted = await draftRegistryEntry(app, tokens.operatorA, {
+        registryType: "verification",
+        subjectId: attestationId,
+        publicKey: `VER-${randomUUID().slice(0, 8)}`,
+        projection: validProjection({ stableId: attestationId, status: "signed" }),
+        policyVersion: "mn-core-1.0.0",
+        schemaVersion: "verification-registry-1",
+      });
+      expect(drafted.statusCode).toBe(200);
+      const published = await publishDraft(app, tokens.disclosureApproverA, drafted.json());
+      expect(published.statusCode).toBe(409);
+      expect(published.json().code).toBe("DISCLOSURE_RESTRICTED");
     });
 
     it("a verification entry records the attestation's signed snapshot", async () => {

@@ -18,6 +18,13 @@ export const E2E_TENANT_C = "e0000000-0000-4000-8000-00000000000c";
 export const E2E_ORG_A = "aaaaaaaa-0000-0000-0000-000000000001";
 export const E2E_ORG_B = "bbbbbbbb-0000-0000-0000-000000000001";
 export const E2E_ORG_C = "cccccccc-1000-0000-0000-000000000001";
+/**
+ * The reviewer's own organization. A reviewer from the organization operating the project is not
+ * independent (02 §2.4 rule 2), and tenant A's projects are owned by `E2E_ORG_A`.
+ */
+export const E2E_ORG_REVIEW = "aaaaaaaa-1000-0000-0000-000000000001";
+/** Accepted authority that issued the reviewer's credential (AC-15·AC-16). */
+export const E2E_ISSUER_AUTHORITY_ID = "cccccccc-0000-0000-0000-000000000006";
 
 /**
  * Demo account addresses are derived from keys supplied at run time.
@@ -98,6 +105,23 @@ const RULE_SET = {
       requiredAttestations: [],
       blockingConflictTypes: ["rights_conflict"],
       notEvaluableWhen: { op: "never" },
+      watchWhen: null,
+    },
+    {
+      // Reads a jurisdiction profile fact nobody has recorded, so it is not_evaluable — the
+      // golden path checks that the gate screen says why and what to do (AC-34).
+      requirementId: "environmental-baseline",
+      label: "Environmental baseline study",
+      appliesWhen: { op: "always" },
+      requiredClaimTypes: ["environmental_baseline"],
+      minimumGrade: "partially_verified",
+      freshnessThresholdDays: null,
+      requiredAttestations: [],
+      blockingConflictTypes: [],
+      notEvaluableWhen: {
+        op: "not",
+        operand: { op: "exists", path: "environmentalRequirementBasis" },
+      },
       watchWhen: null,
     },
   ],
@@ -242,6 +266,11 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       )
     `;
 
+    await sql`
+      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
+      VALUES (${E2E_ORG_REVIEW}, ${E2E_TENANT_A}, 'Independent Review Firm', 'AUS')
+    `;
+
     // steward, gate approver, reviewer. Checking role separation on screen needs separate
     // accounts. In particular, the reviewer must not be the same person as the gate decider (02 §2.4).
     for (const extra of [
@@ -270,7 +299,10 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       `;
       await sql`
         INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (gen_random_uuid(), ${E2E_TENANT_A}, ${extra.subject}, ${E2E_ORG_A}, ${extra.role})
+        VALUES (
+          gen_random_uuid(), ${E2E_TENANT_A}, ${extra.subject},
+          ${extra.subject === E2E_REVIEWER_SUBJECT ? E2E_ORG_REVIEW : E2E_ORG_A}, ${extra.role}
+        )
       `;
     }
 
@@ -311,15 +343,29 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       )
     `;
 
+    // The body that issued the reviewer's credential. A credential whose issuer is not an
+    // accepted authority recognized for the claim type cannot back a review (AC-15·AC-16).
+    await sql`
+      INSERT INTO core.authorities (
+        id, tenant_id, name, jurisdiction, proves, does_not_prove,
+        recognized_scope, verification_method, public_disclosure_level, valid_from, state
+      ) VALUES (
+        ${E2E_ISSUER_AUTHORITY_ID}, ${E2E_TENANT_A}, 'Professional Institute', 'AUS',
+        ARRAY['member_competence'], ARRAY['opinion_accuracy','rights_completeness'],
+        ARRAY['mining_right_registration','resource_estimate'],
+        'verifiable_signed_document', 'public', '2000-01-01', 'accepted'
+      )
+    `;
+
     // The reviewer's credential and the scope it covers. An attestation cannot be created without it.
     await sql`
       INSERT INTO core.credentials (
-        id, tenant_id, subject_id, organization_id, issuer_reference,
+        id, tenant_id, subject_id, organization_id, issuer_reference, issuer_authority_id,
         credential_type, credential_scope, jurisdiction, issued_at, expires_at,
         current_status
       ) VALUES (
-        ${E2E_CREDENTIAL_ID}, ${E2E_TENANT_A}, ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_A},
-        'AusIMM CP(Geology) #123456', 'competent_person',
+        ${E2E_CREDENTIAL_ID}, ${E2E_TENANT_A}, ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_REVIEW},
+        'AusIMM CP(Geology) #123456', ${E2E_ISSUER_AUTHORITY_ID}, 'competent_person',
         ARRAY['mining_right_registration','resource_estimate'], ARRAY['MNG','AUS'],
         '2024-01-01', '2030-01-01', 'valid'
       )

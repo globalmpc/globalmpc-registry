@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { checkGateDecision } from "@mpc/domain";
 import { assessmentHash, evaluateAssessment, type AssessmentInput, type RequirementFacts } from "../src/engine.js";
+import { explainRequirementResult } from "../src/explain.js";
 import { parseRuleSet, type RuleSet } from "../src/rule-schema.js";
 import rulesFixture from "./fixtures/registry-gate.rules.json" with { type: "json" };
 
@@ -13,6 +14,7 @@ const SATISFIED: RequirementFacts = {
   presentAttestations: ["professional_signoff", "legal_notarization", "laboratory_accreditation"],
   evidenceAgeDays: "30",
   unresolvedConflictTypes: [],
+  staleEvidence: [],
   context: {
     projectStage: "exploration_or_later",
     acceptedReportingStandard: "JORC-2012",
@@ -201,6 +203,141 @@ describe("not_evaluable judgment — distinct from gap", () => {
     );
     const result = assessment.requirementResults.find((r) => r.requirementId === "mining-right")!;
     expect(result.status).toBe("not_evaluable");
+  });
+});
+
+describe("unrecorded facts — not_evaluable, never a default (REQ-DAPP-047, REQ-DAPP-055)", () => {
+  it("a fact appliesWhen needs is absent — whether the requirement applies is unknown", () => {
+    const assessment = evaluateAssessment(
+      ruleSet,
+      allSatisfiedInput({
+        "resource-estimate": { context: { ...SATISFIED.context, projectStage: undefined } },
+      }),
+    );
+    const result = assessment.requirementResults.find(
+      (r) => r.requirementId === "resource-estimate",
+    )!;
+    // Treating "stage unknown" as "does not apply" would pass the requirement silently.
+    expect(result.applicable).toBe(true);
+    expect(result.status).toBe("not_evaluable");
+    expect(result.reasonCode).toBe("NO_EVALUATION_BASIS");
+    expect(result.missing).toEqual(["fact:projectStage"]);
+  });
+
+  it("a fact notEvaluableWhen compares against is absent — the profile state is unknown", () => {
+    const assessment = evaluateAssessment(
+      ruleSet,
+      allSatisfiedInput({
+        "mining-right": { context: { ...SATISFIED.context, jurisdictionProfileState: undefined } },
+      }),
+    );
+    const result = assessment.requirementResults.find((r) => r.requirementId === "mining-right")!;
+    // `eq suspended` is false on an absent value, which used to read as "not suspended".
+    expect(result.status).toBe("not_evaluable");
+    expect(result.missing).toEqual(["fact:jurisdictionProfileState"]);
+  });
+
+  it("a fact watchWhen needs is absent — whether to watch is unknown", () => {
+    const assessment = evaluateAssessment(
+      ruleSet,
+      allSatisfiedInput({
+        "mining-right": { context: { ...SATISFIED.context, rightsExpiryWithin12Months: undefined } },
+      }),
+    );
+    const result = assessment.requirementResults.find((r) => r.requirementId === "mining-right")!;
+    expect(result.status).toBe("not_evaluable");
+    expect(result.missing).toEqual(["fact:rightsExpiryWithin12Months"]);
+  });
+
+  it("a requirement that does not apply needs none of its other facts", () => {
+    // offeringIntent=false: ersp-linkage does not apply, so its absent applicableJurisdiction
+    // is not a question anyone has to answer.
+    const assessment = evaluateAssessment(ruleSet, allSatisfiedInput());
+    const ersp = assessment.requirementResults.find((r) => r.requirementId === "ersp-linkage")!;
+    expect(ersp.applicable).toBe(false);
+    expect(ersp.status).toBe("ok");
+  });
+
+  it("a basis that exists but says no names what it read", () => {
+    const assessment = evaluateAssessment(
+      ruleSet,
+      allSatisfiedInput({
+        "mining-right": { context: { ...SATISFIED.context, jurisdictionProfileState: "suspended" } },
+      }),
+    );
+    const result = assessment.requirementResults.find((r) => r.requirementId === "mining-right")!;
+    expect(result.status).toBe("not_evaluable");
+    expect(result.missing).toEqual(["fact:jurisdictionProfileState"]);
+  });
+});
+
+describe("stale or expired evidence (REQ-DAPP-026, AC-04)", () => {
+  it("stale evidence is gap even when the grade and age would pass", () => {
+    const assessment = evaluateAssessment(
+      ruleSet,
+      allSatisfiedInput({ "mining-right": { staleEvidence: ["mining_right_registration"] } }),
+    );
+    const result = assessment.requirementResults.find((r) => r.requirementId === "mining-right")!;
+    expect(result.status).toBe("gap");
+    expect(result.reasonCode).toBe("EVIDENCE_STALE");
+    expect(result.missing).toEqual(["stale:mining_right_registration"]);
+    expect(assessment.status).toBe("gap");
+  });
+
+  it("stale evidence on one requirement does not touch another", () => {
+    const assessment = evaluateAssessment(
+      ruleSet,
+      allSatisfiedInput({ "mining-right": { staleEvidence: ["mining_right_registration"] } }),
+    );
+    const identity = assessment.requirementResults.find(
+      (r) => r.requirementId === "project-identity",
+    )!;
+    expect(identity.status).toBe("ok");
+  });
+});
+
+describe("AC-34 — a blocked requirement says why and what to do", () => {
+  it("not_evaluable carries a cause, the evidence needed and a next action", () => {
+    const assessment = evaluateAssessment(
+      ruleSet,
+      allSatisfiedInput({
+        "mining-right": { context: { ...SATISFIED.context, jurisdictionProfileState: undefined } },
+      }),
+    );
+    const result = assessment.requirementResults.find((r) => r.requirementId === "mining-right")!;
+    const explanation = explainRequirementResult(result);
+    expect(explanation.cause).toMatch(/jurisdictionProfileState/);
+    expect(explanation.neededEvidence).toEqual(["jurisdictionProfileState"]);
+    expect(explanation.nextAction).toBeTruthy();
+  });
+
+  it("each blocking reason has its own next action", () => {
+    const codes = new Set<string>();
+    for (const overrides of [
+      { presentClaimTypes: [] },
+      { grade: "self_reported" as const },
+      { presentAttestations: [] },
+      { evidenceAgeDays: "999" },
+      { staleEvidence: ["mining_right_registration"] },
+      { unresolvedConflictTypes: ["rights_conflict"] },
+      { evidenceAgeDays: null },
+    ]) {
+      const assessment = evaluateAssessment(ruleSet, allSatisfiedInput({ "mining-right": overrides }));
+      const result = assessment.requirementResults.find((r) => r.requirementId === "mining-right")!;
+      expect(["gap", "not_evaluable"]).toContain(result.status);
+      const explanation = explainRequirementResult(result);
+      expect(explanation.nextAction, result.reasonCode).toBeTruthy();
+      expect(explanation.neededEvidence.length, result.reasonCode).toBeGreaterThan(0);
+      codes.add(`${result.reasonCode}:${explanation.nextAction}`);
+    }
+    expect(codes.size).toBe(7);
+  });
+
+  it("a satisfied requirement needs nothing", () => {
+    const assessment = evaluateAssessment(ruleSet, allSatisfiedInput());
+    const explanation = explainRequirementResult(assessment.requirementResults[0]!);
+    expect(explanation.neededEvidence).toEqual([]);
+    expect(explanation.nextAction).toBeNull();
   });
 });
 

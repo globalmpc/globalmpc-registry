@@ -104,6 +104,7 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
                     <th>Applies</th>
                     <th>Reason</th>
                     <th>Missing</th>
+                    <th>Next action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -121,8 +122,13 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
                           <span className="meta">Not applicable</span>
                         )}
                       </td>
-                      <td className="mono meta">{result.reasonCode}</td>
-                      <td className="meta">{result.missing.join(", ") || "—"}</td>
+                      <td className="meta">
+                        <span className="mono">{result.reasonCode}</span>
+                        {/* AC-34: the cause in words, not only a code. */}
+                        <div>{result.cause}</div>
+                      </td>
+                      <td className="meta">{result.neededEvidence.join(", ") || "—"}</td>
+                      <td className="meta">{result.nextAction ?? "—"}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -148,6 +148,7 @@ describeDb("review registry proposals", () => {
     return {
       subjectId,
       issuerReference: `AusIMM #${randomUUID().slice(0, 8)}`,
+      issuerAuthorityId: fx.issuerAuthorityA,
       credentialType: "competent_person",
       credentialScope: ["mining_right_registration"],
       jurisdiction: ["MNG"],
@@ -502,15 +503,34 @@ describeDb("review registry proposals", () => {
       expect(response.statusCode, response.body).toBe(200);
       const decided = (await decide(approverToken, "credentials", response.json())).json() as Proposal;
 
-      const [row] = await fx.sql<{ current_status: string; subject_id: string; organization_id: string }[]>`
-        SELECT current_status, subject_id, organization_id FROM core.credentials
+      const [row] = await fx.sql<
+        {
+          current_status: string;
+          subject_id: string;
+          organization_id: string;
+          issuer_authority_id: string;
+        }[]
+      >`
+        SELECT current_status, subject_id, organization_id, issuer_authority_id
+        FROM core.credentials
         WHERE id = ${decided.materializedId}
       `;
       expect(row).toEqual({
         current_status: "valid",
         subject_id: fx.reviewerSubjectA,
-        organization_id: fx.orgA,
+        organization_id: fx.reviewOrgA,
+        // AC-16: the credential is linked to its issuer, so the issuer's state can be judged.
+        issuer_authority_id: fx.issuerAuthorityA,
       });
+    });
+
+    it("a credential proposal must name a registered issuing authority", async () => {
+      const response = await post(
+        operatorToken,
+        `${BASE}/credentials/proposals`,
+        credentialBody(fx.reviewerSubjectA, { issuerAuthorityId: randomUUID() }),
+      );
+      expect(response.statusCode).toBe(404);
     });
 
     it("the holder cannot approve their own credential", async () => {
@@ -639,8 +659,9 @@ describeDb("review registry proposals", () => {
       const proposed = await post(operatorToken, `${BASE}/credentials/proposals`, body);
       const viaApi = (await decide(approverToken, "credentials", proposed.json())).json() as Proposal;
 
-      // Holder and organization are tenant-bound identities; everything else must match.
-      const holder = ["subject_id", "organization_id"];
+      // Holder, organization and issuer authority are tenant-bound identities; everything else
+      // must match.
+      const holder = ["subject_id", "organization_id", "issuer_authority_id"];
       expect(await rowOf("core.credentials", viaApi.materializedId!, holder)).toEqual(
         await rowOf("core.credentials", viaBootstrap.id, holder),
       );

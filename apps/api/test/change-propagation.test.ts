@@ -229,7 +229,7 @@ describeDb("change propagation", () => {
     });
 
     // The time-based sweep crosses tenants, so it is exercised in the worker's isolated
-    // database (apps/worker/test/credential-expiry.test.ts), not in this shared one.
+    // database (apps/jobs-worker/test/credential-expiry.test.ts), not in this shared one.
     it("the API role cannot run the cross-tenant sweep", async () => {
       await expect(
         fx.appSql`SELECT core.sweep_credential_expiry(now())`,

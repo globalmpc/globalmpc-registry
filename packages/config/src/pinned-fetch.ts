@@ -5,7 +5,7 @@ import type { ClientRequest, IncomingMessage } from "node:http";
 /**
  * Transport layer for outbound calls to operator-set URLs.
  *
- * Used for source calls (`apps/api`) and notification webhooks (`apps/worker`). Two reasons
+ * Used for source calls (`apps/api`) and notification webhooks (`apps/jobs-worker`). Two reasons
  * not to use `fetch` directly.
  *
  * 1. **The connection must be pinned to the checked address.** Even if `assertEndpointReachable`

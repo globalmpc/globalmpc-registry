@@ -5,6 +5,7 @@ import {
   atLifecycleMachine,
   attestationMachine,
   chainTransactionMachine,
+  disclosureRestrictionMachine,
   proposalMachine,
   resumeFromSuspension,
   verificationCaseMachine,
@@ -19,7 +20,7 @@ import {
 } from "../src/state-machine.js";
 
 describe("consistency of every state machine", () => {
-  // The 12 machines each have a different state union. The exhaustive check must treat them as
+  // The 13 machines each have a different state union. The exhaustive check must treat them as
   // string machines, so they are widened once here.
   const machines: StateMachine<string>[] = ALL_MACHINES.map(
     (machine) => machine as unknown as StateMachine<string>,
@@ -167,6 +168,10 @@ describe("Attestation — stale can be undone but revoke cannot", () => {
     expect(attestationMachine.transitions.revoked).toEqual([]);
   });
 
+  it("a signed attestation can be superseded by a correction — nothing activates it first", () => {
+    expect(canTransition(attestationMachine, "signed", "superseded")).toBe(true);
+  });
+
   it("superseded is terminal", () => {
     expect(attestationMachine.transitions.superseded).toEqual([]);
   });
@@ -194,5 +199,17 @@ describe("Chain transaction — included is not success", () => {
     expect(canTransition(chainTransactionMachine, "reorged", "reconciliation_required")).toBe(
       true,
     );
+  });
+});
+
+describe("disclosure restriction — 07 §7.14", () => {
+  it("a released or superseded restriction is final", () => {
+    expect(disclosureRestrictionMachine.transitions.released).toEqual([]);
+    expect(disclosureRestrictionMachine.transitions.superseded).toEqual([]);
+  });
+
+  it("only an active restriction can be released", () => {
+    expect(canTransition(disclosureRestrictionMachine, "draft", "released")).toBe(false);
+    expect(canTransition(disclosureRestrictionMachine, "active", "released")).toBe(true);
   });
 });

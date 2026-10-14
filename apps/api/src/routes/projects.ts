@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { withTenant } from "@mpc/db";
-import { createProjectRequest } from "@mpc/api-contract";
-import { badRequest, forbidden, unauthorized } from "../errors.js";
+import { createProjectRequest, projectListQuery, updateProjectRequest } from "@mpc/api-contract";
+import { badRequest, forbidden, notFound } from "../errors.js";
+import { capRows } from "../list-window.js";
 import {
   actableOrganizations,
   canActForOrganization,
@@ -13,7 +14,15 @@ import {
   tenantResource,
   visibleProjectScope,
 } from "../plugins/authorize.js";
-import { etagOf, requireEnrolledSession, requireReadContext } from "./shared.js";
+import {
+  assertVersionMatches,
+  etagOf,
+  requireEnrolledSession,
+  requireIfMatch,
+  requireMutationContext,
+  requireReadContext,
+} from "./shared.js";
+import { listProjectItems } from "../services/project-registry.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
@@ -25,6 +34,7 @@ interface ProjectRow {
   host_country_iso3: string;
   minerals: string[];
   reference_status: string;
+  relationship_status: string;
   lifecycle_state: string;
   version: number;
   updated_at: Date;
@@ -38,6 +48,7 @@ function toSummary(project: ProjectRow, requestId: string, asOf: string) {
     hostCountryIso3: project.host_country_iso3,
     minerals: project.minerals,
     referenceStatus: project.reference_status,
+    relationshipStatus: project.relationship_status,
     lifecycleState: project.lifecycle_state,
     readinessSummary: null,
     version: project.version,
@@ -46,6 +57,14 @@ function toSummary(project: ProjectRow, requestId: string, asOf: string) {
     asOf,
   };
 }
+
+/**
+ * Cap on the project list, most recently updated first.
+ *
+ * A flag rather than pages: a tenant holds few projects. Past the cap the response says
+ * `truncated`, so a project that was not updated lately is not read as missing.
+ */
+const PROJECT_LIST_LIMIT = 50;
 
 export async function registerProjectRoutes(
   app: FastifyInstance,
@@ -88,7 +107,7 @@ export async function registerProjectRoutes(
     }
 
     const tenantId = session.tenantId;
-    const requestHash = hashRequest(request.body);
+    const requestHash = hashRequest(request);
     const { requestId, asOf, correlationId } = request.context;
 
     return withTenant(sql, { tenantId }, (tx) =>
@@ -98,13 +117,13 @@ export async function registerProjectRoutes(
         const [project] = await tx<ProjectRow[]>`
           INSERT INTO core.projects (
             id, tenant_id, project_key, name, host_country_iso3, minerals,
-            owner_organization_id
+            owner_organization_id, reference_status
           ) VALUES (
             ${id}, ${tenantId}, ${parsed.data.projectKey}, ${parsed.data.name},
             ${parsed.data.hostCountryIso3}, ${parsed.data.minerals},
-            ${parsed.data.ownerOrganizationId}
+            ${parsed.data.ownerOrganizationId}, ${parsed.data.referenceStatus}
           )
-          RETURNING *
+          RETURNING *, 'pending' AS relationship_status
         `;
 
         await recordAudit(tx, {
@@ -194,7 +213,13 @@ export async function registerProjectRoutes(
       const rows = await withTenant(sql, { tenantId }, (tx) =>
         tx<ProjectRow[]>`
           SELECT id, project_key, name, host_country_iso3, minerals,
-                 reference_status, lifecycle_state, version, updated_at
+                 reference_status, COALESCE(
+                   (SELECT v.status::text FROM core.project_fact_versions v
+                    WHERE v.project_id = core.projects.id AND v.fact_key = 'relationship'
+                    ORDER BY v.version DESC LIMIT 1),
+                   'pending'
+                 ) AS relationship_status,
+                 lifecycle_state, version, updated_at
           FROM core.projects WHERE id = ${request.params.projectId}
         `,
       );
@@ -230,26 +255,134 @@ export async function registerProjectRoutes(
     assertAuthorized(
       session,
       "project.read",
-      tenantResource(tenantId),
+      tenantResource(tenantId, { filteredByProjectScope: true }),
       sessionFacts(session),
     );
 
-    const visible = visibleProjectScope(session, "project.read");
+    // Filters narrow inside the visible set (11 §11.3). An unknown filter is refused rather
+    // than ignored — an ignored filter shows an unfiltered list that looks filtered.
+    const query = projectListQuery.safeParse(request.query ?? {});
+    if (!query.success) {
+      throw badRequest("REQUEST_INVALID", "Request format is invalid", {
+        issues: query.error.issues,
+      });
+    }
 
-    const rows = await withTenant(sql, { tenantId }, (tx) =>
-      tx<ProjectRow[]>`
-        SELECT id, project_key, name, host_country_iso3, minerals,
-               reference_status, lifecycle_state, version, updated_at
-        FROM core.projects
-        WHERE ${visible === "all" ? tx`TRUE` : tx`id = ANY(${visible as string[]}::uuid[])`}
-        ORDER BY updated_at DESC LIMIT 50
-      `,
+    const visible = visibleProjectScope(session, "project.read");
+    const filteredAfterAggregation =
+      query.data.grade !== undefined || query.data.gap !== undefined || query.data.stale !== undefined;
+    const items = await withTenant(sql, { tenantId }, (tx) =>
+      listProjectItems(
+        tx,
+        tenantId,
+        visible,
+        query.data,
+        session.subjectId,
+        undefined,
+        filteredAfterAggregation ? undefined : PROJECT_LIST_LIMIT + 1,
+      ),
     );
+    const window = capRows(items, PROJECT_LIST_LIMIT);
 
     return {
-      items: rows.map((row) => toSummary(row, request.context.requestId, request.context.asOf)),
+      // Capped after the filters, most recently updated first: a filtered list that stops at the
+      // cap says so instead of reading as complete.
+      items: window.items,
+      truncated: window.truncated,
+      limit: window.limit,
       requestId: request.context.requestId,
       asOf: request.context.asOf,
     };
   });
+
+  /**
+   * Project identity edits — 07 §7.2 `PATCH /projects/{id}`.
+   *
+   * Only name and minerals. The owner organization decides who reaches the project, and the
+   * reference label is fixed (05 §5.10), so neither changes here. Host country is also left out:
+   * it selects the jurisdiction profile every assessment was made under.
+   */
+  app.patch<{ Params: { projectId: string } }>(
+    "/api/v1/projects/:projectId",
+    async (request, reply) => {
+      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const expected = requireIfMatch(request);
+
+      const parsed = updateProjectRequest.safeParse(request.body);
+      if (!parsed.success) {
+        throw badRequest("REQUEST_INVALID", "Request format is invalid", {
+          issues: parsed.error.issues,
+        });
+      }
+
+      const effectiveRole = assertAuthorized(
+        session,
+        "project.update",
+        projectResource(tenantId, request.params.projectId),
+        sessionFacts(session),
+      );
+
+      const { requestId, asOf, correlationId } = request.context;
+      return withTenant(sql, { tenantId }, (tx) =>
+        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+          const [current] = await tx<{ id: string; name: string; minerals: string[]; version: number }[]>`
+            SELECT id, name, minerals, version FROM core.projects
+            WHERE tenant_id = ${tenantId} AND id = ${request.params.projectId}
+            FOR UPDATE
+          `;
+          if (!current) throw notFound("Project not found");
+          assertVersionMatches(expected, current.version, "project");
+
+          const name = parsed.data.name ?? current.name;
+          const minerals = parsed.data.minerals ?? current.minerals;
+          const [updated] = await tx<{ version: number }[]>`
+            UPDATE core.projects
+            SET name = ${name}, minerals = ${minerals}, version = version + 1, updated_at = now()
+            WHERE tenant_id = ${tenantId} AND id = ${current.id}
+            RETURNING version
+          `;
+
+          await recordAudit(tx, {
+            tenantId,
+            projectId: current.id,
+            session,
+            effectiveRole,
+            command: "project.updated",
+            resourceType: "project",
+            resourceId: current.id,
+            beforeVersion: current.version,
+            afterVersion: updated!.version,
+            reason: parsed.data.reason,
+            correlationId,
+            requestIp: request.clientIp,
+            detail: {
+              before: { name: current.name, minerals: current.minerals },
+              after: { name, minerals },
+            },
+          });
+
+          await enqueueEvent(tx, {
+            tenantId,
+            eventType: "project.updated",
+            aggregateId: current.id,
+            aggregateVersion: updated!.version,
+            projectId: current.id,
+            payload: { changed: Object.keys(parsed.data).filter((key) => key !== "reason") },
+            correlationId,
+          });
+
+          const [item] = await listProjectItems(
+            tx,
+            tenantId,
+            "all",
+            {},
+            session.subjectId,
+            current.id,
+          );
+          reply.header("etag", etagOf(updated!.version));
+          return { ...item!, requestId, asOf };
+        }),
+      );
+    },
+  );
 }

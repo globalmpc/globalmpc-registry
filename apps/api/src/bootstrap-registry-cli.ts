@@ -83,6 +83,8 @@ try {
       tenantSlug,
       walletAddress: required("CREDENTIAL_WALLET"),
       issuerReference: required("CREDENTIAL_ISSUER_REFERENCE"),
+      // Optional: without it the credential exists but cannot be a review basis (AC-16).
+      issuerAuthorityId: process.env["CREDENTIAL_ISSUER_AUTHORITY_ID"] || null,
       credentialType: required("CREDENTIAL_TYPE"),
       credentialScope: list("CREDENTIAL_SCOPE"),
       jurisdiction: list("CREDENTIAL_JURISDICTION"),

@@ -13,5 +13,8 @@
   },
   "dependencies": {
     "@mpc/canonical": "workspace:*"
-  }
+  },
+  "files": [
+    "src"
+  ]
 }

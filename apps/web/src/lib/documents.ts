@@ -33,6 +33,7 @@ export const ORIGIN_LABEL: Record<DocumentLink["origin"], string> = {
 export const CAUSE_LABEL: Record<DocumentImpact["cause"], string> = {
   superseded: "replaced by a new version",
   expired: "past its validity date",
+  revoked: "revoked",
 };
 
 export const RESOLUTION_LABEL: Record<DocumentImpact["resolution"], string> = {

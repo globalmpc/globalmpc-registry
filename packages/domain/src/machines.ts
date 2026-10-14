@@ -294,7 +294,9 @@ export const attestationMachine: StateMachine<AttestationState> = {
   states: ATTESTATION_STATES,
   transitions: {
     draft: ["signed"],
-    signed: ["active", "revoked", "disputed"],
+    // No path activates a signed attestation yet, so a correction must be able to supersede it
+    // straight from `signed` — otherwise a signed error could only be revoked, never corrected.
+    signed: ["active", "superseded", "revoked", "disputed"],
     active: ["stale_candidate", "superseded", "revoked", "disputed"],
     // Once re-review ends it can return to active. The past signature is not erased.
     stale_candidate: ["active", "superseded", "revoked", "disputed"],
@@ -380,6 +382,29 @@ export const chainTransactionMachine: StateMachine<ChainTxState> = {
   },
 };
 
+/**
+ * Disclosure Restriction (material-information blackout) — spec 07 §7.14, AC-30.
+ *
+ * `released` and `superseded` are terminal. A released blackout is not re-armed by editing the
+ * old row — a new restriction is created, so the history of what was restricted when stays
+ * readable. There is no transition driven by time: nothing releases a blackout except a
+ * person recording a release (§7.14 "not released automatically").
+ */
+export const DISCLOSURE_RESTRICTION_STATES = ["draft", "active", "released", "superseded"] as const;
+export type DisclosureRestrictionState = (typeof DISCLOSURE_RESTRICTION_STATES)[number];
+
+export const disclosureRestrictionMachine: StateMachine<DisclosureRestrictionState> = {
+  name: "disclosure_restriction",
+  initial: "draft",
+  states: DISCLOSURE_RESTRICTION_STATES,
+  transitions: {
+    draft: ["active", "superseded"],
+    active: ["released", "superseded"],
+    released: [],
+    superseded: [],
+  },
+};
+
 export const ALL_MACHINES = [
   atLifecycleMachine,
   verificationCaseMachine,
@@ -393,4 +418,5 @@ export const ALL_MACHINES = [
   compliancePolicyMachine,
   jurisdictionProfileMachine,
   chainTransactionMachine,
+  disclosureRestrictionMachine,
 ] as const;

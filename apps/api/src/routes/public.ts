@@ -7,7 +7,9 @@ import {
   PROOF_PROVES,
   publicCursorQuery,
   publicProjection,
+  publicRegistryEntryPathParams,
   publicRegistryListQuery,
+  publicRegistryPathParams,
   publicSearchQuery,
   type publicSearchResult,
 } from "@mpc/api-contract";
@@ -80,6 +82,25 @@ function parseQuery<T>(schema: { safeParse(input: unknown): { success: boolean; 
   return parsed.data;
 }
 
+/**
+ * Path parameters narrower than a string are checked against the contract before any query.
+ *
+ * `registryType` reaches the DB as the `core.registry_type` enum; an unknown value would fail
+ * that cast and go out as a retryable 500. The code matches the central UUID check
+ * (`plugins/request-context.ts`), which covers the `...Id` parameters.
+ */
+function parseParams<T>(schema: { safeParse(input: unknown): { success: boolean; data?: T; error?: { issues: { path: (string | number)[] }[] } } }, input: unknown): T {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success || parsed.data === undefined) {
+    const parameter = String(parsed.error?.issues[0]?.path[0] ?? "path");
+    throw badRequest("PATH_PARAM_INVALID", `${parameter} is not a valid value`, {
+      parameter,
+      received: (input as Record<string, unknown> | undefined)?.[parameter] ?? null,
+    });
+  }
+  return parsed.data;
+}
+
 export async function registerPublicRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
@@ -88,6 +109,7 @@ export async function registerPublicRoutes(
   app.get<{ Params: { registryType: string } }>(
     "/api/v1/public/registries/:registryType",
     async (request, reply) => {
+      const { registryType } = parseParams(publicRegistryPathParams, request.params);
       // Parameters outside the contract are rejected, not ignored (`.strict()`). Ignoring them
       // lets a mistyped filter silently fall through to "the full list".
       const query = parseQuery(publicRegistryListQuery, request.query);
@@ -110,7 +132,7 @@ export async function registerPublicRoutes(
         }[]
       >`
         SELECT * FROM core.public_registry_list(
-          ${request.params.registryType},
+          ${registryType},
           ${query.q ?? null},
           ${query.status ?? null},
           ${query.limit + 1},
@@ -158,6 +180,7 @@ export async function registerPublicRoutes(
       // RLS policies cannot be satisfied, so only the public path is split out into a SECURITY
       // DEFINER function (0009_public_read.sql). That function returns only the public
       // projection of published versions and does not return tenant_id.
+      const { registryType, publicKey } = parseParams(publicRegistryEntryPathParams, request.params);
       const rows = await sql<
         {
           id: string;
@@ -169,9 +192,7 @@ export async function registerPublicRoutes(
           superseded_by_id: string | null;
         }[]
       >`
-        SELECT * FROM core.public_registry_versions(
-          ${request.params.registryType}, ${request.params.publicKey}
-        )
+        SELECT * FROM core.public_registry_versions(${registryType}, ${publicKey})
       `;
 
       const current = rows[0];

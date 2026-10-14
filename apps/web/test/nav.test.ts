@@ -17,6 +17,20 @@ describe("visibleNav", () => {
     expect(steward).not.toContain("Admin");
   });
 
+  it("lists the per-project screens of §11.2 as global entries, each behind its read action", () => {
+    const full = labels({
+      subjectId: "s-1",
+      actions: ["project.read", "evidence.read", "verification.read", "readiness.read", "authority.read"],
+    });
+    expect(full).toEqual(
+      expect.arrayContaining(["Data Room", "Verification", "Readiness & Gates", "Authorities"]),
+    );
+
+    const withoutReadiness = labels({ subjectId: "s-1", actions: ["project.read", "evidence.read"] });
+    expect(withoutReadiness).toContain("Data Room");
+    expect(withoutReadiness).not.toContain("Readiness & Gates");
+  });
+
   it("shows My Activity to a subject even without a role", () => {
     expect(labels({ subjectId: "s-1", actions: [] })).toEqual(["My Activity"]);
   });

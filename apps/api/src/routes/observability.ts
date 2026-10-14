@@ -196,8 +196,10 @@ export async function registerObservabilityRoutes(
         { pending: string; oldest: Date | null; published_last_hour: string }[]
       >`
         SELECT
-          count(*) FILTER (WHERE published_at IS NULL)::text AS pending,
-          min(occurred_at) FILTER (WHERE published_at IS NULL) AS oldest,
+          count(*) FILTER (WHERE published_at IS NULL AND dead_lettered_at IS NULL)::text
+            AS pending,
+          min(occurred_at) FILTER (WHERE published_at IS NULL AND dead_lettered_at IS NULL)
+            AS oldest,
           count(*) FILTER (WHERE published_at >= now() - interval '1 hour')::text
             AS published_last_hour
         FROM core.outbox
@@ -205,7 +207,18 @@ export async function registerObservabilityRoutes(
 
       const byType = await tx<{ event_type: string; pending: string }[]>`
         SELECT event_type, count(*)::text AS pending
-        FROM core.outbox WHERE published_at IS NULL
+        FROM core.outbox WHERE published_at IS NULL AND dead_lettered_at IS NULL
+        GROUP BY event_type ORDER BY count(*) DESC
+      `;
+
+      // Dead letters wait for a person. The last error says which consumer is stuck; it holds
+      // a handler name and an error message, never the payload (0065).
+      const deadLetters = await tx<
+        { event_type: string; dead: string; last_error: string | null }[]
+      >`
+        SELECT event_type, count(*)::text AS dead,
+               (array_agg(last_error ORDER BY dead_lettered_at DESC))[1] AS last_error
+        FROM core.outbox WHERE dead_lettered_at IS NOT NULL AND published_at IS NULL
         GROUP BY event_type ORDER BY count(*) DESC
       `;
 
@@ -221,6 +234,12 @@ export async function registerObservabilityRoutes(
         byEventType: byType.map((row) => ({
           eventType: row.event_type,
           pending: Number(row.pending),
+        })),
+        deadLettered: deadLetters.reduce((sum, row) => sum + Number(row.dead), 0),
+        deadLetteredByEventType: deadLetters.map((row) => ({
+          eventType: row.event_type,
+          deadLettered: Number(row.dead),
+          lastError: row.last_error,
         })),
         requestId,
         asOf,

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Status display mappings, disclaimer catalogue, and prohibited-language lint for the MPC dApp UI layer.",
+  "description": "Status display mappings and shared explanatory copy for the MPC dApp UI layer.",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -13,5 +13,8 @@
   },
   "dependencies": {
     "@mpc/domain": "workspace:*"
-  }
+  },
+  "files": [
+    "src"
+  ]
 }

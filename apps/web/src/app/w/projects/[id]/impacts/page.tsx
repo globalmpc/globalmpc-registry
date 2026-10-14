@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { DocumentTree } from "@/components/DocumentTree";
 import { CAUSE_LABEL, KIND_LABEL, RESOLUTION_LABEL, documentLabel } from "@/lib/documents";
 
@@ -65,6 +66,8 @@ export default function ImpactsPage({ params }: { params: Promise<{ id: string }
   const { token, loading: sessionLoading } = useSession();
 
   const [impacts, setImpacts] = useState<DocumentImpact[]>([]);
+  // Set when the server capped the list: the whole count, else null.
+  const [impactTotal, setImpactTotal] = useState<number | null>(null);
   const [nodes, setNodes] = useState<Map<string, DocumentNode>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
@@ -83,6 +86,7 @@ export default function ImpactsPage({ params }: { params: Promise<{ id: string }
         getDocumentGraph(token, id),
       ]);
       setImpacts(impactData.items);
+      setImpactTotal(impactData.truncated ? impactData.total : null);
       setNodes(new Map(graphData.nodes.map((node) => [node.uploadId, node])));
       setError(null);
     } catch (caught) {
@@ -175,6 +179,17 @@ export default function ImpactsPage({ params }: { params: Promise<{ id: string }
       </div>
 
       {error ? <ErrorNotice error={error} /> : null}
+
+      {impactTotal !== null ? (
+        <TruncatedNotice
+          shown={impacts.length}
+          total={impactTotal}
+          noun="impacts"
+          testId="impacts-truncated"
+        >
+          Open ones are listed first. Judging them brings the rest into view.
+        </TruncatedNotice>
+      ) : null}
 
       <div className="panel">
         <h2>Judge the selected documents</h2>
@@ -271,7 +286,9 @@ export default function ImpactsPage({ params }: { params: Promise<{ id: string }
         <h2>Already judged</h2>
         {closed.length === 0 ? (
           <p className="sub" style={{ margin: 0 }}>
-            Nothing judged yet.
+            {impactTotal !== null
+              ? "Judged impacts are past the list cap. Judge the open ones to see them here."
+              : "Nothing judged yet."}
           </p>
         ) : (
           <div className="table-scroll">

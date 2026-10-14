@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { Address } from "@/components/Address";
 
 /**
@@ -24,6 +25,8 @@ import { Address } from "@/components/Address";
 export default function AnchorsPage() {
   const { token, loading: sessionLoading } = useSession();
   const [items, setItems] = useState<AnchorBatchStatus[]>([]);
+  // The server caps the list and says so. An older batch needing attention would be off it.
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -33,6 +36,7 @@ export default function AnchorsPage() {
     try {
       const data = await listAnchorBatches(token);
       setItems(data.items);
+      setTruncated(data.truncated);
       setError(null);
     } catch (caught) {
       setError(caught);
@@ -95,6 +99,12 @@ export default function AnchorsPage() {
       </div>
 
       {error ? <ErrorNotice error={error} /> : null}
+
+      {truncated ? (
+        <TruncatedNotice shown={items.length} noun="batches, newest first" testId="anchors-truncated">
+          The attention list below covers only these rows.
+        </TruncatedNotice>
+      ) : null}
 
       {attention.length > 0 ? (
         <div className="notice" data-testid="anchor-attention" style={{ color: "var(--destructive-text)" }}>

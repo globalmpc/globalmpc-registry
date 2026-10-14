@@ -97,7 +97,27 @@ export default function AuditPage() {
             </dd>
             <dt>Published in the last hour</dt>
             <dd className="mono">{backlog.publishedLastHour}</dd>
+            <dt>Set aside after retries</dt>
+            <dd className="mono" data-testid="backlog-dead-lettered">
+              {backlog.deadLettered}
+              {backlog.deadLettered > 0 ? (
+                // These do not clear on their own. An operator replays them after fixing the
+                // consumer named in the last error.
+                <span className="meta"> · needs a replay</span>
+              ) : null}
+            </dd>
           </dl>
+
+          {backlog.deadLetteredByEventType.length > 0 ? (
+            <ul style={{ margin: "10px 0 0", paddingLeft: 18, color: "var(--muted-foreground)" }}>
+              {backlog.deadLetteredByEventType.map((row) => (
+                <li key={row.eventType}>
+                  <span className="mono">{row.eventType}</span> — {row.deadLettered}
+                  {row.lastError ? <span className="meta"> · {row.lastError}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
 
           {backlog.byEventType.length > 0 ? (
             <ul style={{ margin: "10px 0 0", paddingLeft: 18, color: "var(--muted-foreground)" }}>
