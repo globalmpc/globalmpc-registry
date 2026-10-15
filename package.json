@@ -9,6 +9,8 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:unit": "vitest run --mode unit",
+    "test:integration": "vitest run --mode integration",
     "test:watch": "vitest",
     "typecheck": "tsc --build --force --noEmit && pnpm --filter @mpc/web typecheck",
     "build:openapi": "pnpm --filter @mpc/api-contract build",
