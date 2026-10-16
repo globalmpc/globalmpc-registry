@@ -2,8 +2,8 @@
 
 [![Build and coverage](https://github.com/globalmpc/globalmpc-registry/actions/workflows/public-quality.yml/badge.svg?branch=main)](https://github.com/globalmpc/globalmpc-registry/actions/workflows/public-quality.yml)
 [![CodeFactor](https://www.codefactor.io/repository/github/globalmpc/globalmpc-registry/badge)](https://www.codefactor.io/repository/github/globalmpc/globalmpc-registry)
-[![App coverage](https://codecov.io/gh/globalmpc/globalmpc-registry/branch/main/graph/badge.svg?flag=app)](https://app.codecov.io/gh/globalmpc/globalmpc-registry)
-[![Contract coverage](https://codecov.io/gh/globalmpc/globalmpc-registry/branch/main/graph/badge.svg?flag=contracts)](https://app.codecov.io/gh/globalmpc/globalmpc-registry)
+[![App coverage](https://img.shields.io/codecov/c/github/globalmpc/globalmpc-registry/main?flag=app&label=App%20coverage)](https://app.codecov.io/gh/globalmpc/globalmpc-registry)
+[![Contract coverage](https://img.shields.io/codecov/c/github/globalmpc/globalmpc-registry/main?flag=contracts&label=Contract%20coverage)](https://app.codecov.io/gh/globalmpc/globalmpc-registry)
 [![CodeQL](https://github.com/globalmpc/globalmpc-registry/actions/workflows/public-codeql.yml/badge.svg?branch=main)](https://github.com/globalmpc/globalmpc-registry/actions/workflows/public-codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/globalmpc/globalmpc-registry/badge)](https://scorecard.dev/viewer/?uri=github.com/globalmpc/globalmpc-registry)
 

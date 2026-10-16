@@ -230,6 +230,43 @@ contract RegistryAnchorV1Test is Test {
         anchor.pause();
     }
 
+    function test_unpause_restoresSubmissionAndPreservesHistory() public {
+        _submit(BATCH_1, ROOT_1);
+        vm.startPrank(pauser);
+        anchor.pause();
+        anchor.unpause();
+        vm.stopPrank();
+
+        assertFalse(anchor.paused());
+        _submit(BATCH_2, ROOT_2);
+        assertEq(anchor.batchCount(), 2);
+        assertEq(anchor.batchIdAt(0), BATCH_1);
+        assertEq(anchor.batchIdAt(1), BATCH_2);
+        assertEq(anchor.getBatch(BATCH_1).root, ROOT_1);
+    }
+
+    function test_unpause_revertsForUnauthorized() public {
+        vm.prank(pauser);
+        anchor.pause();
+        bytes32 role = anchor.PAUSER_ROLE();
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+            )
+        );
+        anchor.unpause();
+        assertTrue(anchor.paused());
+    }
+
+    function test_supersedeBatch_revertsWhenOriginalMissing() public {
+        _submit(BATCH_2, ROOT_2);
+        vm.prank(submitter);
+        vm.expectRevert(abi.encodeWithSelector(IRegistryAnchor.BatchNotFound.selector, BATCH_1));
+        anchor.supersedeBatch(BATCH_1, BATCH_2);
+        assertEq(anchor.getBatch(BATCH_2).root, ROOT_2);
+    }
+
     // -----------------------------------------------------------------------
     // Not even the admin can change a root
     // -----------------------------------------------------------------------
