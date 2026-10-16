@@ -134,25 +134,14 @@ export async function registerExportRoutes(
         )
         .join("");
 
-      const manifest = {
-        format: "mpc.audit-export" as const,
-        formatVersion: "1" as const,
-        encoding: "application/x-ndjson" as const,
-        hashAlgorithm: "sha256" as const,
-        sha256: createHash("sha256").update(jsonl, "utf8").digest("hex"),
-        lineCount: page.length,
-        firstId: page[0]?.id ?? null,
-        lastId: page.at(-1)?.id ?? null,
-        nextAfterId: rows.length > limit ? (page.at(-1)?.id ?? null) : null,
-        filters: {
-          projectId: projectId ?? null,
-          from: from ?? null,
-          to: to ?? null,
-          afterId: afterId ?? null,
-        },
-        generatedAt: asOf,
+      const manifest = buildAuditExportManifest({
+        page,
+        hasNextPage: rows.length > limit,
+        query: parsed.data,
+        jsonl,
+        asOf,
         generatedBy: session.walletAddress,
-      };
+      });
 
       // Who took a copy of the trail, and which copy, is part of the trail (07 §7.9). The hash
       // lets a later reader tie a file in hand to this row.
@@ -292,4 +281,44 @@ export async function registerExportRoutes(
       return { ...toExportView(row), requestId: request.context.requestId, asOf: request.context.asOf };
     },
   );
+}
+
+function auditExportFilters(query: z.infer<typeof auditExportQuery>) {
+  return {
+    projectId: query.projectId ?? null,
+    from: query.from ?? null,
+    to: query.to ?? null,
+    afterId: query.afterId ?? null,
+  };
+}
+
+function buildAuditExportManifest({
+  page,
+  hasNextPage,
+  query,
+  jsonl,
+  asOf,
+  generatedBy,
+}: {
+  page: readonly AuditRow[];
+  hasNextPage: boolean;
+  query: z.infer<typeof auditExportQuery>;
+  jsonl: string;
+  asOf: string;
+  generatedBy: string;
+}) {
+  return {
+    format: "mpc.audit-export" as const,
+    formatVersion: "1" as const,
+    encoding: "application/x-ndjson" as const,
+    hashAlgorithm: "sha256" as const,
+    sha256: createHash("sha256").update(jsonl, "utf8").digest("hex"),
+    lineCount: page.length,
+    firstId: page[0]?.id ?? null,
+    lastId: page.at(-1)?.id ?? null,
+    nextAfterId: hasNextPage ? (page.at(-1)?.id ?? null) : null,
+    filters: auditExportFilters(query),
+    generatedAt: asOf,
+    generatedBy,
+  };
 }

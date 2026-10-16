@@ -166,7 +166,7 @@ export function evaluateRequirement(
     };
   }
 
-  if (facts.grade === null || !gradeAtLeast(facts.grade, requirement.minimumGrade)) {
+  if (!hasMinimumGrade(facts, requirement)) {
     return {
       ...base,
       status: "gap",
@@ -189,27 +189,8 @@ export function evaluateRequirement(
     };
   }
 
-  if (requirement.freshnessThresholdDays !== null) {
-    if (facts.evidenceAgeDays === null) {
-      // Without the age, freshness cannot be judged. Do not pass it.
-      return {
-        ...base,
-        status: "not_evaluable",
-        applicable: true,
-        reasonCode: "NO_EVALUATION_BASIS",
-        missing: ["evidence_age"],
-      };
-    }
-    if (BigInt(facts.evidenceAgeDays) > BigInt(requirement.freshnessThresholdDays)) {
-      return {
-        ...base,
-        status: "gap",
-        applicable: true,
-        reasonCode: "EVIDENCE_STALE",
-        missing: [`max_age_days:${requirement.freshnessThresholdDays}`],
-      };
-    }
-  }
+  const freshness = evaluateFreshness(requirement, facts);
+  if (freshness !== null) return freshness;
 
   const blockingConflicts = facts.unresolvedConflictTypes.filter((conflict) =>
     requirement.blockingConflictTypes.includes(conflict),
@@ -241,6 +222,40 @@ export function evaluateRequirement(
     reasonCode: "REQUIREMENT_SATISFIED",
     missing: [],
   };
+}
+
+function hasMinimumGrade(facts: RequirementFacts, requirement: Requirement): boolean {
+  return facts.grade !== null && gradeAtLeast(facts.grade, requirement.minimumGrade);
+}
+
+function evaluateFreshness(
+  requirement: Requirement,
+  facts: RequirementFacts,
+): RequirementResult | null {
+  const base = { requirementId: requirement.requirementId } as const;
+  if (requirement.freshnessThresholdDays !== null) {
+    if (facts.evidenceAgeDays === null) {
+      // Without the age, freshness cannot be judged. Do not pass it.
+      return {
+        ...base,
+        status: "not_evaluable",
+        applicable: true,
+        reasonCode: "NO_EVALUATION_BASIS",
+        missing: ["evidence_age"],
+      };
+    }
+    if (BigInt(facts.evidenceAgeDays) > BigInt(requirement.freshnessThresholdDays)) {
+      return {
+        ...base,
+        status: "gap",
+        applicable: true,
+        reasonCode: "EVIDENCE_STALE",
+        missing: [`max_age_days:${requirement.freshnessThresholdDays}`],
+      };
+    }
+  }
+
+  return null;
 }
 
 /** Fact paths a predicate reads that the context does not carry, sorted and unique. */

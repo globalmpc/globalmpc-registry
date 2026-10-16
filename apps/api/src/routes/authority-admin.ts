@@ -778,19 +778,7 @@ export async function registerAuthorityAdminRoutes(
       const data = parsed.data;
 
       return withTenant(sql, { tenantId }, async (tx) => {
-        const [current] = await tx<
-          (ConnectionRow & {
-            timeout_ms: number;
-            effective_at_field: string | null;
-            authentication_method: string;
-            adapter_version: string;
-            source_schema_version: string;
-            terms_license: string;
-            commercial_reuse: string;
-            disclosure_permission: string;
-            access_basis: string;
-          })[]
-        >`
+        const [current] = await tx<ConnectionSettingsRow[]>`
           SELECT c.*, c.collection_method::text AS collection_method,
                  c.state::text AS state,
                  c.disclosure_permission::text AS disclosure_permission
@@ -816,33 +804,7 @@ export async function registerAuthorityAdminRoutes(
         await assertActivationReviewed(tx, current, data, session.subjectId);
         await setTransitionContext(tx, data.reason, session.subjectId);
 
-        const [row] = await tx<ConnectionRow[]>`
-          UPDATE core.source_connections SET
-            connection_key = ${data.connectionKey ?? current.connection_key},
-            access_basis = ${data.accessBasis ?? current.access_basis},
-            secret_reference = ${
-              data.secretReference === undefined ? current.secret_reference : data.secretReference
-            },
-            state = ${data.state ?? current.state},
-            endpoint = ${data.endpoint === undefined ? current.endpoint : data.endpoint},
-            timeout_ms = ${data.timeoutMs ?? current.timeout_ms},
-            effective_at_field = ${
-              data.effectiveAtField === undefined
-                ? current.effective_at_field
-                : data.effectiveAtField
-            },
-            authentication_method = ${data.authenticationMethod ?? current.authentication_method},
-            adapter_version = ${data.adapterVersion ?? current.adapter_version},
-            source_schema_version = ${data.sourceSchemaVersion ?? current.source_schema_version},
-            terms_license = ${data.termsLicense ?? current.terms_license},
-            commercial_reuse = ${data.commercialReuse ?? current.commercial_reuse},
-            disclosure_permission = ${data.disclosurePermission ?? current.disclosure_permission},
-            version = version + 1
-          WHERE id = ${current.id}
-          RETURNING id, authority_id, connection_key,
-                    collection_method::text AS collection_method, state::text AS state,
-                    endpoint, secret_reference, last_success_at, version
-        `;
+        const row = await updateConnectionRow(tx, current, data);
 
         await recordAudit(tx, {
           effectiveRole,
@@ -855,12 +817,59 @@ export async function registerAuthorityAdminRoutes(
           requestIp: request.clientIp,
           reason: data.reason,
           beforeVersion: current.version,
-          afterVersion: row!.version,
-          detail: { fromState: current.state, toState: row!.state },
+          afterVersion: row.version,
+          detail: { fromState: current.state, toState: row.state },
         });
 
-        return { ...toConnectionView(row!), requestId, asOf };
+        return { ...toConnectionView(row), requestId, asOf };
       });
     },
   );
+}
+
+type ConnectionSettingsRow = ConnectionRow & {
+  timeout_ms: number;
+  effective_at_field: string | null;
+  authentication_method: string;
+  adapter_version: string;
+  source_schema_version: string;
+  terms_license: string;
+  commercial_reuse: string;
+  disclosure_permission: string;
+  access_basis: string;
+};
+
+async function updateConnectionRow(
+  tx: postgres.TransactionSql,
+  current: ConnectionSettingsRow,
+  data: z.infer<typeof connectionSchema>,
+): Promise<ConnectionRow> {
+  const [row] = await tx<ConnectionRow[]>`
+    UPDATE core.source_connections SET
+      connection_key = ${data.connectionKey ?? current.connection_key},
+      access_basis = ${data.accessBasis ?? current.access_basis},
+      secret_reference = ${
+        data.secretReference === undefined ? current.secret_reference : data.secretReference
+      },
+      state = ${data.state ?? current.state},
+      endpoint = ${data.endpoint === undefined ? current.endpoint : data.endpoint},
+      timeout_ms = ${data.timeoutMs ?? current.timeout_ms},
+      effective_at_field = ${
+        data.effectiveAtField === undefined
+          ? current.effective_at_field
+          : data.effectiveAtField
+      },
+      authentication_method = ${data.authenticationMethod ?? current.authentication_method},
+      adapter_version = ${data.adapterVersion ?? current.adapter_version},
+      source_schema_version = ${data.sourceSchemaVersion ?? current.source_schema_version},
+      terms_license = ${data.termsLicense ?? current.terms_license},
+      commercial_reuse = ${data.commercialReuse ?? current.commercial_reuse},
+      disclosure_permission = ${data.disclosurePermission ?? current.disclosure_permission},
+      version = version + 1
+    WHERE id = ${current.id}
+    RETURNING id, authority_id, connection_key,
+              collection_method::text AS collection_method, state::text AS state,
+              endpoint, secret_reference, last_success_at, version
+  `;
+  return row!;
 }

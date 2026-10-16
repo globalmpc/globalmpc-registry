@@ -84,35 +84,23 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
   const lastPublished = drafts.find((draft) => draft.state === "published") ?? null;
   const ownDraft = pending !== null && pending.proposedBySubjectId === session?.subjectId;
 
-  return (
-    <>
-      <div className="page-head">
-        <div>
-          <h1>Publish</h1>
-          <p className="sub">
-            Only fields on the allowlist are published. One person drafts, another publishes.
-            What is published cannot be taken back.
-          </p>
-        </div>
-        <Link href={`/w/projects/${id}`}>← Project</Link>
+  const renderNotice = () => {
+    return !canDraft && !canPublish ? (
+      <div className="notice" style={{ color: "var(--alert)" }}>
+        <div className="title">This account cannot draft or publish</div>
+        Drafting requires <span className="mono">mpc_operator</span>. Publishing requires{" "}
+        <span className="mono">disclosure_approver</span>, held by someone other than the drafter.
       </div>
+    ) : null;
+  };
 
-      {error ? <ErrorNotice error={error} /> : null}
-
-      {!canDraft && !canPublish ? (
-        <div className="notice" style={{ color: "var(--alert)" }}>
-          <div className="title">This account cannot draft or publish</div>
-          Drafting requires <span className="mono">mpc_operator</span>. Publishing requires{" "}
-          <span className="mono">disclosure_approver</span>, held by someone other than the
-          drafter.
-        </div>
-      ) : null}
-
+  const renderPublicProjection = () => {
+    return (
       <div className="panel">
         <h2>1. What will be public</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          Only the fields below go out. Source documents, coordinates, person-level identifiers,
-          and internal notes leave under no approval.
+          Only the fields below go out. Source documents, coordinates, person-level identifiers, and
+          internal notes leave under no approval.
         </p>
         {project ? (
           <div className="table-scroll">
@@ -141,12 +129,16 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
           <p className="sub">Loading…</p>
         )}
       </div>
+    );
+  };
 
+  const renderDraft = () => {
+    return (
       <div className="panel">
         <h2>2. Draft</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          The server checks these fields against the project and records the evidence snapshot
-          and source terms itself. A draft is not public.
+          The server checks these fields against the project and records the evidence snapshot and
+          source terms itself. A draft is not public.
         </p>
         <button
           className="primary"
@@ -187,7 +179,11 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
           </dl>
         ) : null}
       </div>
+    );
+  };
 
+  const renderPublication = () => {
+    return (
       <div className="panel">
         <h2>3. Publish</h2>
         {/* Next to the action it may block (11 §11.12). The server enforces it either way. */}
@@ -206,8 +202,8 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
           />
           {/* Saying it is irreversible after publishing is too late. */}
           <span>
-            I understand that publication cannot be undone. Revoking does not recall what has
-            already been read, and the revocation itself stays on the public record.
+            I understand that publication cannot be undone. Revoking does not recall what has already
+            been read, and the revocation itself stays on the public record.
           </span>
         </label>
 
@@ -248,12 +244,16 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
           </dl>
         ) : null}
       </div>
+    );
+  };
 
+  const renderAnchor = () => {
+    return (
       <div className="panel">
         <h2>4. anchor</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          Published versions are bound into a Merkle tree. Nothing is submitted to the chain at
-          this step.
+          Published versions are bound into a Merkle tree. Nothing is submitted to the chain at this
+          step.
         </p>
         <button
           data-testid="anchor"
@@ -284,8 +284,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
               {batch.confirmationState}
               {/* created is pre-submission. Do not let it look "done". */}
               <div className="meta">
-                Not submitted yet. Until it confirms, the inclusion proof reports
-                included=false.
+                Not submitted yet. Until it confirms, the inclusion proof reports included=false.
               </div>
             </dd>
           </dl>
@@ -301,6 +300,33 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
           </p>
         ) : null}
       </div>
+    );
+  };
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h1>Publish</h1>
+          <p className="sub">
+            Only fields on the allowlist are published. One person drafts, another publishes.
+            What is published cannot be taken back.
+          </p>
+        </div>
+        <Link href={`/w/projects/${id}`}>← Project</Link>
+      </div>
+
+      {error ? <ErrorNotice error={error} /> : null}
+
+      {renderNotice()}
+
+      {renderPublicProjection()}
+
+      {renderDraft()}
+
+      {renderPublication()}
+
+      {renderAnchor()}
     </>
   );
 }

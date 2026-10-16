@@ -100,23 +100,7 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
   const feeCapGwei = Number(env.ANCHOR_FEE_CAP_GWEI ?? "100");
   if (!(feeCapGwei > 0)) throw new Error("ANCHOR_FEE_CAP_GWEI must be greater than 0");
 
-  // O1 — total gas that may be burned per day. **No default.**
-  //
-  // A per-tx cap and a retry cap already exist. Even with both honored, a steady stream of
-  // batches drains the wallet. The loss cap is fixed only as a daily total, and the operator sets
-  // it (expected burn × 1.5). With a default, it ships without anyone deciding — the same reason
-  // an empty `OBJECT_REGION` is rejected.
-  const dailySpendCapRaw = required(env, "ANCHOR_DAILY_SPEND_CAP_WEI");
-  if (!/^[0-9]+$/.test(dailySpendCapRaw)) {
-    // wei is an integer. `0.05` or `1e17` means the unit was mistaken, and silently rounding
-    // would make the cap trip somewhere other than intended.
-    throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI must be an integer in wei");
-  }
-  const dailySpendCapWei = BigInt(dailySpendCapRaw);
-  if (dailySpendCapWei <= 0n) {
-    // 0 does not mean "no cap"; it means "submit nothing".
-    throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI must be greater than 0");
-  }
+  const dailySpendCapWei = loadDailySpendCap(env);
 
   // Solo EOA submission is for the local chain only. On any other chain the Safe multisig holds
   // the submitter role, and a setting must not be able to open a path around it — so listing a
@@ -176,4 +160,25 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
     recheckIntervalMs: positiveInteger(env, "ANCHOR_RECHECK_MS", 15000),
     gasLimit,
   };
+}
+
+function loadDailySpendCap(env: AnchorEnv): bigint {
+  // O1 — total gas that may be burned per day. **No default.**
+  //
+  // A per-tx cap and a retry cap already exist. Even with both honored, a steady stream of
+  // batches drains the wallet. The loss cap is fixed only as a daily total, and the operator sets
+  // it (expected burn × 1.5). With a default, it ships without anyone deciding — the same reason
+  // an empty `OBJECT_REGION` is rejected.
+  const dailySpendCapRaw = required(env, "ANCHOR_DAILY_SPEND_CAP_WEI");
+  if (!/^[0-9]+$/.test(dailySpendCapRaw)) {
+    // wei is an integer. `0.05` or `1e17` means the unit was mistaken, and silently rounding
+    // would make the cap trip somewhere other than intended.
+    throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI must be an integer in wei");
+  }
+  const dailySpendCapWei = BigInt(dailySpendCapRaw);
+  if (dailySpendCapWei <= 0n) {
+    // 0 does not mean "no cap"; it means "submit nothing".
+    throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI must be greater than 0");
+  }
+  return dailySpendCapWei;
 }

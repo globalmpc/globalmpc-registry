@@ -91,22 +91,8 @@ export default function ProjectListPage() {
 
   const filtered = Object.keys(filters).length > 0;
 
-  return (
-    <>
-      <div className="page-head">
-        <div>
-          <h1>Projects</h1>
-          <p className="sub">
-            {/* Tenant isolation is enforced by server RLS, not by the screen. Another tenant's
-                projects appear in neither the list nor the detail view. */}
-            Only projects in the current tenant are listed. Isolation is decided by the server.
-          </p>
-        </div>
-        <Link href="/w/projects/new">
-          <button className="primary">New project</button>
-        </Link>
-      </div>
-
+  const renderProjectFilters = () => {
+    return (
       <form
         className="panel"
         aria-label="Project filters"
@@ -200,108 +186,142 @@ export default function ProjectListPage() {
           </label>
         </div>
       </form>
+    );
+  };
+
+  const renderTruncationNotice = () => {
+    return truncated && projects ? (
+      <TruncatedNotice
+        shown={projects.length}
+        noun="projects, most recently updated first"
+        testId="projects-truncated"
+      />
+    ) : null;
+  };
+
+  const renderProjectList = () => {
+    return loading ? (
+      <p className="sub">Loading…</p>
+    ) : projects && projects.length > 0 ? (
+      <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="table-scroll">
+          <table data-testid="project-list">
+            <thead>
+              <tr>
+                <th scope="col">Project key</th>
+                <th scope="col">Name</th>
+                <th scope="col">Host country</th>
+                <th scope="col">Minerals</th>
+                <th scope="col">Reference</th>
+                <th scope="col">Lifecycle</th>
+                <th scope="col">Project Registry</th>
+                <th scope="col">Readiness</th>
+                <th scope="col">Weakest grade</th>
+                <th scope="col">Stale / suspended</th>
+                <th scope="col">Owner</th>
+                <th scope="col">Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {projects.map((project) => (
+                <tr key={project.id}>
+                  <td>
+                    <Link href={`/w/projects/${project.id}`} className="mono">
+                      {project.projectKey}
+                    </Link>
+                  </td>
+                  <td>{project.name}</td>
+                  <td className="mono">{project.hostCountryIso3}</td>
+                  <td>{project.minerals.join(", ") || "—"}</td>
+                  <td>{REFERENCE_LABEL[project.referenceStatus]}</td>
+                  <td>
+                    <LifecycleBadge state={project.lifecycleState} />
+                  </td>
+                  <td className="mono">
+                    {project.projectRegistryStatus === "none"
+                      ? "No record"
+                      : project.projectRegistryStatus}
+                  </td>
+                  <td>
+                    {project.readinessSummary ? (
+                      <ReadinessBadge status={project.readinessSummary} />
+                    ) : (
+                      // Keep "not yet evaluated" from looking the same as "passed".
+                      <span className="meta">Not assessed</span>
+                    )}
+                  </td>
+                  <td>
+                    {project.weakestGrade ? (
+                      <GradeBadge grade={project.weakestGrade} />
+                    ) : (
+                      <span className="meta">No claims</span>
+                    )}
+                  </td>
+                  <td>
+                    {project.lifecycleState === "suspended" ? "Suspended" : null}
+                    {project.openStaleSignals > 0 ? (
+                      <div>{project.openStaleSignals} stale signal(s)</div>
+                    ) : project.lifecycleState === "suspended" ? null : (
+                      <span className="meta">—</span>
+                    )}
+                  </td>
+                  <td>{project.ownerOrganizationName}</td>
+                  <td className="mono meta">{project.updatedAt.slice(0, 10)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    ) : projects ? (
+      <div className="panel">
+        <p className="sub" style={{ margin: 0 }}>
+          {/* Distinguish Empty from no permission (§11.7). A permission problem would have
+                    shown an ErrorNotice above. */}
+          {filtered
+            ? "No project matches these filters. Other projects may exist; clear the filters to see them."
+            : "No projects are registered in this tenant. There is no data here; this is not a permission problem."}
+        </p>
+      </div>
+    ) : null;
+  };
+
+  const renderSessionSummary = () => {
+    return session?.authenticated ? (
+      <p className="meta">
+        Tenant <span className="mono">{session.tenantId?.slice(0, 8)}</span> · roles{" "}
+        <span className="mono">
+          {session.roleBindings?.map((binding) => binding.role).join(", ") || "none"}
+        </span>
+      </p>
+    ) : null;
+  };
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h1>Projects</h1>
+          <p className="sub">
+            {/* Tenant isolation is enforced by server RLS, not by the screen. Another tenant's
+                projects appear in neither the list nor the detail view. */}
+            Only projects in the current tenant are listed. Isolation is decided by the server.
+          </p>
+        </div>
+        <Link href="/w/projects/new">
+          <button className="primary">New project</button>
+        </Link>
+      </div>
+
+      {renderProjectFilters()}
 
       {error ? <ErrorNotice error={error} /> : null}
 
-      {truncated && projects ? (
-        <TruncatedNotice
-          shown={projects.length}
-          noun="projects, most recently updated first"
-          testId="projects-truncated"
-        />
-      ) : null}
+      {renderTruncationNotice()}
 
-      {loading ? (
-        <p className="sub">Loading…</p>
-      ) : projects && projects.length > 0 ? (
-        <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
-          <div className="table-scroll">
-            <table data-testid="project-list">
-              <thead>
-                <tr>
-                  <th scope="col">Project key</th>
-                  <th scope="col">Name</th>
-                  <th scope="col">Host country</th>
-                  <th scope="col">Minerals</th>
-                  <th scope="col">Reference</th>
-                  <th scope="col">Lifecycle</th>
-                  <th scope="col">Project Registry</th>
-                  <th scope="col">Readiness</th>
-                  <th scope="col">Weakest grade</th>
-                  <th scope="col">Stale / suspended</th>
-                  <th scope="col">Owner</th>
-                  <th scope="col">Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {projects.map((project) => (
-                  <tr key={project.id}>
-                    <td>
-                      <Link href={`/w/projects/${project.id}`} className="mono">
-                        {project.projectKey}
-                      </Link>
-                    </td>
-                    <td>{project.name}</td>
-                    <td className="mono">{project.hostCountryIso3}</td>
-                    <td>{project.minerals.join(", ") || "—"}</td>
-                    <td>{REFERENCE_LABEL[project.referenceStatus]}</td>
-                    <td>
-                      <LifecycleBadge state={project.lifecycleState} />
-                    </td>
-                    <td className="mono">
-                      {project.projectRegistryStatus === "none" ? "No record" : project.projectRegistryStatus}
-                    </td>
-                    <td>
-                      {project.readinessSummary ? (
-                        <ReadinessBadge status={project.readinessSummary} />
-                      ) : (
-                        // Keep "not yet evaluated" from looking the same as "passed".
-                        <span className="meta">Not assessed</span>
-                      )}
-                    </td>
-                    <td>
-                      {project.weakestGrade ? (
-                        <GradeBadge grade={project.weakestGrade} />
-                      ) : (
-                        <span className="meta">No claims</span>
-                      )}
-                    </td>
-                    <td>
-                      {project.lifecycleState === "suspended" ? "Suspended" : null}
-                      {project.openStaleSignals > 0 ? (
-                        <div>{project.openStaleSignals} stale signal(s)</div>
-                      ) : project.lifecycleState === "suspended" ? null : (
-                        <span className="meta">—</span>
-                      )}
-                    </td>
-                    <td>{project.ownerOrganizationName}</td>
-                    <td className="mono meta">{project.updatedAt.slice(0, 10)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : projects ? (
-        <div className="panel">
-          <p className="sub" style={{ margin: 0 }}>
-            {/* Distinguish Empty from no permission (§11.7). A permission problem would have
-                shown an ErrorNotice above. */}
-            {filtered
-              ? "No project matches these filters. Other projects may exist; clear the filters to see them."
-              : "No projects are registered in this tenant. There is no data here; this is not a permission problem."}
-          </p>
-        </div>
-      ) : null}
+      {renderProjectList()}
 
-      {session?.authenticated ? (
-        <p className="meta">
-          Tenant <span className="mono">{session.tenantId?.slice(0, 8)}</span> · roles{" "}
-          <span className="mono">
-            {session.roleBindings?.map((binding) => binding.role).join(", ") || "none"}
-          </span>
-        </p>
-      ) : null}
+      {renderSessionSummary()}
     </>
   );
 }

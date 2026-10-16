@@ -65,20 +65,14 @@ code,
 
 .topbar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   padding: 14px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  flex-wrap: wrap;
-}
-
-/* When the menu is long, wrap within the left area. If the whole header wraps, the account area
-   drops to the left of the second line and vanishes from the top right. */
-.topbar {
+  /* Keep the account area at the top right; long menus wrap within the left area. */
   flex-wrap: nowrap;
-  align-items: flex-start;
 }
 
 .topbar-start {

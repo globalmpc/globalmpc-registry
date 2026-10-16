@@ -77,8 +77,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   const project = overview;
 
-  return (
-    <>
+  const renderPageHead = () => {
+    return (
       <div className="page-head">
         <div>
           <h1>{project?.projectKey ?? "Project"}</h1>
@@ -86,285 +86,333 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         </div>
         <Link href="/w/projects">← All projects</Link>
       </div>
+    );
+  };
+
+  const renderProjectDetails = () => {
+    if (!(project && token)) return null;
+    const renderIdentity = () => {
+      return (
+        <div className="panel">
+          <h2>Identity</h2>
+          <dl className="dl">
+            <dt>Project ID</dt>
+            <dd className="mono">{project.projectId}</dd>
+
+            <dt>Host country</dt>
+            <dd className="mono">{project.hostCountryIso3}</dd>
+
+            <dt>Minerals</dt>
+            <dd>{project.minerals.join(", ") || "—"}</dd>
+
+            <dt>Lifecycle state</dt>
+            <dd>
+              <LifecycleBadge state={project.lifecycleState} />
+            </dd>
+
+            <dt>Owner</dt>
+            <dd>{project.ownerOrganizationName}</dd>
+
+            <dt>Reference standing</dt>
+            <dd data-testid="reference-standing">
+              {REFERENCE_LABEL[project.referenceStatus]}
+              {project.referenceStatus !== "none" ? (
+                // A Reference badge must not make other fields look automatically
+                // confirmed (§11.5, invariant 10).
+                <div className="meta">
+                  This label does not confirm rights, consent, issuer, or SPV status, and it is not
+                  government cooperation or an offering.
+                </div>
+              ) : null}
+            </dd>
+
+            <dt>Project relationship</dt>
+            <dd>
+              <ConfirmationBadge status={project.relationshipStatus} />
+            </dd>
+
+            <dt>Data readiness</dt>
+            <dd>
+              {project.readiness.length > 0 ? (
+                <span className="meta">See the readiness card below</span>
+              ) : (
+                <>
+                  <span className="meta">Not assessed</span>
+                  <div className="meta">No assessment has run yet. This is not a pass.</div>
+                </>
+              )}
+            </dd>
+
+            <dt>Version</dt>
+            <dd className="mono">v{project.version}</dd>
+
+            <dt>As of</dt>
+            <dd className="mono">{project.asOf}</dd>
+          </dl>
+          {actions.includes("project.update") ? (
+            <EditIdentity token={token} project={project} onSaved={load} />
+          ) : null}
+        </div>
+      );
+    };
+
+    const renderRegistries = () => {
+      return (
+        <div className="panel" data-testid="registry-states">
+          <h2>Registries</h2>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Registry</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Latest version</th>
+                  <th scope="col">Anchored</th>
+                </tr>
+              </thead>
+              <tbody>
+                {project.registries.map((registry) => (
+                  <tr key={registry.registryType}>
+                    <th scope="row">{REGISTRY_LABEL[registry.registryType]}</th>
+                    <td className="mono">
+                      {registry.status === "none" ? "No record" : registry.status}
+                    </td>
+                    <td className="mono">
+                      {registry.latestVersion === null ? "—" : `v${registry.latestVersion}`}
+                    </td>
+                    <td>{registry.anchored ? "Yes" : "No"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="meta" style={{ marginBottom: 0 }}>
+            A registry record states that a record exists. It is not legal effect or issuance.
+          </p>
+        </div>
+      );
+    };
+
+    const renderReadiness = () => {
+      return (
+        <div className="row" style={{ alignItems: "stretch", flexWrap: "wrap" }}>
+          <div className="panel" style={{ flex: "1 1 320px" }} data-testid="readiness-card">
+            <h2>Readiness</h2>
+            {project.readiness.length === 0 ? (
+              <p className="sub" style={{ margin: 0 }}>
+                No gate has an assessment on record.
+              </p>
+            ) : (
+              <ul>
+                {project.readiness.map((row) => (
+                  <li key={row.gateId}>
+                    <span className="mono">{row.gateId}</span> <ReadinessBadge status={row.status} />{" "}
+                    <span className="meta mono">{row.generatedAt}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="meta">{REQUIRED_BOUNDARY_COPY.readiness}</p>
+          </div>
+          <div className="panel" style={{ flex: "1 1 320px" }} data-testid="decision-card">
+            <h2>Latest human decision</h2>
+            {project.decisions.length === 0 ? (
+              <p className="sub" style={{ margin: 0 }}>
+                No gate decision has been recorded.
+              </p>
+            ) : (
+              <ul>
+                {project.decisions.map((row) => (
+                  <li key={row.gateId}>
+                    <span className="mono">{row.gateId}</span> · {row.decision} ·{" "}
+                    {row.decisionAuthority} · <span className="meta mono">{row.signedAt}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    const renderOpenGapsLimitationsAndDataAge = () => {
+      return (
+        <div className="panel" data-testid="gaps-and-limitations">
+          <h2>Open gaps, limitations and data age</h2>
+          {project.readiness.flatMap((row) => row.openGaps).length > 0 ? (
+            <ul>
+              {project.readiness.flatMap((row) =>
+                row.openGaps.map((gap) => (
+                  <li key={`${row.gateId}-${gap.requirementId}`}>
+                    <span className="mono">{row.gateId}</span> ·{" "}
+                    <span className="mono">{gap.requirementId}</span> · {gap.status} ·{" "}
+                    <span className="meta">{gap.reasonCode}</span>
+                  </li>
+                )),
+              )}
+            </ul>
+          ) : null}
+          <ul>
+            {project.limitations.map((text) => (
+              <li key={text}>{text}</li>
+            ))}
+          </ul>
+          <dl className="dl">
+            <dt>Sources recorded</dt>
+            <dd className="mono">{project.dataAge.sourceCount}</dd>
+            <dt>Newest source as of</dt>
+            <dd className="mono">{project.dataAge.newestSourceAsOf ?? "—"}</dd>
+            <dt>Oldest source as of</dt>
+            <dd className="mono">{project.dataAge.oldestSourceAsOf ?? "—"}</dd>
+            <dt>Open stale signals</dt>
+            <dd className="mono">{project.dataAge.openStaleSignals}</dd>
+          </dl>
+        </div>
+      );
+    };
+
+    const renderRecentActivity = () => {
+      return (
+        <div className="panel" data-testid="project-activity">
+          <h2>Recent activity</h2>
+          {project.activity.length === 0 ? (
+            <p className="sub" style={{ margin: 0 }}>
+              No recorded activity.
+            </p>
+          ) : (
+            <ul>
+              {project.activity.map((row, index) => (
+                <li key={`${row.occurredAt}-${index}`}>
+                  <span className="mono">{row.command}</span>
+                  {row.effectiveRole ? (
+                    <span className="meta"> · {row.effectiveRole}</span>
+                  ) : null}{" "}
+                  <span className="meta mono">{row.occurredAt}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="meta" style={{ marginBottom: 0 }}>
+            Command and role only. The full record is on the audit screen.
+          </p>
+        </div>
+      );
+    };
+
+    return (
+      <>
+        {renderIdentity()}
+
+        <PartiesPanel
+          token={token}
+          projectId={id}
+          parties={project.parties}
+          canSubmit={actions.includes("project.party.submit")}
+          canConfirm={actions.includes("project.fact.record")}
+          onChanged={load}
+        />
+
+        <FactMatrix
+          token={token}
+          projectId={id}
+          facts={project.facts}
+          canRecord={actions.includes("project.fact.record")}
+          onChanged={load}
+        />
+
+        <div className="panel" data-testid="lifecycle-timeline">
+          <h2>Lifecycle timeline</h2>
+          {project.lifecycle.length === 0 ? (
+            <p className="sub" style={{ margin: 0 }}>
+              No transition has been recorded since registration.
+            </p>
+          ) : (
+            <ol>
+              {project.lifecycle.map((step) => (
+                <li key={`${step.occurredAt}-${step.toState}`}>
+                  <span className="mono">{step.fromState}</span> →{" "}
+                  <span className="mono">{step.toState}</span> · {step.reason} ·{" "}
+                  <span className="mono meta">{step.occurredAt}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+
+        {renderRegistries()}
+
+        {renderReadiness()}
+
+        {renderOpenGapsLimitationsAndDataAge()}
+
+        <RegistrationRequests
+          token={token}
+          projectId={id}
+          overview={project}
+          canRequest={actions.includes("project.registration.request")}
+          onChanged={load}
+        />
+
+        <StakeholderHistory
+          token={token}
+          projectId={id}
+          canRecord={actions.includes("project.stakeholder.record")}
+        />
+
+        <div className="panel">
+          <h2>Actions</h2>
+          <div className="row" style={{ flexWrap: "wrap" }}>
+            <Link href={`/w/projects/${id}/data-room`}>
+              <button>Data Room</button>
+            </Link>
+            <Link href={`/w/projects/${id}/documents`}>
+              <button>Document status</button>
+            </Link>
+            <Link href={`/w/projects/${id}/impacts`}>
+              <button>Documents to recheck</button>
+            </Link>
+            <Link href={`/w/projects/${id}/verification`}>
+              <button>Verification</button>
+            </Link>
+            <Link href={`/w/projects/${id}/readiness`}>
+              <button>Readiness</button>
+            </Link>
+            {/* Gate Decision is a separate screen from readiness (§11.3). On the same screen,
+                      readiness reads as approval. */}
+            <Link href={`/w/projects/${id}/gates/registry_publication`}>
+              <button>Gate decision</button>
+            </Link>
+            <Link href={`/w/projects/${id}/publication`}>
+              <button>Publish</button>
+            </Link>
+          </div>
+          <ul style={{ margin: "14px 0 0", paddingLeft: 18, color: "var(--muted-foreground)" }}>
+            <li>{REQUIRED_BOUNDARY_COPY.readiness}</li>
+            <li>{REQUIRED_BOUNDARY_COPY.verification}</li>
+          </ul>
+        </div>
+
+        {offering ? <OfferingPanel offering={offering} /> : null}
+
+        {renderRecentActivity()}
+
+        <p className="meta">
+          Request ID <span className="mono">{project.requestId}</span>
+        </p>
+      </>
+    );
+  };
+
+  return (
+    <>
+      {renderPageHead()}
 
       {error ? <ErrorNotice error={error} /> : null}
       <BlackoutNotice token={token} projectId={id} />
 
       {loading ? <p className="sub">Loading…</p> : null}
 
-      {project && token ? (
-        <>
-          <div className="panel">
-            <h2>Identity</h2>
-            <dl className="dl">
-              <dt>Project ID</dt>
-              <dd className="mono">{project.projectId}</dd>
-
-              <dt>Host country</dt>
-              <dd className="mono">{project.hostCountryIso3}</dd>
-
-              <dt>Minerals</dt>
-              <dd>{project.minerals.join(", ") || "—"}</dd>
-
-              <dt>Lifecycle state</dt>
-              <dd>
-                <LifecycleBadge state={project.lifecycleState} />
-              </dd>
-
-              <dt>Owner</dt>
-              <dd>{project.ownerOrganizationName}</dd>
-
-              <dt>Reference standing</dt>
-              <dd data-testid="reference-standing">
-                {REFERENCE_LABEL[project.referenceStatus]}
-                {project.referenceStatus !== "none" ? (
-                  // A Reference badge must not make other fields look automatically
-                  // confirmed (§11.5, invariant 10).
-                  <div className="meta">
-                    This label does not confirm rights, consent, issuer, or SPV status, and it is
-                    not government cooperation or an offering.
-                  </div>
-                ) : null}
-              </dd>
-
-              <dt>Project relationship</dt>
-              <dd>
-                <ConfirmationBadge status={project.relationshipStatus} />
-              </dd>
-
-              <dt>Data readiness</dt>
-              <dd>
-                {project.readiness.length > 0 ? (
-                  <span className="meta">See the readiness card below</span>
-                ) : (
-                  <>
-                    <span className="meta">Not assessed</span>
-                    <div className="meta">No assessment has run yet. This is not a pass.</div>
-                  </>
-                )}
-              </dd>
-
-              <dt>Version</dt>
-              <dd className="mono">v{project.version}</dd>
-
-              <dt>As of</dt>
-              <dd className="mono">{project.asOf}</dd>
-            </dl>
-            {actions.includes("project.update") ? (
-              <EditIdentity token={token} project={project} onSaved={load} />
-            ) : null}
-          </div>
-
-          <PartiesPanel
-            token={token}
-            projectId={id}
-            parties={project.parties}
-            canSubmit={actions.includes("project.party.submit")}
-            canConfirm={actions.includes("project.fact.record")}
-            onChanged={load}
-          />
-
-          <FactMatrix
-            token={token}
-            projectId={id}
-            facts={project.facts}
-            canRecord={actions.includes("project.fact.record")}
-            onChanged={load}
-          />
-
-          <div className="panel" data-testid="lifecycle-timeline">
-            <h2>Lifecycle timeline</h2>
-            {project.lifecycle.length === 0 ? (
-              <p className="sub" style={{ margin: 0 }}>
-                No transition has been recorded since registration.
-              </p>
-            ) : (
-              <ol>
-                {project.lifecycle.map((step) => (
-                  <li key={`${step.occurredAt}-${step.toState}`}>
-                    <span className="mono">{step.fromState}</span> →{" "}
-                    <span className="mono">{step.toState}</span> · {step.reason} ·{" "}
-                    <span className="mono meta">{step.occurredAt}</span>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </div>
-
-          <div className="panel" data-testid="registry-states">
-            <h2>Registries</h2>
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">Registry</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Latest version</th>
-                    <th scope="col">Anchored</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {project.registries.map((registry) => (
-                    <tr key={registry.registryType}>
-                      <th scope="row">{REGISTRY_LABEL[registry.registryType]}</th>
-                      <td className="mono">
-                        {registry.status === "none" ? "No record" : registry.status}
-                      </td>
-                      <td className="mono">
-                        {registry.latestVersion === null ? "—" : `v${registry.latestVersion}`}
-                      </td>
-                      <td>{registry.anchored ? "Yes" : "No"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="meta" style={{ marginBottom: 0 }}>
-              A registry record states that a record exists. It is not legal effect or issuance.
-            </p>
-          </div>
-
-          <div className="row" style={{ alignItems: "stretch", flexWrap: "wrap" }}>
-            <div className="panel" style={{ flex: "1 1 320px" }} data-testid="readiness-card">
-              <h2>Readiness</h2>
-              {project.readiness.length === 0 ? (
-                <p className="sub" style={{ margin: 0 }}>No gate has an assessment on record.</p>
-              ) : (
-                <ul>
-                  {project.readiness.map((row) => (
-                    <li key={row.gateId}>
-                      <span className="mono">{row.gateId}</span>{" "}
-                      <ReadinessBadge status={row.status} />{" "}
-                      <span className="meta mono">{row.generatedAt}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="meta">{REQUIRED_BOUNDARY_COPY.readiness}</p>
-            </div>
-            <div className="panel" style={{ flex: "1 1 320px" }} data-testid="decision-card">
-              <h2>Latest human decision</h2>
-              {project.decisions.length === 0 ? (
-                <p className="sub" style={{ margin: 0 }}>No gate decision has been recorded.</p>
-              ) : (
-                <ul>
-                  {project.decisions.map((row) => (
-                    <li key={row.gateId}>
-                      <span className="mono">{row.gateId}</span> · {row.decision} ·{" "}
-                      {row.decisionAuthority} · <span className="meta mono">{row.signedAt}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-
-          <div className="panel" data-testid="gaps-and-limitations">
-            <h2>Open gaps, limitations and data age</h2>
-            {project.readiness.flatMap((row) => row.openGaps).length > 0 ? (
-              <ul>
-                {project.readiness.flatMap((row) =>
-                  row.openGaps.map((gap) => (
-                    <li key={`${row.gateId}-${gap.requirementId}`}>
-                      <span className="mono">{row.gateId}</span> ·{" "}
-                      <span className="mono">{gap.requirementId}</span> · {gap.status} ·{" "}
-                      <span className="meta">{gap.reasonCode}</span>
-                    </li>
-                  )),
-                )}
-              </ul>
-            ) : null}
-            <ul>
-              {project.limitations.map((text) => (
-                <li key={text}>{text}</li>
-              ))}
-            </ul>
-            <dl className="dl">
-              <dt>Sources recorded</dt>
-              <dd className="mono">{project.dataAge.sourceCount}</dd>
-              <dt>Newest source as of</dt>
-              <dd className="mono">{project.dataAge.newestSourceAsOf ?? "—"}</dd>
-              <dt>Oldest source as of</dt>
-              <dd className="mono">{project.dataAge.oldestSourceAsOf ?? "—"}</dd>
-              <dt>Open stale signals</dt>
-              <dd className="mono">{project.dataAge.openStaleSignals}</dd>
-            </dl>
-          </div>
-
-          <RegistrationRequests
-            token={token}
-            projectId={id}
-            overview={project}
-            canRequest={actions.includes("project.registration.request")}
-            onChanged={load}
-          />
-
-          <StakeholderHistory
-            token={token}
-            projectId={id}
-            canRecord={actions.includes("project.stakeholder.record")}
-          />
-
-          <div className="panel">
-            <h2>Actions</h2>
-            <div className="row" style={{ flexWrap: "wrap" }}>
-              <Link href={`/w/projects/${id}/data-room`}>
-                <button>Data Room</button>
-              </Link>
-              <Link href={`/w/projects/${id}/documents`}>
-                <button>Document status</button>
-              </Link>
-              <Link href={`/w/projects/${id}/impacts`}>
-                <button>Documents to recheck</button>
-              </Link>
-              <Link href={`/w/projects/${id}/verification`}>
-                <button>Verification</button>
-              </Link>
-              <Link href={`/w/projects/${id}/readiness`}>
-                <button>Readiness</button>
-              </Link>
-              {/* Gate Decision is a separate screen from readiness (§11.3). On the same screen,
-                  readiness reads as approval. */}
-              <Link href={`/w/projects/${id}/gates/registry_publication`}>
-                <button>Gate decision</button>
-              </Link>
-              <Link href={`/w/projects/${id}/publication`}>
-                <button>Publish</button>
-              </Link>
-            </div>
-            <ul style={{ margin: "14px 0 0", paddingLeft: 18, color: "var(--muted-foreground)" }}>
-              <li>{REQUIRED_BOUNDARY_COPY.readiness}</li>
-              <li>{REQUIRED_BOUNDARY_COPY.verification}</li>
-            </ul>
-          </div>
-
-          {offering ? <OfferingPanel offering={offering} /> : null}
-
-          <div className="panel" data-testid="project-activity">
-            <h2>Recent activity</h2>
-            {project.activity.length === 0 ? (
-              <p className="sub" style={{ margin: 0 }}>No recorded activity.</p>
-            ) : (
-              <ul>
-                {project.activity.map((row, index) => (
-                  <li key={`${row.occurredAt}-${index}`}>
-                    <span className="mono">{row.command}</span>
-                    {row.effectiveRole ? <span className="meta"> · {row.effectiveRole}</span> : null}{" "}
-                    <span className="meta mono">{row.occurredAt}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="meta" style={{ marginBottom: 0 }}>
-              Command and role only. The full record is on the audit screen.
-            </p>
-          </div>
-
-          <p className="meta">
-            Request ID <span className="mono">{project.requestId}</span>
-          </p>
-        </>
-      ) : null}
+      {renderProjectDetails()}
     </>
   );
 }

@@ -44,21 +44,25 @@ const BLOCKED_SUFFIXES = [".localhost", ".local", ".internal", ".home.arpa"];
  * The cloud metadata endpoint (169.254.169.254) is link-local — without this one line
  * instance credentials can be read.
  */
-function isPrivateIpv4Bytes(bytes: readonly number[]): boolean {
-  const [a, b] = bytes as [number, number, number, number];
+// First octet and inclusive second-octet ranges outside the public internet.
+const PRIVATE_IPV4_RANGES = [
+  [169, 254, 254], // link-local, including cloud metadata
+  [172, 16, 31],
+  [192, 168, 168],
+  [100, 64, 127], // CGNAT
+  [192, 0, 0], // IETF special purpose
+  [198, 18, 19], // benchmark
+] as const;
 
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 169 && b === 254) return true; // link-local · metadata
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
-  if (a === 192 && b === 0) return true; // IETF special purpose
-  if (a === 198 && (b === 18 || b === 19)) return true; // benchmark
-  // 192.88.99.0/24 — 6to4 relay anycast (deprecated by RFC 7526). Leave no remaining path
-  // open. 2002::/16 is blocked on the IPv6 side, so the IPv4 side is blocked too.
-  if (a === 192 && b === 88 && (bytes[2] as number) === 99) return true;
-  if (a >= 224) return true; // multicast · reserved
-  return false;
+function isPrivateIpv4Bytes(bytes: ArrayLike<number>): boolean {
+  const a = bytes[0]!;
+  const b = bytes[1]!;
+  if ([0, 10, 127].includes(a) || a >= 224) return true;
+  // Deprecated 6to4 relay anycast (RFC 7526); IPv6 2002::/16 is checked as well.
+  if (a === 192 && b === 88 && bytes[2] === 99) return true;
+  return PRIVATE_IPV4_RANGES.some(
+    ([first, min, max]) => a === first && b >= min && b <= max,
+  );
 }
 
 function isPrivateIpv4(address: string): boolean {
@@ -85,7 +89,7 @@ function isPrivateIpv6(address: string): boolean {
 
   // `::ffff:a.b.c.d` — IPv4-mapped. Judged by the inner IPv4 rules.
   if (zerosUpTo(10) && bytes[10] === 0xff && bytes[11] === 0xff) {
-    return isPrivateIpv4Bytes([...bytes.slice(12)]);
+    return isPrivateIpv4Bytes(bytes.slice(12));
   }
 
   // `::a.b.c.d` — IPv4-compatible. A deprecated notation with no reason to keep.
@@ -93,7 +97,7 @@ function isPrivateIpv6(address: string): boolean {
 
   // `2002::/16` — 6to4. IPv4 is embedded in bytes 2–5.
   if (bytes[0] === 0x20 && bytes[1] === 0x02) {
-    return isPrivateIpv4Bytes([...bytes.slice(2, 6)]);
+    return isPrivateIpv4Bytes(bytes.slice(2, 6));
   }
 
   // Default deny starts here. Everything outside global unicast (2000::/3) is blocked —
@@ -101,6 +105,10 @@ function isPrivateIpv6(address: string): boolean {
   // discard(100::/64) are caught in one line.
   if ((bytes[0]! & 0xe0) !== 0x20) return true;
 
+  return isReservedGlobalIpv6(bytes);
+}
+
+function isReservedGlobalIpv6(bytes: Uint8Array): boolean {
   // Reserved ranges inside global unicast.
   if (bytes[0] === 0x20 && bytes[1] === 0x01) {
     // 2001::/23 — IETF protocol assignments. Teredo (2001::/32) is here.

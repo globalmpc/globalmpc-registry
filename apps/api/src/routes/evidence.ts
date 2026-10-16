@@ -775,20 +775,7 @@ export async function registerEvidenceRoutes(
            * if that value were unrelated to the document, "re-fetch the original for this hash
            * and compare" would not hold, and silently swapping it hides the disagreement.
            */
-          const documentHash =
-            evidence.rawHash ??
-            (data.documentUploadId
-              ? (await loadVerifiableUpload(tx, request.params.projectId, data.documentUploadId))
-                  .content_hash
-              : null);
-          if (documentHash !== null && data.rawHash !== null && data.rawHash !== documentHash) {
-            throw unprocessable(
-              "RAW_HASH_DOCUMENT_MISMATCH",
-              "The raw hash does not match the referenced document",
-              { documentHash },
-            );
-          }
-          const rawHash = documentHash ?? data.rawHash;
+          const rawHash = await resolveReceiptHash(tx, request.params.projectId, data, evidence);
 
           /**
            * Freshness is computed here, not sent. How old is too old is a per-source rule the
@@ -1190,4 +1177,25 @@ export async function registerEvidenceRoutes(
       );
     },
   );
+}
+
+async function resolveReceiptHash(
+  tx: postgres.TransactionSql,
+  projectId: string,
+  data: Pick<z.infer<typeof createReceiptSchema>, "documentUploadId" | "rawHash">,
+  evidence: ConfirmationEvidence,
+): Promise<string | null> {
+  const documentHash =
+    evidence.rawHash ??
+    (data.documentUploadId
+      ? (await loadVerifiableUpload(tx, projectId, data.documentUploadId)).content_hash
+      : null);
+  if (documentHash !== null && data.rawHash !== null && data.rawHash !== documentHash) {
+    throw unprocessable(
+      "RAW_HASH_DOCUMENT_MISMATCH",
+      "The raw hash does not match the referenced document",
+      { documentHash },
+    );
+  }
+  return documentHash ?? data.rawHash;
 }

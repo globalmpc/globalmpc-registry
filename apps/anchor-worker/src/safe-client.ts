@@ -159,7 +159,7 @@ export function createSafeClient(options: SafeServiceOptions): SafeClient {
   async function request(path: string, init?: RequestInit): Promise<unknown> {
     const response = await fetchImpl(`${options.serviceUrl}${path}`, {
       ...init,
-      headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+      headers: { "content-type": "application/json", ...init?.headers },
     });
 
     if (!response.ok) {

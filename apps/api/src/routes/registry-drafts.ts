@@ -23,6 +23,7 @@ import {
   type EnrolledSession,
 } from "./shared.js";
 import {
+  type PublicationSubject,
   projectionMismatches,
   resolvePublicationSubject,
 } from "../services/registry-publication.js";
@@ -218,32 +219,7 @@ export async function registerRegistryDraftRoutes(
          * to give, so they are passed as given here — this call answers "could this be
          * published if approved?", and publication asks the full question again.
          */
-        const publishCheck = checkPublishable({
-          fields: Object.keys(data.projection),
-          // The projection carries only allowlisted fields, and its identity fields are
-          // checked against the record below. Per-field sensitivity of free-text fields such as
-          // `claimSummary` is not derived yet; the approver reads them before publishing.
-          sensitivity: "public",
-          disclosureApproved: true,
-          containsPersonLevelIdentifier: data.containsPersonLevelIdentifier,
-          personIdentifierSafeguards: safeguardsOf(
-            {
-              lawfulBasis: record?.lawfulBasis ?? null,
-              purpose: record?.purpose ?? null,
-              retention: record?.retention ?? null,
-              acknowledgedAt: record ? new Date() : null,
-            },
-            true,
-          ),
-          commercialReuse: subject.commercialReuse,
-          publishedAsCommercialBasis: data.publishedAsCommercialBasis,
-        });
-        if (!publishCheck.allowed) {
-          throw unprocessable(publishCheck.reason, "This projection cannot be published", {
-            offendingFields: publishCheck.offendingFields,
-            commercialReuse: subject.commercialReuse,
-          });
-        }
+        assertDraftPublishable(data, record, subject);
 
         // `.strict()` rejects fields outside the allowlist once more, and checks the shape.
         const projectionCheck = publicProjection.safeParse(data.projection);
@@ -436,4 +412,37 @@ export async function registerRegistryDraftRoutes(
       );
     },
   );
+}
+
+function assertDraftPublishable(
+  data: z.infer<typeof createRegistryDraftRequest>,
+  record: z.infer<typeof createRegistryDraftRequest>["personIdentifierRecord"] | null,
+  subject: PublicationSubject,
+): void {
+  const publishCheck = checkPublishable({
+    fields: Object.keys(data.projection),
+    // The projection carries only allowlisted fields, and its identity fields are
+    // checked against the record below. Per-field sensitivity of free-text fields such as
+    // `claimSummary` is not derived yet; the approver reads them before publishing.
+    sensitivity: "public",
+    disclosureApproved: true,
+    containsPersonLevelIdentifier: data.containsPersonLevelIdentifier,
+    personIdentifierSafeguards: safeguardsOf(
+      {
+        lawfulBasis: record?.lawfulBasis ?? null,
+        purpose: record?.purpose ?? null,
+        retention: record?.retention ?? null,
+        acknowledgedAt: record ? new Date() : null,
+      },
+      true,
+    ),
+    commercialReuse: subject.commercialReuse,
+    publishedAsCommercialBasis: data.publishedAsCommercialBasis,
+  });
+  if (!publishCheck.allowed) {
+    throw unprocessable(publishCheck.reason, "This projection cannot be published", {
+      offendingFields: publishCheck.offendingFields,
+      commercialReuse: subject.commercialReuse,
+    });
+  }
 }

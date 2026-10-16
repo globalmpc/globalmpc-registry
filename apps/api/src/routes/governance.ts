@@ -763,60 +763,7 @@ export async function registerGovernanceRoutes(
            * do not drift apart.
            */
           const spaceChain = chainForSpace(chain, current.space);
-          let snapshotBlock: number | null = null;
-          let eligibleWeight: string | null = null;
-          let eligibleWeightSource: "onchain_total_supply" | "manual" | null = null;
-
-          if (toState === "voting") {
-            if (spaceChain?.tokenAddress) {
-              snapshotBlock = snapshotBlockFor(
-                await spaceChain.headBlockNumber(),
-                spaceChain.confirmationDepth,
-              );
-
-              let totalSupply: bigint;
-              try {
-                totalSupply = await spaceChain.readTotalSupply({
-                  tokenAddress: spaceChain.tokenAddress,
-                  blockNumber: snapshotBlock,
-                });
-              } catch (error) {
-                // Reading a lookup failure as 0 makes quorum always pass. 0 is
-                // the fact "no voting power"; failure is "unknown".
-                throw unprocessable(
-                  "ELIGIBLE_WEIGHT_UNAVAILABLE",
-                  "Cannot open voting: total supply at the snapshot block could not be read",
-                  { blockNumber: String(snapshotBlock), reason: String(error).slice(0, 200) },
-                );
-              }
-
-              // 0 differs from a lookup failure but is equally unusable as a denominator —
-              // `participation × D >= 0 × N` is always true. A wrong address also reads 0,
-              // so passing it silently would erase quorum. The check runs outside
-              // the catch — inside, it would turn into "could not read".
-              if (totalSupply === 0n) {
-                throw unprocessable(
-                  "ELIGIBLE_WEIGHT_ZERO",
-                  "Total supply is 0 and cannot serve as the quorum denominator",
-                  { blockNumber: String(snapshotBlock), tokenAddress: spaceChain.tokenAddress },
-                );
-              }
-
-              eligibleWeight = totalSupply.toString();
-              eligibleWeightSource = "onchain_total_supply";
-            } else if (current.eligible_weight !== null) {
-              eligibleWeight = current.eligible_weight;
-              eligibleWeightSource = "manual";
-            } else {
-              // Opening without a denominator makes `participation × D >= participation × N`
-              // always true, so `no_quorum` can structurally never occur (09 §9.6).
-              throw unprocessable(
-                "ELIGIBLE_WEIGHT_REQUIRED",
-                "Cannot open voting: no quorum denominator",
-                { space: current.space },
-              );
-            }
-          }
+          const { snapshotBlock, eligibleWeight, eligibleWeightSource } = await resolveVotingSnapshot(spaceChain, current, toState);
 
           await tx`
             UPDATE core.governance_proposals
@@ -1128,4 +1075,69 @@ export async function registerGovernanceRoutes(
       );
     },
   );
+}
+
+interface VotingSnapshot {
+  snapshotBlock: number | null;
+  eligibleWeight: string | null;
+  eligibleWeightSource: "onchain_total_supply" | "manual" | null;
+}
+async function resolveVotingSnapshot(
+  spaceChain: GovernanceChain | undefined,
+  current: ProposalRow,
+  toState: ProposalState,
+): Promise<VotingSnapshot> {
+  let snapshotBlock: number | null = null;
+  let eligibleWeight: string | null = null;
+  let eligibleWeightSource: "onchain_total_supply" | "manual" | null = null;
+
+  if (toState === "voting") {
+    if (spaceChain?.tokenAddress) {
+      snapshotBlock = snapshotBlockFor(
+        await spaceChain.headBlockNumber(),
+        spaceChain.confirmationDepth,
+      );
+
+      let totalSupply: bigint;
+      try {
+        totalSupply = await spaceChain.readTotalSupply({
+          tokenAddress: spaceChain.tokenAddress,
+          blockNumber: snapshotBlock,
+        });
+      } catch (error) {
+        // Reading a lookup failure as 0 makes quorum always pass. 0 is
+        // the fact "no voting power"; failure is "unknown".
+        throw unprocessable(
+          "ELIGIBLE_WEIGHT_UNAVAILABLE",
+          "Cannot open voting: total supply at the snapshot block could not be read",
+          { blockNumber: String(snapshotBlock), reason: String(error).slice(0, 200) },
+        );
+      }
+
+      // 0 differs from a lookup failure but is equally unusable as a denominator —
+      // `participation × D >= 0 × N` is always true. A wrong address also reads 0,
+      // so passing it silently would erase quorum. The check runs outside
+      // the catch — inside, it would turn into "could not read".
+      if (totalSupply === 0n) {
+        throw unprocessable(
+          "ELIGIBLE_WEIGHT_ZERO",
+          "Total supply is 0 and cannot serve as the quorum denominator",
+          { blockNumber: String(snapshotBlock), tokenAddress: spaceChain.tokenAddress },
+        );
+      }
+
+      eligibleWeight = totalSupply.toString();
+      eligibleWeightSource = "onchain_total_supply";
+    } else if (current.eligible_weight !== null) {
+      eligibleWeight = current.eligible_weight;
+      eligibleWeightSource = "manual";
+    } else {
+      // Opening without a denominator makes `participation × D >= participation × N`
+      // always true, so `no_quorum` can structurally never occur (09 §9.6).
+      throw unprocessable("ELIGIBLE_WEIGHT_REQUIRED", "Cannot open voting: no quorum denominator", {
+        space: current.space,
+      });
+    }
+  }
+  return { snapshotBlock, eligibleWeight, eligibleWeightSource };
 }

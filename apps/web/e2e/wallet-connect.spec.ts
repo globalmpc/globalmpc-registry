@@ -52,7 +52,10 @@ async function installWallets(page: Page, wallets: readonly FakeWallet[]): Promi
           ...wallet.flags,
           async request({ method, params }: { method: string; params?: unknown[] }) {
             calls.push(`${wallet.rdns}:${method}`);
-            const target = () => Number.parseInt((params?.[0] as { chainId: string }).chainId, 16);
+            const target = () => {
+              const request = params?.[0] as { chainId: string } | undefined;
+              return Number.parseInt(request?.chainId ?? "", 16);
+            };
             switch (method) {
               case "eth_requestAccounts":
               case "eth_accounts":
@@ -72,7 +75,7 @@ async function installWallets(page: Page, wallets: readonly FakeWallet[]): Promi
                   throw fail("Unrecognized chain ID.", { code: 4902 });
                 }
                 chain = next;
-                (listeners["chainChanged"] ?? []).forEach((handler) => handler(`0x${next.toString(16)}`));
+                listeners["chainChanged"]?.forEach((handler) => handler(`0x${next.toString(16)}`));
                 return null;
               }
               case "wallet_addEthereumChain":

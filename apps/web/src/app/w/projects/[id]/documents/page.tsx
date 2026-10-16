@@ -154,20 +154,8 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
     { label: "Failed scanning or rejected", value: totals?.unusable, status: "unusable" },
   ];
 
-  return (
-    <>
-      <div className="page-head">
-        <Link href={`/w/projects/${id}`}>← Project</Link>
-        <h1>Document status</h1>
-        <p className="sub">
-          Which documents this project expects, and where its documents stand
-          {summary ? ` as of ${summary.today}` : ""}. Expiry is judged by calendar day; a
-          document is valid through its last valid day.
-        </p>
-      </div>
-
-      <ErrorNotice error={error} />
-
+  const renderDocumentsByStatus = () => {
+    return (
       <div className="panel">
         <h2>Documents by status</h2>
         <div className="row" style={{ flexWrap: "wrap", gap: 12 }}>
@@ -186,16 +174,20 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
         </div>
         {totals ? (
           <p className="meta" style={{ marginTop: 10 }}>
-            {totals.untyped} current or expired document{totals.untyped === 1 ? " has" : "s have"}{" "}
-            no type and cannot count toward any requirement. {totals.withoutValidUntil} current
-            document{totals.withoutValidUntil === 1 ? " has" : "s have"} no last valid day.{" "}
+            {totals.untyped} current or expired document{totals.untyped === 1 ? " has" : "s have"} no
+            type and cannot count toward any requirement. {totals.withoutValidUntil} current document
+            {totals.withoutValidUntil === 1 ? " has" : "s have"} no last valid day.{" "}
             <Link href={`/w/projects/${id}/impacts`}>
               {totals.openImpacts} open impact{totals.openImpacts === 1 ? "" : "s"} →
             </Link>
           </p>
         ) : null}
       </div>
+    );
+  };
 
+  const renderCoverageByTier = () => {
+    return (
       <div className="panel">
         <h2>Coverage by tier</h2>
         <div className="table-scroll">
@@ -236,12 +228,16 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
         </div>
         {summary && summary.tiers.every((tier) => tier.declared === 0) ? (
           <p className="meta">
-            No document types are declared yet, so nothing counts as required. Declare the types
-            this project expects below.
+            No document types are declared yet, so nothing counts as required. Declare the types this
+            project expects below.
           </p>
         ) : null}
       </div>
+    );
+  };
 
+  const renderExpectedDocumentTypes = () => {
+    return (
       <div className="panel">
         <h2>Expected document types</h2>
         <div className="table-scroll">
@@ -348,66 +344,78 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
         </form>
         <p className="meta">{TIER_EXPLANATION[newTier]} Types match uploads regardless of case.</p>
       </div>
+    );
+  };
 
-      {summary && summary.undeclaredTypes.length > 0 ? (
-        <div className="panel">
-          <h2>Types nobody declared</h2>
-          <p className="meta">
-            These types appear on uploads but are in no tier. Declare them above to track them.
-          </p>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Current</th>
-                  <th>Expired</th>
-                  <th>Not promoted</th>
-                  <th>Replaced</th>
+  const renderTypesNobodyDeclared = () => {
+    return summary && summary.undeclaredTypes.length > 0 ? (
+      <div className="panel">
+        <h2>Types nobody declared</h2>
+        <p className="meta">
+          These types appear on uploads but are in no tier. Declare them above to track them.
+        </p>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Current</th>
+                <th>Expired</th>
+                <th>Not promoted</th>
+                <th>Replaced</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.undeclaredTypes.map((type) => (
+                <tr key={type.documentType}>
+                  <td>
+                    <button
+                      type="button"
+                      className="field"
+                      onClick={() => setNewType(type.documentType)}
+                    >
+                      {type.documentType}
+                    </button>
+                  </td>
+                  <td>{type.currentCount}</td>
+                  <td>{type.expiredCount}</td>
+                  <td>{type.pendingCount}</td>
+                  <td>{type.supersededCount}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {summary.undeclaredTypes.map((type) => (
-                  <tr key={type.documentType}>
-                    <td>
-                      <button type="button" className="field" onClick={() => setNewType(type.documentType)}>
-                        {type.documentType}
-                      </button>
-                    </td>
-                    <td>{type.currentCount}</td>
-                    <td>{type.expiredCount}</td>
-                    <td>{type.pendingCount}</td>
-                    <td>{type.supersededCount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {summary.undeclaredTypesTruncated ? (
-            <p className="meta">
-              More undeclared types exist than shown here. Filter the list below by “Not in any
-              tier” to see all of them.
-            </p>
-          ) : null}
+              ))}
+            </tbody>
+          </table>
         </div>
-      ) : null}
+        {summary.undeclaredTypesTruncated ? (
+          <p className="meta">
+            More undeclared types exist than shown here. Filter the list below by “Not in any tier” to
+            see all of them.
+          </p>
+        ) : null}
+      </div>
+    ) : null;
+  };
 
-      {summary && summary.nextExpiries.length > 0 ? (
-        <div className="panel">
-          <h2>Next to expire</h2>
-          <ul>
-            {summary.nextExpiries.map((entry) => (
-              <li key={entry.uploadId}>
-                <Link href={`/w/projects/${id}/documents/${entry.uploadId}`}>
-                  {entry.documentType ?? `Document ${entry.uploadId.slice(0, 8)}`}
-                </Link>{" "}
-                <span className="meta">{validityText(entry.validUntil, entry.daysUntilExpiry)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+  const renderNextToExpire = () => {
+    return summary && summary.nextExpiries.length > 0 ? (
+      <div className="panel">
+        <h2>Next to expire</h2>
+        <ul>
+          {summary.nextExpiries.map((entry) => (
+            <li key={entry.uploadId}>
+              <Link href={`/w/projects/${id}/documents/${entry.uploadId}`}>
+                {entry.documentType ?? `Document ${entry.uploadId.slice(0, 8)}`}
+              </Link>{" "}
+              <span className="meta">{validityText(entry.validUntil, entry.daysUntilExpiry)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ) : null;
+  };
 
+  const renderDocuments = () => {
+    return (
       <div className="panel">
         <h2>Documents</h2>
         <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
@@ -416,7 +424,10 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
             value={filter.status ?? ""}
             onChange={(event) =>
               setFilter((current) =>
-                withStatusFilter(current, (event.target.value || undefined) as DocumentStatus | undefined),
+                withStatusFilter(
+                  current,
+                  (event.target.value || undefined) as DocumentStatus | undefined,
+                ),
               )
             }
           >
@@ -463,7 +474,10 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
             value={filter.expiresWithinDays ?? ""}
             onChange={(event) =>
               setFilter((current) =>
-                withExpiryWindow(current, event.target.value === "" ? undefined : Number(event.target.value)),
+                withExpiryWindow(
+                  current,
+                  event.target.value === "" ? undefined : Number(event.target.value),
+                ),
               )
             }
           />
@@ -511,6 +525,34 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
           <p className="meta">End of list · {items.length} shown.</p>
         ) : null}
       </div>
+    );
+  };
+
+  return (
+    <>
+      <div className="page-head">
+        <Link href={`/w/projects/${id}`}>← Project</Link>
+        <h1>Document status</h1>
+        <p className="sub">
+          Which documents this project expects, and where its documents stand
+          {summary ? ` as of ${summary.today}` : ""}. Expiry is judged by calendar day; a
+          document is valid through its last valid day.
+        </p>
+      </div>
+
+      <ErrorNotice error={error} />
+
+      {renderDocumentsByStatus()}
+
+      {renderCoverageByTier()}
+
+      {renderExpectedDocumentTypes()}
+
+      {renderTypesNobodyDeclared()}
+
+      {renderNextToExpire()}
+
+      {renderDocuments()}
     </>
   );
 }

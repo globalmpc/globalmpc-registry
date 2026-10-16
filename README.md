@@ -1,5 +1,7 @@
 # MPC Registry
 
+[![CodeFactor](https://www.codefactor.io/repository/github/globalmpc/globalmpc-registry/badge)](https://www.codefactor.io/repository/github/globalmpc/globalmpc-registry)
+
 MPC is developing infrastructure for mining real-world assets (RWAs).
 
 This repository contains the evidence registry and review workspace for that project,
