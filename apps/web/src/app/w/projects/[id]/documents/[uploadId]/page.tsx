@@ -22,6 +22,7 @@ import { ErrorNotice } from "@/components/ErrorNotice";
 import { DocumentTree } from "@/components/DocumentTree";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
 import {
+  documentProfileChanges,
   KIND_EXPLANATION,
   KIND_LABEL,
   ORIGIN_LABEL,
@@ -144,11 +145,7 @@ export default function DocumentPage({
     );
   }
 
-  const nextType = typeDraft.trim() === "" ? null : typeDraft.trim();
-  const nextValid = validDraft === "" ? null : validDraft;
-  const profileChanges: { documentType?: string | null; validUntil?: string | null } = {};
-  if (self && nextType !== self.documentType) profileChanges.documentType = nextType;
-  if (self && nextValid !== self.validUntil) profileChanges.validUntil = nextValid;
+  const profileChanges = documentProfileChanges(self, typeDraft, validDraft);
   const profileChanged = Object.keys(profileChanges).length > 0;
 
   const replaced = self?.supersededByUploadId ?? null;

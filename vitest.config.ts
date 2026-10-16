@@ -20,6 +20,14 @@ export default defineConfig(({ mode }) => {
   );
   return {
     test: {
+      coverage: {
+        provider: "v8",
+        reportsDirectory: "coverage/app",
+        reporter: ["text-summary", "lcov", "json-summary"],
+        // Include untested first-party sources, including routes and React screens.
+        include: ["apps/*/src/**/*.{ts,tsx}", "packages/*/src/**/*.{ts,tsx}"],
+        exclude: ["**/*.d.ts", "**/*.test.*", "**/*.spec.*", "**/node_modules/**"],
+      },
       projects: [
         ...selectedRoots.map((root) => ({
           extends: true as const,

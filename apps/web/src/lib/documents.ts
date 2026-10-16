@@ -88,3 +88,18 @@ export function childrenByParent<T extends TreeItem>(items: readonly T[]): Map<s
   }
   return children;
 }
+
+/** Send only changed profile fields; an empty draft explicitly clears a saved value. */
+export function documentProfileChanges(
+  document: Pick<DocumentNode, "documentType" | "validUntil"> | undefined,
+  typeDraft: string,
+  validDraft: string,
+): { documentType?: string | null; validUntil?: string | null } {
+  if (!document) return {};
+  const nextType = typeDraft.trim() === "" ? null : typeDraft.trim();
+  const nextValid = validDraft === "" ? null : validDraft;
+  return {
+    ...(nextType !== document.documentType ? { documentType: nextType } : {}),
+    ...(nextValid !== document.validUntil ? { validUntil: nextValid } : {}),
+  };
+}
