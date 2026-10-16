@@ -1,8 +1,17 @@
 # App and Solidity reports describe different scopes; keep their badges separate.
 coverage:
   status:
-    project: off
+    project:
+      app:
+        target: 80%
+        flags:
+          - app
     patch: off
+parsers:
+  lcov:
+    # Match the CI line-coverage floor: an executed line counts as covered even
+    # when some branches on that line were not taken. Keep branch data in LCOV.
+    partials_as_hits: true
 comment: false
 flag_management:
   default_rules:
