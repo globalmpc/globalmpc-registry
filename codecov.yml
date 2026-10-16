@@ -1,0 +1,20 @@
+# App and Solidity reports describe different scopes; keep their badges separate.
+coverage:
+  status:
+    project: off
+    patch: off
+comment: false
+flag_management:
+  default_rules:
+    carryforward: false
+  individual_flags:
+    - name: app
+      paths:
+        - apps/
+        - packages/
+    - name: contracts
+      paths:
+        - contracts/src/
+fixes:
+  # Forge reports paths relative to its contracts/ working directory.
+  - 'src/::contracts/src/'

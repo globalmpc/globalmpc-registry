@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { childrenByParent, validityText } from "../src/lib/documents";
+import { childrenByParent, documentProfileChanges, validityText } from "../src/lib/documents";
 
 /**
  * Document-relations screen helpers.
@@ -28,5 +28,22 @@ describe("document relation helpers", () => {
     expect(children.get("license")?.map((item) => item.uploadId)).toEqual(["report", "memo"]);
     expect(children.get("report")?.map((item) => item.uploadId)).toEqual(["summary"]);
     expect(children.has("memo")).toBe(false);
+  });
+});
+
+describe("document profile changes", () => {
+  const document = { documentType: "license", validUntil: "2031-05-01" };
+
+  it("omits unchanged values, including whitespace around the type", () => {
+    expect(documentProfileChanges(document, " license ", "2031-05-01")).toEqual({});
+  });
+
+  it("keeps explicit clearing separate from an omitted field", () => {
+    expect(documentProfileChanges(document, " ", "2031-05-01")).toEqual({ documentType: null });
+    expect(documentProfileChanges(document, "license", "")).toEqual({ validUntil: null });
+  });
+
+  it("does not produce a patch for a missing document", () => {
+    expect(documentProfileChanges(undefined, "license", "2031-05-01")).toEqual({});
   });
 });

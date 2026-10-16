@@ -18,13 +18,15 @@
     "check:contracts": "cd contracts && forge test",
     "check:brand": "tsx scripts/check-brand-assets.ts",
     "check:migration-rollback": "pnpm --filter @mpc/db rollback-check",
-    "check": "pnpm typecheck && pnpm test && pnpm check:openapi && pnpm check:brand"
+    "check": "pnpm typecheck && pnpm test && pnpm check:openapi && pnpm check:brand",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@mpc/api-contract": "workspace:*",
     "@mpc/ui": "workspace:*",
     "@openzeppelin/contracts": "5.6.1",
     "@types/node": "22.20.1",
+    "@vitest/coverage-v8": "5.0.4",
     "fast-check": "4.10.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2",

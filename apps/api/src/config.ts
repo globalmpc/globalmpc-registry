@@ -336,6 +336,30 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
 }
 
 function configureObjectStore(value: z.infer<typeof schema>): ObjectStoreConfig {
+  assertObjectStoreConfiguration(value);
+
+  const objectStore: ObjectStoreConfig = {
+    kind: value.OBJECT_STORE,
+    ...(value.OBJECT_BUCKET ? { bucket: value.OBJECT_BUCKET } : {}),
+    ...(value.OBJECT_REGION ? { region: value.OBJECT_REGION } : {}),
+    ...(value.OBJECT_ENDPOINT ? { endpoint: value.OBJECT_ENDPOINT } : {}),
+    ...(value.OBJECT_PUBLIC_ENDPOINT ? { publicEndpoint: value.OBJECT_PUBLIC_ENDPOINT } : {}),
+    forcePathStyle: value.OBJECT_FORCE_PATH_STYLE === "true",
+    sse: value.OBJECT_SSE,
+    ...(value.OBJECT_KMS_KEY_ID ? { kmsKeyId: value.OBJECT_KMS_KEY_ID } : {}),
+    ...(value.OBJECT_ACCESS_KEY_ID && value.OBJECT_SECRET_ACCESS_KEY
+      ? {
+          credentials: {
+            accessKeyId: value.OBJECT_ACCESS_KEY_ID,
+            secretAccessKey: value.OBJECT_SECRET_ACCESS_KEY,
+          },
+        }
+      : {}),
+  };
+  return objectStore;
+}
+
+function assertObjectStoreConfiguration(value: z.infer<typeof schema>): void {
   // Choosing the memory store in production loses evidence originals on every restart.
   // Silent operation is the worst case, so startup itself is blocked.
   if (value.NODE_ENV === "production" && value.OBJECT_STORE === "memory") {
@@ -360,24 +384,4 @@ function configureObjectStore(value: z.infer<typeof schema>): ObjectStoreConfig 
   if (value.NODE_ENV === "production" && value.OBJECT_SSE === "none") {
     throw new ConfigError("OBJECT_SSE=none cannot be used in production");
   }
-
-  const objectStore: ObjectStoreConfig = {
-    kind: value.OBJECT_STORE,
-    ...(value.OBJECT_BUCKET ? { bucket: value.OBJECT_BUCKET } : {}),
-    ...(value.OBJECT_REGION ? { region: value.OBJECT_REGION } : {}),
-    ...(value.OBJECT_ENDPOINT ? { endpoint: value.OBJECT_ENDPOINT } : {}),
-    ...(value.OBJECT_PUBLIC_ENDPOINT ? { publicEndpoint: value.OBJECT_PUBLIC_ENDPOINT } : {}),
-    forcePathStyle: value.OBJECT_FORCE_PATH_STYLE === "true",
-    sse: value.OBJECT_SSE,
-    ...(value.OBJECT_KMS_KEY_ID ? { kmsKeyId: value.OBJECT_KMS_KEY_ID } : {}),
-    ...(value.OBJECT_ACCESS_KEY_ID && value.OBJECT_SECRET_ACCESS_KEY
-      ? {
-          credentials: {
-            accessKeyId: value.OBJECT_ACCESS_KEY_ID,
-            secretAccessKey: value.OBJECT_SECRET_ACCESS_KEY,
-          },
-        }
-      : {}),
-  };
-  return objectStore;
 }
