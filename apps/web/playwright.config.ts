@@ -131,6 +131,8 @@ export default defineConfig({
   webServer: [
     {
       command: "pnpm --filter @mpc/api start",
+      stdout: "pipe",
+      stderr: "pipe",
       cwd: "../..",
       port: 3001,
       reuseExistingServer: !process.env["CI"],
@@ -175,6 +177,8 @@ export default defineConfig({
       // The `--webpack` flag lives in the dev script of `package.json`. Calling next directly
       // here would split the flag across two places.
       command: "pnpm dev",
+      stdout: "pipe",
+      stderr: "pipe",
       port: 3000,
       reuseExistingServer: !process.env["CI"],
       timeout: 120_000,
