@@ -33,10 +33,12 @@ import {
 } from "./shared.js";
 import { buildAnchorBatch, buildInclusionProof } from "../services/anchor-batch.js";
 import {
+  type PublicationSubject,
   projectionMismatches,
   resolvePublicationSubject,
 } from "../services/registry-publication.js";
 import {
+  type DraftRow,
   lockDraft,
   parseBody,
   registerRegistryDraftRoutes,
@@ -175,44 +177,7 @@ export async function registerRegistryRoutes(
             "registry.publish",
             session.subjectId,
           );
-          const staleFields = [
-            ...(subject.sourceSnapshotHash === draft.source_snapshot_hash
-              ? []
-              : ["sourceSnapshotHash"]),
-            ...(subject.commercialReuse === draft.commercial_reuse ? [] : ["commercialReuse"]),
-            ...projectionMismatches(draft.projection, subject),
-          ];
-          if (staleFields.length > 0) {
-            throw conflict(
-              "REGISTRY_DRAFT_STALE",
-              "The record changed since this draft was made. Reject it and draft again",
-              { staleFields },
-            );
-          }
-
-          const publishCheck = checkPublishable({
-            fields: Object.keys(draft.projection),
-            sensitivity: "public",
-            // Given by this request: a Disclosure Approver who is not the drafter.
-            disclosureApproved: true,
-            containsPersonLevelIdentifier: draft.contains_person_level_identifier,
-            personIdentifierSafeguards: safeguardsOf(
-              {
-                lawfulBasis: draft.lawful_basis,
-                purpose: draft.purpose,
-                retention: draft.retention,
-                acknowledgedAt: draft.irreversibility_acknowledged_at,
-              },
-              body.personIdentifierPublicationApproved,
-            ),
-            commercialReuse: subject.commercialReuse,
-            publishedAsCommercialBasis: draft.published_as_commercial_basis,
-          });
-          if (!publishCheck.allowed) {
-            throw unprocessable(publishCheck.reason, "This projection cannot be published", {
-              offendingFields: publishCheck.offendingFields,
-            });
-          }
+          assertDraftStillPublishable(draft, subject, body.personIdentifierPublicationApproved);
 
           /**
            * `status` holds the lifecycle **after** publication.
@@ -782,4 +747,47 @@ export async function registerRegistryRoutes(
       );
     },
   );
+}
+
+function assertDraftStillPublishable(
+  draft: DraftRow,
+  subject: PublicationSubject,
+  personIdentifierPublicationApproved: boolean,
+): void {
+  const staleFields = [
+    ...(subject.sourceSnapshotHash === draft.source_snapshot_hash ? [] : ["sourceSnapshotHash"]),
+    ...(subject.commercialReuse === draft.commercial_reuse ? [] : ["commercialReuse"]),
+    ...projectionMismatches(draft.projection, subject),
+  ];
+  if (staleFields.length > 0) {
+    throw conflict(
+      "REGISTRY_DRAFT_STALE",
+      "The record changed since this draft was made. Reject it and draft again",
+      { staleFields },
+    );
+  }
+
+  const publishCheck = checkPublishable({
+    fields: Object.keys(draft.projection),
+    sensitivity: "public",
+    // Given by this request: a Disclosure Approver who is not the drafter.
+    disclosureApproved: true,
+    containsPersonLevelIdentifier: draft.contains_person_level_identifier,
+    personIdentifierSafeguards: safeguardsOf(
+      {
+        lawfulBasis: draft.lawful_basis,
+        purpose: draft.purpose,
+        retention: draft.retention,
+        acknowledgedAt: draft.irreversibility_acknowledged_at,
+      },
+      personIdentifierPublicationApproved,
+    ),
+    commercialReuse: subject.commercialReuse,
+    publishedAsCommercialBasis: draft.published_as_commercial_basis,
+  });
+  if (!publishCheck.allowed) {
+    throw unprocessable(publishCheck.reason, "This projection cannot be published", {
+      offendingFields: publishCheck.offendingFields,
+    });
+  }
 }

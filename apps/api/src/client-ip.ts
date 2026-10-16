@@ -32,6 +32,10 @@ export function isUnroutableAddress(address: string | undefined): boolean {
   if (/^f[cd][0-9a-f]{2}:/.test(bare)) return true;
   if (/^fe[89ab][0-9a-f]:/.test(bare)) return true;
 
+  return isUnroutableIpv4(bare);
+}
+
+function isUnroutableIpv4(bare: string): boolean {
   const octets = bare.split(".");
   if (octets.length !== 4) return false;
 

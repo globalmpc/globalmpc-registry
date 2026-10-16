@@ -117,7 +117,7 @@ export function createMetricsRegistry(): MetricsRegistry {
 
       // Gauges are grouped by name so HELP and TYPE are emitted once. Repeating them makes
       // Prometheus drop the whole scrape as a duplicate definition.
-      for (const metric of [...new Set(gauges.map((gauge) => gauge.metric))]) {
+      for (const metric of new Set(gauges.map((gauge) => gauge.metric))) {
         lines.push(`# TYPE mpc_${metric} gauge`);
         for (const gauge of gauges.filter((entry) => entry.metric === metric)) {
           lines.push(`mpc_${metric}{state="${escapeLabel(gauge.label)}"} ${gauge.value}`);

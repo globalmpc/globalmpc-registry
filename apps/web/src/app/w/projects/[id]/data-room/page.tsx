@@ -289,68 +289,38 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
     );
   }
 
-  return (
-    <>
-      <div className="page-head">
-        <div>
-          <h1>Data Room</h1>
-          <p className="sub">
-            This is a view of claims and their sources, not a file list. A successful source
-            lookup is not verification.
-          </p>
+  const renderNotice = () => {
+    return scanner && scanner.state !== "running" ? (
+      <div
+        className="notice"
+        style={{
+          color: scanner.state === "unknown" ? "var(--alert)" : "var(--destructive-text)",
+        }}
+        data-testid="scanner-status"
+        role="alert"
+      >
+        <div className="title">
+          {scanner.state === "never_seen"
+            ? "No scan worker has ever reported"
+            : scanner.state === "stale"
+              ? "The scan worker has gone quiet"
+              : "Scan worker state is unknown"}
         </div>
-        <Link href={`/w/projects/${id}`}>← Project</Link>
-      </div>
-
-      {error ? <ErrorNotice error={error} /> : null}
-
-      {/*
-        Without a scanner, uploads stay in quarantine **forever**. That stall looks
-        like waiting, not an error, so unless it is stated here the user believes
-        it is still pending.
-      */}
-      {scanner && scanner.state !== "running" ? (
-        <div
-          className="notice"
-          style={{
-            color: scanner.state === "unknown" ? "var(--alert)" : "var(--destructive-text)",
-          }}
-          data-testid="scanner-status"
-          role="alert"
-        >
-          <div className="title">
-            {scanner.state === "never_seen"
-              ? "No scan worker has ever reported"
-              : scanner.state === "stale"
-                ? "The scan worker has gone quiet"
-                : "Scan worker state is unknown"}
+        {scanner.state === "unknown"
+          ? "We could not read the scanner's state. Treat quarantined uploads as unverified until this resolves."
+          : "Uploads will stay in quarantine and cannot be promoted to evidence until a scanner runs. This is not a queue you can wait out."}
+        {scanner.secondsSinceHeartbeat !== null ? (
+          <div className="meta" style={{ marginTop: 6, color: "inherit" }}>
+            Last seen {scanner.secondsSinceHeartbeat}s ago.
           </div>
-          {scanner.state === "unknown"
-            ? "We could not read the scanner's state. Treat quarantined uploads as unverified until this resolves."
-            : "Uploads will stay in quarantine and cannot be promoted to evidence until a scanner runs. This is not a queue you can wait out."}
-          {scanner.secondsSinceHeartbeat !== null ? (
-            <div className="meta" style={{ marginTop: 6, color: "inherit" }}>
-              Last seen {scanner.secondsSinceHeartbeat}s ago.
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+        ) : null}
+      </div>
+    ) : null;
+  };
 
-      <div className="panel">
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-          <h2>Files</h2>
-          <Link href={`/w/projects/${id}/impacts`} data-testid="impacts-link">
-            Documents that need a second look →
-          </Link>
-        </div>
-        <p className="sub" style={{ marginTop: 0 }}>
-          {/* If uploads became evidence immediately, unscanned files would become review material. */}
-          An uploaded file does not become evidence on arrival. It enters quarantine, and only
-          after the scan worker finishes can it be promoted to evidence.
-        </p>
-
-        {/* Two inputs, not one: the camera is offered only where a photo is meant. Forcing it on
-            the general picker would stop people on a phone from attaching a saved file. */}
+  const renderFiles = () => {
+    const renderChooseAFile = () => {
+      return (
         <div className="upload-inputs">
           <div className="field">
             <label htmlFor="upload">Choose a file</label>
@@ -384,133 +354,162 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
             />
           </div>
         </div>
+      );
+    };
 
-        {uploads.length === 0 ? (
-          <p className="sub" style={{ margin: 0 }}>
-            No files uploaded. There is no data here; this is not a permission problem.
-          </p>
-        ) : (
-          <div className="table-scroll">
-            <table data-testid="upload-table">
-              <thead>
-                <tr>
-                  <th>File</th>
-                  <th>Type</th>
-                  <th>Valid until</th>
-                  <th>State</th>
-                  <th>Size</th>
-                  <th>Open impacts</th>
-                  <th>Next action</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {uploads.map((upload) => (
-                  <tr key={upload.id}>
-                    <td className="meta">{upload.originalFilename ?? "—"}</td>
-                    <td className="meta">{upload.documentType ?? "—"}</td>
-                    <td
-                      className="mono meta"
-                      data-testid={`upload-validity-${upload.id}`}
-                      style={
-                        nodes[upload.id]?.expired ? { color: "var(--destructive-text)" } : undefined
-                      }
-                    >
-                      {validityText(upload.validUntil, nodes[upload.id]?.daysUntilExpiry)}
-                    </td>
-                    <td>
-                      <span
-                        className="mono"
-                        data-testid={`upload-state-${upload.id}`}
-                        style={{ color: uploadColor(upload.state) }}
-                      >
-                        {upload.state}
-                      </span>
-                    </td>
-                    <td className="mono meta">{Math.ceil(upload.byteSize / 1024)} KB</td>
-                    <td className="mono" data-testid={`upload-impacts-${upload.id}`}>
-                      {/* Not 0 when the graph did not carry this document: unknown is not none. */}
-                      {nodes[upload.id]?.openImpactCount ?? "—"}
-                    </td>
-                    <td className="meta">{upload.nextActions.join(", ") || "—"}</td>
-                    <td>
-                      <div className="row" style={{ gap: 6 }}>
-                        <Link
-                          href={`/w/projects/${id}/documents/${upload.id}`}
-                          data-testid={`relations-${upload.id}`}
-                        >
-                          Relations
-                        </Link>
-                                                {upload.state === "received" || upload.state === "quarantined" ? (
-                          // A separate worker performs the scan. If the screen could
-                          // produce a result, quarantine would be a formality.
-                          <span className="meta">Awaiting scan</span>
-                        ) : null}
+    const renderUploadRow = (upload: (typeof uploads)[number]) => {
+      const renderUploadActions = () => {
+        return (
+          <td>
+            <div className="row" style={{ gap: 6 }}>
+              <Link
+                href={`/w/projects/${id}/documents/${upload.id}`}
+                data-testid={`relations-${upload.id}`}
+              >
+                Relations
+              </Link>
+              {upload.state === "received" || upload.state === "quarantined" ? (
+                // A separate worker performs the scan. If the screen could
+                // produce a result, quarantine would be a formality.
+                <span className="meta">Awaiting scan</span>
+              ) : null}
 
-                        {upload.state === "scanned_clean" ? (
-                          <button
-                            className="primary"
-                            data-testid={`promote-${upload.id}`}
-                            disabled={busy}
-                            onClick={() =>
-                              void step((activeToken) =>
-                                promoteUpload(
-                                  activeToken,
-                                  upload.id,
-                                  upload.version,
-                                  newIdempotencyKey(),
-                                ),
-                              )
-                            }
-                          >
-                            Promote to evidence
-                          </button>
-                        ) : null}
+              {upload.state === "scanned_clean" ? (
+                <button
+                  className="primary"
+                  data-testid={`promote-${upload.id}`}
+                  disabled={busy}
+                  onClick={() =>
+                    void step((activeToken) =>
+                      promoteUpload(activeToken, upload.id, upload.version, newIdempotencyKey()),
+                    )
+                  }
+                >
+                  Promote to evidence
+                </button>
+              ) : null}
 
-                        {/* Only scanned files get a link. The server refuses the rest. */}
-                        {upload.state === "scanned_clean" || upload.state === "promoted" ? (
-                          <button
-                            data-testid={`download-${upload.id}`}
-                            disabled={busy}
-                            onClick={() =>
-                              void step(async (activeToken) => {
-                                const link = await createDownloadLink(
-                                  activeToken,
-                                  upload.id,
-                                  newIdempotencyKey(),
-                                );
-                                window.open(link.url, "_blank", "noopener");
-                              })
-                            }
-                          >
-                            Download
-                          </button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              {/* Only scanned files get a link. The server refuses the rest. */}
+              {upload.state === "scanned_clean" || upload.state === "promoted" ? (
+                <button
+                  data-testid={`download-${upload.id}`}
+                  disabled={busy}
+                  onClick={() =>
+                    void step(async (activeToken) => {
+                      const link = await createDownloadLink(
+                        activeToken,
+                        upload.id,
+                        newIdempotencyKey(),
+                      );
+                      window.open(link.url, "_blank", "noopener");
+                    })
+                  }
+                >
+                  Download
+                </button>
+              ) : null}
+            </div>
+          </td>
+        );
+      };
 
-        {uploadCursor ? (
-          <TruncatedNotice
-            shown={uploads.length}
-            total={uploadTotal}
-            noun="files"
-            testId="uploads-truncated"
+      return (
+        <tr key={upload.id}>
+          <td className="meta">{upload.originalFilename ?? "—"}</td>
+          <td className="meta">{upload.documentType ?? "—"}</td>
+          <td
+            className="mono meta"
+            data-testid={`upload-validity-${upload.id}`}
+            style={nodes[upload.id]?.expired ? { color: "var(--destructive-text)" } : undefined}
           >
-            <button
-              data-testid="uploads-load-more"
-              disabled={busy}
-              onClick={() => void loadMoreUploads()}
+            {validityText(upload.validUntil, nodes[upload.id]?.daysUntilExpiry)}
+          </td>
+          <td>
+            <span
+              className="mono"
+              data-testid={`upload-state-${upload.id}`}
+              style={{ color: uploadColor(upload.state) }}
             >
-              {busy ? "Loading…" : "Load more files"}
-            </button>
-          </TruncatedNotice>
-        ) : null}
+              {upload.state}
+            </span>
+          </td>
+          <td className="mono meta">{Math.ceil(upload.byteSize / 1024)} KB</td>
+          <td className="mono" data-testid={`upload-impacts-${upload.id}`}>
+            {/* Not 0 when the graph did not carry this document: unknown is not none. */}
+            {nodes[upload.id]?.openImpactCount ?? "—"}
+          </td>
+          <td className="meta">{upload.nextActions.join(", ") || "—"}</td>
+          {renderUploadActions()}
+        </tr>
+      );
+    };
+
+    const renderUploadTable = () => {
+      return uploads.length === 0 ? (
+        <p className="sub" style={{ margin: 0 }}>
+          No files uploaded. There is no data here; this is not a permission problem.
+        </p>
+      ) : (
+        <div className="table-scroll">
+          <table data-testid="upload-table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Type</th>
+                <th>Valid until</th>
+                <th>State</th>
+                <th>Size</th>
+                <th>Open impacts</th>
+                <th>Next action</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>{uploads.map(renderUploadRow)}</tbody>
+          </table>
+        </div>
+      );
+    };
+
+    const renderUploadsLoadMore = () => {
+      return uploadCursor ? (
+        <TruncatedNotice
+          shown={uploads.length}
+          total={uploadTotal}
+          noun="files"
+          testId="uploads-truncated"
+        >
+          <button
+            data-testid="uploads-load-more"
+            disabled={busy}
+            onClick={() => void loadMoreUploads()}
+          >
+            {busy ? "Loading…" : "Load more files"}
+          </button>
+        </TruncatedNotice>
+      ) : null;
+    };
+
+    return (
+      <div className="panel">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+          <h2>Files</h2>
+          <Link href={`/w/projects/${id}/impacts`} data-testid="impacts-link">
+            Documents that need a second look →
+          </Link>
+        </div>
+        <p className="sub" style={{ marginTop: 0 }}>
+          {/* If uploads became evidence immediately, unscanned files would become review material. */}
+          An uploaded file does not become evidence on arrival. It enters quarantine, and only after
+          the scan worker finishes can it be promoted to evidence.
+        </p>
+
+        {/* Two inputs, not one: the camera is offered only where a photo is meant. Forcing it on
+                the general picker would stop people on a phone from attaching a saved file. */}
+        {renderChooseAFile()}
+
+        {renderUploadTable()}
+
+        {renderUploadsLoadMore()}
         {graphLimit !== null ? (
           <p className="meta" data-testid="uploads-graph-truncated">
             Open impacts are counted for the newest {graphLimit.toLocaleString("en-US")} documents.
@@ -521,32 +520,35 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
         <p className="meta" style={{ marginTop: 10 }}>
           {/* No path reverses an infected verdict — enforced by the state machine, not permissions. */}
           A separate worker runs the scan; this screen cannot produce the result. A file judged
-          infected cannot be rescanned and is never promoted to evidence — upload it again as a
-          new file. Only a file that passed the scan can be downloaded. Download links expire
-          after five minutes, and anyone holding one can fetch
-          the file without signing in.
+          infected cannot be rescanned and is never promoted to evidence — upload it again as a new
+          file. Only a file that passed the scan can be downloaded. Download links expire after five
+          minutes, and anyone holding one can fetch the file without signing in.
         </p>
       </div>
+    );
+  };
 
+  const renderSourceReceipt = () => {
+    return (
       <div className="panel">
         <h2>Source Receipt</h2>
         <p className="sub" style={{ marginTop: 0 }}>
           The twelve results are different facts. Each carries a different next action.
         </p>
         {/*
-          State in readable text that confirmation cannot be entered from the screen.
-          Just removing the button leaves "why is it missing" unanswered, and people look for a workaround.
-        */}
+              State in readable text that confirmation cannot be entered from the screen.
+              Just removing the button leaves "why is it missing" unanswered, and people look for a workaround.
+            */}
         <p className="sub" style={{ marginTop: 0 }}>
-          A confirmation is not something this screen can record. It comes from the server
-          calling the official source, or from a signed document the server verified against a
-          registered key. The buttons below record what actually happened.
+          A confirmation is not something this screen can record. It comes from the server calling the
+          official source, or from a signed document the server verified against a registered key. The
+          buttons below record what actually happened.
         </p>
 
         {sources.length === 0 ? (
           <p className="sub" data-testid="no-source-connection">
-            This project’s jurisdiction has no registered source connection, so there is nothing
-            to look up or record against. Register a connection first.
+            This project’s jurisdiction has no registered source connection, so there is nothing to
+            look up or record against. Register a connection first.
           </p>
         ) : (
           <>
@@ -731,7 +733,11 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
           />
         ) : null}
       </div>
+    );
+  };
 
+  const renderClaim = () => {
+    return (
       <div className="panel">
         <h2>Claim</h2>
         <p className="sub" style={{ marginTop: 0 }}>
@@ -766,7 +772,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                 {claims.map((claim) => (
                   <tr key={claim.id}>
                     {/* A claim needs its own address so disputes and review requests point
-                        to the same thing. */}
+                            to the same thing. */}
                     <td className="mono">
                       <Link href={`/w/projects/${id}/claims/${claim.id}`}>{claim.claimType}</Link>
                     </td>
@@ -805,11 +811,41 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
         ) : null}
 
         <p className="meta" style={{ marginTop: 10 }}>
-          Recording a conflict recomputes the grade immediately. If someone changed the claim
-          while this screen was open, the record is refused and the current version is reported —
-          so one person’s judgement is never quietly overwritten.
+          Recording a conflict recomputes the grade immediately. If someone changed the claim while
+          this screen was open, the record is refused and the current version is reported — so one
+          person’s judgement is never quietly overwritten.
         </p>
       </div>
+    );
+  };
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h1>Data Room</h1>
+          <p className="sub">
+            This is a view of claims and their sources, not a file list. A successful source
+            lookup is not verification.
+          </p>
+        </div>
+        <Link href={`/w/projects/${id}`}>← Project</Link>
+      </div>
+
+      {error ? <ErrorNotice error={error} /> : null}
+
+      {/*
+        Without a scanner, uploads stay in quarantine **forever**. That stall looks
+        like waiting, not an error, so unless it is stated here the user believes
+        it is still pending.
+      */}
+      {renderNotice()}
+
+      {renderFiles()}
+
+      {renderSourceReceipt()}
+
+      {renderClaim()}
 
       <p className="meta">
         A successful source lookup is not verification. Each result means something different

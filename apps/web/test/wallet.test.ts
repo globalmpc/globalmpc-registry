@@ -33,7 +33,10 @@ function fakeWallet(options: {
   const provider: Eip1193Provider = {
     async request({ method, params }) {
       calls.push(method);
-      const target = () => Number.parseInt((params?.[0] as { chainId: string }).chainId, 16);
+      const target = () => {
+        const request = params?.[0] as { chainId: string } | undefined;
+        return Number.parseInt(request?.chainId ?? "", 16);
+      };
       switch (method) {
         case "eth_chainId":
           return `0x${chain.toString(16)}`;

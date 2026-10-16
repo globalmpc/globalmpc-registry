@@ -168,408 +168,164 @@ export default function AdminPage() {
     return <p className="sub">No account is connected.</p>;
   }
 
-  return (
-    <>
-      <div className="page-head">
-        <div>
-          <h1>Administration</h1>
-          <p className="sub">
-            People, wallets, and roles for this tenant. Granting or revoking a role takes two
-            people: one proposes, another decides. The server enforces that — hiding a button is
-            not a control.
-          </p>
+  const renderNotice = () => {
+    return locked.length > 0 ? (
+      <div className="notice" style={{ color: "var(--alert)" }} data-testid="admin-locked">
+        <div className="title">
+          {locked.length} account{locked.length === 1 ? "" : "s"} cannot sign in
         </div>
+        Every wallet bound to {locked.map((subject) => subject.displayName).join(", ")} is disabled.
+        Roles remain recorded, but the person has no way in until a new key is bound.
       </div>
+    ) : null;
+  };
 
-      {error ? <ErrorNotice error={error} /> : null}
-
-      {locked.length > 0 ? (
-        <div className="notice" style={{ color: "var(--alert)" }} data-testid="admin-locked">
-          <div className="title">
-            {locked.length} account{locked.length === 1 ? "" : "s"} cannot sign in
-          </div>
-          Every wallet bound to {locked.map((subject) => subject.displayName).join(", ")} is
-          disabled. Roles remain recorded, but the person has no way in until a new key is bound.
-        </div>
-      ) : null}
-
+  const renderBindAWallet = () => {
+    return walletFor ? (
       <div className="panel">
-        <h2>Add a person</h2>
+        <h2>Bind a wallet</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          A new subject has no wallet and no role. Both are separate, deliberate steps.
+          This is also the recovery path: disable the lost key, then bind a new address here. An
+          address already bound elsewhere is refused rather than moved — moving it would make that
+          address&rsquo;s past signatures read as someone else&rsquo;s.
+        </p>
+        <p className="sub" style={{ marginTop: 0 }}>
+          The assurance level decides which roles this wallet can exercise. Choose it from what you
+          checked about the person, and say what that was — it is kept in the audit record.
         </p>
         <form
-          className="row"
-          style={{ alignItems: "flex-end" }}
           onSubmit={(event) => {
             event.preventDefault();
             void run(async () => {
-              await createAdminSubject(token!, newIdempotencyKey(), { displayName: newName });
-              setNewName("");
+              // Use the server session's chain. A hardcoded number breaks on stg/prod (56).
+              if (!session?.chainId) throw new Error("No session chain. Connect again.");
+              await bindAdminWallet(token!, newIdempotencyKey(), walletFor, {
+                walletAddress: walletAddress.trim().toLowerCase(),
+                chainId: session.chainId,
+                assuranceLevel: walletLevel,
+                justification: walletJustification.trim(),
+              });
+              setWalletFor(null);
+              setWalletAddress("");
+              setWalletLevel("");
+              setWalletJustification("");
             });
           }}
         >
-          <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
-            <label htmlFor="subject-name">Name</label>
+          <div className="field">
+            <label htmlFor="wallet-address">Wallet address</label>
             <input
-              id="subject-name"
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
+              id="wallet-address"
+              className="mono"
+              value={walletAddress}
+              onChange={(event) => setWalletAddress(event.target.value)}
+              placeholder="0x…"
             />
           </div>
-          <button className="primary" type="submit" disabled={busy || newName.trim() === ""}>
-            Add person
+          <div className="field">
+            <label htmlFor="wallet-assurance">Assurance level</label>
+            <select
+              id="wallet-assurance"
+              value={walletLevel}
+              onChange={(event) => setWalletLevel(event.target.value)}
+            >
+              <option value="">Choose a level</option>
+              {ASSURANCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="wallet-justification">What you checked (required)</label>
+            <input
+              id="wallet-justification"
+              value={walletJustification}
+              onChange={(event) => setWalletJustification(event.target.value)}
+              placeholder="e.g. ID document checked in person"
+            />
+          </div>
+          <button
+            className="primary"
+            type="submit"
+            disabled={
+              walletAddress.trim() === "" || walletLevel === "" || walletJustification.trim() === ""
+            }
+          >
+            Bind
+          </button>{" "}
+          <button type="button" onClick={() => setWalletFor(null)}>
+            Cancel
           </button>
         </form>
       </div>
+    ) : null;
+  };
 
+  const renderProposeARole = () => {
+    return grantFor ? (
       <div className="panel">
-        <h2>People</h2>
-        <div className="table-scroll">
-          <table data-testid="admin-subjects">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Wallets</th>
-                <th>Roles</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {subjects.map((subject) => (
-                <tr key={subject.id}>
-                  <td>
-                    {subject.displayName}
-                    {subject.locked ? (
-                      <div className="meta" style={{ color: "var(--destructive-text)" }}>
-                        cannot sign in
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="mono meta">
-                    {subject.wallets.length === 0 ? "none" : null}
-                    {subject.wallets.map((wallet) => (
-                      <div key={wallet.id}>
-                        <Address value={wallet.walletAddress} />{" "}
-                        <span data-testid="wallet-assurance">{wallet.assuranceLevel}</span>{" "}
-                        {wallet.disabledAt ? (
-                          <span style={{ color: "var(--destructive-text)" }}>disabled</span>
-                        ) : wallet.walletAddress === session?.walletAddress?.toLowerCase() ? (
-                          // You cannot deactivate your own wallet. A button here would show the rejection only after the click.
-                          <span>you</span>
-                        ) : (
-                          <button
-                            onClick={() => setDisableFor({ id: wallet.id, version: wallet.version })}
-                          >
-                            Disable
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </td>
-                  <td className="mono meta">
-                    {subject.roles.length === 0 ? "none" : null}
-                    {subject.roles.map((role) => (
-                      <div key={role.id}>
-                        {role.role}{" "}
-                        {role.revokedAt ? (
-                          // Ended, not deleted — the history of who held what stays visible.
-                          <span style={{ color: "var(--destructive-text)" }}>revoked</span>
-                        ) : bindingsUnderRevocation.has(role.id) ? (
-                          <span>revocation pending</span>
-                        ) : (
-                          <button
-                            onClick={() =>
-                              setRevokeFor({
-                                bindingId: role.id,
-                                subjectName: subject.displayName,
-                                role: role.role,
-                              })
-                            }
-                          >
-                            Propose revocation
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </td>
-                  <td>
-                    {/* Operator-level holders do not get wallets attached from the screen. Key rotation goes through bootstrap. */}
-                    {subject.roles.some(
-                      (role) => role.revokedAt === null && ADMIN_ROLES.includes(role.role),
-                    ) ? (
-                      <span className="meta">Wallet changes via bootstrap</span>
-                    ) : (
-                      <button onClick={() => setWalletFor(subject.id)}>Bind wallet</button>
-                    )}{" "}
-                    <button onClick={() => setGrantFor(subject.id)}>Propose role</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <h2>Propose a role</h2>
+        <p className="sub" style={{ marginTop: 0 }}>
+          Proposing does not grant. Someone else has to decide, and it cannot be you.
+        </p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void run(async () => {
+              await createRoleGrant(token!, newIdempotencyKey(), {
+                subjectId: grantFor,
+                role: grantRole.trim(),
+                reason: grantReason,
+              });
+              setGrantFor(null);
+              setGrantRole("");
+              setGrantReason("");
+            });
+          }}
+        >
+          <div className="field">
+            <label htmlFor="grant-role">Role</label>
+            <input
+              id="grant-role"
+              className="mono"
+              value={grantRole}
+              onChange={(event) => setGrantRole(event.target.value)}
+              placeholder="data_steward"
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="grant-reason">Why</label>
+            <input
+              id="grant-reason"
+              value={grantReason}
+              onChange={(event) => setGrantReason(event.target.value)}
+            />
+          </div>
+          <button
+            className="primary"
+            type="submit"
+            disabled={grantRole.trim() === "" || grantReason.trim() === ""}
+          >
+            Propose
+          </button>{" "}
+          <button type="button" onClick={() => setGrantFor(null)}>
+            Cancel
+          </button>
+        </form>
       </div>
+    ) : null;
+  };
 
-      {walletFor ? (
-        <div className="panel">
-          <h2>Bind a wallet</h2>
-          <p className="sub" style={{ marginTop: 0 }}>
-            This is also the recovery path: disable the lost key, then bind a new address here. An
-            address already bound elsewhere is refused rather than moved — moving it would make that
-            address&rsquo;s past signatures read as someone else&rsquo;s.
-          </p>
-          <p className="sub" style={{ marginTop: 0 }}>
-            The assurance level decides which roles this wallet can exercise. Choose it from what you
-            checked about the person, and say what that was — it is kept in the audit record.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void run(async () => {
-                // Use the server session's chain. A hardcoded number breaks on stg/prod (56).
-                if (!session?.chainId) throw new Error("No session chain. Connect again.");
-                await bindAdminWallet(token!, newIdempotencyKey(), walletFor, {
-                  walletAddress: walletAddress.trim().toLowerCase(),
-                  chainId: session.chainId,
-                  assuranceLevel: walletLevel,
-                  justification: walletJustification.trim(),
-                });
-                setWalletFor(null);
-                setWalletAddress("");
-                setWalletLevel("");
-                setWalletJustification("");
-              });
-            }}
-          >
-            <div className="field">
-              <label htmlFor="wallet-address">Wallet address</label>
-              <input
-                id="wallet-address"
-                className="mono"
-                value={walletAddress}
-                onChange={(event) => setWalletAddress(event.target.value)}
-                placeholder="0x…"
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="wallet-assurance">Assurance level</label>
-              <select
-                id="wallet-assurance"
-                value={walletLevel}
-                onChange={(event) => setWalletLevel(event.target.value)}
-              >
-                <option value="">Choose a level</option>
-                {ASSURANCE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="wallet-justification">What you checked (required)</label>
-              <input
-                id="wallet-justification"
-                value={walletJustification}
-                onChange={(event) => setWalletJustification(event.target.value)}
-                placeholder="e.g. ID document checked in person"
-              />
-            </div>
-            <button
-              className="primary"
-              type="submit"
-              disabled={
-                walletAddress.trim() === "" ||
-                walletLevel === "" ||
-                walletJustification.trim() === ""
-              }
-            >
-              Bind
-            </button>{" "}
-            <button type="button" onClick={() => setWalletFor(null)}>
-              Cancel
-            </button>
-          </form>
-        </div>
-      ) : null}
-
-      {disableFor ? (
-        <div className="panel">
-          <h2>Disable a wallet</h2>
-          <p className="sub" style={{ marginTop: 0 }}>
-            The reason is recorded because lost, compromised, rotated, and offboarded produce the
-            same result but call for different readings of that key&rsquo;s past signatures. Past
-            signatures are not removed.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void run(async () => {
-                await disableAdminWallet(
-                  token!,
-                  newIdempotencyKey(),
-                  disableFor.id,
-                  disableFor.version,
-                  { reasonCode, detail },
-                );
-                setDisableFor(null);
-                setDetail("");
-              });
-            }}
-          >
-            <div className="field">
-              <label htmlFor="reason-code">Reason</label>
-              <select
-                id="reason-code"
-                value={reasonCode}
-                onChange={(event) => setReasonCode(event.target.value)}
-              >
-                {REASON_CODES.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="reason-detail">What happened</label>
-              <input
-                id="reason-detail"
-                value={detail}
-                onChange={(event) => setDetail(event.target.value)}
-              />
-            </div>
-            <button className="primary" type="submit" disabled={detail.trim() === ""}>
-              Disable
-            </button>{" "}
-            <button type="button" onClick={() => setDisableFor(null)}>
-              Cancel
-            </button>
-          </form>
-        </div>
-      ) : null}
-
-      {grantFor ? (
-        <div className="panel">
-          <h2>Propose a role</h2>
-          <p className="sub" style={{ marginTop: 0 }}>
-            Proposing does not grant. Someone else has to decide, and it cannot be you.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void run(async () => {
-                await createRoleGrant(token!, newIdempotencyKey(), {
-                  subjectId: grantFor,
-                  role: grantRole.trim(),
-                  reason: grantReason,
-                });
-                setGrantFor(null);
-                setGrantRole("");
-                setGrantReason("");
-              });
-            }}
-          >
-            <div className="field">
-              <label htmlFor="grant-role">Role</label>
-              <input
-                id="grant-role"
-                className="mono"
-                value={grantRole}
-                onChange={(event) => setGrantRole(event.target.value)}
-                placeholder="data_steward"
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="grant-reason">Why</label>
-              <input
-                id="grant-reason"
-                value={grantReason}
-                onChange={(event) => setGrantReason(event.target.value)}
-              />
-            </div>
-            <button
-              className="primary"
-              type="submit"
-              disabled={grantRole.trim() === "" || grantReason.trim() === ""}
-            >
-              Propose
-            </button>{" "}
-            <button type="button" onClick={() => setGrantFor(null)}>
-              Cancel
-            </button>
-          </form>
-        </div>
-      ) : null}
-
-      {revokeFor ? (
-        <div className="panel">
-          <h2>Propose a revocation</h2>
-          <p className="sub" style={{ marginTop: 0 }}>
-            Revoke <span className="mono">{revokeFor.role}</span> from {revokeFor.subjectName}.
-            Proposing does not revoke. Someone else has to decide, and it cannot be you. The role
-            is ended, not deleted: the record of who held it stays.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void run(async () => {
-                await createRoleRevocation(token!, newIdempotencyKey(), {
-                  roleBindingId: revokeFor.bindingId,
-                  reasonCode: revokeCode,
-                  reason: revokeReason,
-                });
-                setRevokeFor(null);
-                setRevokeReason("");
-              });
-            }}
-          >
-            <div className="field">
-              <label htmlFor="revoke-reason-code">Revocation reason</label>
-              <select
-                id="revoke-reason-code"
-                value={revokeCode}
-                onChange={(event) => setRevokeCode(event.target.value as RoleRevocationReasonCode)}
-              >
-                {REVOCATION_REASONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="revoke-detail">What changed</label>
-              <input
-                id="revoke-detail"
-                value={revokeReason}
-                onChange={(event) => setRevokeReason(event.target.value)}
-              />
-            </div>
-            <button className="primary" type="submit" disabled={revokeReason.trim() === ""}>
-              Submit revocation
-            </button>{" "}
-            <button type="button" onClick={() => setRevokeFor(null)}>
-              Cancel
-            </button>
-          </form>
-        </div>
-      ) : null}
-
-      {/*
-        Document type rules.
-
-        A rule writes links into every project of the tenant, which is why the server gives it
-        to a tenant-wide role only. Retiring keeps the links already made — people may have come
-        to rely on them — so the screen says that before the button, not after.
-      */}
+  const renderDocumentTypeRules = () => {
+    return (
       <div className="panel" data-testid="admin-document-rules">
         <h2>Document type rules</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          &ldquo;Documents of one type rest on documents of another.&rdquo; A rule links the
-          current documents of every project now, and each document later given a matching type.
-          People can still add and remove links themselves; types match regardless of case.
+          &ldquo;Documents of one type rest on documents of another.&rdquo; A rule links the current
+          documents of every project now, and each document later given a matching type. People can
+          still add and remove links themselves; types match regardless of case.
         </p>
 
         <form
@@ -717,8 +473,8 @@ export default function AdminPage() {
             }}
           >
             <p className="sub" style={{ marginTop: 0 }}>
-              Retiring stops new links. The links this rule already made stay, and people can
-              remove them one by one.
+              Retiring stops new links. The links this rule already made stay, and people can remove
+              them one by one.
             </p>
             <div className="field">
               <label htmlFor="retire-note">Why</label>
@@ -738,20 +494,18 @@ export default function AdminPage() {
           </form>
         ) : null}
       </div>
+    );
+  };
 
-      {/*
-        Notification sinks.
-
-        **Show "registered" separately from "actually delivering".** A sink that is configured but
-        sends nothing is the worst state — everyone believes it is sending.
-      */}
+  const renderNotificationDelivery = () => {
+    return (
       <div className="panel" data-testid="admin-sinks">
         <h2>Notification delivery</h2>
         <p className="sub" style={{ marginTop: 0 }}>
           Notifications reach people inside this app whether or not anything is configured here. A
-          sink pushes them out as well, signed so the receiver can tell they came from this
-          registry. Email is deliberately not offered — storing addresses would make this system
-          hold personal data it currently refuses (OD-18).
+          sink pushes them out as well, signed so the receiver can tell they came from this registry.
+          Email is deliberately not offered — storing addresses would make this system hold personal
+          data it currently refuses (OD-18).
         </p>
 
         <form
@@ -798,8 +552,8 @@ export default function AdminPage() {
           </button>
         </form>
         <p className="meta">
-          {/* A pasted value would stay in the DB. Accept only a reference (05 §5.12). */}
-          A reference, not the secret itself — `env:WEBHOOK_SECRET_&lt;NAME&gt;` or
+          {/* A pasted value would stay in the DB. Accept only a reference (05 §5.12). */}A reference,
+          not the secret itself — `env:WEBHOOK_SECRET_&lt;NAME&gt;` or
           `file:/run/secrets/webhook_&lt;name&gt;`. The worker resolves it at send time; the value
           never enters this database. Private and internal addresses are refused.
         </p>
@@ -830,7 +584,9 @@ export default function AdminPage() {
                     <td className="mono">{sink.delivery.pending}</td>
                     <td className="mono">
                       {sink.delivery.failed > 0 ? (
-                        <span style={{ color: "var(--destructive-text)" }}>{sink.delivery.failed}</span>
+                        <span style={{ color: "var(--destructive-text)" }}>
+                          {sink.delivery.failed}
+                        </span>
                       ) : (
                         0
                       )}
@@ -865,6 +621,274 @@ export default function AdminPage() {
           </div>
         )}
       </div>
+    );
+  };
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h1>Administration</h1>
+          <p className="sub">
+            People, wallets, and roles for this tenant. Granting or revoking a role takes two
+            people: one proposes, another decides. The server enforces that — hiding a button is
+            not a control.
+          </p>
+        </div>
+      </div>
+
+      {error ? <ErrorNotice error={error} /> : null}
+
+      {renderNotice()}
+
+      <div className="panel">
+        <h2>Add a person</h2>
+        <p className="sub" style={{ marginTop: 0 }}>
+          A new subject has no wallet and no role. Both are separate, deliberate steps.
+        </p>
+        <form
+          className="row"
+          style={{ alignItems: "flex-end" }}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void run(async () => {
+              await createAdminSubject(token!, newIdempotencyKey(), { displayName: newName });
+              setNewName("");
+            });
+          }}
+        >
+          <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
+            <label htmlFor="subject-name">Name</label>
+            <input
+              id="subject-name"
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+            />
+          </div>
+          <button className="primary" type="submit" disabled={busy || newName.trim() === ""}>
+            Add person
+          </button>
+        </form>
+      </div>
+
+      <div className="panel">
+        <h2>People</h2>
+        <div className="table-scroll">
+          <table data-testid="admin-subjects">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Wallets</th>
+                <th>Roles</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subjects.map((subject) => (
+                <tr key={subject.id}>
+                  <td>
+                    {subject.displayName}
+                    {subject.locked ? (
+                      <div className="meta" style={{ color: "var(--destructive-text)" }}>
+                        cannot sign in
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="mono meta">
+                    {subject.wallets.length === 0 ? "none" : null}
+                    {subject.wallets.map((wallet) => (
+                      <div key={wallet.id}>
+                        <Address value={wallet.walletAddress} />{" "}
+                        <span data-testid="wallet-assurance">{wallet.assuranceLevel}</span>{" "}
+                        {wallet.disabledAt ? (
+                          <span style={{ color: "var(--destructive-text)" }}>disabled</span>
+                        ) : wallet.walletAddress === session?.walletAddress?.toLowerCase() ? (
+                          // You cannot deactivate your own wallet. A button here would show the rejection only after the click.
+                          <span>you</span>
+                        ) : (
+                          <button
+                            onClick={() => setDisableFor({ id: wallet.id, version: wallet.version })}
+                          >
+                            Disable
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </td>
+                  <td className="mono meta">
+                    {subject.roles.length === 0 ? "none" : null}
+                    {subject.roles.map((role) => (
+                      <div key={role.id}>
+                        {role.role}{" "}
+                        {role.revokedAt ? (
+                          // Ended, not deleted — the history of who held what stays visible.
+                          <span style={{ color: "var(--destructive-text)" }}>revoked</span>
+                        ) : bindingsUnderRevocation.has(role.id) ? (
+                          <span>revocation pending</span>
+                        ) : (
+                          <button
+                            onClick={() =>
+                              setRevokeFor({
+                                bindingId: role.id,
+                                subjectName: subject.displayName,
+                                role: role.role,
+                              })
+                            }
+                          >
+                            Propose revocation
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </td>
+                  <td>
+                    {/* Operator-level holders do not get wallets attached from the screen. Key rotation goes through bootstrap. */}
+                    {subject.roles.some(
+                      (role) => role.revokedAt === null && ADMIN_ROLES.includes(role.role),
+                    ) ? (
+                      <span className="meta">Wallet changes via bootstrap</span>
+                    ) : (
+                      <button onClick={() => setWalletFor(subject.id)}>Bind wallet</button>
+                    )}{" "}
+                    <button onClick={() => setGrantFor(subject.id)}>Propose role</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {renderBindAWallet()}
+
+      {disableFor ? (
+        <div className="panel">
+          <h2>Disable a wallet</h2>
+          <p className="sub" style={{ marginTop: 0 }}>
+            The reason is recorded because lost, compromised, rotated, and offboarded produce the
+            same result but call for different readings of that key&rsquo;s past signatures. Past
+            signatures are not removed.
+          </p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(async () => {
+                await disableAdminWallet(
+                  token!,
+                  newIdempotencyKey(),
+                  disableFor.id,
+                  disableFor.version,
+                  { reasonCode, detail },
+                );
+                setDisableFor(null);
+                setDetail("");
+              });
+            }}
+          >
+            <div className="field">
+              <label htmlFor="reason-code">Reason</label>
+              <select
+                id="reason-code"
+                value={reasonCode}
+                onChange={(event) => setReasonCode(event.target.value)}
+              >
+                {REASON_CODES.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="reason-detail">What happened</label>
+              <input
+                id="reason-detail"
+                value={detail}
+                onChange={(event) => setDetail(event.target.value)}
+              />
+            </div>
+            <button className="primary" type="submit" disabled={detail.trim() === ""}>
+              Disable
+            </button>{" "}
+            <button type="button" onClick={() => setDisableFor(null)}>
+              Cancel
+            </button>
+          </form>
+        </div>
+      ) : null}
+
+      {renderProposeARole()}
+
+      {revokeFor ? (
+        <div className="panel">
+          <h2>Propose a revocation</h2>
+          <p className="sub" style={{ marginTop: 0 }}>
+            Revoke <span className="mono">{revokeFor.role}</span> from {revokeFor.subjectName}.
+            Proposing does not revoke. Someone else has to decide, and it cannot be you. The role
+            is ended, not deleted: the record of who held it stays.
+          </p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(async () => {
+                await createRoleRevocation(token!, newIdempotencyKey(), {
+                  roleBindingId: revokeFor.bindingId,
+                  reasonCode: revokeCode,
+                  reason: revokeReason,
+                });
+                setRevokeFor(null);
+                setRevokeReason("");
+              });
+            }}
+          >
+            <div className="field">
+              <label htmlFor="revoke-reason-code">Revocation reason</label>
+              <select
+                id="revoke-reason-code"
+                value={revokeCode}
+                onChange={(event) => setRevokeCode(event.target.value as RoleRevocationReasonCode)}
+              >
+                {REVOCATION_REASONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="revoke-detail">What changed</label>
+              <input
+                id="revoke-detail"
+                value={revokeReason}
+                onChange={(event) => setRevokeReason(event.target.value)}
+              />
+            </div>
+            <button className="primary" type="submit" disabled={revokeReason.trim() === ""}>
+              Submit revocation
+            </button>{" "}
+            <button type="button" onClick={() => setRevokeFor(null)}>
+              Cancel
+            </button>
+          </form>
+        </div>
+      ) : null}
+
+      {/*
+        Document type rules.
+
+        A rule writes links into every project of the tenant, which is why the server gives it
+        to a tenant-wide role only. Retiring keeps the links already made — people may have come
+        to rely on them — so the screen says that before the button, not after.
+      */}
+      {renderDocumentTypeRules()}
+
+      {/*
+        Notification sinks.
+
+        **Show "registered" separately from "actually delivering".** A sink that is configured but
+        sends nothing is the worst state — everyone believes it is sending.
+      */}
+      {renderNotificationDelivery()}
 
       <div className="panel">
         <h2>Role proposals waiting on a decision</h2>

@@ -42,6 +42,8 @@ import {
  * block publication unless it names `registry.publish`.
  */
 
+type TransitionKind = "activate" | "release" | "supersede";
+
 interface RestrictionRow {
   readonly id: string;
   readonly project_id: string;
@@ -261,8 +263,6 @@ export async function registerDisclosureRestrictionRoutes(
 
   // --- Transitions --------------------------------------------------------------
 
-  type TransitionKind = "activate" | "release" | "supersede";
-
   const TARGET: Record<TransitionKind, DisclosureRestrictionState> = {
     activate: "active",
     release: "released",
@@ -337,21 +337,7 @@ export async function registerDisclosureRestrictionRoutes(
               );
             }
 
-            const supersededById = kind === "supersede" ? (body.supersededById ?? null) : null;
-            if (supersededById) {
-              const [replacement] = await tx<{ project_id: string }[]>`
-                SELECT project_id FROM core.disclosure_restrictions
-                WHERE tenant_id = ${tenantId} AND id = ${supersededById}
-              `;
-              // A replacement on another project would leave this project's scope unrestricted
-              // while the history says it moved.
-              if (!replacement || replacement.project_id !== current.project_id || supersededById === current.id) {
-                throw unprocessable(
-                  "RESTRICTION_REPLACEMENT_INVALID",
-                  "The replacing restriction must be another restriction on the same project",
-                );
-              }
-            }
+            const supersededById = await resolveReplacement(tx, tenantId, current, kind, body.supersededById);
 
             const releaseRecord =
               kind === "release"
@@ -426,4 +412,33 @@ export async function registerDisclosureRestrictionRoutes(
       },
     );
   }
+}
+
+async function resolveReplacement(
+  tx: postgres.TransactionSql,
+  tenantId: string,
+  current: RestrictionRow,
+  kind: TransitionKind,
+  supersededBy: string | null | undefined,
+): Promise<string | null> {
+  const supersededById = kind === "supersede" ? (supersededBy ?? null) : null;
+  if (supersededById) {
+    const [replacement] = await tx<{ project_id: string }[]>`
+      SELECT project_id FROM core.disclosure_restrictions
+      WHERE tenant_id = ${tenantId} AND id = ${supersededById}
+    `;
+    // A replacement on another project would leave this project's scope unrestricted
+    // while the history says it moved.
+    if (
+      !replacement ||
+      replacement.project_id !== current.project_id ||
+      supersededById === current.id
+    ) {
+      throw unprocessable(
+        "RESTRICTION_REPLACEMENT_INVALID",
+        "The replacing restriction must be another restriction on the same project",
+      );
+    }
+  }
+  return supersededById;
 }

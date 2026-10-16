@@ -157,6 +157,414 @@ export default function DocumentPage({
   // A revoked document is kept as it was; only a corrected version moves things on.
   const editable = usable && !revoked;
 
+  const renderMissingDocument = () => {
+    return graph && !self ? (
+      <p className="sub">This document is not in this project, or it is not visible to you.</p>
+    ) : null;
+  };
+
+  const renderPreviousVersion = () => {
+    return self?.supersedesUploadId ? (
+      <p className="meta">
+        This is a new version of{" "}
+        <Link href={`/w/projects/${id}/documents/${self.supersedesUploadId}`}>
+          {documentLabel(nodes.get(self.supersedesUploadId), self.supersedesUploadId)}
+        </Link>
+        {self.state === "promoted"
+          ? "."
+          : ". It takes effect once it passes the scan and is promoted."}
+      </p>
+    ) : null;
+  };
+
+  const renderProfile = () => {
+    return self ? (
+      <div className="panel">
+        <h2>Profile</h2>
+        <dl className="kv" style={{ marginTop: 0 }}>
+          <dt>State</dt>
+          <dd className="mono">{self.state}</dd>
+          <dt>Valid until</dt>
+          <dd className="mono" data-testid="document-validity">
+            {validityText(self.validUntil, self.daysUntilExpiry)}
+          </dd>
+          <dt>Open impacts</dt>
+          <dd className="mono">{self.openImpactCount}</dd>
+        </dl>
+
+        <form
+          className="row"
+          style={{ alignItems: "flex-end", marginTop: 12 }}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void step((activeToken) =>
+              updateDocumentProfile(
+                activeToken,
+                uploadId,
+                self.version,
+                profileChanges,
+                newIdempotencyKey(),
+              ),
+            );
+          }}
+        >
+          <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
+            <label htmlFor="document-type">Document type</label>
+            <input
+              id="document-type"
+              list="document-types"
+              maxLength={80}
+              value={typeDraft}
+              disabled={!editable}
+              placeholder="e.g. Exploration license"
+              onChange={(event) => setTypeDraft(event.target.value)}
+            />
+            {/* Suggest the words already in use, so one kind of document does not end up
+                      under three spellings — type rules match on the text. */}
+            <datalist id="document-types">
+              {knownTypes.map((value) => (
+                <option key={value} value={value} />
+              ))}
+            </datalist>
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label htmlFor="document-valid-until">Valid until</label>
+            <input
+              id="document-valid-until"
+              type="date"
+              value={validDraft}
+              disabled={!editable}
+              onChange={(event) => setValidDraft(event.target.value)}
+            />
+          </div>
+          <button className="primary" type="submit" disabled={busy || !editable || !profileChanged}>
+            Save profile
+          </button>
+        </form>
+        <p className="meta" style={{ marginTop: 10 }}>
+          The type is free text. Setting a type can add links from type rules an operator has
+          declared. A validity date in the past flags this document and whatever rests on it at once.
+        </p>
+      </div>
+    ) : null;
+  };
+
+  const renderRemoveALink = () => {
+    return removeFor ? (
+      <div className="panel">
+        <h2>Remove a link</h2>
+        <p className="sub" style={{ marginTop: 0 }}>
+          The link stops carrying the next change. Impacts it already raised stay open — they were
+          right when raised. The link is kept on record with your reason.
+        </p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void step(async (activeToken) => {
+              await removeDocumentLink(
+                activeToken,
+                removeFor.id,
+                removeReason.trim(),
+                newIdempotencyKey(),
+              );
+              setRemoveFor(null);
+              setRemoveReason("");
+            });
+          }}
+        >
+          <div className="field">
+            <label htmlFor="remove-reason">Why</label>
+            <input
+              id="remove-reason"
+              value={removeReason}
+              maxLength={500}
+              onChange={(event) => setRemoveReason(event.target.value)}
+            />
+          </div>
+          <button className="primary" type="submit" disabled={busy || removeReason.trim() === ""}>
+            Remove link
+          </button>{" "}
+          <button type="button" onClick={() => setRemoveFor(null)}>
+            Cancel
+          </button>
+        </form>
+      </div>
+    ) : null;
+  };
+
+  const renderAddALink = () => {
+    return self && editable && !replaced ? (
+      <div className="panel">
+        <h2>Add a link</h2>
+        {graph?.truncated ? (
+          <TruncatedNotice
+            shown={graph.nodes.length}
+            total={graph.totalNodes}
+            noun="documents in the list below"
+            testId="link-candidates-truncated"
+          >
+            It holds the newest documents and the ones already linked to this one.
+          </TruncatedNotice>
+        ) : null}
+        {candidates.length === 0 ? (
+          <p className="sub" style={{ margin: 0 }}>
+            No other current document in this project to link to.
+          </p>
+        ) : (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const upstreamUploadId = direction === "rests_on" ? linkTarget : uploadId;
+              const downstreamUploadId = direction === "rests_on" ? uploadId : linkTarget;
+              void step(async (activeToken) => {
+                await createDocumentLink(
+                  activeToken,
+                  id,
+                  {
+                    upstreamUploadId,
+                    downstreamUploadId,
+                    kind,
+                    note: linkNote.trim() === "" ? null : linkNote.trim(),
+                  },
+                  newIdempotencyKey(),
+                );
+                setLinkTarget("");
+                setLinkNote("");
+              });
+            }}
+          >
+            <div className="field">
+              <label htmlFor="link-target">Other document</label>
+              <select
+                id="link-target"
+                data-testid="link-target"
+                value={linkTarget}
+                onChange={(event) => setLinkTarget(event.target.value)}
+              >
+                <option value="">Choose a document…</option>
+                {candidates.map((node) => (
+                  <option key={node.uploadId} value={node.uploadId}>
+                    {documentLabel(node, node.uploadId)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="link-direction">Direction</label>
+              <select
+                id="link-direction"
+                value={direction}
+                onChange={(event) => setDirection(event.target.value as "rests_on" | "rested_on_by")}
+              >
+                <option value="rests_on">This document rests on the other one</option>
+                <option value="rested_on_by">The other document rests on this one</option>
+              </select>
+            </div>
+            <fieldset className="field" style={{ border: 0, padding: 0 }}>
+              <legend>Kind</legend>
+              {(["depends_on", "references"] as const).map((option) => (
+                <label key={option} style={{ display: "block", margin: "4px 0" }}>
+                  <input
+                    type="radio"
+                    name="link-kind"
+                    value={option}
+                    checked={kind === option}
+                    onChange={() => setKind(option)}
+                  />{" "}
+                  {KIND_EXPLANATION[option]}
+                </label>
+              ))}
+            </fieldset>
+            <div className="field">
+              <label htmlFor="link-note">Note (optional)</label>
+              <input
+                id="link-note"
+                value={linkNote}
+                maxLength={500}
+                onChange={(event) => setLinkNote(event.target.value)}
+              />
+            </div>
+            <button className="primary" type="submit" disabled={busy || linkTarget === ""}>
+              Add link
+            </button>
+          </form>
+        )}
+      </div>
+    ) : null;
+  };
+
+  const renderIfThisDocumentChanges = () => {
+    return (
+      <div className="panel">
+        <h2>If this document changes</h2>
+        <p className="sub" style={{ marginTop: 0 }}>
+          These documents would need a second look. A link that cites stops the change there; a link
+          that rests on carries it further. This is a preview — nothing is recorded.
+        </p>
+        {preview && preview.items.length > 0 ? (
+          <DocumentTree
+            testId="impact-preview"
+            rootId={uploadId}
+            items={preview.items}
+            renderItem={(item) => (
+              <>
+                <Link href={`/w/projects/${id}/documents/${item.uploadId}`}>
+                  {documentLabel(nodes.get(item.uploadId), item.uploadId)}
+                </Link>{" "}
+                <span className="meta">— {KIND_LABEL[item.viaKind]} the document above</span>
+              </>
+            )}
+          />
+        ) : (
+          <p className="sub" style={{ margin: 0 }} data-testid="impact-preview-empty">
+            Nothing rests on this document, so a change here flags no other document.
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  const renderUploadANewVersion = () => {
+    return self && usable && !replaced ? (
+      <div className="panel">
+        <h2>Upload a new version</h2>
+        <p className="sub" style={{ marginTop: 0 }}>
+          The new version goes through quarantine and the scan like any upload. It takes effect only
+          once it is promoted in the Data Room — then this document&rsquo;s links move to it and the
+          documents resting on this one are flagged for a second look.
+        </p>
+        <form
+          className="row"
+          style={{ alignItems: "flex-end" }}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!versionFile) return;
+            const file = versionFile;
+            void step(async (activeToken) => {
+              const uploaded = await createUpload(activeToken, id, file, newIdempotencyKey());
+              /**
+               * The server stores identical content once and hands back the existing upload.
+               * Marking that one as the new version would quietly turn an unrelated document
+               * into this document's successor, so stop here. A fresh upload is always in
+               * quarantine and not yet in this project's list.
+               */
+              if (uploaded.state !== "quarantined" || nodes.has(uploaded.id)) {
+                throw new Error(
+                  `This file is already in the Data Room as upload ${uploaded.id}. ` +
+                    "Upload the revised file, or open that document and mark it as the new version there.",
+                );
+              }
+              const marked = await updateDocumentProfile(
+                activeToken,
+                uploaded.id,
+                uploaded.version,
+                {
+                  supersedesUploadId: uploadId,
+                  ...(self.documentType ? { documentType: self.documentType } : {}),
+                  ...(versionValid ? { validUntil: versionValid } : {}),
+                },
+                newIdempotencyKey(),
+              );
+              setCreated(marked);
+              setVersionFile(null);
+              if (versionFileInput.current) versionFileInput.current.value = "";
+              if (versionPhotoInput.current) versionPhotoInput.current.value = "";
+              setVersionValid("");
+            });
+          }}
+        >
+          <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
+            <label htmlFor="new-version-file">File</label>
+            <input
+              id="new-version-file"
+              type="file"
+              accept={UPLOAD_ACCEPT}
+              data-testid="new-version-input"
+              ref={versionFileInput}
+              disabled={busy}
+              onChange={(event) => {
+                if (versionPhotoInput.current) versionPhotoInput.current.value = "";
+                setVersionFile(event.target.files?.[0] ?? null);
+              }}
+            />
+          </div>
+          {/* A renewed permit is often photographed on site. The camera stays on its own input
+                    so the general picker still lets people attach a saved file. */}
+          <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
+            <label htmlFor="new-version-photo">Or take a photo</label>
+            <input
+              id="new-version-photo"
+              type="file"
+              accept={PHOTO_ACCEPT}
+              capture="environment"
+              data-testid="new-version-photo-input"
+              ref={versionPhotoInput}
+              disabled={busy}
+              onChange={(event) => {
+                if (versionFileInput.current) versionFileInput.current.value = "";
+                setVersionFile(event.target.files?.[0] ?? null);
+              }}
+            />
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label htmlFor="new-version-valid-until">New version valid until (optional)</label>
+            <input
+              id="new-version-valid-until"
+              type="date"
+              value={versionValid}
+              onChange={(event) => setVersionValid(event.target.value)}
+            />
+          </div>
+          <button className="primary" type="submit" disabled={busy || versionFile === null}>
+            Upload new version
+          </button>
+        </form>
+      </div>
+    ) : null;
+  };
+
+  const renderRevokeThisDocument = () => {
+    return self && self.state === "promoted" && !revoked ? (
+      <div className="panel">
+        <h2>Revoke this document</h2>
+        <p className="sub" style={{ marginTop: 0 }}>
+          For a document found to be wrong — issued in error, forged, or signed with a key that
+          leaked. It is not deleted: it stays on record, marked, with your reason. The documents
+          resting on it are flagged for a second look, and nothing new can rest on it. This cannot be
+          undone; a correction is uploaded as a new version.
+        </p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void step(async (activeToken) => {
+              await revokeDocument(
+                activeToken,
+                uploadId,
+                self.version,
+                revokeReason.trim(),
+                newIdempotencyKey(),
+              );
+              setRevokeReason("");
+            });
+          }}
+        >
+          <div className="field">
+            <label htmlFor="revoke-reason">Why this document is revoked</label>
+            <input
+              id="revoke-reason"
+              value={revokeReason}
+              maxLength={1000}
+              onChange={(event) => setRevokeReason(event.target.value)}
+            />
+          </div>
+          <button type="submit" disabled={busy || revokeReason.trim() === ""}>
+            Revoke document
+          </button>
+        </form>
+      </div>
+    ) : null;
+  };
+
   return (
     <>
       <div className="page-head">
@@ -172,9 +580,7 @@ export default function DocumentPage({
 
       {error ? <ErrorNotice error={error} /> : null}
 
-      {graph && !self ? (
-        <p className="sub">This document is not in this project, or it is not visible to you.</p>
-      ) : null}
+      {renderMissingDocument()}
 
       {replaced ? (
         <div className="notice" data-testid="document-replaced">
@@ -192,88 +598,9 @@ export default function DocumentPage({
         </div>
       ) : null}
 
-      {self?.supersedesUploadId ? (
-        <p className="meta">
-          This is a new version of{" "}
-          <Link href={`/w/projects/${id}/documents/${self.supersedesUploadId}`}>
-            {documentLabel(nodes.get(self.supersedesUploadId), self.supersedesUploadId)}
-          </Link>
-          {self.state === "promoted"
-            ? "."
-            : ". It takes effect once it passes the scan and is promoted."}
-        </p>
-      ) : null}
+      {renderPreviousVersion()}
 
-      {self ? (
-        <div className="panel">
-          <h2>Profile</h2>
-          <dl className="kv" style={{ marginTop: 0 }}>
-            <dt>State</dt>
-            <dd className="mono">{self.state}</dd>
-            <dt>Valid until</dt>
-            <dd className="mono" data-testid="document-validity">
-              {validityText(self.validUntil, self.daysUntilExpiry)}
-            </dd>
-            <dt>Open impacts</dt>
-            <dd className="mono">{self.openImpactCount}</dd>
-          </dl>
-
-          <form
-            className="row"
-            style={{ alignItems: "flex-end", marginTop: 12 }}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void step((activeToken) =>
-                updateDocumentProfile(
-                  activeToken,
-                  uploadId,
-                  self.version,
-                  profileChanges,
-                  newIdempotencyKey(),
-                ),
-              );
-            }}
-          >
-            <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
-              <label htmlFor="document-type">Document type</label>
-              <input
-                id="document-type"
-                list="document-types"
-                maxLength={80}
-                value={typeDraft}
-                disabled={!editable}
-                placeholder="e.g. Exploration license"
-                onChange={(event) => setTypeDraft(event.target.value)}
-              />
-              {/* Suggest the words already in use, so one kind of document does not end up
-                  under three spellings — type rules match on the text. */}
-              <datalist id="document-types">
-                {knownTypes.map((value) => (
-                  <option key={value} value={value} />
-                ))}
-              </datalist>
-            </div>
-            <div className="field" style={{ marginBottom: 0 }}>
-              <label htmlFor="document-valid-until">Valid until</label>
-              <input
-                id="document-valid-until"
-                type="date"
-                value={validDraft}
-                disabled={!editable}
-                onChange={(event) => setValidDraft(event.target.value)}
-              />
-            </div>
-            <button className="primary" type="submit" disabled={busy || !editable || !profileChanged}>
-              Save profile
-            </button>
-          </form>
-          <p className="meta" style={{ marginTop: 10 }}>
-            The type is free text. Setting a type can add links from type rules an operator has
-            declared. A validity date in the past flags this document and whatever rests on it at
-            once.
-          </p>
-        </div>
-      ) : null}
+      {renderProfile()}
 
       <div className="panel">
         <h2>Rests on</h2>
@@ -303,311 +630,15 @@ export default function DocumentPage({
         />
       </div>
 
-      {removeFor ? (
-        <div className="panel">
-          <h2>Remove a link</h2>
-          <p className="sub" style={{ marginTop: 0 }}>
-            The link stops carrying the next change. Impacts it already raised stay open — they
-            were right when raised. The link is kept on record with your reason.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void step(async (activeToken) => {
-                await removeDocumentLink(
-                  activeToken,
-                  removeFor.id,
-                  removeReason.trim(),
-                  newIdempotencyKey(),
-                );
-                setRemoveFor(null);
-                setRemoveReason("");
-              });
-            }}
-          >
-            <div className="field">
-              <label htmlFor="remove-reason">Why</label>
-              <input
-                id="remove-reason"
-                value={removeReason}
-                maxLength={500}
-                onChange={(event) => setRemoveReason(event.target.value)}
-              />
-            </div>
-            <button className="primary" type="submit" disabled={busy || removeReason.trim() === ""}>
-              Remove link
-            </button>{" "}
-            <button type="button" onClick={() => setRemoveFor(null)}>
-              Cancel
-            </button>
-          </form>
-        </div>
-      ) : null}
+      {renderRemoveALink()}
 
-      {self && editable && !replaced ? (
-        <div className="panel">
-          <h2>Add a link</h2>
-          {graph?.truncated ? (
-            <TruncatedNotice
-              shown={graph.nodes.length}
-              total={graph.totalNodes}
-              noun="documents in the list below"
-              testId="link-candidates-truncated"
-            >
-              It holds the newest documents and the ones already linked to this one.
-            </TruncatedNotice>
-          ) : null}
-          {candidates.length === 0 ? (
-            <p className="sub" style={{ margin: 0 }}>
-              No other current document in this project to link to.
-            </p>
-          ) : (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const upstreamUploadId = direction === "rests_on" ? linkTarget : uploadId;
-                const downstreamUploadId = direction === "rests_on" ? uploadId : linkTarget;
-                void step(async (activeToken) => {
-                  await createDocumentLink(
-                    activeToken,
-                    id,
-                    {
-                      upstreamUploadId,
-                      downstreamUploadId,
-                      kind,
-                      note: linkNote.trim() === "" ? null : linkNote.trim(),
-                    },
-                    newIdempotencyKey(),
-                  );
-                  setLinkTarget("");
-                  setLinkNote("");
-                });
-              }}
-            >
-              <div className="field">
-                <label htmlFor="link-target">Other document</label>
-                <select
-                  id="link-target"
-                  data-testid="link-target"
-                  value={linkTarget}
-                  onChange={(event) => setLinkTarget(event.target.value)}
-                >
-                  <option value="">Choose a document…</option>
-                  {candidates.map((node) => (
-                    <option key={node.uploadId} value={node.uploadId}>
-                      {documentLabel(node, node.uploadId)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label htmlFor="link-direction">Direction</label>
-                <select
-                  id="link-direction"
-                  value={direction}
-                  onChange={(event) =>
-                    setDirection(event.target.value as "rests_on" | "rested_on_by")
-                  }
-                >
-                  <option value="rests_on">This document rests on the other one</option>
-                  <option value="rested_on_by">The other document rests on this one</option>
-                </select>
-              </div>
-              <fieldset className="field" style={{ border: 0, padding: 0 }}>
-                <legend>Kind</legend>
-                {(["depends_on", "references"] as const).map((option) => (
-                  <label key={option} style={{ display: "block", margin: "4px 0" }}>
-                    <input
-                      type="radio"
-                      name="link-kind"
-                      value={option}
-                      checked={kind === option}
-                      onChange={() => setKind(option)}
-                    />{" "}
-                    {KIND_EXPLANATION[option]}
-                  </label>
-                ))}
-              </fieldset>
-              <div className="field">
-                <label htmlFor="link-note">Note (optional)</label>
-                <input
-                  id="link-note"
-                  value={linkNote}
-                  maxLength={500}
-                  onChange={(event) => setLinkNote(event.target.value)}
-                />
-              </div>
-              <button className="primary" type="submit" disabled={busy || linkTarget === ""}>
-                Add link
-              </button>
-            </form>
-          )}
-        </div>
-      ) : null}
+      {renderAddALink()}
 
-      <div className="panel">
-        <h2>If this document changes</h2>
-        <p className="sub" style={{ marginTop: 0 }}>
-          These documents would need a second look. A link that cites stops the change there; a
-          link that rests on carries it further. This is a preview — nothing is recorded.
-        </p>
-        {preview && preview.items.length > 0 ? (
-          <DocumentTree
-            testId="impact-preview"
-            rootId={uploadId}
-            items={preview.items}
-            renderItem={(item) => (
-              <>
-                <Link href={`/w/projects/${id}/documents/${item.uploadId}`}>
-                  {documentLabel(nodes.get(item.uploadId), item.uploadId)}
-                </Link>{" "}
-                <span className="meta">— {KIND_LABEL[item.viaKind]} the document above</span>
-              </>
-            )}
-          />
-        ) : (
-          <p className="sub" style={{ margin: 0 }} data-testid="impact-preview-empty">
-            Nothing rests on this document, so a change here flags no other document.
-          </p>
-        )}
-      </div>
+      {renderIfThisDocumentChanges()}
 
-      {self && usable && !replaced ? (
-        <div className="panel">
-          <h2>Upload a new version</h2>
-          <p className="sub" style={{ marginTop: 0 }}>
-            The new version goes through quarantine and the scan like any upload. It takes effect
-            only once it is promoted in the Data Room — then this document&rsquo;s links move to it
-            and the documents resting on this one are flagged for a second look.
-          </p>
-          <form
-            className="row"
-            style={{ alignItems: "flex-end" }}
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!versionFile) return;
-              const file = versionFile;
-              void step(async (activeToken) => {
-                const uploaded = await createUpload(activeToken, id, file, newIdempotencyKey());
-                /**
-                 * The server stores identical content once and hands back the existing upload.
-                 * Marking that one as the new version would quietly turn an unrelated document
-                 * into this document's successor, so stop here. A fresh upload is always in
-                 * quarantine and not yet in this project's list.
-                 */
-                if (uploaded.state !== "quarantined" || nodes.has(uploaded.id)) {
-                  throw new Error(
-                    `This file is already in the Data Room as upload ${uploaded.id}. ` +
-                      "Upload the revised file, or open that document and mark it as the new version there.",
-                  );
-                }
-                const marked = await updateDocumentProfile(
-                  activeToken,
-                  uploaded.id,
-                  uploaded.version,
-                  {
-                    supersedesUploadId: uploadId,
-                    ...(self.documentType ? { documentType: self.documentType } : {}),
-                    ...(versionValid ? { validUntil: versionValid } : {}),
-                  },
-                  newIdempotencyKey(),
-                );
-                setCreated(marked);
-                setVersionFile(null);
-                if (versionFileInput.current) versionFileInput.current.value = "";
-                if (versionPhotoInput.current) versionPhotoInput.current.value = "";
-                setVersionValid("");
-              });
-            }}
-          >
-            <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
-              <label htmlFor="new-version-file">File</label>
-              <input
-                id="new-version-file"
-                type="file"
-                accept={UPLOAD_ACCEPT}
-                data-testid="new-version-input"
-                ref={versionFileInput}
-                disabled={busy}
-                onChange={(event) => {
-                  if (versionPhotoInput.current) versionPhotoInput.current.value = "";
-                  setVersionFile(event.target.files?.[0] ?? null);
-                }}
-              />
-            </div>
-            {/* A renewed permit is often photographed on site. The camera stays on its own input
-                so the general picker still lets people attach a saved file. */}
-            <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
-              <label htmlFor="new-version-photo">Or take a photo</label>
-              <input
-                id="new-version-photo"
-                type="file"
-                accept={PHOTO_ACCEPT}
-                capture="environment"
-                data-testid="new-version-photo-input"
-                ref={versionPhotoInput}
-                disabled={busy}
-                onChange={(event) => {
-                  if (versionFileInput.current) versionFileInput.current.value = "";
-                  setVersionFile(event.target.files?.[0] ?? null);
-                }}
-              />
-            </div>
-            <div className="field" style={{ marginBottom: 0 }}>
-              <label htmlFor="new-version-valid-until">New version valid until (optional)</label>
-              <input
-                id="new-version-valid-until"
-                type="date"
-                value={versionValid}
-                onChange={(event) => setVersionValid(event.target.value)}
-              />
-            </div>
-            <button className="primary" type="submit" disabled={busy || versionFile === null}>
-              Upload new version
-            </button>
-          </form>
-        </div>
-      ) : null}
+      {renderUploadANewVersion()}
 
-      {self && self.state === "promoted" && !revoked ? (
-        <div className="panel">
-          <h2>Revoke this document</h2>
-          <p className="sub" style={{ marginTop: 0 }}>
-            For a document found to be wrong — issued in error, forged, or signed with a key that
-            leaked. It is not deleted: it stays on record, marked, with your reason. The documents
-            resting on it are flagged for a second look, and nothing new can rest on it. This
-            cannot be undone; a correction is uploaded as a new version.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void step(async (activeToken) => {
-                await revokeDocument(
-                  activeToken,
-                  uploadId,
-                  self.version,
-                  revokeReason.trim(),
-                  newIdempotencyKey(),
-                );
-                setRevokeReason("");
-              });
-            }}
-          >
-            <div className="field">
-              <label htmlFor="revoke-reason">Why this document is revoked</label>
-              <input
-                id="revoke-reason"
-                value={revokeReason}
-                maxLength={1000}
-                onChange={(event) => setRevokeReason(event.target.value)}
-              />
-            </div>
-            <button type="submit" disabled={busy || revokeReason.trim() === ""}>
-              Revoke document
-            </button>
-          </form>
-        </div>
-      ) : null}
+      {renderRevokeThisDocument()}
 
       {created ? (
         <div className="notice" data-testid="new-version-created">

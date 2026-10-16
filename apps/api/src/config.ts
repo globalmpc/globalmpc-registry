@@ -302,6 +302,40 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
 
   const value = parsed.data;
 
+  const objectStore = configureObjectStore(value);
+
+  return {
+    port: value.PORT,
+    databaseUrl: value.DATABASE_URL,
+    siweDomain: value.SIWE_DOMAIN,
+    siweUri: value.SIWE_URI,
+    chainId: value.CHAIN_ID,
+    sessionSecret: value.SESSION_SECRET,
+    nodeEnv: value.NODE_ENV,
+    rateLimitMax: value.RATE_LIMIT_MAX,
+    publicRateLimitMax: value.PUBLIC_RATE_LIMIT_MAX ?? value.RATE_LIMIT_MAX,
+    authRateLimitMax: value.AUTH_RATE_LIMIT_MAX,
+    trustedProxyHops: value.TRUSTED_PROXY_HOPS,
+    trustedProxyCidrs: value.TRUSTED_PROXY_CIDRS.split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+    edgeProxySecret: value.EDGE_PROXY_SECRET ?? null,
+    // A trailing slash would never equal a browser `Origin` header; normalize once here.
+    edgeWebOrigin: value.EDGE_WEB_ORIGIN ? new URL(value.EDGE_WEB_ORIGIN).origin : null,
+    opsEndpointCidrs: value.OPS_ENDPOINT_CIDRS.split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+    requestTimeoutMs: value.REQUEST_TIMEOUT_MS,
+    socketIdleTimeoutMs: value.SOCKET_IDLE_TIMEOUT_MS,
+    secretAudit,
+    objectStore,
+    chainRpcUrl: value.CHAIN_RPC_URL ?? null,
+    governanceTokenAddress: value.GOVERNANCE_TOKEN_ADDRESS?.toLowerCase() ?? null,
+    governanceConfirmationDepth: value.GOVERNANCE_CONFIRMATIONS,
+  };
+}
+
+function configureObjectStore(value: z.infer<typeof schema>): ObjectStoreConfig {
   // Choosing the memory store in production loses evidence originals on every restart.
   // Silent operation is the worst case, so startup itself is blocked.
   if (value.NODE_ENV === "production" && value.OBJECT_STORE === "memory") {
@@ -345,34 +379,5 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
         }
       : {}),
   };
-
-  return {
-    port: value.PORT,
-    databaseUrl: value.DATABASE_URL,
-    siweDomain: value.SIWE_DOMAIN,
-    siweUri: value.SIWE_URI,
-    chainId: value.CHAIN_ID,
-    sessionSecret: value.SESSION_SECRET,
-    nodeEnv: value.NODE_ENV,
-    rateLimitMax: value.RATE_LIMIT_MAX,
-    publicRateLimitMax: value.PUBLIC_RATE_LIMIT_MAX ?? value.RATE_LIMIT_MAX,
-    authRateLimitMax: value.AUTH_RATE_LIMIT_MAX,
-    trustedProxyHops: value.TRUSTED_PROXY_HOPS,
-    trustedProxyCidrs: value.TRUSTED_PROXY_CIDRS.split(",")
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0),
-    edgeProxySecret: value.EDGE_PROXY_SECRET ?? null,
-    // A trailing slash would never equal a browser `Origin` header; normalize once here.
-    edgeWebOrigin: value.EDGE_WEB_ORIGIN ? new URL(value.EDGE_WEB_ORIGIN).origin : null,
-    opsEndpointCidrs: value.OPS_ENDPOINT_CIDRS.split(",")
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0),
-    requestTimeoutMs: value.REQUEST_TIMEOUT_MS,
-    socketIdleTimeoutMs: value.SOCKET_IDLE_TIMEOUT_MS,
-    secretAudit,
-    objectStore,
-    chainRpcUrl: value.CHAIN_RPC_URL ?? null,
-    governanceTokenAddress: value.GOVERNANCE_TOKEN_ADDRESS?.toLowerCase() ?? null,
-    governanceConfirmationDepth: value.GOVERNANCE_CONFIRMATIONS,
-  };
+  return objectStore;
 }

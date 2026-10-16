@@ -52,13 +52,9 @@ function normalizeCode(sql: string): string {
     const next = sql[i + 1];
     const tag = ch === "$" ? dollarTagAt(sql, i) : null;
     if (tag !== null) {
-      const close = sql.indexOf(tag, i + tag.length);
-      const innerEnd = close === -1 ? sql.length : close;
-      const end = close === -1 ? sql.length : close + tag.length;
-      const inner = sql.slice(i + tag.length, innerEnd);
-      const closing = close === -1 ? "" : tag;
-      out += FUNCTION_BODY_OPENER.test(out) ? `${tag}${normalizeCode(inner)}${closing}` : sql.slice(i, end);
-      i = end;
+      const quoted = normalizeDollarQuoted(sql, i, tag, out);
+      out += quoted.text;
+      i = quoted.end;
     } else if (ch === "'" || ch === '"') {
       const end = endOfQuoted(sql, i);
       out += sql.slice(i, end);
@@ -79,6 +75,18 @@ function normalizeCode(sql: string): string {
     }
   }
   return out;
+}
+
+function normalizeDollarQuoted(sql: string, start: number, tag: string, prefix: string) {
+  const close = sql.indexOf(tag, start + tag.length);
+  const innerEnd = close === -1 ? sql.length : close;
+  const end = close === -1 ? sql.length : close + tag.length;
+  const inner = sql.slice(start + tag.length, innerEnd);
+  const closing = close === -1 ? "" : tag;
+  const text = FUNCTION_BODY_OPENER.test(prefix)
+    ? `${tag}${normalizeCode(inner)}${closing}`
+    : sql.slice(start, end);
+  return { text, end };
 }
 
 /** Output so far ends with the keyword that introduces a function or `DO` body. */

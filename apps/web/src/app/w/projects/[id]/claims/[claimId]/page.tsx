@@ -59,6 +59,256 @@ export default function ClaimDetailPage({
     return <p className="sub">No account is connected.</p>;
   }
 
+  const renderClaimDetails = () => {
+    if (!claim) return null;
+    const renderStatement = () => {
+      return (
+        <div className="panel" data-testid="claim-detail">
+          <h2>Statement</h2>
+          <dl className="dl">
+            <dt>Value</dt>
+            <dd className="mono">
+              {claim.valueText}
+              {claim.unit ? <span className="meta"> {claim.unit}</span> : null}
+            </dd>
+            <dt>As of</dt>
+            <dd className="mono">{claim.asOf ?? "—"}</dd>
+            <dt>Source coordinate</dt>
+            <dd className="mono" data-testid="source-coordinate">
+              {Object.keys(claim.sourceCoordinate).length === 0
+                ? "—"
+                : Object.entries(claim.sourceCoordinate)
+                    .map(([key, value]) => `${key}: ${String(value)}`)
+                    .join(" · ")}
+            </dd>
+            <dt>Source receipt</dt>
+            <dd className="mono">
+              {claim.sourceReceiptId ?? <span className="meta">No source receipt is linked</span>}
+            </dd>
+            <dt>Version</dt>
+            <dd className="mono">v{claim.version}</dd>
+          </dl>
+        </div>
+      );
+    };
+
+    const renderProvenance = () => {
+      return (
+        <div className="panel" data-testid="claim-provenance">
+          <h2>Provenance</h2>
+          <dl className="dl">
+            <dt>Evidence tier</dt>
+            <dd className="mono">{claim.evidenceTier ?? "—"}</dd>
+            <dt>Verification state</dt>
+            <dd className="mono">
+              {claim.verificationState}
+              {claim.verificationState === "unreviewed" ? (
+                <div className="meta">No person has reviewed this claim.</div>
+              ) : null}
+            </dd>
+            <dt>Grade</dt>
+            <dd>
+              <GradeBadge grade={claim.grade} />
+            </dd>
+            <dt>Stale</dt>
+            <dd className="mono">
+              {claim.staleSince ? `since ${claim.staleSince}` : "No open signal"}
+            </dd>
+          </dl>
+        </div>
+      );
+    };
+
+    const renderAttestationsAndLimitations = () => {
+      return (
+        <div className="panel" data-testid="claim-attestations">
+          <h2>Attestations and limitations</h2>
+          {claim.attestations.length === 0 ? (
+            <p className="sub" style={{ margin: 0 }}>
+              No attestation covers this claim.
+            </p>
+          ) : (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Type</th>
+                    <th scope="col">State</th>
+                    <th scope="col">Limitations</th>
+                    <th scope="col">Signed</th>
+                    <th scope="col">Valid until</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {claim.attestations.map((attestation) => (
+                    <tr key={attestation.id}>
+                      <td className="mono">{attestation.attestationType}</td>
+                      <td className="mono">{attestation.state}</td>
+                      <td>{attestation.limitations}</td>
+                      <td className="mono meta">{attestation.signedAt}</td>
+                      <td className="mono meta">{attestation.validUntil ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    const renderConflicts = () => {
+      return (
+        <div className="panel" data-testid="claim-conflicts">
+          <h2>Conflicts</h2>
+          {claim.conflicts.length === 0 && claim.conflictingClaimIds.length === 0 ? (
+            <p className="sub" style={{ margin: 0 }}>
+              No conflict is recorded for this claim.
+            </p>
+          ) : (
+            <ul>
+              {claim.conflicts.map((item) => (
+                <li key={item.id}>
+                  <span className="mono">{item.conflictType}</span> ·{" "}
+                  {item.resolvedAt ? `resolved ${item.resolvedAt}` : "unresolved"}
+                </li>
+              ))}
+              {claim.conflictingClaimIds.map((other) => (
+                <li key={other}>
+                  Contradicted by{" "}
+                  <Link href={`/w/projects/${id}/claims/${other}`} className="mono">
+                    {other.slice(0, 8)}…
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      );
+    };
+
+    const renderDerivation = () => {
+      return (
+        <div className="panel" data-testid="claim-derivation">
+          <h2>Derivation</h2>
+          {claim.derivation ? (
+            <dl className="dl">
+              <dt>Formula</dt>
+              <dd className="mono">{claim.derivation.formula}</dd>
+              <dt>Inputs</dt>
+              <dd>
+                {claim.derivation.inputClaimIds.map((input) => (
+                  <Link key={input} href={`/w/projects/${id}/claims/${input}`} className="mono">
+                    {input.slice(0, 8)}…{" "}
+                  </Link>
+                ))}
+              </dd>
+              <dt>Unit · as of</dt>
+              <dd className="mono">
+                {claim.derivation.unit ?? "—"} · {claim.derivation.asOf ?? "—"}
+              </dd>
+              <dt>Recorded</dt>
+              <dd className="mono meta">{claim.derivation.recordedAt}</dd>
+            </dl>
+          ) : (
+            <p className="sub" style={{ margin: 0 }}>
+              No derivation is recorded for this claim. If it was calculated, the formula and inputs
+              are not on record.
+            </p>
+          )}
+        </div>
+      );
+    };
+
+    const renderVersionHistory = () => {
+      return (
+        <div className="panel" data-testid="claim-history">
+          <h2>Version history</h2>
+          {claim.history.length === 0 && claim.lineage.length === 0 ? (
+            <p className="sub" style={{ margin: 0 }}>
+              No change has been recorded.
+            </p>
+          ) : (
+            <ul>
+              {claim.history.map((row, index) => (
+                <li key={`${row.occurredAt}-${index}`}>
+                  <span className="mono">{row.command}</span>
+                  {row.afterVersion !== null ? (
+                    <span className="mono"> → v{row.afterVersion}</span>
+                  ) : null}{" "}
+                  <span className="meta mono">{row.occurredAt}</span>
+                </li>
+              ))}
+              {claim.lineage
+                .filter(
+                  (edge) => edge.relationType === "supersedes" || edge.relationType === "revokes",
+                )
+                .map((edge) => (
+                  <li key={`${edge.relationType}-${edge.fromId}-${edge.toId}`}>
+                    <span className="mono">{edge.relationType}</span>{" "}
+                    <span className="mono meta">
+                      {edge.fromId.slice(0, 8)}… → {edge.toId.slice(0, 8)}…
+                    </span>
+                  </li>
+                ))}
+            </ul>
+          )}
+        </div>
+      );
+    };
+
+    const renderAnchorProof = () => {
+      return (
+        <div className="panel" data-testid="claim-anchor">
+          <h2>Anchor proof</h2>
+          {claim.anchors.length === 0 ? (
+            <p className="sub" style={{ margin: 0 }}>
+              No published registry record containing this claim has been anchored.
+            </p>
+          ) : (
+            <ul>
+              {claim.anchors.map((anchor) => (
+                <li key={anchor.entryVersionId}>
+                  <span className="mono">{anchor.merkleRoot ?? "not in a batch yet"}</span> ·{" "}
+                  <span className="mono">{anchor.txHash ?? "no transaction"}</span> ·{" "}
+                  {anchor.transactionState ?? "—"}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="meta" style={{ marginBottom: 0 }}>
+            An anchor proves that the published bytes were included and not altered. It does not prove
+            that the value is true or legally effective.
+          </p>
+        </div>
+      );
+    };
+
+    return (
+      <>
+        {renderStatement()}
+
+        {renderProvenance()}
+
+        <div className="notice" style={{ color: "var(--alert)" }}>
+          <div className="title">Grade is not review</div>
+          {REQUIRED_BOUNDARY_COPY.verification} A grade describes the evidence behind a value. It does
+          not say that a qualified person examined it, and it never says the value is correct.
+        </div>
+
+        {renderAttestationsAndLimitations()}
+
+        {renderConflicts()}
+
+        {renderDerivation()}
+
+        {renderVersionHistory()}
+
+        {renderAnchorProof()}
+      </>
+    );
+  };
+
   return (
     <>
       <div className="page-head">
@@ -84,200 +334,7 @@ export default function ClaimDetailPage({
         </div>
       ) : null}
 
-      {claim ? (
-        <>
-          <div className="panel" data-testid="claim-detail">
-            <h2>Statement</h2>
-            <dl className="dl">
-              <dt>Value</dt>
-              <dd className="mono">
-                {claim.valueText}
-                {claim.unit ? <span className="meta"> {claim.unit}</span> : null}
-              </dd>
-              <dt>As of</dt>
-              <dd className="mono">{claim.asOf ?? "—"}</dd>
-              <dt>Source coordinate</dt>
-              <dd className="mono" data-testid="source-coordinate">
-                {Object.keys(claim.sourceCoordinate).length === 0
-                  ? "—"
-                  : Object.entries(claim.sourceCoordinate)
-                      .map(([key, value]) => `${key}: ${String(value)}`)
-                      .join(" · ")}
-              </dd>
-              <dt>Source receipt</dt>
-              <dd className="mono">
-                {claim.sourceReceiptId ?? <span className="meta">No source receipt is linked</span>}
-              </dd>
-              <dt>Version</dt>
-              <dd className="mono">v{claim.version}</dd>
-            </dl>
-          </div>
-
-          <div className="panel" data-testid="claim-provenance">
-            <h2>Provenance</h2>
-            <dl className="dl">
-              <dt>Evidence tier</dt>
-              <dd className="mono">{claim.evidenceTier ?? "—"}</dd>
-              <dt>Verification state</dt>
-              <dd className="mono">
-                {claim.verificationState}
-                {claim.verificationState === "unreviewed" ? (
-                  <div className="meta">No person has reviewed this claim.</div>
-                ) : null}
-              </dd>
-              <dt>Grade</dt>
-              <dd>
-                <GradeBadge grade={claim.grade} />
-              </dd>
-              <dt>Stale</dt>
-              <dd className="mono">
-                {claim.staleSince ? `since ${claim.staleSince}` : "No open signal"}
-              </dd>
-            </dl>
-          </div>
-
-          <div className="notice" style={{ color: "var(--alert)" }}>
-            <div className="title">Grade is not review</div>
-            {REQUIRED_BOUNDARY_COPY.verification} A grade describes the evidence behind a value.
-            It does not say that a qualified person examined it, and it never says the value is
-            correct.
-          </div>
-
-          <div className="panel" data-testid="claim-attestations">
-            <h2>Attestations and limitations</h2>
-            {claim.attestations.length === 0 ? (
-              <p className="sub" style={{ margin: 0 }}>No attestation covers this claim.</p>
-            ) : (
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th scope="col">Type</th>
-                      <th scope="col">State</th>
-                      <th scope="col">Limitations</th>
-                      <th scope="col">Signed</th>
-                      <th scope="col">Valid until</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {claim.attestations.map((attestation) => (
-                      <tr key={attestation.id}>
-                        <td className="mono">{attestation.attestationType}</td>
-                        <td className="mono">{attestation.state}</td>
-                        <td>{attestation.limitations}</td>
-                        <td className="mono meta">{attestation.signedAt}</td>
-                        <td className="mono meta">{attestation.validUntil ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          <div className="panel" data-testid="claim-conflicts">
-            <h2>Conflicts</h2>
-            {claim.conflicts.length === 0 && claim.conflictingClaimIds.length === 0 ? (
-              <p className="sub" style={{ margin: 0 }}>No conflict is recorded for this claim.</p>
-            ) : (
-              <ul>
-                {claim.conflicts.map((item) => (
-                  <li key={item.id}>
-                    <span className="mono">{item.conflictType}</span> ·{" "}
-                    {item.resolvedAt ? `resolved ${item.resolvedAt}` : "unresolved"}
-                  </li>
-                ))}
-                {claim.conflictingClaimIds.map((other) => (
-                  <li key={other}>
-                    Contradicted by{" "}
-                    <Link href={`/w/projects/${id}/claims/${other}`} className="mono">
-                      {other.slice(0, 8)}…
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="panel" data-testid="claim-derivation">
-            <h2>Derivation</h2>
-            {claim.derivation ? (
-              <dl className="dl">
-                <dt>Formula</dt>
-                <dd className="mono">{claim.derivation.formula}</dd>
-                <dt>Inputs</dt>
-                <dd>
-                  {claim.derivation.inputClaimIds.map((input) => (
-                    <Link key={input} href={`/w/projects/${id}/claims/${input}`} className="mono">
-                      {input.slice(0, 8)}…{" "}
-                    </Link>
-                  ))}
-                </dd>
-                <dt>Unit · as of</dt>
-                <dd className="mono">
-                  {claim.derivation.unit ?? "—"} · {claim.derivation.asOf ?? "—"}
-                </dd>
-                <dt>Recorded</dt>
-                <dd className="mono meta">{claim.derivation.recordedAt}</dd>
-              </dl>
-            ) : (
-              <p className="sub" style={{ margin: 0 }}>
-                No derivation is recorded for this claim. If it was calculated, the formula and inputs are not on record.
-              </p>
-            )}
-          </div>
-
-          <div className="panel" data-testid="claim-history">
-            <h2>Version history</h2>
-            {claim.history.length === 0 && claim.lineage.length === 0 ? (
-              <p className="sub" style={{ margin: 0 }}>No change has been recorded.</p>
-            ) : (
-              <ul>
-                {claim.history.map((row, index) => (
-                  <li key={`${row.occurredAt}-${index}`}>
-                    <span className="mono">{row.command}</span>
-                    {row.afterVersion !== null ? <span className="mono"> → v{row.afterVersion}</span> : null}{" "}
-                    <span className="meta mono">{row.occurredAt}</span>
-                  </li>
-                ))}
-                {claim.lineage
-                  .filter((edge) => edge.relationType === "supersedes" || edge.relationType === "revokes")
-                  .map((edge) => (
-                    <li key={`${edge.relationType}-${edge.fromId}-${edge.toId}`}>
-                      <span className="mono">{edge.relationType}</span>{" "}
-                      <span className="mono meta">
-                        {edge.fromId.slice(0, 8)}… → {edge.toId.slice(0, 8)}…
-                      </span>
-                    </li>
-                  ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="panel" data-testid="claim-anchor">
-            <h2>Anchor proof</h2>
-            {claim.anchors.length === 0 ? (
-              <p className="sub" style={{ margin: 0 }}>
-                No published registry record containing this claim has been anchored.
-              </p>
-            ) : (
-              <ul>
-                {claim.anchors.map((anchor) => (
-                  <li key={anchor.entryVersionId}>
-                    <span className="mono">{anchor.merkleRoot ?? "not in a batch yet"}</span> ·{" "}
-                    <span className="mono">{anchor.txHash ?? "no transaction"}</span> ·{" "}
-                    {anchor.transactionState ?? "—"}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="meta" style={{ marginBottom: 0 }}>
-              An anchor proves that the published bytes were included and not altered. It does not
-              prove that the value is true or legally effective.
-            </p>
-          </div>
-        </>
-      ) : null}
+      {renderClaimDetails()}
     </>
   );
 }

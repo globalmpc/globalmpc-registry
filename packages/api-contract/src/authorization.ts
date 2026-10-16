@@ -160,6 +160,26 @@ export type AuthorizationDecision =
       readonly accessRequestPath?: string;
     };
 
+function jurisdictionMatches(actor: AuthorizationContext, resource: ResourceContext): boolean {
+  /**
+   * Jurisdiction condition — 02 §2.5.
+   *
+   * **Fails closed for scoped bindings.** A binding limited to some jurisdictions passes only
+   * when the resource's host jurisdiction is known and listed. A tenant-level resource has no
+   * host jurisdiction, so a scoped binding cannot act on it: treating "no location" as "any
+   * location" would let the narrowest binding reach the widest resources. The one exception is
+   * a list the route filters by project scope, where the filter itself applies the limit.
+   */
+  return !(
+    actor.jurisdictionScope !== undefined &&
+    actor.jurisdictionScope !== null &&
+    !(resource.projectId === null && resource.filteredByProjectScope === true) &&
+    (resource.jurisdiction === undefined ||
+      resource.jurisdiction === null ||
+      !actor.jurisdictionScope.includes(resource.jurisdiction))
+  );
+}
+
 export function authorize(
   policy: ActionPolicy,
   actor: AuthorizationContext,
@@ -202,26 +222,17 @@ export function authorize(
     };
   }
 
-  /**
-   * Jurisdiction condition — 02 §2.5.
-   *
-   * **Fails closed for scoped bindings.** A binding limited to some jurisdictions passes only
-   * when the resource's host jurisdiction is known and listed. A tenant-level resource has no
-   * host jurisdiction, so a scoped binding cannot act on it: treating "no location" as "any
-   * location" would let the narrowest binding reach the widest resources. The one exception is
-   * a list the route filters by project scope, where the filter itself applies the limit.
-   */
-  if (
-    actor.jurisdictionScope !== undefined &&
-    actor.jurisdictionScope !== null &&
-    !(resource.projectId === null && resource.filteredByProjectScope === true) &&
-    (resource.jurisdiction === undefined ||
-      resource.jurisdiction === null ||
-      !actor.jurisdictionScope.includes(resource.jurisdiction))
-  ) {
+  if (!jurisdictionMatches(actor, resource)) {
     return { allow: false, reason: "JURISDICTION_SCOPE_MISMATCH" };
   }
 
+  return authorizeResourceConditions(actor, resource);
+}
+
+function authorizeResourceConditions(
+  actor: AuthorizationContext,
+  resource: ResourceContext,
+): AuthorizationDecision {
   if (!actor.sensitivityClearance.includes(resource.sensitivity)) {
     return { allow: false, reason: "SENSITIVITY_CLEARANCE_INSUFFICIENT" };
   }
