@@ -70,6 +70,8 @@ const leafHashes = (count: number): Hex[] =>
 
 describe("Merkle batch build and proof (13 §13.7)", () => {
   for (const size of [1_000, 10_000]) {
+    // Coverage instrumentation and shared CI runners can exceed Vitest's 5s default.
+    // These measurements have no latency gate; correctness assertions still apply.
     it(`builds a ${size}-leaf batch and proves members`, async () => {
       const leaves = leafHashes(size);
 
@@ -90,7 +92,7 @@ describe("Merkle batch build and proof (13 §13.7)", () => {
         expect(verifyMerkleProof(leaf, measured.value, tree.root)).toBe(true);
       }
       report(summarize(`Merkle proof (${size} leaves)`, proofs));
-    });
+    }, 30_000);
   }
 });
 
