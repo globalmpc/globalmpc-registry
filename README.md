@@ -38,6 +38,20 @@ can be published. A public Explorer lets readers inspect published records and t
 Local contract addresses are created during development and CI runs. They are not BSC
 addresses. The mainnet address and BscScan verification link will be added after deployment.
 
+## BNB Chain Configuration
+
+BNB Smart Chain is set as the target network in these files:
+
+- [`apps/api/src/config.ts`](apps/api/src/config.ts) — `CHAIN_ID` accepts only 56 (BSC mainnet)
+  or 31337 (local chain); any other value stops the API at startup.
+- [`apps/api/src/bootstrap.ts`](apps/api/src/bootstrap.ts) — applies the same 56-or-31337 rule
+  when the registry is initialized.
+- [`contracts/foundry.toml`](contracts/foundry.toml) — declares a `bsc` RPC endpoint read from
+  `BSC_RPC_URL`.
+- [`deploy/mainnet-contract.md`](deploy/mainnet-contract.md) — the BSC mainnet (Chain ID 56)
+  deployment procedure and the decisions it waits on.
+- [`.env.example`](.env.example) — defaults to the local chain (31337) for development.
+
 ## Current Features
 
 - **Project workspace:** register mining-asset projects and organize documents, source
