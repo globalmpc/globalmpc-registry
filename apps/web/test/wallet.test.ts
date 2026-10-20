@@ -186,3 +186,133 @@ describe("walletFlags", () => {
     expect(walletFlags(null)).toEqual([]);
   });
 });
+
+describe("connection and signatures", () => {
+  it("normalizes approved accounts and sends signature parameters in wallet order", async () => {
+    const {
+      connectWallet,
+      personalSign,
+      signTypedDataWithWallet,
+      subscribeProviderEvents,
+    } = await import("../src/lib/wallet.js");
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(["0xABC"])
+      .mockResolvedValueOnce("0xpersonal")
+      .mockResolvedValueOnce("0xtyped");
+    const removeListener = vi.fn();
+    use({
+      request,
+      on: (event, listener) => {
+        listeners.set(event, listener);
+      },
+      removeListener,
+    });
+    expect(await connectWallet()).toBe("0xabc");
+    expect(await personalSign("message", "0xabc")).toBe("0xpersonal");
+    expect(
+      await signTypedDataWithWallet({ domain: { name: "MPC" } }, "0xabc"),
+    ).toBe("0xtyped");
+    expect(request).toHaveBeenNthCalledWith(2, {
+      method: "personal_sign",
+      params: ["message", "0xabc"],
+    });
+    expect(request).toHaveBeenNthCalledWith(3, {
+      method: "eth_signTypedData_v4",
+      params: ["0xabc", '{"domain":{"name":"MPC"}}'],
+    });
+    const onAccounts = vi.fn(),
+      onChain = vi.fn();
+    const stop = subscribeProviderEvents({ onAccounts, onChain });
+    listeners.get("accountsChanged")!(["0xABC"]);
+    listeners.get("accountsChanged")!();
+    listeners.get("chainChanged")!("0x38");
+    expect(onAccounts.mock.calls).toEqual([[["0xabc"]], [[]]]);
+    expect(onChain).toHaveBeenCalledWith(56);
+    stop();
+    expect(removeListener).toHaveBeenCalledTimes(2);
+  });
+  it("distinguishes empty accounts, explicit rejection and provider failure", async () => {
+    const {
+      connectWallet,
+      personalSign,
+      signTypedDataWithWallet,
+      currentChainId,
+      subscribeProviderEvents,
+    } = await import("../src/lib/wallet.js");
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce({ code: 4001 })
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce("failed");
+    use({ request });
+    await expect(connectWallet()).rejects.toThrow("returned no account");
+    await expect(connectWallet()).rejects.toMatchObject({
+      rejectedByUser: true,
+      code: 4001,
+    });
+    await expect(personalSign("m", "a")).rejects.toThrow("offline");
+    await expect(signTypedDataWithWallet({}, "a")).rejects.toThrow("failed");
+    expect(() =>
+      subscribeProviderEvents({ onAccounts: vi.fn(), onChain: vi.fn() })(),
+    ).not.toThrow();
+    selectWallet(null);
+    for (const operation of [
+      () => connectWallet(),
+      () => currentChainId(),
+      () => personalSign("m", "a"),
+      () => signTypedDataWithWallet({}, "a"),
+      () => switchChain(56),
+    ])
+      await expect(operation()).rejects.toThrow("No browser wallet");
+  });
+});
+
+it("requests wallet announcements after subscribing and deduplicates repeated providers", async () => {
+  const { subscribeWallets, hasInjectedWallet } =
+    await import("../src/lib/wallet.js");
+  const events = new Map<string, (event: Event) => void>();
+  const request = vi.fn();
+  const onChange = vi.fn();
+  const removeEventListener = vi.fn();
+  const dispatchEvent = vi.fn(() => {
+    expect(events.has("eip6963:announceProvider")).toBe(true);
+    return true;
+  });
+  vi.stubGlobal("window", {
+    addEventListener: (name: string, handler: (event: Event) => void) =>
+      events.set(name, handler),
+    removeEventListener,
+    dispatchEvent,
+    ethereum: { request },
+  });
+  const stop = subscribeWallets(onChange);
+  const announce = events.get("eip6963:announceProvider")!;
+  announce({ detail: {} } as unknown as Event);
+  for (const name of ["Wallet", "Renamed wallet"])
+    announce({
+      detail: {
+        info: { rdns: "wallet.test", name, icon: "" },
+        provider: { request },
+      },
+    } as unknown as Event);
+  expect(onChange.mock.calls.at(-1)?.[0]).toEqual([
+    {
+      id: "wallet.test",
+      name: "Renamed wallet",
+      icon: null,
+      provider: { request },
+    },
+  ]);
+  expect(hasInjectedWallet()).toBe(true);
+  stop();
+  expect(removeEventListener).toHaveBeenCalledWith(
+    "eip6963:announceProvider",
+    announce,
+  );
+  vi.stubGlobal("window", undefined);
+  expect(() => subscribeWallets(onChange)()).not.toThrow();
+  expect(hasInjectedWallet()).toBe(false);
+});

@@ -54,3 +54,62 @@ describe("worker API client", () => {
     await expect(client.post("/api/v1/anchor", {})).rejects.toThrow(/aborted/);
   });
 });
+
+it("refreshes an expired session once, keeps mutation headers and caches the new token", async () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  let logins = 0,
+    sends = 0;
+  const client = createApiClient(options, (async (input, init = {}) => {
+    const url = String(input);
+    calls.push({ url, init });
+    if (url.endsWith("/nonce"))
+      return Response.json({ nonce: "abcdef123456", statement: "sign in" });
+    if (url.endsWith("/verify"))
+      return Response.json({ sessionToken: `token${++logins}` });
+    return ++sends === 1
+      ? new Response("", { status: 401 })
+      : Response.json({ ok: true });
+  }) as typeof fetch);
+  expect(
+    await client.post("/scan", undefined, {
+      "if-match": '"2"',
+      "idempotency-key": "scan1",
+    }),
+  ).toEqual({ ok: true });
+  await client.post("/scan", {});
+  expect(logins).toBe(2);
+  const targets = calls.filter((c) => c.url.endsWith("/scan"));
+  expect(targets).toHaveLength(3);
+  expect(targets[1]!.init.headers).toMatchObject({
+    authorization: "Bearer token2",
+    "if-match": '"2"',
+    "idempotency-key": "scan1",
+  });
+  expect(targets[0]!.init.body).toBe("{}");
+});
+it.each(["nonce", "verify", "target"])(
+  "preserves %s authentication or request failures",
+  async (stage) => {
+    const client = createApiClient(options, (async (input) => {
+      const url = String(input);
+      if (url.endsWith("/nonce"))
+        return stage === "nonce"
+          ? new Response("", { status: 503 })
+          : Response.json({ nonce: "abcdef123456", statement: "sign in" });
+      if (url.endsWith("/verify"))
+        return stage === "verify"
+          ? Response.json({}, { status: 403 })
+          : Response.json({ sessionToken: "token" });
+      return new Response("not json", { status: 500 });
+    }) as typeof fetch);
+    await expect(client.post("/scan", {})).rejects.toMatchObject({
+      code:
+        stage === "nonce"
+          ? "SIWE_NONCE_FAILED"
+          : stage === "verify"
+            ? "SIWE_VERIFY_FAILED"
+            : "UNKNOWN",
+      status: stage === "nonce" ? 503 : stage === "verify" ? 403 : 500,
+    });
+  },
+);

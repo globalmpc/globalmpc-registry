@@ -27,6 +27,10 @@ export async function connectAs(page: Page, label: string): Promise<void> {
 
   await card.click();
 
+  // The session state can render before the card handler finishes router.push().
+  // Let that navigation finish before the caller opens its target screen.
+  await expect(page).toHaveURL(/\/w\/projects$/);
+
   // The top bar is the only place that reflects the active session. Other screens may also
   // render a wallet address, so the check is scoped to the header.
   const topBar = page.locator("header.topbar");

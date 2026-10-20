@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Concurrent edit E2E — 07 §7.1.
@@ -17,11 +18,7 @@ test.describe("concurrent edits", () => {
     // --- Setup: project and claim ----------------------------------------
     const operator = await browser.newContext();
     const operatorPage = await operator.newPage();
-    await operatorPage.goto("/connect");
-    await operatorPage.getByRole("button", { name: /Operator A/ }).click();
-    // The token exists only after SIWE signing and verification finish. Without waiting,
-    // the next screen renders without a session.
-    await expect(operatorPage.getByRole("button", { name: "Disconnect" })).toBeVisible();
+    await connectAs(operatorPage, "Operator A");
     await operatorPage.goto("/w/projects/new");
     await operatorPage.getByRole("textbox", { name: "Project key" }).fill(projectKey);
     await operatorPage.getByRole("textbox", { name: "Name" }).fill("For the concurrent edit check");
@@ -40,18 +37,14 @@ test.describe("concurrent edits", () => {
     // not permissions, so both windows use the same role.
     const first = await browser.newContext();
     const firstPage = await first.newPage();
-    await firstPage.goto("/connect");
-    await firstPage.getByRole("button", { name: /Steward A/ }).click();
-    await expect(firstPage.getByRole("button", { name: "Disconnect" })).toBeVisible();
+    await connectAs(firstPage, "Steward A");
     await firstPage.goto(`/w/projects/${projectId}/data-room`);
     await firstPage.getByRole("button", { name: "Add a mining right claim" }).click();
     await expect(firstPage.getByText("mining_right_registration")).toBeVisible();
 
     const second = await browser.newContext();
     const secondPage = await second.newPage();
-    await secondPage.goto("/connect");
-    await secondPage.getByRole("button", { name: /Steward A/ }).click();
-    await expect(secondPage.getByRole("button", { name: "Disconnect" })).toBeVisible();
+    await connectAs(secondPage, "Steward A");
     await secondPage.goto(`/w/projects/${projectId}/data-room`);
     // Both windows see the same v1.
     await expect(secondPage.getByText("v1")).toBeVisible();
