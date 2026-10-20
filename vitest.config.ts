@@ -24,7 +24,7 @@ export default defineConfig(({ mode }) => {
         provider: "v8",
         reportsDirectory: "coverage/app",
         reporter: ["text-summary", "lcov", "json-summary"],
-        thresholds: { lines: 80 },
+        thresholds: { lines: 90 },
         // Include untested first-party sources, including routes and React screens.
         include: ["apps/*/src/**/*.{ts,tsx}", "packages/*/src/**/*.{ts,tsx}"],
         exclude: ["**/*.d.ts", "**/*.test.*", "**/*.spec.*", "**/node_modules/**"],

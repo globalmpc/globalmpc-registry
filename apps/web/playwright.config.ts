@@ -183,6 +183,9 @@ export default defineConfig({
       reuseExistingServer: !process.env["CI"],
       timeout: 120_000,
       env: {
+        // Webpack's dev server retains compiled routes throughout the browser suite.
+        // Bound its heap so it collects before starving Chromium/API on shared CI hosts.
+        NODE_OPTIONS: `${process.env["NODE_OPTIONS"] ?? ""} --max-old-space-size=1536`.trim(),
         // E2E logs in with demo accounts. Without this value the login screen has no
         // accounts and every spec stops at the first step. Deployment builds do not provide this value,
         // so no demo accounts exist there.

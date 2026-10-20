@@ -297,3 +297,63 @@ describe("Data Room evidence and source workflows", () => {
     );
   });
 });
+
+it("adds an unreviewed claim, records a versioned conflict, and preserves failures for retry", async () => {
+  const data = routes();
+  let claimAdded = false,
+    failed = false;
+  data[`GET ${root}/claims`] = () => ({
+    items: claimAdded
+      ? [
+          {
+            id: "c1",
+            claimType: "mining_right_registration",
+            valueText: "MV-123",
+            unit: "license",
+            evidenceTier: "P1",
+            verificationState: "unreviewed",
+            grade: "unverified",
+            version: 2,
+          },
+        ]
+      : [],
+    truncated: false,
+  });
+  data[`POST ${root}/claims`] = () => {
+    if (failed) throw new Error("Claim rejected");
+    claimAdded = true;
+    return {};
+  };
+  data["POST /api/v1/claims/c1/conflicts"] = () => {
+    if (failed) throw new Error("Conflict rejected");
+    return {};
+  };
+  const calls = mockHttp(data);
+  await mount();
+  fireEvent.click(screen.getByText("Add a mining right claim"));
+  await screen.findByTestId("conflict-c1");
+  expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({
+    claimType: "mining_right_registration",
+    evidenceTier: "P1",
+  });
+  expect(calls.find((c) => c.method === "POST")?.body).not.toHaveProperty(
+    "verificationState",
+  );
+  fireEvent.click(screen.getByTestId("conflict-c1"));
+  await waitFor(() =>
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(2),
+  );
+  expect(
+    calls.find((c) => c.url.endsWith("/conflicts"))?.headers.get("if-match"),
+  ).toBe('"2"');
+  await waitFor(() =>
+    expect(screen.getByTestId("conflict-c1").hasAttribute("disabled")).toBe(
+      false,
+    ),
+  );
+  failed = true;
+  fireEvent.click(screen.getByTestId("conflict-c1"));
+  await screen.findByText("Conflict rejected");
+  fireEvent.click(screen.getByText("Add a mining right claim"));
+  await screen.findByText("Claim rejected");
+});

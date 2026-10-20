@@ -3,7 +3,7 @@ coverage:
   status:
     project:
       app:
-        target: 80%
+        target: 90%
         flags:
           - app
     patch: off
