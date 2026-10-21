@@ -30,12 +30,12 @@ Every change receives a security assessment proportional to its affected attack 
 - Parallelize independent code reviews. Forward concrete reproduction hypotheses promptly while other review continues.
 - Assign one owner per shared browser session; reuse healthy servers/sessions and existing role fixtures. Isolate accounts, data, and ports when parallelism would otherwise collide.
 - Reuse the existing Playwright seed/configuration and tests. Add meaningful regression coverage for behavior changes, prioritizing repeated critical journeys and security boundaries over tests that merely mirror implementation.
-- Do not parallelize destructive DB suites or reset shared seed data beneath active tests/workers. Respect the existing CI ordering, worker limits, and resource budgets documented in `.github/CI.md`.
+- Do not parallelize destructive DB suites or reset shared seed data beneath active tests/workers. Respect the existing CI ordering, worker limits, and resource budgets documented in `docs/ci.md`.
 - Run focused checks first, then the required broader checks once. Repeat when fixes or new evidence justify it.
 
 ## Quality tools and evidence
 
-Use `.github/CI.md`, workflow files, package scripts, `vitest.config.ts`, and `codecov.yml` as the maintained sources of commands and thresholds. Do not duplicate the complete CI setup here.
+Use `docs/ci.md`, workflow files, package scripts, `vitest.config.ts`, and `codecov.yml` as the maintained sources of commands and thresholds. Do not duplicate the complete CI setup here.
 
 | Signal | Review requirement |
 | --- | --- |
