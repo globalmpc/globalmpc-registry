@@ -41,7 +41,7 @@ Use `docs/ci.md`, workflow files, package scripts, `vitest.config.ts`, and `code
 | --- | --- |
 | CodeFactor | Examine available findings for the changed revision, including complexity, duplication, and maintainability. Preserve behavior during refactoring; keep unrelated cleanup separate. Do not invent an unconfigured grade threshold. |
 | Vitest / Codecov | Preserve the configured 90% aggregate application line-coverage floor and full first-party source denominator. Inspect meaningful assertions and skipped tests. Keep app and contract coverage claims separate. |
-| CodeQL | Inspect actual SARIF/alerts, including relevant warnings. The private gate fails on error-level findings; a successful analysis job does not establish absence of vulnerabilities. |
+| CodeQL | Inspect actual SARIF/alerts, including relevant warnings. Apply the configured finding gates where present; a successful analysis job does not establish absence of vulnerabilities. |
 | Dependency audit | Preserve the production dependency audit at high severity and assess relevant dependency/lockfile changes. |
 | Playwright / DB integration | Verify affected real journeys, server-side access boundaries, and persistence. A green run with missing DB execution is insufficient evidence. |
 | Foundry | For relevant contract changes, run the configured build, tests, fuzz and invariant checks; inspect coverage where applicable. |
@@ -50,7 +50,7 @@ Use `docs/ci.md`, workflow files, package scripts, `vitest.config.ts`, and `code
 
 Never improve scores by lowering thresholds, excluding production code, suppressing findings without justification, skipping failing tests, or removing meaningful assertions. A legitimate scope change or false-positive suppression needs an explicit rationale and impact assessment. Do not add arbitrary score targets.
 
-For external results, verify repository, commit SHA, scope, and measurement time. Public mirror badges/results do not establish the status of the current private revision. Historical scores in documentation are historical evidence. If a service has not analyzed this revision or cannot be accessed, report it as pending/unavailable rather than passed. Inspect published results when publishing/synchronization is within the authorized task scope.
+For external results, verify repository, commit SHA, scope, and measurement time. Results for a different revision do not establish the status of the reviewed change. Historical scores are historical evidence. If a service has not analyzed this revision or cannot be accessed, report it as pending/unavailable rather than passed. Inspect published results when publication is within the authorized task scope.
 
 ## Findings and completion
 
