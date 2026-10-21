@@ -4,7 +4,7 @@
 
 - User journeys and security are joint highest priorities. Applicable configured quality checks are additional completion criteria, never substitutes for these reviews. External scores must be reported with their revision and availability, not assumed to pass.
 - Before implementation, read `CONTRIBUTING.md` and the applicable nested `AGENTS.md` files. Before reviewing changes, read and apply `docs/review-guidelines.md`.
-- Use `.github/CI.md` and the actual workflow/package configuration for verification commands and scope. Preserve the repository invariants in `CONTRIBUTING.md` and `README.md`.
+- Use `docs/ci.md` and the actual workflow/package configuration for verification commands and scope. Preserve the repository invariants in `CONTRIBUTING.md` and `README.md`.
 
 ## Work allocation
 
