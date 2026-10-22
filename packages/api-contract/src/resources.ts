@@ -1711,6 +1711,7 @@ export const REGISTRY_KINDS = [
   "attestation_schema",
   "policy_set",
   "jurisdiction_profile",
+  "claim_type",
 ] as const;
 
 /** Blank is not a reason. The DB rejects it too; this says so before the insert fails. */
@@ -1805,6 +1806,59 @@ export const proposeJurisdictionProfileRequest = z.object({
   environmentalRequirementBasis: nonBlank(200).nullable(),
   effectiveFrom: isoDateTime,
   rationale: nonBlank(2000),
+});
+
+/** Bounded declarative fields only: no executable expressions or external schema references. */
+export const claimTypeDefinition = z.object({
+  fields: z.array(z.object({
+    key: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/),
+    label: z.string().trim().min(1).max(200),
+    type: z.enum(["string", "number", "boolean", "date"]),
+    required: z.boolean(),
+  }).strict()).min(1).max(50),
+}).strict().refine((value) => new Set(value.fields.map((field) => field.key)).size === value.fields.length, {
+  message: "Field keys must be unique",
+});
+
+/** Catalog dates round-trip through JavaScript/DB without normalizing invalid dates or losing precision. */
+const catalogEffectiveFrom = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/)
+  .refine((value) => {
+    const date = new Date(value);
+    if (value.startsWith("0000-") || !Number.isFinite(date.getTime())) return false;
+    const normalized = value.replace(/(?:\.(\d{1,3}))?Z$/, (_match, fraction: string | undefined) =>
+      `.${(fraction ?? "").padEnd(3, "0")}Z`);
+    return date.toISOString() === normalized;
+  }, "Must be a real UTC instant with at most millisecond precision");
+
+export const proposeClaimTypeRequest = z.object({
+  claimType: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/),
+  displayName: z.string().trim().min(1).max(200),
+  description: z.string().trim().min(1).max(2000).nullable().default(null),
+  definition: claimTypeDefinition,
+  effectiveFrom: catalogEffectiveFrom,
+  rationale: nonBlank(2000),
+}).strict();
+
+export const claimTypeCatalogQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/).optional(),
+}).strict();
+
+export const claimTypeCatalogEntry = z.object({
+  id: z.string().uuid(),
+  claimType: z.string(),
+  catalogVersion: z.number().int().positive(),
+  displayName: z.string(),
+  description: z.string().nullable(),
+  definition: claimTypeDefinition,
+  effectiveFrom: isoDateTime,
+  createdAt: isoDateTime,
+});
+
+export const claimTypeCatalogList = z.object({
+  items: z.array(claimTypeCatalogEntry),
+  nextCursor: z.string().nullable(),
 });
 
 /** Approve or reject. Rejected if the decider is the proposer — the DB blocks this too. */

@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { ROUTES } from "@mpc/api-contract";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
@@ -124,6 +126,120 @@ describeDb("review registry proposals", () => {
   function get(token: string, url: string) {
     return app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
   }
+
+  function catalogBody(overrides: Record<string, unknown> = {}) {
+    return { claimType: `catalog_${randomUUID().replaceAll("-", "")}`, displayName: "Mining licence",
+      description: "Evidence fields", definition: { fields: [{ key: "number", label: "Number", type: "string", required: true }] },
+      effectiveFrom: "2026-01-01T00:00:00Z", rationale: "Define evidence fields", ...overrides };
+  }
+  const catalogBase = `${BASE}/claim-types/proposals`;
+  it("catalog requires independent approval, preserves versions and isolates tenants", async () => {
+    const body = catalogBody();
+    const proposed = await post(dualToken, catalogBase, body);
+    expect(proposed.statusCode).toBe(200);
+    const proposal = proposed.json<Proposal>();
+    const proposalList = await get(operatorToken, catalogBase);
+    expect(proposalList.statusCode).toBe(200);
+    const listSchema = ROUTES.find((route) => route.operationId === "listClaimTypeProposals")!.responseSchema!;
+    expect(listSchema.parse(proposalList.json()).items.some((item: Proposal) => item.id === proposal.id)).toBe(true);
+    expect((await get(stewardToken, `/api/v1/claim-types/${body.claimType}/versions/1`)).statusCode).toBe(404);
+    expect((await post(dualToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Checked" }, 1)).statusCode).toBe(422);
+    const approved = await post(approverToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Checked" }, 1);
+    expect(approved.statusCode).toBe(200);
+    const duplicateDecisions = await Promise.all([
+      post(approverToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Concurrent replay" }, 1),
+      post(approverToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Concurrent replay" }, 1),
+    ]);
+    expect(duplicateDecisions.map((result) => result.statusCode)).toEqual([412, 412]);
+    const first = await get(stewardToken, `/api/v1/claim-types/${body.claimType}/versions/1`);
+    expect(first.statusCode).toBe(200);
+    const detailSchema = ROUTES.find((route) => route.operationId === "getClaimTypeVersion")!.responseSchema!;
+    expect(detailSchema).toBeInstanceOf(z.ZodObject);
+    const parsedDetail = (detailSchema as z.ZodObject<z.ZodRawShape>).strict().parse(first.json());
+    expect(parsedDetail).toMatchObject({ requestId: first.json().requestId, asOf: first.json().asOf });
+    expect(Object.keys(first.json()).every((key) => key in parsedDetail)).toBe(true);
+    expect(first.json()).toMatchObject({ claimType: body.claimType, catalogVersion: 1, definition: body.definition });
+    expect((await get(operatorBToken, `/api/v1/claim-types/${body.claimType}/versions/1`)).statusCode).toBe(404);
+    expect((await get(stewardToken, catalogBase)).statusCode).toBe(403);
+    expect((await post(operatorToken, catalogBase, { ...body, effectiveFrom: "2025-01-01T00:00:00Z" })).statusCode).toBe(422);
+    const next = await post(operatorToken, catalogBase, { ...body, displayName: "Revised licence" });
+    expect(next.statusCode).toBe(200);
+    expect((await post(approverToken, `${catalogBase}/${next.json<Proposal>().id}/decision`, { decision: "approve", reason: "Reviewed revision" }, 1)).statusCode).toBe(200);
+    const list = (await get(stewardToken, "/api/v1/claim-types")).json<{ items: { claimType: string; catalogVersion: number }[] }>();
+    const page = await get(stewardToken, "/api/v1/claim-types?limit=1");
+    expect(page.statusCode).toBe(200);
+    const catalogListSchema = ROUTES.find((route) => route.operationId === "listClaimTypes")!.responseSchema!;
+    expect(catalogListSchema).toBeInstanceOf(z.ZodObject);
+    const parsedPage = (catalogListSchema as z.ZodObject<z.ZodRawShape>).strict().parse(page.json());
+    expect(parsedPage).toMatchObject({ requestId: page.json().requestId, asOf: page.json().asOf });
+    expect(Object.keys(page.json()).every((key) => key in parsedPage)).toBe(true);
+    expect(page.json().items).toHaveLength(1);
+    expect((await get(stewardToken, "/api/v1/claim-types?limit=101")).statusCode).toBe(400);
+    expect(list.items.find((entry) => entry.claimType === body.claimType)?.catalogVersion).toBe(2);
+    expect((await get(stewardToken, `/api/v1/claim-types/${body.claimType}/versions/1`)).json().displayName).toBe(body.displayName);
+    expect((await post(approverToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Replay" }, 2)).statusCode).toBe(422);
+  });
+
+  it("serializes concurrent catalog proposals and decisions and paginates without tenant leakage", async () => {
+    const body = catalogBody();
+    const attempts = await Promise.all([post(operatorToken, catalogBase, body), post(operatorToken, catalogBase, body)]);
+    expect(attempts.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    const proposal = attempts.find((response) => response.statusCode === 200)!.json<Proposal>();
+    const decisions = await Promise.all([
+      post(approverToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Reviewed" }, 1),
+      post(approverToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Reviewed" }, 1),
+    ]);
+    expect(decisions.map((response) => response.statusCode).sort()).toEqual([200, 412]);
+    const [count] = await fx.sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM core.claim_types WHERE tenant_id = ${fx.tenantA} AND claim_type = ${body.claimType}`;
+    expect(count!.count).toBe(1);
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const response = await get(stewardToken, `/api/v1/claim-types?limit=1${cursor ? `&cursor=${cursor}` : ""}`);
+      expect(response.statusCode).toBe(200);
+      const page = response.json<{ items: { claimType: string }[]; nextCursor: string | null }>();
+      seen.push(...page.items.map((item) => item.claimType));
+      cursor = page.nextCursor;
+      expect(seen.length).toBeLessThan(20);
+    } while (cursor);
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen).toContain(body.claimType);
+    const other = (await get(operatorBToken, "/api/v1/claim-types")).json<{ items: { claimType: string }[] }>();
+    expect(other.items.some((item) => seen.includes(item.claimType))).toBe(false);
+  });
+
+  it("future catalog versions and rejected proposals are absent from reader catalog", async () => {
+    const body = catalogBody({ effectiveFrom: "2099-01-01T00:00:00Z" });
+    const proposal = await post(operatorToken, catalogBase, body);
+    expect(proposal.statusCode).toBe(200);
+    expect((await post(approverToken, `${catalogBase}/${proposal.json<Proposal>().id}/decision`, { decision: "approve", reason: "Future definition" }, 1)).statusCode).toBe(200);
+    expect((await get(stewardToken, `/api/v1/claim-types/${body.claimType}/versions/1`)).statusCode).toBe(404);
+    const rejected = await post(operatorToken, catalogBase, catalogBody());
+    expect((await post(approverToken, `${catalogBase}/${rejected.json<Proposal>().id}/decision`, { decision: "reject", reason: "Not ready" }, 1)).statusCode).toBe(200);
+    const list = (await get(stewardToken, "/api/v1/claim-types")).json<{ items: { claimType: string }[] }>();
+    expect(list.items.some((entry) => entry.claimType === body.claimType)).toBe(false);
+  });
+
+  it("rejects invalid catalog calendar dates before persistence", async () => {
+    for (const effectiveFrom of ["0000-01-01T00:00:00Z", "2026-02-31T00:00:00Z", "2026-02-29T00:00:00Z", "2026-13-01T00:00:00Z", "2026-01-01T24:00:00Z", "2026-01-01T00:00:00.1234Z"]) {
+      const body = catalogBody({ effectiveFrom });
+      expect((await post(operatorToken, catalogBase, body)).statusCode).toBe(400);
+      const [count] = await fx.sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM core.registry_proposals WHERE tenant_id = ${fx.tenantA} AND item_key = ${body.claimType}`;
+      expect(count!.count).toBe(0);
+    }
+  });
+
+  it("catalog rejects anonymous, unauthorized and malformed writes", async () => {
+    expect((await app.inject({ method: "GET", url: "/api/v1/claim-types" })).statusCode).toBe(401);
+    expect((await post(stewardToken, catalogBase, catalogBody())).statusCode).toBe(403);
+    for (const definition of [
+      { fields: [] },
+      { fields: [{ key: "number", label: "Number", type: "script", required: true }] },
+      { fields: [{ key: "number", label: "Number", type: "string", required: true }], $ref: "https://invalid" },
+      { fields: Array(2).fill({ key: "number", label: "Number", type: "string", required: true }) },
+    ]) expect((await post(operatorToken, catalogBase, catalogBody({ definition }))).statusCode).toBe(400);
+  });
 
   function ruleSet(overrides: Record<string, unknown> = {}) {
     return { ...rulesFixture, ruleSetId: `api-${randomUUID().slice(0, 8)}`, ...overrides };

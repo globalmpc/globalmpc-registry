@@ -5,6 +5,8 @@ import { z } from "zod";
 import { withTenant } from "@mpc/db";
 import {
   decideRegistryProposalRequest,
+  proposeClaimTypeRequest,
+  claimTypeCatalogQuery,
   proposeAttestationSchemaRequest,
   proposeCredentialRequest,
   proposeJurisdictionProfileRequest,
@@ -117,6 +119,7 @@ interface Prepared<Stored> {
 /** Request facts a registry row's side effects (events) carry. */
 interface MaterializeContext {
   readonly correlationId: string;
+  readonly effectiveFrom: Date;
 }
 
 /**
@@ -361,6 +364,91 @@ const JURISDICTION_PROFILE: KindSpec<
   },
 };
 
+// Claim types are definitions only; approval never changes existing claims or assessments.
+const storedClaimType = proposeClaimTypeRequest.omit({ rationale: true, effectiveFrom: true });
+type StoredClaimType = z.infer<typeof storedClaimType>;
+async function validateCatalogDate(tx: Tx, tenantId: string, claimType: string, effectiveFrom: Date): Promise<Validated<true>> {
+  const [latest] = await tx<{ effective_from: Date }[]>`
+    SELECT effective_from FROM core.claim_types WHERE tenant_id = ${tenantId} AND claim_type = ${claimType}
+    ORDER BY catalog_version DESC LIMIT 1
+  `;
+  if (latest && effectiveFrom < latest.effective_from) {
+    return { ok: false, code: "CLAIM_TYPE_EFFECTIVE_DATE", message: "Effective date cannot precede the previous approved version" };
+  }
+  return { ok: true, value: true };
+}
+const CLAIM_TYPE: KindSpec<z.infer<typeof proposeClaimTypeRequest>, StoredClaimType> = {
+  kind: "claim_type", segment: "claim-types", resourceType: "claim_type",
+  requestSchema: proposeClaimTypeRequest, storedSchema: storedClaimType,
+  async prepare(tx, tenantId, body) {
+    const checked = await validateCatalogDate(tx, tenantId, body.claimType, new Date(body.effectiveFrom));
+    if (!checked.ok) return checked;
+    const { rationale: _rationale, effectiveFrom, ...payload } = body;
+    return { ok: true, value: { itemKey: body.claimType, effectiveFrom: new Date(effectiveFrom), payload } };
+  },
+  async findExisting() { return null; },
+  async materialize(tx, tenantId, id, stored, _now, context) {
+    const checked = await validateCatalogDate(tx, tenantId, stored.claimType, context.effectiveFrom);
+    if (!checked.ok) return checked;
+    const [latest] = await tx<{ version: number }[]>`
+      SELECT COALESCE(max(catalog_version), 0)::integer AS version FROM core.claim_types
+      WHERE tenant_id = ${tenantId} AND claim_type = ${stored.claimType}
+    `;
+    await tx`
+      INSERT INTO core.claim_types
+        (id, tenant_id, claim_type, catalog_version, display_name, description, definition, effective_from)
+      VALUES (${id}, ${tenantId}, ${stored.claimType}, ${latest!.version + 1}, ${stored.displayName},
+        ${stored.description}, ${tx.json(stored.definition)}, ${context.effectiveFrom})
+    `;
+    return { ok: true, value: true };
+  },
+};
+
+interface CatalogRow {
+  id: string; claim_type: string; catalog_version: number; display_name: string;
+  description: string | null; definition: unknown; effective_from: Date; created_at: Date;
+}
+function toCatalog(row: CatalogRow) {
+  return { id: row.id, claimType: row.claim_type, catalogVersion: row.catalog_version,
+    displayName: row.display_name, description: row.description, definition: row.definition,
+    effectiveFrom: row.effective_from.toISOString(), createdAt: row.created_at.toISOString() };
+}
+function registerCatalogReads(app: FastifyInstance, sql: postgres.Sql): void {
+  function context(request: FastifyRequest) {
+    const result = requireReadContext(request);
+    assertAuthorized(result.session, "registry.read", tenantResource(result.tenantId), sessionFacts(result.session));
+    return result;
+  }
+  app.get("/api/v1/claim-types", async (request) => {
+    const { tenantId } = context(request);
+    const { requestId, asOf } = request.context;
+    const { limit, cursor } = parseBody(claimTypeCatalogQuery, request.query);
+    const rows = await withTenant(sql, { tenantId }, (tx) => tx<CatalogRow[]>`
+      SELECT DISTINCT ON (claim_type) * FROM core.claim_types
+      WHERE tenant_id = ${tenantId} AND effective_from <= ${new Date(asOf)}
+        AND claim_type > ${cursor ?? ""}
+      ORDER BY claim_type, catalog_version DESC LIMIT ${limit + 1}
+    `);
+    const page = rows.slice(0, limit);
+    return { items: page.map(toCatalog), nextCursor: rows.length > limit ? page.at(-1)!.claim_type : null, requestId, asOf };
+  });
+  app.get<{ Params: { claimType: string; catalogVersion: string } }>(
+    "/api/v1/claim-types/:claimType/versions/:catalogVersion", async (request) => {
+      const { tenantId } = context(request);
+      const { requestId, asOf } = request.context;
+      const { claimType, catalogVersion } = request.params;
+      if (!/^[a-z][a-z0-9_]{0,99}$/.test(claimType) || !/^[1-9][0-9]{0,8}$/.test(catalogVersion)) {
+        throw notFound("Claim type version not found");
+      }
+      const [row] = await withTenant(sql, { tenantId }, (tx) => tx<CatalogRow[]>`
+        SELECT * FROM core.claim_types WHERE tenant_id = ${tenantId} AND claim_type = ${claimType}
+          AND catalog_version = ${Number(catalogVersion)} AND effective_from <= ${new Date(asOf)}
+      `);
+      if (!row) throw notFound("Claim type version not found");
+      return { ...toCatalog(row), requestId, asOf };
+    });
+}
+
 // --- routes -----------------------------------------------------------------
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -599,6 +687,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
           const materializedId = approved
             ? await materializeApproved(tx, tenantId, spec, stored, decider, new Date(asOf), {
                 correlationId,
+                effectiveFrom: proposal.effective_from,
               })
             : null;
 
@@ -709,6 +798,8 @@ export async function registerReviewRegistryRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
 ): Promise<void> {
+  registerKind(app, sql, CLAIM_TYPE);
+  registerCatalogReads(app, sql);
   registerKind(app, sql, CREDENTIAL);
   registerKind(app, sql, ATTESTATION_SCHEMA);
   registerKind(app, sql, POLICY_SET);
