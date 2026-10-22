@@ -84,6 +84,8 @@ export const ROUTE_LAYER_RULES: readonly { readonly pattern: string; readonly la
   { pattern: "/api/v1/projects/{projectId}/source-receipts", layer: "data_oracle" },
   { pattern: "/api/v1/projects/{projectId}/claims", layer: "data_oracle" },
   { pattern: "/api/v1/claims/**", layer: "data_oracle" },
+  { pattern: "/api/v1/claim-types/**", layer: "data_oracle" },
+  { pattern: "/api/v1/review-registry/claim-types/**", layer: "data_oracle" },
   { pattern: "/api/v1/projects/{projectId}/stale-signals", layer: "data_oracle" },
   { pattern: "/api/v1/stale-signals/**", layer: "data_oracle" },
   { pattern: "/api/v1/jurisdictions/**", layer: "data_oracle" },

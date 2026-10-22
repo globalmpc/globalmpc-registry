@@ -1,3 +1,5 @@
+import { responseMeta } from "./common.js";
+import { proposeClaimTypeRequest, claimTypeCatalogEntry, claimTypeCatalogQuery, claimTypeCatalogList } from "./resources.js";
 import { z } from "zod";
 import { RESTRICTION_ROUTES } from "./restrictions.js";
 import {
@@ -1671,6 +1673,19 @@ export const ROUTES: readonly RouteDefinition[] = [
   },
 
   // --- Review registries (02 §2.8) ---------------------------------------------------------
+  ...reviewRegistryRoutes("claim-types", "ClaimType", "claim type", proposeClaimTypeRequest,
+    responseMeta.extend({ items: registryProposal.array() })),
+  {
+    method: "get", path: "/api/v1/claim-types", summary: "List latest effective approved claim types",
+    operationId: "listClaimTypes", public: false, implemented: true, mutation: false,
+    requiresIfMatch: false, action: "registry.read", querySchema: claimTypeCatalogQuery, responseSchema: claimTypeCatalogList.merge(responseMeta),
+  },
+  {
+    method: "get", path: "/api/v1/claim-types/{claimType}/versions/{catalogVersion}",
+    summary: "Get an effective approved claim type version",
+    operationId: "getClaimTypeVersion", public: false, implemented: true, mutation: false,
+    requiresIfMatch: false, action: "registry.read", responseSchema: claimTypeCatalogEntry.merge(responseMeta),
+  },
   ...reviewRegistryRoutes("credentials", "Credential", "credential", proposeCredentialRequest),
   ...reviewRegistryRoutes(
     "attestation-schemas",
@@ -1877,6 +1892,7 @@ function reviewRegistryRoutes(
   noun: string,
   label: string,
   requestSchema: z.ZodTypeAny,
+  listResponseSchema: z.ZodTypeAny = registryProposal.array(),
 ): RouteDefinition[] {
   const base = `/api/v1/review-registry/${segment}/proposals`;
   const shared = { public: false, implemented: true } as const;
@@ -1890,7 +1906,7 @@ function reviewRegistryRoutes(
       mutation: false,
       requiresIfMatch: false,
       action: "review_registry.read",
-      responseSchema: registryProposal.array(),
+      responseSchema: listResponseSchema,
     },
     {
       ...shared,

@@ -63493,6 +63493,2715 @@
         }
       }
     },
+    "/api/v1/review-registry/claim-types/proposals": {
+      "get": {
+        "operationId": "listClaimTypeProposals",
+        "summary": "List claim type proposals — pending and decided",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/listClaimTypeProposalsResponse",
+                  "definitions": {
+                    "listClaimTypeProposalsResponse": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "resourceVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "asOf": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "credential",
+                                  "attestation_schema",
+                                  "policy_set",
+                                  "jurisdiction_profile",
+                                  "claim_type"
+                                ]
+                              },
+                              "itemKey": {
+                                "type": "string"
+                              },
+                              "itemVersion": {
+                                "type": "integer",
+                                "exclusiveMinimum": true,
+                                "minimum": 0
+                              },
+                              "payload": {
+                                "type": "object",
+                                "additionalProperties": {}
+                              },
+                              "rationale": {
+                                "type": "string"
+                              },
+                              "effectiveFrom": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              },
+                              "proposedBySubjectId": {
+                                "type": "string"
+                              },
+                              "proposedAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "pending",
+                                  "approved",
+                                  "rejected"
+                                ]
+                              },
+                              "decidedBySubjectId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "decidedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "decisionReason": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "materializedId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "version": {
+                                "type": "integer",
+                                "exclusiveMinimum": true,
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "itemKey",
+                              "itemVersion",
+                              "payload",
+                              "rationale",
+                              "effectiveFrom",
+                              "proposedBySubjectId",
+                              "proposedAt",
+                              "state",
+                              "decidedBySubjectId",
+                              "decidedAt",
+                              "decisionReason",
+                              "materializedId",
+                              "version"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "requestId",
+                        "asOf",
+                        "items"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "review_registry.read",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "proposeClaimType",
+        "summary": "Propose a claim type — nothing is created until another person approves",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/proposeClaimTypeResponse",
+                  "definitions": {
+                    "proposeClaimTypeResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "credential",
+                            "attestation_schema",
+                            "policy_set",
+                            "jurisdiction_profile",
+                            "claim_type"
+                          ]
+                        },
+                        "itemKey": {
+                          "type": "string"
+                        },
+                        "itemVersion": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        },
+                        "payload": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "rationale": {
+                          "type": "string"
+                        },
+                        "effectiveFrom": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "proposedBySubjectId": {
+                          "type": "string"
+                        },
+                        "proposedAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "approved",
+                            "rejected"
+                          ]
+                        },
+                        "decidedBySubjectId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "decidedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "decisionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "materializedId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "version": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "itemKey",
+                        "itemVersion",
+                        "payload",
+                        "rationale",
+                        "effectiveFrom",
+                        "proposedBySubjectId",
+                        "proposedAt",
+                        "state",
+                        "decidedBySubjectId",
+                        "decidedAt",
+                        "decisionReason",
+                        "materializedId",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "review_registry.propose",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/proposeClaimTypeRequest",
+                "definitions": {
+                  "proposeClaimTypeRequest": {
+                    "type": "object",
+                    "properties": {
+                      "claimType": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]{0,99}$"
+                      },
+                      "displayName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "description": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null
+                      },
+                      "definition": {
+                        "type": "object",
+                        "properties": {
+                          "fields": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]{0,99}$"
+                                },
+                                "label": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "string",
+                                    "number",
+                                    "boolean",
+                                    "date"
+                                  ]
+                                },
+                                "required": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "label",
+                                "type",
+                                "required"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "minItems": 1,
+                            "maxItems": 50
+                          }
+                        },
+                        "required": [
+                          "fields"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "effectiveFrom": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$"
+                      },
+                      "rationale": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000
+                      }
+                    },
+                    "required": [
+                      "claimType",
+                      "displayName",
+                      "definition",
+                      "effectiveFrom",
+                      "rationale"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/review-registry/claim-types/proposals/{proposalId}": {
+      "get": {
+        "operationId": "getClaimTypeProposal",
+        "summary": "Get one claim type proposal",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "proposalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/getClaimTypeProposalResponse",
+                  "definitions": {
+                    "getClaimTypeProposalResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "credential",
+                            "attestation_schema",
+                            "policy_set",
+                            "jurisdiction_profile",
+                            "claim_type"
+                          ]
+                        },
+                        "itemKey": {
+                          "type": "string"
+                        },
+                        "itemVersion": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        },
+                        "payload": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "rationale": {
+                          "type": "string"
+                        },
+                        "effectiveFrom": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "proposedBySubjectId": {
+                          "type": "string"
+                        },
+                        "proposedAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "approved",
+                            "rejected"
+                          ]
+                        },
+                        "decidedBySubjectId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "decidedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "decisionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "materializedId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "version": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "itemKey",
+                        "itemVersion",
+                        "payload",
+                        "rationale",
+                        "effectiveFrom",
+                        "proposedBySubjectId",
+                        "proposedAt",
+                        "state",
+                        "decidedBySubjectId",
+                        "decidedAt",
+                        "decisionReason",
+                        "materializedId",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "review_registry.read",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/review-registry/claim-types/proposals/{proposalId}/decision": {
+      "post": {
+        "operationId": "decideClaimTypeProposal",
+        "summary": "Approve or reject a claim type proposal — not by the proposer",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "proposalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Expected version of the versioned resource. Format: `\"3\"` (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/decideClaimTypeProposalResponse",
+                  "definitions": {
+                    "decideClaimTypeProposalResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "credential",
+                            "attestation_schema",
+                            "policy_set",
+                            "jurisdiction_profile",
+                            "claim_type"
+                          ]
+                        },
+                        "itemKey": {
+                          "type": "string"
+                        },
+                        "itemVersion": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        },
+                        "payload": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "rationale": {
+                          "type": "string"
+                        },
+                        "effectiveFrom": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "proposedBySubjectId": {
+                          "type": "string"
+                        },
+                        "proposedAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "approved",
+                            "rejected"
+                          ]
+                        },
+                        "decidedBySubjectId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "decidedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "decisionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "materializedId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "version": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "itemKey",
+                        "itemVersion",
+                        "payload",
+                        "rationale",
+                        "effectiveFrom",
+                        "proposedBySubjectId",
+                        "proposedAt",
+                        "state",
+                        "decidedBySubjectId",
+                        "decidedAt",
+                        "decisionReason",
+                        "materializedId",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "review_registry.approve",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/decideClaimTypeProposalRequest",
+                "definitions": {
+                  "decideClaimTypeProposalRequest": {
+                    "type": "object",
+                    "properties": {
+                      "decision": {
+                        "type": "string",
+                        "enum": [
+                          "approve",
+                          "reject"
+                        ]
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      }
+                    },
+                    "required": [
+                      "decision",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/claim-types": {
+      "get": {
+        "operationId": "listClaimTypes",
+        "summary": "List latest effective approved claim types",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,99}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/listClaimTypesResponse",
+                  "definitions": {
+                    "listClaimTypesResponse": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "claimType": {
+                                "type": "string"
+                              },
+                              "catalogVersion": {
+                                "type": "integer",
+                                "exclusiveMinimum": true,
+                                "minimum": 0
+                              },
+                              "displayName": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "definition": {
+                                "type": "object",
+                                "properties": {
+                                  "fields": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "key": {
+                                          "type": "string",
+                                          "pattern": "^[a-z][a-z0-9_]{0,99}$"
+                                        },
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        },
+                                        "type": {
+                                          "type": "string",
+                                          "enum": [
+                                            "string",
+                                            "number",
+                                            "boolean",
+                                            "date"
+                                          ]
+                                        },
+                                        "required": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "key",
+                                        "label",
+                                        "type",
+                                        "required"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "minItems": 1,
+                                    "maxItems": 50
+                                  }
+                                },
+                                "required": [
+                                  "fields"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "effectiveFrom": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "claimType",
+                              "catalogVersion",
+                              "displayName",
+                              "description",
+                              "definition",
+                              "effectiveFrom",
+                              "createdAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "nextCursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "resourceVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "asOf": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "nextCursor",
+                        "requestId",
+                        "asOf"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "registry.read",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/claim-types/{claimType}/versions/{catalogVersion}": {
+      "get": {
+        "operationId": "getClaimTypeVersion",
+        "summary": "Get an effective approved claim type version",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "claimType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "catalogVersion",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/getClaimTypeVersionResponse",
+                  "definitions": {
+                    "getClaimTypeVersionResponse": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "claimType": {
+                          "type": "string"
+                        },
+                        "catalogVersion": {
+                          "type": "integer",
+                          "exclusiveMinimum": true,
+                          "minimum": 0
+                        },
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "definition": {
+                          "type": "object",
+                          "properties": {
+                            "fields": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string",
+                                    "pattern": "^[a-z][a-z0-9_]{0,99}$"
+                                  },
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "string",
+                                      "number",
+                                      "boolean",
+                                      "date"
+                                    ]
+                                  },
+                                  "required": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "label",
+                                  "type",
+                                  "required"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "minItems": 1,
+                              "maxItems": 50
+                            }
+                          },
+                          "required": [
+                            "fields"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "effectiveFrom": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "resourceVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "asOf": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "claimType",
+                        "catalogVersion",
+                        "displayName",
+                        "description",
+                        "definition",
+                        "effectiveFrom",
+                        "createdAt",
+                        "requestId",
+                        "asOf"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "registry.read",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      }
+    },
     "/api/v1/review-registry/credentials/proposals": {
       "get": {
         "operationId": "listCredentialProposals",
@@ -63535,7 +66244,8 @@
                               "credential",
                               "attestation_schema",
                               "policy_set",
-                              "jurisdiction_profile"
+                              "jurisdiction_profile",
+                              "claim_type"
                             ]
                           },
                           "itemKey": {
@@ -63937,7 +66647,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -64463,7 +67174,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -64883,7 +67595,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -65353,7 +68066,8 @@
                               "credential",
                               "attestation_schema",
                               "policy_set",
-                              "jurisdiction_profile"
+                              "jurisdiction_profile",
+                              "claim_type"
                             ]
                           },
                           "itemKey": {
@@ -65755,7 +68469,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -66285,7 +69000,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -66705,7 +69421,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -67175,7 +69892,8 @@
                               "credential",
                               "attestation_schema",
                               "policy_set",
-                              "jurisdiction_profile"
+                              "jurisdiction_profile",
+                              "claim_type"
                             ]
                           },
                           "itemKey": {
@@ -67577,7 +70295,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -68051,7 +70770,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -68471,7 +71191,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -68941,7 +71662,8 @@
                               "credential",
                               "attestation_schema",
                               "policy_set",
-                              "jurisdiction_profile"
+                              "jurisdiction_profile",
+                              "claim_type"
                             ]
                           },
                           "itemKey": {
@@ -69343,7 +72065,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -69845,7 +72568,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
@@ -70265,7 +72989,8 @@
                             "credential",
                             "attestation_schema",
                             "policy_set",
-                            "jurisdiction_profile"
+                            "jurisdiction_profile",
+                            "claim_type"
                           ]
                         },
                         "itemKey": {
