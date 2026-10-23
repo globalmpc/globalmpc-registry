@@ -18,7 +18,7 @@
     "@mpc/design": "link:../../design-system",
     "@mpc/domain": "workspace:*",
     "@mpc/ui": "workspace:*",
-    "next": "16.4.0",
+    "next": "16.4.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "viem": "2.57.5"

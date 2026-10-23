@@ -96,7 +96,8 @@ const confirmationVersion = z.object({
 });
 
 export const projectFactView = z.object({
-  factKey: z.enum(PROJECT_FACT_KEYS),
+  /** Legacy matrix key or an exact approved catalog claim-type key. */
+  factKey: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/),
   status: z.enum(CONFIRMATION_STATUSES),
   /** `false` when nothing was ever recorded — shown as pending, not as a decision someone made. */
   recorded: z.boolean(),

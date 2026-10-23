@@ -143,6 +143,10 @@ export interface ProjectOverview {
 }
 
 export interface ClaimDetail {
+  catalogEntryId?: string | null;
+  catalogVersion?: number | null;
+  structuredValues?: Record<string, string | boolean> | null;
+  documentUploadIds?: string[];
   id: string;
   projectId: string;
   claimType: string;

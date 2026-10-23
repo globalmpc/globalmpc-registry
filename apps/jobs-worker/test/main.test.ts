@@ -10,9 +10,14 @@ const s = vi.hoisted(() => ({
   heartbeat: vi.fn(),
   expiry: vi.fn(),
   credentials: vi.fn(),
+  ledger: vi.fn(),
   secret: vi.fn(),
   webhook: vi.fn(),
   signals: new Map<string, () => void>(),
+}));
+vi.mock("../src/evidence-ledger.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/evidence-ledger.js")>(),
+  createLedgerSweep: () => s.ledger,
 }));
 vi.mock("postgres", () => ({ default: () => s.sql }));
 vi.mock("@mpc/config", () => ({
@@ -52,6 +57,7 @@ beforeEach(() => {
     s.heartbeat,
     s.expiry,
     s.credentials,
+    s.ledger,
     s.secret,
     s.webhook,
     s.backlog,
@@ -61,6 +67,7 @@ beforeEach(() => {
   s.signals.clear();
   s.secret.mockReturnValue("postgres://local/test");
   s.expiry.mockResolvedValue({ ran: true, flagged: 1 });
+  s.ledger.mockResolvedValue({ ran: true, recorded: 1 });
   s.credentials.mockResolvedValue({ ran: true, flagged: 2 });
   s.deliver.mockResolvedValue({ handled: false, delivered: 0, failed: 0 });
   s.backlog.mockResolvedValue({
@@ -94,7 +101,7 @@ afterEach(() => {
 it("sweeps expiries, emits a heartbeat when idle, and closes its connection", async () => {
   await import("../src/main.js");
   expect(s.heartbeat).toHaveBeenCalledWith({ published: 0, delivered: 0 });
-  expect(s.sql.end).toHaveBeenCalledOnce();
+  expect(s.sql.end).toHaveBeenCalledTimes(2);
   const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
   expect(log).toContain("document.expiry.flagged");
   expect(log).toContain("credential.expiry.flagged");
@@ -124,7 +131,7 @@ it("keeps publishing when expiry sweeps or dead-letter settlement fail", async (
     expect(log).toContain(event);
   expect(s.deadLetter).toHaveBeenCalledWith({ id: "e1", event_type: "export" });
   expect(s.webhook).toHaveBeenCalledWith("reference");
-  expect(s.sql.end).toHaveBeenCalledOnce();
+  expect(s.sql.end).toHaveBeenCalledTimes(2);
 });
 it("reports unexpected failures without stamping events published", async () => {
   s.publish.mockImplementation(async () => {
@@ -136,7 +143,7 @@ it("reports unexpected failures without stamping events published", async () => 
     expect.stringContaining("outbox.loop.failed"),
   );
   expect(s.heartbeat).not.toHaveBeenCalled();
-  expect(s.sql.end).toHaveBeenCalledOnce();
+  expect(s.sql.end).toHaveBeenCalledTimes(2);
 });
 it("rejects a missing database secret before starting the loop", async () => {
   s.secret.mockImplementation(() => {
@@ -147,4 +154,24 @@ it("rejects a missing database secret before starting the loop", async () => {
   });
   await expect(import("../src/main.js")).rejects.toThrow("exit");
   expect(process.stderr.write).toHaveBeenCalledWith("DATABASE_URL required\n");
+});
+
+it("delivers and heartbeats while a long ledger sweep runs, then drains before closing", async () => {
+  let finish!: (value: {ran: boolean; recorded: number}) => void;
+  s.ledger.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  let cycles = 0;
+  s.publish.mockImplementation(async () => ({ published: 1, failed: 0 }));
+  s.heartbeat.mockImplementation(async () => {
+    cycles++;
+    if (cycles === 2) {
+      expect(s.ledger).toHaveBeenCalledOnce();
+      expect(s.deliver).toHaveBeenCalledTimes(2);
+      expect(s.sql.end).not.toHaveBeenCalled();
+      s.signals.get("SIGTERM")!();
+      queueMicrotask(() => finish({ ran: true, recorded: 1 }));
+    }
+  });
+  await import("../src/main.js");
+  expect(cycles).toBe(2);
+  expect(s.sql.end).toHaveBeenCalledTimes(2);
 });

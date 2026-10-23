@@ -26,6 +26,7 @@ import {
   type PublicationSubject,
   projectionMismatches,
   resolvePublicationSubject,
+  assertEvidenceLedgerProjection,
 } from "../services/registry-publication.js";
 
 /**
@@ -230,6 +231,10 @@ export async function registerRegistryDraftRoutes(
             { issues: projectionCheck.error.issues },
           );
         }
+
+        await assertEvidenceLedgerProjection(
+          tx, tenantId, registryType, subject.projectId, data.projection, new Date(asOf),
+        );
 
         if (subject.publicKey !== null && data.publicKey !== subject.publicKey) {
           throw unprocessable(

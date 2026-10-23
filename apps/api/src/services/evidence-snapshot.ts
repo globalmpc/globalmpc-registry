@@ -22,12 +22,25 @@ export interface EvidenceSnapshot {
   readonly receiptIds: readonly string[];
 }
 
+export interface SnapshotClaimRow {
+  id: string; value_text: string; grade: string;
+  catalog_entry_id: string | null; catalog_version: number | null;
+  structured_values: Record<string, string | boolean> | null; document_upload_ids: string[];
+}
+export function snapshotClaimFingerprint(claim: SnapshotClaimRow) {
+  return { id: claim.id, valueText: claim.value_text, grade: claim.grade,
+    ...(claim.catalog_entry_id === null ? {} : { structured: {
+      catalogEntryId: claim.catalog_entry_id, catalogVersion: claim.catalog_version,
+      values: claim.structured_values, documentUploadIds: [...claim.document_upload_ids].sort(),
+    } }),
+  };
+}
 interface SnapshotInput {
   readonly claimIds: readonly string[];
   readonly artifactIds: readonly string[];
   readonly receiptIds: readonly string[];
   /** The claim's current content must be included to detect changed values. */
-  readonly claimFingerprints: readonly { id: string; valueText: string; grade: string }[];
+  readonly claimFingerprints: readonly { id: string; valueText: string; grade: string; structured?: { catalogEntryId: string; catalogVersion: number | null; values: Record<string, string | boolean> | null; documentUploadIds: string[] } }[];
 }
 
 function canonicalForm(input: SnapshotInput) {
@@ -35,7 +48,7 @@ function canonicalForm(input: SnapshotInput) {
     [...values].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
 
   return {
-    snapshotVersion: "1",
+    snapshotVersion: input.claimFingerprints.some((claim) => claim.structured !== undefined) ? "2" : "1",
     claimIds: [...input.claimIds].sort(),
     artifactIds: [...input.artifactIds].sort(),
     receiptIds: [...input.receiptIds].sort(),
@@ -43,6 +56,7 @@ function canonicalForm(input: SnapshotInput) {
       id: claim.id,
       valueText: claim.valueText,
       grade: claim.grade,
+      ...(claim.structured === undefined ? {} : { structured: { ...claim.structured, catalogVersion: claim.structured.catalogVersion === null ? null : String(claim.structured.catalogVersion), documentUploadIds: [...claim.structured.documentUploadIds].sort() } }),
     })),
   };
 }
@@ -68,8 +82,8 @@ export async function buildEvidenceSnapshot(
     );
   }
 
-  const claims = await tx<{ id: string; value_text: string; grade: string }[]>`
-    SELECT id, value_text, grade FROM core.claims
+  const claims = await tx<SnapshotClaimRow[]>`
+    SELECT id, value_text, grade, catalog_entry_id, catalog_version, structured_values, document_upload_ids FROM core.claims
     WHERE project_id = ${projectId} AND id = ANY(${claimIds as string[]}::uuid[])
   `;
 
@@ -94,11 +108,7 @@ export async function buildEvidenceSnapshot(
     claimIds: claims.map((claim) => claim.id),
     artifactIds: artifacts.map((artifact) => artifact.id),
     receiptIds: receipts.map((receipt) => receipt.id),
-    claimFingerprints: claims.map((claim) => ({
-      id: claim.id,
-      valueText: claim.value_text,
-      grade: claim.grade,
-    })),
+    claimFingerprints: claims.map(snapshotClaimFingerprint),
   };
 
   return {

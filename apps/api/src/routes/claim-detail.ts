@@ -24,6 +24,10 @@ import { requireMutationContext, requireReadContext } from "./shared.js";
  */
 
 interface ClaimRow {
+  catalog_entry_id: string | null;
+  catalog_version: number | null;
+  structured_values: Record<string, string | boolean> | null;
+  document_upload_ids: string[];
   id: string;
   project_id: string;
   claim_type: string;
@@ -42,7 +46,7 @@ interface ClaimRow {
 
 async function readClaim(tx: postgres.TransactionSql, tenantId: string, claimId: string) {
   const [claim] = await tx<ClaimRow[]>`
-    SELECT id, project_id, claim_type, value_text, unit, as_of, source_coordinate,
+    SELECT catalog_entry_id, catalog_version, structured_values, document_upload_ids, id, project_id, claim_type, value_text, unit, as_of, source_coordinate,
            source_receipt_id, evidence_tier, verification_state, grade, excluded_by_rule,
            stale_since, version
     FROM core.claims WHERE tenant_id = ${tenantId} AND id = ${claimId}
@@ -165,6 +169,10 @@ export async function registerClaimDetailRoutes(
         id: claim.id,
         projectId: claim.project_id,
         claimType: claim.claim_type,
+        catalogEntryId: claim.catalog_entry_id,
+        catalogVersion: claim.catalog_version,
+        structuredValues: claim.structured_values,
+        documentUploadIds: claim.document_upload_ids,
         valueText: claim.value_text,
         unit: claim.unit,
         asOf: claim.as_of ? claim.as_of.toISOString().slice(0, 10) : null,

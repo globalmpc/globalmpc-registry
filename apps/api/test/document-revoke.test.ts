@@ -503,24 +503,50 @@ describeDb("document revocation", () => {
 
       let release!: () => void;
       const held = new Promise<void>((resolve) => (release = resolve));
+      let locked!: (pid: number) => void;
+      const ready = new Promise<number>((resolve) => (locked = resolve));
       const revocation = fx.sql.begin(async (tx) => {
+        const [backend] = await tx<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
         await tx`SELECT id FROM core.object_uploads WHERE id = ${target.id} FOR UPDATE`;
         await tx`
           UPDATE core.object_uploads
           SET revoked_at = now(), revoked_by = ${fx.operatorSubjectA}, revocation_reason = 'Withdrawn'
           WHERE id = ${target.id}
         `;
+        locked(backend!.pid);
         await held;
       });
 
-      const attempt = link(other, target);
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      release();
-      await revocation;
+      // Begin the request only after revocation owns the row, then observe the actual
+      // blocked DB transaction. A sleep allows the link to win on a busy runner.
+      const backendPid = await Promise.race([ready, revocation.then(() => {
+        throw new Error("Revocation completed before acquiring its lock");
+      })]);
+      const attempt = Promise.resolve(link(other, target));
+      try {
+        await expect.poll(async () => {
+          const [waiting] = await fx.sql<{ blocked: boolean }[]>`
+            SELECT EXISTS (
+              SELECT 1 FROM pg_stat_activity
+              WHERE ${backendPid} = ANY(pg_blocking_pids(pid))
+            ) AS blocked
+          `;
+          return waiting!.blocked;
+        }, { timeout: 3000 }).toBe(true);
+      } finally {
+        release();
+        await revocation;
+        await attempt;
+      }
 
       const response = await attempt;
       expect(response.statusCode).toBe(409);
       expect(response.json().code).toBe("DOCUMENT_REVOKED");
+      const [stored] = await fx.sql<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM core.document_links
+        WHERE upstream_upload_id = ${other.id} AND downstream_upload_id = ${target.id}
+      `;
+      expect(stored!.count).toBe(0);
     });
 
     it("refuses profile edits and leaves it out of type rules", async () => {

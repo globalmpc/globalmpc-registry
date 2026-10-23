@@ -4135,15 +4135,7 @@
                             "properties": {
                               "factKey": {
                                 "type": "string",
-                                "enum": [
-                                  "relationship",
-                                  "consent",
-                                  "rights",
-                                  "issuer",
-                                  "spv",
-                                  "legal_structure",
-                                  "source_data"
-                                ]
+                                "pattern": "^[a-z][a-z0-9_]{0,99}$"
                               },
                               "status": {
                                 "type": "string",
@@ -5099,15 +5091,7 @@
                             "properties": {
                               "factKey": {
                                 "type": "string",
-                                "enum": [
-                                  "relationship",
-                                  "consent",
-                                  "rights",
-                                  "issuer",
-                                  "spv",
-                                  "legal_structure",
-                                  "source_data"
-                                ]
+                                "pattern": "^[a-z][a-z0-9_]{0,99}$"
                               },
                               "status": {
                                 "type": "string",
@@ -5591,15 +5575,7 @@
                       "properties": {
                         "factKey": {
                           "type": "string",
-                          "enum": [
-                            "relationship",
-                            "consent",
-                            "rights",
-                            "issuer",
-                            "spv",
-                            "legal_structure",
-                            "source_data"
-                          ]
+                          "pattern": "^[a-z][a-z0-9_]{0,99}$"
                         },
                         "status": {
                           "type": "string",
@@ -11626,6 +11602,60 @@
                           "items": {
                             "type": "object",
                             "properties": {
+                              "catalogEntryId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "catalogVersion": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": true,
+                                    "minimum": 0
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "structuredValues": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "maxLength": 4000
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "pattern": "^[a-z][a-z0-9_]{0,99}$"
+                                    }
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "documentUploadIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                }
+                              },
                               "id": {
                                 "type": "string"
                               },
@@ -11731,6 +11761,10 @@
                               }
                             },
                             "required": [
+                              "catalogEntryId",
+                              "catalogVersion",
+                              "structuredValues",
+                              "documentUploadIds",
                               "id",
                               "projectId",
                               "claimType",
@@ -12081,6 +12115,60 @@
                     "createClaimResponse": {
                       "type": "object",
                       "properties": {
+                        "catalogEntryId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "catalogVersion": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": true,
+                              "minimum": 0
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "structuredValues": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "maxLength": 4000
+                                  },
+                                  {
+                                    "type": "boolean"
+                                  }
+                                ]
+                              },
+                              "propertyNames": {
+                                "pattern": "^[a-z][a-z0-9_]{0,99}$"
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "documentUploadIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
                         "id": {
                           "type": "string"
                         },
@@ -12186,6 +12274,10 @@
                         }
                       },
                       "required": [
+                        "catalogEntryId",
+                        "catalogVersion",
+                        "structuredValues",
+                        "documentUploadIds",
                         "id",
                         "projectId",
                         "claimType",
@@ -12526,6 +12618,60 @@
                     "createClaimConflictResponse": {
                       "type": "object",
                       "properties": {
+                        "catalogEntryId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "catalogVersion": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": true,
+                              "minimum": 0
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "structuredValues": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "maxLength": 4000
+                                  },
+                                  {
+                                    "type": "boolean"
+                                  }
+                                ]
+                              },
+                              "propertyNames": {
+                                "pattern": "^[a-z][a-z0-9_]{0,99}$"
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "documentUploadIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
                         "id": {
                           "type": "string"
                         },
@@ -12631,6 +12777,10 @@
                         }
                       },
                       "required": [
+                        "catalogEntryId",
+                        "catalogVersion",
+                        "structuredValues",
+                        "documentUploadIds",
                         "id",
                         "projectId",
                         "claimType",
@@ -12971,6 +13121,60 @@
                     "correctClaimResponse": {
                       "type": "object",
                       "properties": {
+                        "catalogEntryId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "catalogVersion": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": true,
+                              "minimum": 0
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "structuredValues": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "maxLength": 4000
+                                  },
+                                  {
+                                    "type": "boolean"
+                                  }
+                                ]
+                              },
+                              "propertyNames": {
+                                "pattern": "^[a-z][a-z0-9_]{0,99}$"
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "documentUploadIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
                         "id": {
                           "type": "string"
                         },
@@ -13076,6 +13280,10 @@
                         }
                       },
                       "required": [
+                        "catalogEntryId",
+                        "catalogVersion",
+                        "structuredValues",
+                        "documentUploadIds",
                         "id",
                         "projectId",
                         "claimType",
@@ -13406,6 +13614,49 @@
                   "correctClaimRequest": {
                     "type": "object",
                     "properties": {
+                      "catalogEntryId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "structuredValues": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "maxLength": 4000
+                                },
+                                {
+                                  "type": "boolean"
+                                }
+                              ]
+                            },
+                            "propertyNames": {
+                              "pattern": "^[a-z][a-z0-9_]{0,99}$"
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "documentUploadIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "maxItems": 20
+                      },
                       "valueText": {
                         "type": "string",
                         "minLength": 1
@@ -63493,6 +63744,1387 @@
         }
       }
     },
+    "/api/v1/projects/{projectId}/evidence-ledger": {
+      "get": {
+        "operationId": "getEvidenceLedger",
+        "summary": "Read current computed evidence coverage and stage",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/getEvidenceLedgerResponse",
+                  "definitions": {
+                    "getEvidenceLedgerResponse": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "resourceVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "asOf": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "snapshot": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "projectId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "evaluatedAt": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            "inputSnapshotHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "evaluatorVersion": {
+                              "type": "string",
+                              "const": "1"
+                            },
+                            "inputBasis": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            },
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "claimType": {
+                                    "type": "string"
+                                  },
+                                  "catalogVersion": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": true,
+                                    "minimum": 0
+                                  },
+                                  "displayName": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "missing",
+                                      "unreviewed",
+                                      "reviewed",
+                                      "needs_re_review",
+                                      "conflicting",
+                                      "rejected",
+                                      "not_applicable"
+                                    ]
+                                  },
+                                  "grade": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "rejected",
+                                          "unverified",
+                                          "self_reported",
+                                          "partially_verified",
+                                          "verified"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "reviewScope": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviews": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "reviewerHandle": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{64}$"
+                                        },
+                                        "credentialType": {
+                                          "type": "string"
+                                        },
+                                        "attestationType": {
+                                          "type": "string"
+                                        },
+                                        "signedAt": {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                        },
+                                        "limitations": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reviewerHandle",
+                                        "credentialType",
+                                        "attestationType",
+                                        "signedAt",
+                                        "limitations"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "claimIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    }
+                                  },
+                                  "attestationIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    }
+                                  },
+                                  "reasons": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claimType",
+                                  "catalogVersion",
+                                  "displayName",
+                                  "status",
+                                  "grade",
+                                  "reviewScope",
+                                  "reviews",
+                                  "claimIds",
+                                  "attestationIds",
+                                  "reasons",
+                                  "limitations"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "stages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "gateId": {
+                                    "type": "string"
+                                  },
+                                  "policySetId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "ruleSetVersion": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ok",
+                                      "watch",
+                                      "gap",
+                                      "not_evaluable"
+                                    ]
+                                  },
+                                  "missing": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviewedItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  },
+                                  "requiredItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  }
+                                },
+                                "required": [
+                                  "gateId",
+                                  "policySetId",
+                                  "ruleSetVersion",
+                                  "status",
+                                  "missing",
+                                  "reviewedItems",
+                                  "requiredItems"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "currentStage": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "limitations": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "projectId",
+                            "evaluatedAt",
+                            "inputSnapshotHash",
+                            "evaluatorVersion",
+                            "inputBasis",
+                            "items",
+                            "stages",
+                            "currentStage",
+                            "limitations"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "requestId",
+                        "asOf",
+                        "snapshot"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "readiness.read",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "recordEvidenceLedger",
+        "summary": "Record a computed evidence assessment for disclosure review",
+        "tags": [
+          "workspace"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16
+            },
+            "description": "Prevents duplicate execution when a mutation is retried (07 §7.1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Resource-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/recordEvidenceLedgerResponse",
+                  "definitions": {
+                    "recordEvidenceLedgerResponse": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "resourceVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "asOf": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                        },
+                        "snapshot": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "projectId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "evaluatedAt": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            "inputSnapshotHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "evaluatorVersion": {
+                              "type": "string",
+                              "const": "1"
+                            },
+                            "inputBasis": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            },
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "claimType": {
+                                    "type": "string"
+                                  },
+                                  "catalogVersion": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": true,
+                                    "minimum": 0
+                                  },
+                                  "displayName": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "missing",
+                                      "unreviewed",
+                                      "reviewed",
+                                      "needs_re_review",
+                                      "conflicting",
+                                      "rejected",
+                                      "not_applicable"
+                                    ]
+                                  },
+                                  "grade": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "rejected",
+                                          "unverified",
+                                          "self_reported",
+                                          "partially_verified",
+                                          "verified"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "reviewScope": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviews": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "reviewerHandle": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{64}$"
+                                        },
+                                        "credentialType": {
+                                          "type": "string"
+                                        },
+                                        "attestationType": {
+                                          "type": "string"
+                                        },
+                                        "signedAt": {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                        },
+                                        "limitations": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reviewerHandle",
+                                        "credentialType",
+                                        "attestationType",
+                                        "signedAt",
+                                        "limitations"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "claimIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    }
+                                  },
+                                  "attestationIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    }
+                                  },
+                                  "reasons": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claimType",
+                                  "catalogVersion",
+                                  "displayName",
+                                  "status",
+                                  "grade",
+                                  "reviewScope",
+                                  "reviews",
+                                  "claimIds",
+                                  "attestationIds",
+                                  "reasons",
+                                  "limitations"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "stages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "gateId": {
+                                    "type": "string"
+                                  },
+                                  "policySetId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "ruleSetVersion": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ok",
+                                      "watch",
+                                      "gap",
+                                      "not_evaluable"
+                                    ]
+                                  },
+                                  "missing": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviewedItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  },
+                                  "requiredItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  }
+                                },
+                                "required": [
+                                  "gateId",
+                                  "policySetId",
+                                  "ruleSetVersion",
+                                  "status",
+                                  "missing",
+                                  "reviewedItems",
+                                  "requiredItems"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "currentStage": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "limitations": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "projectId",
+                            "evaluatedAt",
+                            "inputSnapshotHash",
+                            "evaluatorVersion",
+                            "inputBasis",
+                            "items",
+                            "stages",
+                            "currentStage",
+                            "limitations"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "publicProjection": {
+                          "type": "object",
+                          "properties": {
+                            "snapshotId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "evaluatedAt": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            "inputSnapshotHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "claimType": {
+                                    "type": "string"
+                                  },
+                                  "catalogVersion": {
+                                    "type": "string",
+                                    "pattern": "^[1-9][0-9]*$"
+                                  },
+                                  "displayName": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "missing",
+                                      "unreviewed",
+                                      "reviewed",
+                                      "needs_re_review",
+                                      "conflicting",
+                                      "rejected",
+                                      "not_applicable"
+                                    ]
+                                  },
+                                  "grade": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "rejected",
+                                          "unverified",
+                                          "self_reported",
+                                          "partially_verified",
+                                          "verified"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "reviewScope": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviews": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "reviewerHandle": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{64}$"
+                                        },
+                                        "credentialType": {
+                                          "type": "string"
+                                        },
+                                        "attestationType": {
+                                          "type": "string"
+                                        },
+                                        "signedAt": {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                        },
+                                        "limitations": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reviewerHandle",
+                                        "credentialType",
+                                        "attestationType",
+                                        "signedAt",
+                                        "limitations"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "reasons": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claimType",
+                                  "catalogVersion",
+                                  "displayName",
+                                  "status",
+                                  "grade",
+                                  "reviewScope",
+                                  "reviews",
+                                  "reasons",
+                                  "limitations"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "stages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "gateId": {
+                                    "type": "string"
+                                  },
+                                  "ruleSetVersion": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ok",
+                                      "watch",
+                                      "gap",
+                                      "not_evaluable"
+                                    ]
+                                  },
+                                  "missing": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviewedItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  },
+                                  "requiredItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  }
+                                },
+                                "required": [
+                                  "gateId",
+                                  "ruleSetVersion",
+                                  "status",
+                                  "missing",
+                                  "reviewedItems",
+                                  "requiredItems"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "currentStage": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "limitations": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "snapshotId",
+                            "evaluatedAt",
+                            "inputSnapshotHash",
+                            "items",
+                            "stages",
+                            "currentStage",
+                            "limitations"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "requestId",
+                        "asOf",
+                        "snapshot",
+                        "publicProjection"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — returns the required role and the access request path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "resourceVersion conflict or idempotency key reuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "External source, chain, or ERSP unavailable — check retryable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+                }
+              }
+            }
+          }
+        },
+        "x-mpc-action": "readiness.recompute",
+        "security": [
+          {
+            "siweSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/recordEvidenceLedgerRequest",
+                "definitions": {
+                  "recordEvidenceLedgerRequest": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2019-09/schema#"
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/review-registry/claim-types/proposals": {
       "get": {
         "operationId": "listClaimTypeProposals",
@@ -75571,6 +77203,201 @@
                               "projection": {
                                 "type": "object",
                                 "properties": {
+                                  "evidenceLedger": {
+                                    "type": "object",
+                                    "properties": {
+                                      "snapshotId": {
+                                        "type": "string",
+                                        "format": "uuid"
+                                      },
+                                      "evaluatedAt": {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                      },
+                                      "inputSnapshotHash": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$"
+                                      },
+                                      "items": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "claimType": {
+                                              "type": "string"
+                                            },
+                                            "catalogVersion": {
+                                              "type": "string",
+                                              "pattern": "^[1-9][0-9]*$"
+                                            },
+                                            "displayName": {
+                                              "type": "string"
+                                            },
+                                            "status": {
+                                              "type": "string",
+                                              "enum": [
+                                                "missing",
+                                                "unreviewed",
+                                                "reviewed",
+                                                "needs_re_review",
+                                                "conflicting",
+                                                "rejected",
+                                                "not_applicable"
+                                              ]
+                                            },
+                                            "grade": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "rejected",
+                                                    "unverified",
+                                                    "self_reported",
+                                                    "partially_verified",
+                                                    "verified"
+                                                  ]
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "reviewScope": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "reviews": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "reviewerHandle": {
+                                                    "type": "string",
+                                                    "pattern": "^0x[0-9a-f]{64}$"
+                                                  },
+                                                  "credentialType": {
+                                                    "type": "string"
+                                                  },
+                                                  "attestationType": {
+                                                    "type": "string"
+                                                  },
+                                                  "signedAt": {
+                                                    "type": "string",
+                                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                                  },
+                                                  "limitations": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "reviewerHandle",
+                                                  "credentialType",
+                                                  "attestationType",
+                                                  "signedAt",
+                                                  "limitations"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "reasons": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "limitations": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "claimType",
+                                            "catalogVersion",
+                                            "displayName",
+                                            "status",
+                                            "grade",
+                                            "reviewScope",
+                                            "reviews",
+                                            "reasons",
+                                            "limitations"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "stages": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "gateId": {
+                                              "type": "string"
+                                            },
+                                            "ruleSetVersion": {
+                                              "type": "string"
+                                            },
+                                            "status": {
+                                              "type": "string",
+                                              "enum": [
+                                                "ok",
+                                                "watch",
+                                                "gap",
+                                                "not_evaluable"
+                                              ]
+                                            },
+                                            "missing": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "reviewedItems": {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]*)$"
+                                            },
+                                            "requiredItems": {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]*)$"
+                                            }
+                                          },
+                                          "required": [
+                                            "gateId",
+                                            "ruleSetVersion",
+                                            "status",
+                                            "missing",
+                                            "reviewedItems",
+                                            "requiredItems"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "currentStage": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      },
+                                      "limitations": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "snapshotId",
+                                      "evaluatedAt",
+                                      "inputSnapshotHash",
+                                      "items",
+                                      "stages",
+                                      "currentStage",
+                                      "limitations"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "stableId": {
                                     "type": "string"
                                   },
@@ -76080,6 +77907,201 @@
                     "getPublicRegistryEntryResponse": {
                       "type": "object",
                       "properties": {
+                        "evidenceLedger": {
+                          "type": "object",
+                          "properties": {
+                            "snapshotId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "evaluatedAt": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            "inputSnapshotHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "claimType": {
+                                    "type": "string"
+                                  },
+                                  "catalogVersion": {
+                                    "type": "string",
+                                    "pattern": "^[1-9][0-9]*$"
+                                  },
+                                  "displayName": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "missing",
+                                      "unreviewed",
+                                      "reviewed",
+                                      "needs_re_review",
+                                      "conflicting",
+                                      "rejected",
+                                      "not_applicable"
+                                    ]
+                                  },
+                                  "grade": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "rejected",
+                                          "unverified",
+                                          "self_reported",
+                                          "partially_verified",
+                                          "verified"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "reviewScope": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviews": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "reviewerHandle": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{64}$"
+                                        },
+                                        "credentialType": {
+                                          "type": "string"
+                                        },
+                                        "attestationType": {
+                                          "type": "string"
+                                        },
+                                        "signedAt": {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                        },
+                                        "limitations": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reviewerHandle",
+                                        "credentialType",
+                                        "attestationType",
+                                        "signedAt",
+                                        "limitations"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "reasons": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claimType",
+                                  "catalogVersion",
+                                  "displayName",
+                                  "status",
+                                  "grade",
+                                  "reviewScope",
+                                  "reviews",
+                                  "reasons",
+                                  "limitations"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "stages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "gateId": {
+                                    "type": "string"
+                                  },
+                                  "ruleSetVersion": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ok",
+                                      "watch",
+                                      "gap",
+                                      "not_evaluable"
+                                    ]
+                                  },
+                                  "missing": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviewedItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  },
+                                  "requiredItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  }
+                                },
+                                "required": [
+                                  "gateId",
+                                  "ruleSetVersion",
+                                  "status",
+                                  "missing",
+                                  "reviewedItems",
+                                  "requiredItems"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "currentStage": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "limitations": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "snapshotId",
+                            "evaluatedAt",
+                            "inputSnapshotHash",
+                            "items",
+                            "stages",
+                            "currentStage",
+                            "limitations"
+                          ],
+                          "additionalProperties": false
+                        },
                         "stableId": {
                           "type": "string"
                         },
@@ -76233,6 +78255,111 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "resourceVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "entryVersionId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "publishedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "history": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "entryVersionId": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "version": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string"
+                              },
+                              "revokedAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "entryVersionId",
+                              "version",
+                              "status",
+                              "revokedAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "evidenceLedgerCurrent": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "evaluatedAt": {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                },
+                                "warnings": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "claimType": {
+                                        "type": "string"
+                                      },
+                                      "catalogVersion": {
+                                        "type": "string",
+                                        "pattern": "^[1-9][0-9]*$"
+                                      },
+                                      "status": {
+                                        "type": "string",
+                                        "enum": [
+                                          "needs_re_review",
+                                          "conflicting",
+                                          "rejected"
+                                        ]
+                                      },
+                                      "reasons": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "claimType",
+                                      "catalogVersion",
+                                      "status",
+                                      "reasons"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "evaluatedAt",
+                                "warnings"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -76244,7 +78371,11 @@
                         "staleStatus",
                         "limitations",
                         "legalEffect",
-                        "disclaimerCodes"
+                        "disclaimerCodes",
+                        "requestId",
+                        "entryVersionId",
+                        "publishedAt",
+                        "history"
                       ],
                       "additionalProperties": false
                     }
@@ -76534,6 +78665,201 @@
                     "getPublicProjectionFieldsResponse": {
                       "type": "object",
                       "properties": {
+                        "evidenceLedger": {
+                          "type": "object",
+                          "properties": {
+                            "snapshotId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "evaluatedAt": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                            },
+                            "inputSnapshotHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "claimType": {
+                                    "type": "string"
+                                  },
+                                  "catalogVersion": {
+                                    "type": "string",
+                                    "pattern": "^[1-9][0-9]*$"
+                                  },
+                                  "displayName": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "missing",
+                                      "unreviewed",
+                                      "reviewed",
+                                      "needs_re_review",
+                                      "conflicting",
+                                      "rejected",
+                                      "not_applicable"
+                                    ]
+                                  },
+                                  "grade": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "rejected",
+                                          "unverified",
+                                          "self_reported",
+                                          "partially_verified",
+                                          "verified"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "reviewScope": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviews": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "reviewerHandle": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{64}$"
+                                        },
+                                        "credentialType": {
+                                          "type": "string"
+                                        },
+                                        "attestationType": {
+                                          "type": "string"
+                                        },
+                                        "signedAt": {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                        },
+                                        "limitations": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reviewerHandle",
+                                        "credentialType",
+                                        "attestationType",
+                                        "signedAt",
+                                        "limitations"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "reasons": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "limitations": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claimType",
+                                  "catalogVersion",
+                                  "displayName",
+                                  "status",
+                                  "grade",
+                                  "reviewScope",
+                                  "reviews",
+                                  "reasons",
+                                  "limitations"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "stages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "gateId": {
+                                    "type": "string"
+                                  },
+                                  "ruleSetVersion": {
+                                    "type": "string"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ok",
+                                      "watch",
+                                      "gap",
+                                      "not_evaluable"
+                                    ]
+                                  },
+                                  "missing": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reviewedItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  },
+                                  "requiredItems": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  }
+                                },
+                                "required": [
+                                  "gateId",
+                                  "ruleSetVersion",
+                                  "status",
+                                  "missing",
+                                  "reviewedItems",
+                                  "requiredItems"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "currentStage": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "limitations": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "snapshotId",
+                            "evaluatedAt",
+                            "inputSnapshotHash",
+                            "items",
+                            "stages",
+                            "currentStage",
+                            "limitations"
+                          ],
+                          "additionalProperties": false
+                        },
                         "stableId": {
                           "type": "string"
                         },
@@ -79234,6 +81560,201 @@
                                       "projection": {
                                         "type": "object",
                                         "properties": {
+                                          "evidenceLedger": {
+                                            "type": "object",
+                                            "properties": {
+                                              "snapshotId": {
+                                                "type": "string",
+                                                "format": "uuid"
+                                              },
+                                              "evaluatedAt": {
+                                                "type": "string",
+                                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                              },
+                                              "inputSnapshotHash": {
+                                                "type": "string",
+                                                "pattern": "^0x[0-9a-f]{64}$"
+                                              },
+                                              "items": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "claimType": {
+                                                      "type": "string"
+                                                    },
+                                                    "catalogVersion": {
+                                                      "type": "string",
+                                                      "pattern": "^[1-9][0-9]*$"
+                                                    },
+                                                    "displayName": {
+                                                      "type": "string"
+                                                    },
+                                                    "status": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "missing",
+                                                        "unreviewed",
+                                                        "reviewed",
+                                                        "needs_re_review",
+                                                        "conflicting",
+                                                        "rejected",
+                                                        "not_applicable"
+                                                      ]
+                                                    },
+                                                    "grade": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string",
+                                                          "enum": [
+                                                            "rejected",
+                                                            "unverified",
+                                                            "self_reported",
+                                                            "partially_verified",
+                                                            "verified"
+                                                          ]
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "reviewScope": {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    "reviews": {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "reviewerHandle": {
+                                                            "type": "string",
+                                                            "pattern": "^0x[0-9a-f]{64}$"
+                                                          },
+                                                          "credentialType": {
+                                                            "type": "string"
+                                                          },
+                                                          "attestationType": {
+                                                            "type": "string"
+                                                          },
+                                                          "signedAt": {
+                                                            "type": "string",
+                                                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                                          },
+                                                          "limitations": {
+                                                            "type": "string"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "reviewerHandle",
+                                                          "credentialType",
+                                                          "attestationType",
+                                                          "signedAt",
+                                                          "limitations"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      }
+                                                    },
+                                                    "reasons": {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    "limitations": {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "claimType",
+                                                    "catalogVersion",
+                                                    "displayName",
+                                                    "status",
+                                                    "grade",
+                                                    "reviewScope",
+                                                    "reviews",
+                                                    "reasons",
+                                                    "limitations"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              },
+                                              "stages": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "gateId": {
+                                                      "type": "string"
+                                                    },
+                                                    "ruleSetVersion": {
+                                                      "type": "string"
+                                                    },
+                                                    "status": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "ok",
+                                                        "watch",
+                                                        "gap",
+                                                        "not_evaluable"
+                                                      ]
+                                                    },
+                                                    "missing": {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    "reviewedItems": {
+                                                      "type": "string",
+                                                      "pattern": "^(0|[1-9][0-9]*)$"
+                                                    },
+                                                    "requiredItems": {
+                                                      "type": "string",
+                                                      "pattern": "^(0|[1-9][0-9]*)$"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "gateId",
+                                                    "ruleSetVersion",
+                                                    "status",
+                                                    "missing",
+                                                    "reviewedItems",
+                                                    "requiredItems"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              },
+                                              "currentStage": {
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "limitations": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "snapshotId",
+                                              "evaluatedAt",
+                                              "inputSnapshotHash",
+                                              "items",
+                                              "stages",
+                                              "currentStage",
+                                              "limitations"
+                                            ],
+                                            "additionalProperties": false
+                                          },
                                           "stableId": {
                                             "type": "string"
                                           },

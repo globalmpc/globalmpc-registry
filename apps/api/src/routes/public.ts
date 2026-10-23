@@ -210,8 +210,13 @@ export async function registerPublicRoutes(
         });
       }
 
+      const [ledgerCurrent] = current.public_projection["evidenceLedger"] === undefined ? [] : await sql<{ current: unknown }[]>`
+        SELECT core.public_evidence_ledger_current(${current.id}) AS current
+      `;
       return {
         ...current.public_projection,
+        // Live advisory state is separate from the immutable approved/anchored projection.
+        ...(current.public_projection["evidenceLedger"] === undefined ? {} : { evidenceLedgerCurrent: ledgerCurrent?.current ?? null }),
         entryVersionId: current.id,
         version: String(current.version),
         status: current.status,

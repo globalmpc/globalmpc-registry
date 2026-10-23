@@ -1,7 +1,71 @@
 import type postgres from "postgres";
 import type { Hex } from "@mpc/canonical";
-import { notFound, unprocessable } from "../errors.js";
-import { hashSnapshotInput } from "./evidence-snapshot.js";
+import { notFound, unprocessable, unavailable } from "../errors.js";
+import { hashSnapshotInput, snapshotClaimFingerprint, type SnapshotClaimRow } from "./evidence-snapshot.js";
+import { canonicalBytes, type CanonicalValue } from "@mpc/canonical";
+import {
+  computeEvidenceLedger,
+  evidenceLedgerSemantic,
+  loadEvidenceLedgerSnapshot,
+  publicLedgerProjection,
+  ledgerInputHash,
+} from "@mpc/db";
+
+/** Keep assessment inputs stable until the publication transaction commits. */
+export async function lockEvidenceLedgerPublicationInputs(tx: postgres.TransactionSql): Promise<void> {
+  try {
+    await tx`SELECT core.lock_ledger_publication_inputs()`;
+  } catch (error) {
+    if ((error as {code?: string}).code === "55P03") {
+      throw unavailable("PUBLICATION_EVIDENCE_BUSY", "Evidence is being updated; retry publication with the same idempotency key");
+    }
+    throw error;
+  }
+}
+
+/** A ledger is a separately approved, frozen statement, never a client-authored assessment. */
+export async function assertEvidenceLedgerProjection(
+  tx: postgres.TransactionSql,
+  tenantId: string,
+  registryType: "project" | "verification",
+  projectId: string,
+  projection: Readonly<Record<string, unknown>>,
+  evaluatedAt: Date,
+): Promise<void> {
+  const ledger = projection["evidenceLedger"];
+  if (ledger === undefined) return;
+  if (registryType !== "project" || ledger === null || typeof ledger !== "object") {
+    throw unprocessable("PUBLICATION_LEDGER_INVALID", "Only a project can publish an evidence ledger");
+  }
+  const snapshotId = (ledger as Record<string, unknown>)["snapshotId"];
+  if (typeof snapshotId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(snapshotId)) {
+    throw unprocessable("PUBLICATION_LEDGER_INVALID", "An assessed snapshot is required");
+  }
+  const stored = await loadEvidenceLedgerSnapshot(tx, tenantId, projectId, snapshotId);
+  if (!stored || stored.inputSnapshotHash !== ledgerInputHash(stored.inputBasis, stored.evaluatedAt)
+      || !sameCanonical(ledger, publicLedgerProjection(stored))) {
+    throw unprocessable("PUBLICATION_LEDGER_MISMATCH", "The ledger must match this project's recorded assessment");
+  }
+  const current = await computeEvidenceLedger(tx, tenantId, projectId, evaluatedAt);
+  if (!current || !sameCanonical(evidenceLedgerSemantic(stored), evidenceLedgerSemantic(current))) {
+    throw unprocessable("PUBLICATION_LEDGER_STALE", "Evidence changed since assessment; assess again and prepare a new draft");
+  }
+}
+
+function sameCanonical(left: unknown, right: unknown): boolean {
+  return Buffer.from(canonicalBytes(comparableLedger(left))).equals(Buffer.from(canonicalBytes(comparableLedger(right))));
+}
+
+/** Private assessment metadata has integer versions; the canonical format uses decimal strings. */
+function comparableLedger(value: unknown): CanonicalValue {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.map(comparableLedger);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, comparableLedger(item)]));
+  }
+  throw unprocessable("PUBLICATION_LEDGER_INVALID", "The ledger contains an unsupported value");
+}
 
 /**
  * What the server knows about a registry subject — spec 05 §5.6·§5.9·§5.12.
@@ -83,8 +147,8 @@ async function resolveProject(
    * Registry is where a project starts (04 §4.3 `draft→registered`). An empty set still hashes
    * to a fixed value, so the recorded hash says "nothing yet" rather than something invented.
    */
-  const claims = await tx<{ id: string; value_text: string; grade: string }[]>`
-    SELECT id, value_text, grade FROM core.claims
+  const claims = await tx<SnapshotClaimRow[]>`
+    SELECT id, value_text, grade, catalog_entry_id, catalog_version, structured_values, document_upload_ids FROM core.claims
     WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
   `;
   const artifacts = await tx<{ id: string }[]>`
@@ -100,11 +164,7 @@ async function resolveProject(
     claimIds: claims.map((claim) => claim.id),
     artifactIds: artifacts.map((artifact) => artifact.id),
     receiptIds: receipts.map((receipt) => receipt.id),
-    claimFingerprints: claims.map((claim) => ({
-      id: claim.id,
-      valueText: claim.value_text,
-      grade: claim.grade,
-    })),
+    claimFingerprints: claims.map(snapshotClaimFingerprint),
   });
 
   // 11 §11.4: `registered` means "a Registry record exists", and publication creates it.

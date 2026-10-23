@@ -1,3 +1,5 @@
+import { publicEvidenceLedger } from "./evidence-ledger.js";
+import { structuredClaimInput, structuredClaimView } from "./structured-claims.js";
 import { z } from "zod";
 import {
   ATTESTATION_TYPES,
@@ -89,6 +91,7 @@ export const sourceReceipt = z
 
 /** Claim — numbers are a decimal string + unit + as-of date (ADR-T07). */
 export const claim = z.object({
+  ...structuredClaimView,
   id: z.string(),
   projectId: z.string(),
   claimType: z.string(),
@@ -123,6 +126,7 @@ export const claim = z.object({
  * The new version starts `unreviewed`: its value is new, and no one has reviewed it yet.
  */
 export const correctClaimRequest = z.object({
+  ...structuredClaimInput,
   valueText: z.string().min(1),
   unit: z.string().nullable().default(null),
   asOf: z.string().date().nullable().default(null),
@@ -1080,6 +1084,7 @@ export const registryEntryVersion = z.object({
  */
 export const publicProjection = z
   .object({
+    evidenceLedger: publicEvidenceLedger.optional(),
     stableId: z.string(),
     projectKey: z.string().optional(),
     projectName: z.string().optional(),

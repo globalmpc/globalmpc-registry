@@ -71,6 +71,40 @@ export default function ClaimDetailPage({
               {claim.valueText}
               {claim.unit ? <span className="meta"> {claim.unit}</span> : null}
             </dd>
+            <dt>Catalog definition</dt>
+            <dd>
+              {claim.catalogVersion
+                ? `${claim.claimType} · catalog v${claim.catalogVersion}`
+                : "Legacy claim · no pinned catalog"}
+            </dd>
+            {claim.structuredValues ? (
+              <>
+                <dt>Declared values</dt>
+                <dd>
+                  <dl>
+                    {Object.entries(claim.structuredValues).map(([key, value]) => (
+                      <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+                    ))}
+                  </dl>
+                </dd>
+              </>
+            ) : null}
+            {claim.documentUploadIds?.length ? (
+              <>
+                <dt>Supporting documents</dt>
+                <dd>
+                  <ul>
+                    {claim.documentUploadIds.map((uploadId) => (
+                      <li key={uploadId}>
+                        <Link href={`/w/projects/${id}/documents/${uploadId}`}>
+                          Document {uploadId}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
+              </>
+            ) : null}
             <dt>As of</dt>
             <dd className="mono">{claim.asOf ?? "—"}</dd>
             <dt>Source coordinate</dt>

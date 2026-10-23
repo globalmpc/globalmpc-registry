@@ -141,9 +141,12 @@ test.describe("golden path", () => {
     await expect(page.getByText("mining_right_registration")).toBeVisible();
 
     // Recording a conflict recomputes the grade immediately and bumps the version.
-    await expect(page.getByText("v1")).toBeVisible();
-    await page.getByRole("button", { name: "Record a conflict" }).click();
-    await expect(page.getByText("v2")).toBeVisible();
+    const legacyClaimLink = page.getByRole("link", { name: "mining_right_registration", exact: true });
+    const claimId = (await legacyClaimLink.getAttribute("href"))!.split("/").pop()!;
+    const legacyClaimRow = page.getByRole("row").filter({ has: page.locator(`a[href="/w/projects/${projectId}/claims/${claimId}"]`) });
+    await expect(legacyClaimRow.getByRole("cell", { name: "v1", exact: true })).toBeVisible();
+    await page.getByTestId(`conflict-${claimId}`).click();
+    await expect(legacyClaimRow.getByRole("cell", { name: "v2", exact: true })).toBeVisible();
 
     // --- 3. Review assignment (data_steward) ------------------------------
     await page.goto(`/w/projects/${projectId}/verification`);

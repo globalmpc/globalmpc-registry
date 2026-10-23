@@ -36,6 +36,8 @@ import {
   type PublicationSubject,
   projectionMismatches,
   resolvePublicationSubject,
+  assertEvidenceLedgerProjection,
+  lockEvidenceLedgerPublicationInputs,
 } from "../services/registry-publication.js";
 import {
   type DraftRow,
@@ -153,6 +155,9 @@ export async function registerRegistryRoutes(
            * and the project can be suspended. The approver approves what the draft shows; if
            * that is no longer true, publishing it would anchor a stale statement.
            */
+          if (draft.projection["evidenceLedger"] !== undefined) {
+            await lockEvidenceLedgerPublicationInputs(tx);
+          }
           // The project's lifecycle becomes the published status. Locked here, in the same order
           // as lifecycle transitions, so a suspension cannot commit between reading and writing it.
           if (draft.registry_type === "project") {
@@ -178,6 +183,9 @@ export async function registerRegistryRoutes(
             session.subjectId,
           );
           assertDraftStillPublishable(draft, subject, body.personIdentifierPublicationApproved);
+          await assertEvidenceLedgerProjection(
+            tx, tenantId, draft.registry_type, subject.projectId, draft.projection, new Date(),
+          );
 
           /**
            * `status` holds the lifecycle **after** publication.

@@ -133,6 +133,57 @@ describeDb("review registry proposals", () => {
       effectiveFrom: "2026-01-01T00:00:00Z", rationale: "Define evidence fields", ...overrides };
   }
   const catalogBase = `${BASE}/claim-types/proposals`;
+  it("structured claims pin catalog versions, reject unavailable definitions and preserve immutable corrections", async () => {
+    const body = catalogBody();
+    const proposed = (await post(dualToken, catalogBase, body)).json<Proposal>();
+    const unapproved = { claimType: body.claimType, valueText: "Licence 123", sourceCoordinate: {},
+      catalogEntryId: randomUUID(), structuredValues: { number: "123" } };
+    const path = `/api/v1/projects/${fx.projectA}/claims`;
+    expect((await post(stewardToken, path, unapproved)).statusCode).toBe(422);
+    const approved = await post(approverToken, `${catalogBase}/${proposed.id}/decision`, { decision: "approve", reason: "Checked" }, 1);
+    expect(approved.statusCode).toBe(200);
+    const catalogEntryId = approved.json<Proposal>().materializedId!;
+    const input = { ...unapproved, catalogEntryId };
+    expect((await post(stewardToken, path, { ...input, structuredValues: {} })).statusCode).toBe(422);
+    expect((await post(stewardToken, path, { ...input, sourceReceiptId: randomUUID() })).statusCode).toBe(422);
+    expect((await post(operatorBToken, `/api/v1/projects/${fx.projectA}/claims`, input)).statusCode).not.toBe(200);
+    expect((await post(stewardToken, path, { ...input, documentUploadIds: [randomUUID()] })).statusCode).toBe(422);
+    const uploadId = randomUUID();
+    await fx.sql`INSERT INTO core.object_uploads (id, tenant_id, project_id, object_key, content_hash, byte_size, content_type, sensitivity, state)
+      VALUES (${uploadId}, ${fx.tenantA}, ${fx.projectA}, ${`objects/${uploadId}`}, ${`0x${"ab".repeat(32)}`}, 10, 'application/pdf', 'restricted', 'scanned_clean')`;
+    const otherUploadId = randomUUID();
+    await fx.sql`INSERT INTO core.object_uploads (id, tenant_id, project_id, object_key, content_hash, byte_size, content_type, sensitivity, state)
+      VALUES (${otherUploadId}, ${fx.tenantA}, ${fx.otherProjectA}, ${`objects/${otherUploadId}`}, ${`0x${"ac".repeat(32)}`}, 10, 'application/pdf', 'restricted', 'scanned_clean')`;
+    expect((await post(stewardToken, path, { ...input, documentUploadIds: [otherUploadId] })).statusCode).toBe(422);
+    const created = await post(stewardToken, path, { ...input, documentUploadIds: [uploadId] });
+    expect(created.statusCode).toBe(200);
+    const claim = created.json();
+    expect(claim).toMatchObject({ catalogEntryId, catalogVersion: 1, structuredValues: { number: "123" }, verificationState: "unreviewed" });
+    const detail = await get(stewardToken, `/api/v1/claims/${claim.id}`);
+    expect(detail.json()).toMatchObject({ catalogEntryId, structuredValues: { number: "123" } });
+    await expect(fx.sql`UPDATE core.claims SET structured_values = '{"number":"tampered"}'::jsonb WHERE id = ${claim.id}`).rejects.toThrow();
+    const correction = await post(stewardToken, `/api/v1/claims/${claim.id}/versions`, {
+      valueText: "Licence 456", sourceCoordinate: {}, structuredValues: { number: "456" }, reason: "Correct number",
+    }, claim.version);
+    expect(correction.statusCode).toBe(200);
+    expect(correction.json().documentUploadIds).toEqual([uploadId]);
+    expect(correction.json()).toMatchObject({ catalogEntryId, catalogVersion: 1, structuredValues: { number: "456" }, verificationState: "unreviewed" });
+    expect((await get(stewardToken, `/api/v1/claims/${claim.id}`)).json().structuredValues).toEqual({ number: "123" });
+  });
+
+  it("structured claims reject approved future definitions", async () => {
+    const body = catalogBody({ effectiveFrom: "2099-01-01T00:00:00Z" });
+    const proposed = (await post(dualToken, catalogBase, body)).json<Proposal>();
+    const approved = await post(approverToken, `${catalogBase}/${proposed.id}/decision`, { decision: "approve", reason: "Checked" }, 1);
+    expect(approved.statusCode).toBe(200);
+    const response = await post(stewardToken, `/api/v1/projects/${fx.projectA}/claims`, {
+      claimType: body.claimType, valueText: "Licence 123", sourceCoordinate: {},
+      catalogEntryId: approved.json<Proposal>().materializedId, structuredValues: { number: "123" },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().code).toBe("CLAIM_CATALOG_UNAVAILABLE");
+  });
+
   it("catalog requires independent approval, preserves versions and isolates tenants", async () => {
     const body = catalogBody();
     const proposed = await post(dualToken, catalogBase, body);

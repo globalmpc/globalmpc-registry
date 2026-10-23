@@ -121,9 +121,6 @@ export async function registerProjectPartyRoutes(
       const { session, tenantId, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
       const { projectId, factKey } = request.params;
-      if (!isProjectFactKey(factKey)) {
-        throw badRequest("FACT_KEY_UNKNOWN", "Unknown matrix fact", { factKey });
-      }
       const data = parseBody(recordConfirmationRequest, request);
 
       const effectiveRole = assertAuthorized(
@@ -137,6 +134,14 @@ export async function registerProjectPartyRoutes(
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           await assertProjectExists(tx, tenantId, projectId);
+          if (!isProjectFactKey(factKey)) {
+            const [catalog] = await tx<{ id: string }[]>`
+              SELECT id FROM core.claim_types
+              WHERE tenant_id = ${tenantId} AND claim_type = ${factKey} AND effective_from <= now()
+              LIMIT 1
+            `;
+            if (!catalog) throw badRequest("FACT_KEY_UNKNOWN", "Unknown or not yet effective catalog fact", { factKey });
+          }
           // Serialize writers of this row; the version check below is the conflict answer.
           await tx`SELECT pg_advisory_xact_lock(hashtext(${`${projectId}:${factKey}`}))`;
           const [latest] = await tx<{ version: number }[]>`
@@ -162,7 +167,9 @@ export async function registerProjectPartyRoutes(
               ${data.reason}, ${session.subjectId}
             )
           `;
-          await tx`
+          // Catalog applicability decisions belong only to the append-only ledger history.
+          // A catalog key must never manufacture or overwrite a legacy readiness/gate fact.
+          if (isProjectFactKey(factKey)) await tx`
             INSERT INTO core.project_facts (
               id, tenant_id, project_id, fact_key, status, evidence_ref, evidence_kind, as_of,
               note, version, recorded_by_subject_id, recorded_at
