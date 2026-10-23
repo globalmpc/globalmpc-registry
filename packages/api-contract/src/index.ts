@@ -18,3 +18,7 @@ export {
   toFastifyPath,
   type RouteDefinition,
 } from "./routes.js";
+
+export * from "./structured-claims.js";
+
+export * from "./evidence-ledger.js";

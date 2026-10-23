@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { createLedgerSweep, createLedgerSweepRunner } from "./evidence-ledger.js";
 import { resolveSecret, resolveWebhookSecret } from "@mpc/config";
 import { SESSION_CONNECTION } from "@mpc/db";
 import { createCredentialExpirySweep, DEFAULT_CREDENTIAL_SWEEP_MS } from "./credential-expiry.js";
@@ -85,6 +86,13 @@ emit({ level: "info", msg: "outbox.worker.started", pollIntervalMs: POLL_INTERVA
 
 const heartbeat = createHeartbeat(sql, "outbox", 15_000, process.env["WORKER_HEALTH_FILE"]);
 const sweepExpiry = createExpirySweep(sql, EXPIRY_SWEEP_MS);
+// Reserve a separate connection so a long assessment cannot exhaust delivery's pool.
+const ledgerSql = postgres(databaseUrl, { max: 1, onnotice: () => {}, connection: SESSION_CONNECTION });
+const ledgerRunner = createLedgerSweepRunner(createLedgerSweep(ledgerSql), (ledger) => {
+  if (ledger.ran && ledger.recorded > 0) emit({ level: "info", msg: "evidence_ledger.assessed", recorded: ledger.recorded });
+}, (error) => {
+  emit({ level: "error", msg: "evidence_ledger.sweep_failed", error: String(error) });
+});
 const sweepCredentials = createCredentialExpirySweep(sql, CREDENTIAL_SWEEP_MS);
 
 while (running) {
@@ -129,6 +137,8 @@ while (running) {
     } catch (error) {
       emit({ level: "error", msg: "credential.expiry.sweep_failed", error: String(error) });
     }
+
+    ledgerRunner.kick();
 
     // Notification delivery also handles one item per cycle.
     const delivery = await deliverOnce(
@@ -177,5 +187,7 @@ while (running) {
   }
 }
 
+await ledgerRunner.stop();
+await ledgerSql.end();
 emit({ level: "info", msg: "outbox.worker.stopped" });
 await sql.end();

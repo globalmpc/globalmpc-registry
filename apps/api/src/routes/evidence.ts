@@ -13,7 +13,8 @@ import {
   type SourceResult,
   type VerificationState,
 } from "@mpc/domain";
-import { correctClaimRequest } from "@mpc/api-contract";
+import { structuredClaimInput, correctClaimRequest } from "@mpc/api-contract";
+import { resolveCatalogClaim } from "../services/catalog-claims.js";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import { capRows } from "../list-window.js";
 import {
@@ -138,6 +139,7 @@ const decimalString = z
 
 const createClaimSchema = z
   .object({
+    ...structuredClaimInput,
     claimType: z.string().min(1),
     valueText: z.union([decimalString, z.string().min(1)]),
     unit: z.string().nullable().default(null),
@@ -248,6 +250,10 @@ function toReceiptView(row: ReceiptRow, requestId: string, asOf: string) {
 }
 
 interface ClaimRow {
+  catalog_entry_id: string | null;
+  catalog_version: number | null;
+  structured_values: Record<string, string | boolean> | null;
+  document_upload_ids: string[];
   id: string;
   project_id: string;
   claim_type: string;
@@ -272,6 +278,10 @@ function toClaimView(row: ClaimRow, requestId: string, asOf: string) {
     id: row.id,
     projectId: row.project_id,
     claimType: row.claim_type,
+    catalogEntryId: row.catalog_entry_id ?? null,
+    catalogVersion: row.catalog_version ?? null,
+    structuredValues: row.structured_values ?? null,
+    documentUploadIds: row.document_upload_ids ?? [],
     valueText: row.value_text,
     unit: row.unit,
     asOf: row.as_of ? row.as_of.toISOString().slice(0, 10) : null,
@@ -916,6 +926,8 @@ export async function registerEvidenceRoutes(
             );
           }
 
+          const structured = await resolveCatalogClaim(tx, request.params.projectId, data.claimType, data);
+
           // Domain rules compute the grade.
           const grade = computeClaimGrade({
             verificationState: "unreviewed",
@@ -931,12 +943,13 @@ export async function registerEvidenceRoutes(
             INSERT INTO core.claims (
               id, tenant_id, project_id, claim_type, value_text, unit, as_of,
               source_coordinate, evidence_tier, verification_state, grade,
-              source_receipt_id, submitted_by
+              source_receipt_id, submitted_by, catalog_entry_id, catalog_version, structured_values, document_upload_ids
             ) VALUES (
               ${id}, ${tenantId}, ${request.params.projectId}, ${data.claimType},
               ${data.valueText}, ${data.unit}, ${data.asOf},
               ${tx.json(data.sourceCoordinate)}, ${data.evidenceTier},
-              'unreviewed', ${grade}, ${data.sourceReceiptId}, ${session.subjectId ?? null}
+              'unreviewed', ${grade}, ${data.sourceReceiptId}, ${session.subjectId ?? null},
+              ${structured.catalogEntryId}, ${structured.catalogVersion}, ${structured.structuredValues === null ? null : tx.json(structured.structuredValues)}, ${structured.documentUploadIds}::uuid[]
             )
             RETURNING *
           `;
@@ -1096,6 +1109,14 @@ export async function registerEvidenceRoutes(
             });
           }
 
+          if (previous.catalog_entry_id && (data.catalogEntryId === null || data.structuredValues == null)) {
+            throw unprocessable("CLAIM_STRUCTURED_CORRECTION_REQUIRED", "A structured correction must retain its catalog and provide replacement structured values");
+          }
+          const structured = await resolveCatalogClaim(tx, projectId, previous.claim_type, {
+            ...data,
+            catalogEntryId: data.catalogEntryId === undefined ? previous.catalog_entry_id : data.catalogEntryId,
+            documentUploadIds: data.documentUploadIds ?? previous.document_upload_ids,
+          });
           const id = randomUUID();
           const grade = computeClaimGrade({
             verificationState: "unreviewed",
@@ -1110,13 +1131,15 @@ export async function registerEvidenceRoutes(
             INSERT INTO core.claims (
               id, tenant_id, project_id, claim_type, value_text, unit, as_of,
               source_coordinate, evidence_tier, verification_state, grade,
-              source_receipt_id, submitted_by, supersedes_claim_id, correction_reason
+              source_receipt_id, submitted_by, supersedes_claim_id, correction_reason,
+              catalog_entry_id, catalog_version, structured_values, document_upload_ids
             ) VALUES (
               ${id}, ${tenantId}, ${projectId}, ${previous.claim_type},
               ${data.valueText}, ${data.unit}, ${data.asOf},
               ${tx.json(data.sourceCoordinate)}, ${data.evidenceTier},
               'unreviewed', ${grade}, ${data.sourceReceiptId}, ${session.subjectId ?? null},
-              ${previous.id}, ${data.reason}
+              ${previous.id}, ${data.reason}, ${structured.catalogEntryId}, ${structured.catalogVersion},
+              ${structured.structuredValues === null ? null : tx.json(structured.structuredValues)}, ${structured.documentUploadIds}::uuid[]
             )
             RETURNING *
           `;

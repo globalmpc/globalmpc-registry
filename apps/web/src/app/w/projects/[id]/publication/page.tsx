@@ -15,6 +15,8 @@ import {
   type RegistryDraft,
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { persistEvidenceLedger, type LedgerSummary } from "@/lib/evidence-ledger-api";
+import { EvidenceLedger, WorkspaceEvidenceLedger } from "@/components/EvidenceLedger";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { BlackoutNotice } from "@/components/BlackoutNotice";
 
@@ -98,9 +100,15 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
     return (
       <div className="panel">
         <h2>1. What will be public</h2>
+        {pending?.projection.evidenceLedger ? (
+          <EvidenceLedger
+            summary={pending.projection.evidenceLedger as LedgerSummary}
+            title="Evidence assessment in this draft"
+          />
+        ) : token ? <WorkspaceEvidenceLedger token={token} projectId={id} /> : null}
         <p className="sub" style={{ marginTop: 0 }}>
-          Only the fields below go out. Source documents, coordinates, person-level identifiers, and
-          internal notes leave under no approval.
+          Only the fields below and the approved evidence assessment go out. Source documents,
+          coordinates, person-level identifiers, and internal notes leave under no approval.
         </p>
         {project ? (
           <div className="table-scroll">
@@ -117,7 +125,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
                     <tr key={field}>
                       <td className="mono">{field}</td>
                       <td className="meta">
-                        {Array.isArray(value) ? value.join("; ") : String(value ?? "—")}
+                        {typeof value === "object" && value !== null ? JSON.stringify(value) : String(value ?? "—")}
                       </td>
                     </tr>
                   ),
@@ -147,13 +155,14 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
           onClick={() =>
             void run(async () => {
               if (!project) return;
+              const assessment = await persistEvidenceLedger(token, id, newIdempotencyKey());
               await draftRegistryEntry(
                 token,
                 {
                   registryType: "project",
                   subjectId: project.id,
                   publicKey: project.projectKey,
-                  projection: buildProjection(project),
+                  projection: { ...buildProjection(project), evidenceLedger: assessment.publicProjection },
                   policyVersion: "1.0.0",
                   schemaVersion: "1",
                 },

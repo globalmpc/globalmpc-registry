@@ -306,6 +306,13 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       `;
     }
 
+    // Test-only assurance reviewer approves catalog and stage-rule fixtures independently
+    // from Operator A, who proposes them. No application approval path is bypassed.
+    await sql`
+      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
+      VALUES (gen_random_uuid(), ${E2E_TENANT_A}, ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_REVIEW}, 'reviewer_assurance')
+    `;
+
     // An unintegrated authority and a planned-stage authority. Leaving them out of the list
     // hides "why is this authority missing"; marking them active promises an integration that does not exist (R5 gate).
     await sql`

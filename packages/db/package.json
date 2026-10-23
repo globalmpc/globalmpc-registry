@@ -15,7 +15,10 @@
     "rollback-check": "tsx src/rollback-check-cli.ts"
   },
   "dependencies": {
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "@mpc/policy": "workspace:*",
+    "@mpc/canonical": "workspace:*",
+    "@mpc/domain": "workspace:*"
   },
   "files": [
     "src",

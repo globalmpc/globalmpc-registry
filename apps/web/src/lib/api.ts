@@ -248,6 +248,10 @@ export interface SourceReceipt {
 }
 
 export interface Claim {
+  catalogEntryId?: string | null;
+  catalogVersion?: number | null;
+  structuredValues?: Record<string, string | boolean> | null;
+  documentUploadIds?: string[];
   id: string;
   claimType: string;
   valueText: string;

@@ -93,7 +93,14 @@ describeDb("reviewed claim type catalog", () => {
       UPDATE core.claim_types SET display_name = 'Changed' WHERE id = ${id}`)).rejects.toThrow();
     await expect(withTenant(app, { tenantId: tenant }, (tx) => tx`
       DELETE FROM core.claim_types WHERE id = ${id}`)).rejects.toThrow();
-    await expect(admin.unsafe('TRUNCATE core.claim_types')).rejects.toThrow(/TRUNCATE rejected/);
+    // CASCADE reaches the truncate guard even when claims reference the catalog. Roll back
+    // unconditionally so a broken guard cannot destroy shared integration fixtures.
+    const beforeTruncate = await admin`SELECT id FROM core.claim_types WHERE id = ${id}`;
+    await expect(admin.begin(async (tx) => {
+      await tx.unsafe('TRUNCATE core.claim_types CASCADE');
+      throw new Error("Catalog truncate guard did not reject the statement");
+    })).rejects.toThrow(/TRUNCATE rejected/);
+    expect(await admin`SELECT id FROM core.claim_types WHERE id = ${id}`).toEqual(beforeTruncate);
     await expect(admin`DELETE FROM core.claim_types WHERE id = ${id}`).rejects.toThrow(/cannot be modified/);
     await expect(admin`UPDATE core.claim_types SET display_name = 'Changed' WHERE id = ${id}`)
       .rejects.toThrow(/cannot be modified/);

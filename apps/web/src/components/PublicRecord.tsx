@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { EvidenceLedger, EvidenceLedgerWarnings } from "./EvidenceLedger";
+import type { LedgerSummary, LedgerCurrent } from "@/lib/evidence-ledger-api";
 import { TxLink } from "@/components/TxLink";
 import {
   getInclusionProof,
@@ -51,6 +53,8 @@ export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
 
   return (
       <>
+        {entry.evidenceLedger ? <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" /> : null}
+        {entry.evidenceLedgerCurrent ? <EvidenceLedgerWarnings current={entry.evidenceLedgerCurrent as LedgerCurrent} /> : null}
         <div className="panel">
           <div className="page-head" style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0 }}>Published record</h2>

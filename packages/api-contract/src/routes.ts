@@ -1,4 +1,5 @@
 import { responseMeta } from "./common.js";
+import { evidenceLedgerResponse, publicEvidenceLedger, publicEvidenceLedgerCurrent } from "./evidence-ledger.js";
 import { proposeClaimTypeRequest, claimTypeCatalogEntry, claimTypeCatalogQuery, claimTypeCatalogList } from "./resources.js";
 import { z } from "zod";
 import { RESTRICTION_ROUTES } from "./restrictions.js";
@@ -1673,6 +1674,19 @@ export const ROUTES: readonly RouteDefinition[] = [
   },
 
   // --- Review registries (02 §2.8) ---------------------------------------------------------
+  {
+    method: "get", path: "/api/v1/projects/{projectId}/evidence-ledger",
+    operationId: "getEvidenceLedger", summary: "Read current computed evidence coverage and stage",
+    public: false, implemented: true, mutation: false, requiresIfMatch: false,
+    action: "readiness.read", responseSchema: evidenceLedgerResponse,
+  },
+  {
+    method: "post", path: "/api/v1/projects/{projectId}/evidence-ledger",
+    operationId: "recordEvidenceLedger", summary: "Record a computed evidence assessment for disclosure review",
+    public: false, implemented: true, mutation: true, requiresIfMatch: false,
+    action: "readiness.recompute", requestSchema: z.object({}).strict(),
+    responseSchema: evidenceLedgerResponse.extend({ publicProjection: publicEvidenceLedger }),
+  },
   ...reviewRegistryRoutes("claim-types", "ClaimType", "claim type", proposeClaimTypeRequest,
     responseMeta.extend({ items: registryProposal.array() })),
   {
@@ -1790,7 +1804,16 @@ export const ROUTES: readonly RouteDefinition[] = [
     action: null,
     implemented: true,
     paramsSchema: publicRegistryEntryPathParams,
-    responseSchema: publicProjection,
+    // Read metadata and live warnings are not part of the immutable public projection.
+    responseSchema: publicProjection.merge(responseMeta).extend({
+      entryVersionId: z.string().uuid(),
+      publishedAt: z.string().nullable(),
+      history: z.array(z.object({
+        entryVersionId: z.string().uuid(), version: z.string(), status: z.string(),
+        revokedAt: z.string().nullable(),
+      }).strict()),
+      evidenceLedgerCurrent: publicEvidenceLedgerCurrent.nullable().optional(),
+    }).strict(),
   },
   {
     method: "get",

@@ -157,7 +157,19 @@ export async function readFacts(tx: Tx, tenantId: string, projectId: string) {
     WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
   `;
 
-  return PROJECT_FACT_KEYS.map((factKey) => {
+  const catalog = await tx<{ claim_type: string }[]>`
+    SELECT DISTINCT claim_type FROM core.claim_types
+    WHERE tenant_id = ${tenantId} AND effective_from <= now()
+    ORDER BY claim_type
+  `;
+  // Catalog confirmations use their exact claim-type key; no mapping to the seven gate facts.
+  // Keep historical rows visible even when their catalog is not currently effective.
+  const factKeys = [...new Set<string>([
+    ...PROJECT_FACT_KEYS,
+    ...catalog.map((row) => row.claim_type),
+    ...rows.map((row) => row.key),
+  ])];
+  return factKeys.map((factKey) => {
     const history = rows.filter((row) => row.key === factKey);
     const latest = history[0];
     const legacyStatus = unversioned.find((row) => row.fact_key === factKey)?.status;

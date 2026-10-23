@@ -25,6 +25,8 @@ import {
   type SourceReceipt,
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { CatalogClaimForm } from "@/components/CatalogClaimForm";
+import { WorkspaceEvidenceLedger } from "@/components/EvidenceLedger";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { GradeBadge, SourceResultBadge } from "@/components/StatusBadge";
@@ -45,7 +47,9 @@ import { SOURCE_RESULTS, type Grade, type SourceResult } from "@mpc/domain";
  */
 export default function DataRoomPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { token, loading: sessionLoading } = useSession();
+  const { token, session, loading: sessionLoading } = useSession();
+  const canCreateClaim = session?.actions?.includes("claim.curate") ?? false;
+  const [ledgerRevision, setLedgerRevision] = useState(0);
 
   const [receipts, setReceipts] = useState<SourceReceipt[]>([]);
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -106,6 +110,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
       setNodes(Object.fromEntries(graphData.nodes.map((node) => [node.uploadId, node])));
       setGraphLimit(graphData.truncated ? graphData.limit : null);
       setError(null);
+      setLedgerRevision((current) => current + 1);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -744,11 +749,14 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
           Grades are computed by rule. An operator cannot raise one directly.
         </p>
 
+        {token && canCreateClaim ? <CatalogClaimForm token={token} projectId={id} uploads={uploads} onSaved={load} /> : <p className="meta">A data steward can record catalog claims.</p>}
+        <details open><summary>Legacy claim entry (not catalog-backed)</summary>
+        <p className="meta">This compatibility action creates an unreviewed mining-right reference. It does not satisfy a catalog requirement.</p>
         <div className="row" style={{ marginBottom: 14 }}>
           <button onClick={() => void addClaim()} disabled={busy}>
             Add a mining right claim
           </button>
-        </div>
+        </div></details>
 
         {claims.length === 0 ? (
           <p className="sub" style={{ margin: 0 }}>
@@ -778,6 +786,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
                     </td>
                     <td>
                       {claim.valueText}
+                      {claim.catalogVersion ? <p className="meta">Catalog v{claim.catalogVersion} · {claim.documentUploadIds?.length ?? 0} linked documents</p> : <p className="meta">Legacy claim · no pinned catalog</p>}
                       {claim.unit ? <span className="meta"> {claim.unit}</span> : null}
                     </td>
                     <td className="mono meta">{claim.evidenceTier ?? "—"}</td>
@@ -846,6 +855,8 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
       {renderSourceReceipt()}
 
       {renderClaim()}
+
+      {token ? <WorkspaceEvidenceLedger token={token} projectId={id} revision={ledgerRevision} /> : null}
 
       <p className="meta">
         A successful source lookup is not verification. Each result means something different

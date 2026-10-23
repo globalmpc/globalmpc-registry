@@ -29,6 +29,7 @@ export const PUBLIC_FIELD_ALLOWLIST = [
   "sourceAge",
   "staleStatus",
   "claimSummary",
+  "evidenceLedger",
   "grade",
   "limitations",
   "verificationScope",

@@ -234,6 +234,40 @@ being blocked with respect to A3 (original evidence).
 
 ## 5. When to update this document
 
+### Evidence ledger boundary review (2026-10-23)
+
+Catalog-linked claims bind an approved catalog version, structured values and supporting
+documents to immutable claim content. New structured review snapshots use version 2 of the
+evidence commitment; legacy unstructured commitments retain their version 1 bytes. The
+server validates field declarations, project-scoped receipts and scanned documents. A
+correction appends a claim; it does not rewrite previously signed content.
+
+Computed ledger snapshots are separate from manual project confirmations and existing
+readiness or gate decisions. Their private input basis contains evidence and rule inputs,
+so snapshot reads require project authorization and tenant RLS. Recompute requests accept
+no caller-provided results or evaluation time. Snapshots reject update, delete and truncate.
+Publication checks the recorded input commitment, the exact public summary, and the current
+private basis and outcomes, at both draft and independent approval time.
+
+`core.public_evidence_ledger_current` is a new `SECURITY DEFINER` boundary. It resolves only
+published project versions, joins their recorded snapshot in the same tenant and project,
+and returns fixed warning codes for the already published item/version basis. It returns
+no new claims, document references, private inputs, natural-person names or free-text reasons.
+Signed limitations and pseudonymous review qualifications enter the frozen public summary
+only through the existing disclosure preview and independent approval. The current-warning
+overlay is explicitly outside the anchored content and cannot change an old content hash.
+
+The existing jobs worker can read the required assessment inputs and insert immutable
+snapshots and audit events. It gains no authority to edit claims, manual facts, policies,
+approvals or published versions. Because the worker bypasses RLS, every project-specific
+input query must also constrain the tenant explicitly; a regression test covers competing
+jurisdiction profiles in two tenants using the actual worker role. Worker failures are
+reported and retried; request-time health checks prevent an overdue sweep from hiding an
+expired or revoked evidence basis.
+
+These checks do not resolve the production data-residency, key-ownership, or release
+prerequisites listed above, and an evidence stage is not permission to operate or invest.
+
 - When a `SECURITY DEFINER` function is added or its `WHERE` clause changes (T2, T3)
 - When a page or endpoint is added to the public surface (T2, T5)
 - When a new system identity (worker, service account) is created (T1, T3)
@@ -241,3 +275,25 @@ being blocked with respect to A3 (original evidence).
 
 A threat model that is not updated **gives the reader false reassurance.** If there is nothing to
 change, write "checked, nothing changed" with the date.
+
+### Evidence-ledger publication concurrency
+
+Ledger publication takes a fixed, database-enforced lock over assessment input tables before
+reading current evidence and holds it through commit. This includes inserts and direct SQL
+writes, not just API updates. A dedicated invokable function has a fixed search path and fixed
+relation list; it returns no rows and is executable only by the application role. Plain reads
+continue concurrently. `NOWAIT` rejects an existing writer or row-lock holder immediately,
+returning a retryable publication error; the transaction rolls back its idempotency record so
+the original request key remains usable. The assessment clock is refreshed after acquisition.
+
+The barrier is deliberately conservative: ledger publication briefly excludes input writes
+across tenants. Concurrent writers cause publication to retry instead of accumulating a lock
+queue. A future finer-grained barrier must preserve protection against new input rows and
+consistent lock ordering across API, worker and direct SQL mutations. Changes to evaluator
+input relations must update the barrier relation list and concurrency regression coverage.
+
+The private assessment input also commits to the policy engine's applicable requirement IDs.
+Public grade warnings use this recorded applicability and the approved policy's minimum
+grade; private requirement IDs remain outside the public projection. Older ledger snapshots
+without this metadata conservatively warn on a below-minimum grade and may need a new
+assessment to disambiguate requirements that did not apply.

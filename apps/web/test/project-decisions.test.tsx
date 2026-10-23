@@ -168,6 +168,8 @@ function publicationRoutes() {
   let drafts: Record<string, unknown>[] = [];
   return {
     "GET /api/v1/projects/p1": project,
+    "GET /api/v1/projects/p1/evidence-ledger": { snapshot: { evaluatedAt: "2026-10-23T00:00:00Z", inputSnapshotHash: "snapshot", items: [], stages: [], currentStage: null, limitations: [] } },
+    "POST /api/v1/projects/p1/evidence-ledger": { publicProjection: { snapshotId: "snapshot-1", evaluatedAt: "2026-10-23T00:00:00Z", inputSnapshotHash: "snapshot", items: [], stages: [], currentStage: null, limitations: [] } },
     "GET /api/v1/projects/p1/disclosure-restrictions/active": { items: [] },
     "GET /api/v1/registry-entries/drafts?subjectId=p1": () => ({
       items: drafts,
@@ -231,7 +233,7 @@ describe("publication separation of duties", () => {
       calls.find(
         (c) => c.method === "POST" && c.url === "/api/v1/registry-entries",
       )?.body,
-    ).toMatchObject({ projection: { legalEffect: "none", stableId: "p1" } });
+    ).toMatchObject({ projection: { legalEffect: "none", stableId: "p1", evidenceLedger: { snapshotId: "snapshot-1" } } });
   });
   it("forbids publishing one's own draft, and shows published state on reload", async () => {
     const routes = publicationRoutes();
