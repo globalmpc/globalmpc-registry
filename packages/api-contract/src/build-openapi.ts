@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 import { errorEnvelope } from "./common.js";
 import { ROUTES } from "./routes.js";
 
@@ -16,25 +16,20 @@ import { ROUTES } from "./routes.js";
  * on drift (`pnpm check:openapi`).
  */
 
-function schemaFor(schema: Parameters<typeof zodToJsonSchema>[0], name: string): unknown {
-  // OpenAPI 3.1 uses JSON Schema 2020-12. The closest target zod-to-json-schema
-  // supports is 2019-09; for the schema constructs used here, both drafts are
-  // interpreted identically.
-  return zodToJsonSchema(schema, {
-    name,
-    target: "jsonSchema2019-09",
-    $refStrategy: "none",
-  });
+function schemaFor(schema: z.ZodType, name: string, io: "input" | "output" = "output"): unknown {
+  // Requests describe accepted input; responses describe the validated output shape.
+  const { $schema, ...converted } = z.toJSONSchema(schema, { target: "draft-2020-12", io });
+  return { $ref: `#/definitions/${name}`, definitions: { [name]: converted }, $schema };
 }
 
-/** Properties of an object schema, unwrapped from zod-to-json-schema's `definitions` wrapper. */
+/** Properties of an object schema, unwrapped from the named `definitions` wrapper. */
 function objectProperties(
-  schema: Parameters<typeof zodToJsonSchema>[0],
+  schema: z.ZodType,
   name: string,
 ): { readonly properties?: Record<string, unknown>; readonly required?: readonly string[] } {
-  // Given `name`, zod-to-json-schema wraps the schema under `definitions`.
+  // Named schemas are wrapped under `definitions`.
   // Parameters need the inner object, so unwrap one level.
-  const wrapper = schemaFor(schema, name) as { readonly definitions?: Record<string, unknown> };
+  const wrapper = schemaFor(schema, name, "input") as { readonly definitions?: Record<string, unknown> };
   return (wrapper.definitions?.[name] ?? {}) as {
     readonly properties?: Record<string, unknown>;
     readonly required?: readonly string[];
@@ -43,7 +38,7 @@ function objectProperties(
 
 function pathParameters(
   routePath: string,
-  paramsSchema: Parameters<typeof zodToJsonSchema>[0] | undefined,
+  paramsSchema: z.ZodType | undefined,
   operationId: string,
 ): unknown[] {
   const declared = paramsSchema
@@ -147,7 +142,7 @@ for (const route of ROUTES) {
       required: true,
       content: {
         "application/json": {
-          schema: schemaFor(route.requestSchema, `${route.operationId}Request`),
+          schema: schemaFor(route.requestSchema, `${route.operationId}Request`, "input"),
         },
       },
     };

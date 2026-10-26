@@ -26,7 +26,7 @@ import { requireMutationContext, requireReadContext } from "./shared.js";
  *   clearance, and the event, in one transaction.
  */
 
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 
 interface AuditRow {
   id: string;

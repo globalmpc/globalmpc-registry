@@ -72,7 +72,7 @@ export const sourceReceipt = z
     authorityId: z.string(),
     /** `null` when no original was received — never a placeholder hash (REQ-DAPP-049). */
     rawHash: hex32.nullable(),
-    queryBasis: z.record(z.unknown()),
+    queryBasis: z.record(z.string(), z.unknown()),
     endpointOrDocumentRef: z.string(),
     authenticationMethod: z.string(),
     termsLicense: z.string(),
@@ -98,7 +98,7 @@ export const claim = z.object({
   valueText: z.string(),
   unit: z.string().nullable(),
   asOf: z.string().nullable(),
-  sourceCoordinate: z.record(z.unknown()),
+  sourceCoordinate: z.record(z.string(), z.unknown()),
   evidenceTier: z.enum(["P1", "P2", "P3", "P4", "P5"]).nullable(),
   verificationState: z.enum([
     "unreviewed",
@@ -130,8 +130,8 @@ export const correctClaimRequest = z.object({
   valueText: z.string().min(1),
   unit: z.string().nullable().default(null),
   asOf: z.string().date().nullable().default(null),
-  sourceCoordinate: z.record(z.string()),
-  sourceReceiptId: z.string().uuid().nullable().default(null),
+  sourceCoordinate: z.record(z.string(), z.string()),
+  sourceReceiptId: z.string().guid().nullable().default(null),
   evidenceTier: z.enum(["P1", "P2", "P3", "P4", "P5"]).nullable().default(null),
   reason: z.string().min(1, "The reason for the correction cannot be empty"),
 });
@@ -398,8 +398,8 @@ export const verificationAttestation = z.object({
   attestationType: z.enum(ATTESTATION_TYPES),
   claimScope: z.array(z.string()).min(1),
   evidenceSnapshotHash: hex32,
-  findings: z.array(z.record(z.unknown())),
-  citations: z.array(z.record(z.unknown())),
+  findings: z.array(z.record(z.string(), z.unknown())),
+  citations: z.array(z.record(z.string(), z.unknown())),
   /** AC-01: empty strings are not allowed. */
   limitations: z.string().min(1),
   credentialStatusSnapshot: z.object({
@@ -433,11 +433,11 @@ export const createAttestationRequest = z.object({
   assignmentId: z.string(),
   attestationType: z.enum(ATTESTATION_TYPES),
   claimScope: z.array(z.string()).min(1),
-  findings: z.array(z.record(z.unknown())).default([]),
-  citations: z.array(z.record(z.unknown())).default([]),
+  findings: z.array(z.record(z.string(), z.unknown())).default([]),
+  citations: z.array(z.record(z.string(), z.unknown())).default([]),
   limitations: z.string().min(1, "limitations cannot be empty"),
   /** The signed attestation this corrects. It becomes `superseded` when this one is signed. */
-  supersedesId: z.string().uuid().nullable().default(null),
+  supersedesId: z.string().guid().nullable().default(null),
 });
 
 /** Withdraw a signed attestation. The signed body stays; a reason is recorded (07 §7.2). */
@@ -467,8 +467,8 @@ export const revokeAssignmentRequest = z.object({
  * independence checks as the first appointment (02 §2.4).
  */
 export const reassignReviewerRequest = z.object({
-  reviewerSubjectId: z.string().uuid(),
-  credentialId: z.string().uuid(),
+  reviewerSubjectId: z.string().guid(),
+  credentialId: z.string().guid(),
   conflictStatus: z.enum(["none", "disclosed_resolved", "unresolved"]),
   reason: z.string().min(1, "The reason for reassigning cannot be empty"),
 });
@@ -651,7 +651,7 @@ export const secondReviewRequest = z.object({
  * The request states only "what the lookup is based on".
  */
 export const sourceCollectRequest = z.object({
-  projectId: z.string().uuid(),
+  projectId: z.string().guid(),
   /** Lookup criteria. Kept verbatim in the receipt as the basis for reproduction. */
   queryBasis: z.record(z.string(), z.string()),
 });
@@ -855,7 +855,7 @@ export const jurisdictionProfileView = z.object({
   manualCount: z.number().int(),
   pendingCount: z.number().int(),
   /** Count per integration stage. Evidence for the R5 gate — no stage is folded into another. */
-  stageCounts: z.record(z.number().int()),
+  stageCounts: z.record(z.string(), z.number().int()),
   /** What this profile does not promise. Does not overstate unconfirmed integrations (R5 gate). */
   limitations: z.array(z.string()),
 });
@@ -996,7 +996,7 @@ export const governanceProposal = z.object({
 
 export const createProposalRequest = z.object({
   space: z.enum(["protocol", "project"]),
-  projectId: z.string().uuid().nullable().default(null),
+  projectId: z.string().guid().nullable().default(null),
   proposalType: z.string().min(1),
   title: z.string().min(1),
   rationale: z.string().min(1, "The proposal rationale cannot be empty"),
@@ -1095,7 +1095,7 @@ export const publicProjection = z
     asOf: isoDateTime,
     sourceAge: z.string().nullable(),
     staleStatus: z.string(),
-    claimSummary: z.array(z.record(z.string())).optional(),
+    claimSummary: z.array(z.record(z.string(), z.string())).optional(),
     grade: z.enum(GRADES).optional(),
     limitations: z.array(z.string()),
     verificationScope: z.array(z.string()).optional(),
@@ -1345,7 +1345,7 @@ export const publicProposalDetail = publicProposal.extend({
       toState: z.string(),
       reason: z.string(),
       occurredAt: isoDateTime,
-      tallySnapshot: z.record(z.unknown()).nullable(),
+      tallySnapshot: z.record(z.string(), z.unknown()).nullable(),
     }),
   ),
 });
@@ -1643,10 +1643,10 @@ export const roleGrantRequest = z.object({
 });
 
 export const createRoleGrantRequest = z.object({
-  subjectId: z.string().uuid(),
+  subjectId: z.string().guid(),
   role: z.string().min(1),
-  projectId: z.string().uuid().optional(),
-  organizationId: z.string().uuid().optional(),
+  projectId: z.string().guid().optional(),
+  organizationId: z.string().guid().optional(),
   /**
    * Limit the binding to projects hosted in these jurisdictions (02 §2.5), as ISO 3166-1
    * alpha-3 codes — the same form as a project's host country. Omit for an unscoped binding.
@@ -1698,7 +1698,7 @@ export const roleRevocationRequest = z.object({
 });
 
 export const createRoleRevocationRequest = z.object({
-  roleBindingId: z.string().uuid(),
+  roleBindingId: z.string().guid(),
   reasonCode: z.enum(ROLE_REVOCATION_REASON_CODES),
   reason: z.string().min(1).max(1000),
 });
@@ -1739,7 +1739,7 @@ export const registryProposal = z.object({
   kind: z.enum(REGISTRY_KINDS),
   itemKey: z.string(),
   itemVersion: z.number().int().positive(),
-  payload: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
   rationale: z.string(),
   effectiveFrom: isoDateTime,
   proposedBySubjectId: z.string(),
@@ -1758,13 +1758,13 @@ export const registryProposal = z.object({
  * bootstrap CLI resolves it. Effective from `issuedAt`.
  */
 export const proposeCredentialRequest = z.object({
-  subjectId: z.string().uuid(),
+  subjectId: z.string().guid(),
   issuerReference: z.string().min(1).max(500),
   /**
    * The authority that issued the credential. Its acceptance state and recognized scope decide
    * whether the credential can be a review basis (AC-15·AC-16); free text cannot be asked that.
    */
-  issuerAuthorityId: z.string().uuid(),
+  issuerAuthorityId: z.string().guid(),
   credentialType: z.string().min(1).max(200),
   credentialScope: z.array(z.string().min(1)).max(100),
   jurisdiction: z.array(z.string().min(1)).max(50),
@@ -1790,7 +1790,7 @@ export const proposeAttestationSchemaRequest = z.object({
  * against its schema (OD-15); version and effective date come from the definition itself.
  */
 export const proposePolicySetRequest = z.object({
-  definition: z.record(z.unknown()),
+  definition: z.record(z.string(), z.unknown()),
   rationale: nonBlank(2000),
 });
 
@@ -1851,7 +1851,7 @@ export const claimTypeCatalogQuery = z.object({
 }).strict();
 
 export const claimTypeCatalogEntry = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   claimType: z.string(),
   catalogVersion: z.number().int().positive(),
   displayName: z.string(),
@@ -1901,9 +1901,9 @@ export const personIdentifierRecord = z
 export const createRegistryDraftRequest = z
   .object({
     registryType: z.enum(["project", "verification", "asset"]),
-    subjectId: z.string().uuid(),
+    subjectId: z.string().guid(),
     publicKey: z.string().min(1).max(200),
-    projection: z.record(z.unknown()),
+    projection: z.record(z.string(), z.unknown()),
     sourceSnapshotHash: hex32.optional(),
     policyVersion: z.string().min(1).max(100),
     schemaVersion: z.string().min(1).max(100),
@@ -1926,7 +1926,7 @@ export const publishRegistryDraftRequest = z
 export const rejectRegistryDraftRequest = z.object({ reason: nonBlank(1000) }).strict();
 
 export const registryDraftListQuery = z.object({
-  subjectId: z.string().uuid().optional(),
+  subjectId: z.string().guid().optional(),
   state: z.enum(["pending", "published", "rejected"]).optional(),
 });
 
@@ -1935,7 +1935,7 @@ export const registryPublicationDraft = z.object({
   registryType: z.enum(["project", "verification"]),
   subjectId: z.string(),
   publicKey: z.string(),
-  projection: z.record(z.unknown()),
+  projection: z.record(z.string(), z.unknown()),
   sourceSnapshotHash: hex32,
   commercialReuse: z.enum(["confirmed", "unconfirmed", "prohibited"]),
   publishedAsCommercialBasis: z.boolean(),
@@ -2186,7 +2186,7 @@ export const updateDocumentProfileRequest = z
   .object({
     documentType: documentTypeText.nullable().optional(),
     validUntil: calendarDate.nullable().optional(),
-    supersedesUploadId: z.string().uuid().optional(),
+    supersedesUploadId: z.string().guid().optional(),
   })
   .strict();
 
@@ -2243,9 +2243,9 @@ export const documentGraph = z.object({
 export const createDocumentLinkRequest = z
   .object({
     /** The document rested on. */
-    upstreamUploadId: z.string().uuid(),
+    upstreamUploadId: z.string().guid(),
     /** The document that rests on it — the one to look at again when upstream changes. */
-    downstreamUploadId: z.string().uuid(),
+    downstreamUploadId: z.string().guid(),
     kind: documentLinkKind,
     note: z.string().trim().min(1).max(500).nullable().default(null),
   })
@@ -2328,7 +2328,7 @@ export const documentImpactList = z.object({
  */
 export const resolveDocumentImpactsRequest = z
   .object({
-    impactIds: z.array(z.string().uuid()).min(1).max(200),
+    impactIds: z.array(z.string().guid()).min(1).max(200),
     resolution: z.enum(["no_change_needed", "not_applicable"]),
     note: z.string().trim().min(1).max(1000),
   })

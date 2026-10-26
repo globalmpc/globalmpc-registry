@@ -15,7 +15,7 @@
 #
 # A failure in step 2 means the old image would not start. A failure in step 3 names the code
 # path that breaks after a rollback — the fix is either a compatible migration in TO_REF or a
-# rollback plan that restores the database too (see deploy/rollback.md).
+# rollback plan that restores the database too (see docs/operations/rollback.md).
 #
 # **It deletes nothing it did not create.** The database name carries the time and the script
 # refuses if it already exists.

@@ -70,11 +70,11 @@ import {
 const SIGNATURE_REQUEST_TTL_MS = 10 * 60 * 1000;
 
 const createCaseSchema = z.object({
-  projectId: z.string().uuid(),
-  schemaId: z.string().uuid(),
-  claimIds: z.array(z.string().uuid()).min(1, "A review cannot be created without evidence"),
-  reviewerSubjectId: z.string().uuid(),
-  credentialId: z.string().uuid(),
+  projectId: z.string().guid(),
+  schemaId: z.string().guid(),
+  claimIds: z.array(z.string().guid()).min(1, "A review cannot be created without evidence"),
+  reviewerSubjectId: z.string().guid(),
+  credentialId: z.string().guid(),
   /**
    * The assigner's conflict disclosure — 02 §2.5. Required: a default of `none` recorded
    * "no conflict" for every case nobody asked about. The server's independence checks run
@@ -84,7 +84,7 @@ const createCaseSchema = z.object({
 });
 
 const createAttestationSchema = z.object({
-  assignmentId: z.string().uuid(),
+  assignmentId: z.string().guid(),
   attestationType: z.enum([
     "professional_signoff",
     "laboratory_accreditation",
@@ -92,19 +92,19 @@ const createAttestationSchema = z.object({
     "legal_notarization",
     "cryptographic_attestation",
   ]),
-  claimScope: z.array(z.string().uuid()).min(1),
-  findings: z.array(z.record(z.string())).default([]),
-  citations: z.array(z.record(z.string())).default([]),
+  claimScope: z.array(z.string().guid()).min(1),
+  findings: z.array(z.record(z.string(), z.string())).default([]),
+  citations: z.array(z.record(z.string(), z.string())).default([]),
   limitations: z.string().min(1, "limitations cannot be empty"),
   /**
    * The signed attestation this one corrects — 04 §4.2, REQ-DAPP-006. The predecessor becomes
    * `superseded` only when this one is signed; until then it stands.
    */
-  supersedesId: z.string().uuid().nullable().default(null),
+  supersedesId: z.string().guid().nullable().default(null),
 });
 
 const submitSignatureSchema = z.object({
-  signatureRequestId: z.string().uuid(),
+  signatureRequestId: z.string().guid(),
   signature: z.string().regex(/^0x[0-9a-f]+$/),
 });
 

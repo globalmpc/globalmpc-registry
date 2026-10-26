@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import { readdirSync, readFileSync } from "node:fs";
 
 // Referenced directories do not inherit the root configuration in Vitest 5.
@@ -12,11 +12,12 @@ const roots = [
 
 // Split CI by project without skipping DB-dependent suites or running files twice.
 // API/worker projects contain DB integration tests and run together with packages/db.
+// Explicit .unit.test.ts files in packages/db exercise pure domain contracts without a DB.
 // With no mode override, local `pnpm test` still runs every project.
 export default defineConfig(({ mode }) => {
   const integrationRoot = (root: string) => root === "packages/db" || root.startsWith("apps/");
   const selectedRoots = roots.filter((root) =>
-    mode === "unit" ? !integrationRoot(root) : mode === "integration" ? integrationRoot(root) : true,
+    mode === "unit" ? !integrationRoot(root) || root === "packages/db" : mode === "integration" ? integrationRoot(root) : true,
   );
   return {
     test: {
@@ -35,6 +36,12 @@ export default defineConfig(({ mode }) => {
           test: {
             root,
             name: JSON.parse(readFileSync(`${root}/package.json`, "utf8")).name as string,
+            ...(root === "packages/db" && mode === "unit"
+              ? { include: ["test/**/*.unit.test.ts"] }
+              : {}),
+            ...(root === "packages/db" && mode === "integration"
+              ? { exclude: [...configDefaults.exclude, "test/**/*.unit.test.ts"] }
+              : {}),
           },
         })),
         ...(mode === "integration" ? [] : [{

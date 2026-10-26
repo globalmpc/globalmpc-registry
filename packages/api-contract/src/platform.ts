@@ -78,7 +78,7 @@ export const releaseBreakGlassRequest = z.object({
 
 /** Access quarantine: every active role binding of the subject ends at once. */
 export const quarantineAccessRequest = z.object({
-  subjectId: z.string().uuid(),
+  subjectId: z.string().guid(),
   reason: nonBlank(1000),
 });
 

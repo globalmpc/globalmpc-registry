@@ -91,6 +91,6 @@ export function parseRuleSet(input: unknown): RuleSet {
   return ruleSetSchema.parse(input);
 }
 
-export function safeParseRuleSet(input: unknown): z.SafeParseReturnType<unknown, RuleSet> {
+export function safeParseRuleSet(input: unknown): z.ZodSafeParseResult<RuleSet> {
   return ruleSetSchema.safeParse(input);
 }

@@ -16,7 +16,7 @@ const EDGE_CLIENT_IP_HEADER = "x-mpc-client-ip";
  * Neither value is verified here — the API only uses it together with the secret, i.e. when it
  * is certain the value came from this code and not from the visitor. That is only as good as the
  * platform: it must overwrite both headers (Vercel does). One that passes a visitor's own
- * `x-real-ip` through lets the visitor choose the address vouched for — deploy/README.md says so.
+ * `x-real-ip` through lets the visitor choose the address vouched for — docs/operations/deployment.md says so.
  */
 function visitorAddress(request: NextRequest): string | null {
   const real = request.headers.get("x-real-ip")?.trim();

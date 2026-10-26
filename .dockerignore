@@ -13,6 +13,9 @@ contracts/lib
 
 # Local secrets are not put into the image. compose mounts them at runtime.
 deploy/local-secrets
+config/local-secrets
+deploy/secrets
+config/secrets
 
 # Secrets never enter the build context — `COPY . .` would bake them into a layer, and a layer
 # keeps them even after a later delete. `**/` also covers nested files such as

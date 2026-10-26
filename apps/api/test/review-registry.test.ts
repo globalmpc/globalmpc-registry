@@ -192,7 +192,7 @@ describeDb("review registry proposals", () => {
     const proposalList = await get(operatorToken, catalogBase);
     expect(proposalList.statusCode).toBe(200);
     const listSchema = ROUTES.find((route) => route.operationId === "listClaimTypeProposals")!.responseSchema!;
-    expect(listSchema.parse(proposalList.json()).items.some((item: Proposal) => item.id === proposal.id)).toBe(true);
+    expect((listSchema.parse(proposalList.json()) as { items: Proposal[] }).items.some((item: Proposal) => item.id === proposal.id)).toBe(true);
     expect((await get(stewardToken, `/api/v1/claim-types/${body.claimType}/versions/1`)).statusCode).toBe(404);
     expect((await post(dualToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Checked" }, 1)).statusCode).toBe(422);
     const approved = await post(approverToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Checked" }, 1);

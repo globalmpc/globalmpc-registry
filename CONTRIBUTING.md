@@ -27,7 +27,7 @@ In particular:
 
 ```sh
 pnpm install --frozen-lockfile
-docker compose up -d                       # Postgres · MinIO · anvil
+docker compose -f docker/docker-compose.yml up -d                       # Postgres · MinIO · anvil
 
 DATABASE_URL="postgres://postgres@localhost:5432/mpc_test" pnpm test
 pnpm check                                 # must pass before a PR

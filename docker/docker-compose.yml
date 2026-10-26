@@ -60,24 +60,6 @@ services:
       echo 'bucket ready'
       "
 
-  # Virus scanning. The first start takes a few minutes while the signature DB downloads.
-  #
-  # The official `clamav/clamav` is **amd64 only**, so on Apple Silicon it ran under emulation.
-  # Slow scans stop being checked, and an unchecked scanner cannot be told apart from a
-  # deployment with `scan` off. So it is built here on Alpine —
-  # `deploy/clamav/`. Local and deployment use the same image.
-  clamav:
-    build: ./deploy/clamav
-    healthcheck:
-      # The Alpine package has no `clamdcheck.sh`. `--ping` checks the same thing —
-      # whether clamd responds. It does not respond while downloading the signature DB,
-      # so it keeps retrying within `start_period`.
-      test: ["CMD", "clamdscan", "--config-file=/etc/clamav/clamd.conf", "--ping", "1"]
-      interval: 15s
-      timeout: 10s
-      retries: 40
-      start_period: 300s
-
   # Observability — enable with `--profile observability`.
   #
   # Ports are published on loopback (`127.0.0.1`) only — not reachable from other hosts.
@@ -87,8 +69,8 @@ services:
     image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
     profiles: ["observability"]
     volumes:
-      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./deploy/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ../config/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../config/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - "127.0.0.1:9090:9090"
 
@@ -96,7 +78,7 @@ services:
     image: prom/alertmanager:v0.28.0@sha256:d5155cfac40a6d9250ffc97c19db2c5e190c7bc57c6b67125c94903358f8c7d8
     profiles: ["observability"]
     volumes:
-      - ./deploy/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ../config/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
       - "127.0.0.1:9093:9093"
 
@@ -109,8 +91,8 @@ services:
 
   migrate:
     build: &build
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     depends_on:
       postgres: { condition: service_healthy }
     environment:
@@ -126,7 +108,7 @@ services:
     environment:
       PGPASSWORD: postgres
     volumes:
-      - ./deploy/sql:/sql:ro
+      - ../packages/db/sql:/sql:ro
     command: ["psql", "-h", "postgres", "-U", "postgres", "-d", "mpc_dev", "-v", "ON_ERROR_STOP=1", "-f", "/sql/login-roles.sql"]
 
   api:
@@ -165,8 +147,8 @@ services:
   anchor-worker:
     image: mpc/anchor-worker:local
     build:
-      context: .
-      dockerfile: deploy/workers.Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile.workers
       args:
         WORKER: anchor-worker
     init: true
@@ -197,7 +179,7 @@ services:
       ANCHOR_POLL_MS: "2000"
       ANCHOR_RECHECK_MS: "5000"
       # Local anvil value only. anvil accounts hold no real assets. How to set the production
-      # value is in `deploy/README.md`.
+      # value is in `docs/operations/deployment.md`.
       ANCHOR_DAILY_SPEND_CAP_WEI: "1000000000000000000"
     secrets: [worker_database_url, anchor_signer_key]
     command: ["node", "node_modules/tsx/dist/cli.mjs", "src/main.ts"]
@@ -207,8 +189,8 @@ services:
   jobs-worker:
     image: mpc/jobs-worker:local
     build:
-      context: .
-      dockerfile: deploy/workers.Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile.workers
       args:
         WORKER: jobs-worker
     init: true
@@ -243,33 +225,36 @@ services:
   scan-worker:
     image: mpc/scan-worker:local
     build:
-      context: .
-      dockerfile: deploy/workers.Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile.workers
       args:
         WORKER: scan-worker
     init: true
     restart: unless-stopped
     stop_grace_period: 60s
     read_only: true
-    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,mode=1777"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m,mode=1777"]
+    volumes:
+      - clamavdata:/var/lib/clamav
+      # INSTREAM spools uploads; large evidence must not exhaust the small /tmp tmpfs.
+      - clamavscratch:/var/tmp/clamav
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
-      test: ["CMD", "node", "-e", "const fs = require('node:fs'); try { process.exit(Date.now() - fs.statSync('/tmp/worker-heartbeat').mtimeMs < 90000 ? 0 : 1); } catch { process.exit(1); }"]
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 300s
     depends_on:
       login-roles: { condition: service_completed_successfully }
       minio-init: { condition: service_completed_successfully }
-      clamav: { condition: service_healthy }
       api: { condition: service_started }
     environment:
       WORKER_HEALTH_FILE: /tmp/worker-heartbeat
       DATABASE_URL: file:/run/secrets/worker_database_url
       OBJECT_SECRET_ACCESS_KEY: file:/run/secrets/object_secret_key
-      CLAMAV_HOST: clamav
+      CLAMAV_HOST: 127.0.0.1
       CLAMAV_PORT: "3310"
       SCAN_POLL_MS: "3000"
       # Results are reported through the API. The worker takes the same SIWE path as a person.
@@ -288,7 +273,7 @@ services:
       OBJECT_SSE: none
       OBJECT_ACCESS_KEY_ID: minioadmin
     secrets: [worker_database_url, object_secret_key, scan_service_key]
-    command: ["node", "node_modules/tsx/dist/cli.mjs", "src/main.ts"]
+    command: ["node", "--import", "tsx", "src/main.ts"]
 
   web:
     build: *build
@@ -305,18 +290,20 @@ services:
 # Local-only values. Mounting them as files is the point; the values are meaningless.
 secrets:
   database_url:
-    file: ./deploy/local-secrets/database_url
+    file: ../config/local-secrets/database_url
   worker_database_url:
-    file: ./deploy/local-secrets/worker_database_url
+    file: ../config/local-secrets/worker_database_url
   session_secret:
-    file: ./deploy/local-secrets/session_secret
+    file: ../config/local-secrets/session_secret
   object_secret_key:
-    file: ./deploy/local-secrets/object_secret_key
+    file: ../config/local-secrets/object_secret_key
   anchor_signer_key:
-    file: ./deploy/local-secrets/anchor_signer_key
+    file: ../config/local-secrets/anchor_signer_key
   scan_service_key:
-    file: ./deploy/local-secrets/scan_service_key
+    file: ../config/local-secrets/scan_service_key
 
 volumes:
   pgdata:
   miniodata:
+  clamavdata:
+  clamavscratch:

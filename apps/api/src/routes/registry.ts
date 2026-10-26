@@ -156,7 +156,7 @@ export async function registerRegistryRoutes(
            * that is no longer true, publishing it would anchor a stale statement.
            */
           if (draft.projection["evidenceLedger"] !== undefined) {
-            await lockEvidenceLedgerPublicationInputs(tx);
+            await lockEvidenceLedgerPublicationInputs(tx, draft.subject_id);
           }
           // The project's lifecycle becomes the published status. Locked here, in the same order
           // as lifecycle transitions, so a suspension cannot commit between reading and writing it.

@@ -19,7 +19,7 @@ import type { RouteDefinition } from "./routes.js";
  */
 export const disclosureRestrictionCreateRequest = z.object({
   /** Subjects the blackout covers — the project itself, or specific insiders by subject id. */
-  subjectScope: z.array(z.string().uuid()).min(1),
+  subjectScope: z.array(z.string().guid()).min(1),
   restrictedActionTypes: z.array(z.enum(RESTRICTABLE_ACTION_TYPES)).min(1),
   materialInfoRef: z.string().min(1).max(500),
   reason: z.string().min(1).max(1000),
@@ -50,7 +50,7 @@ export const disclosureRestrictionReleaseRequest = z.object({
 export const disclosureRestrictionSupersedeRequest = z.object({
   reason: z.string().min(1).max(1000),
   /** The restriction that replaces this one, when there is one. */
-  supersededById: z.string().uuid().nullable().optional(),
+  supersededById: z.string().guid().nullable().optional(),
 });
 
 export const disclosureRestriction = z.object({
@@ -67,7 +67,7 @@ export const disclosureRestriction = z.object({
   expectedNextUpdateAt: isoDateTime.nullable(),
   expectedReleaseAt: isoDateTime.nullable(),
   releasedAt: isoDateTime.nullable(),
-  releaseRecord: z.record(z.unknown()).nullable(),
+  releaseRecord: z.record(z.string(), z.unknown()).nullable(),
   supersededById: z.string().nullable(),
   version: z.number().int().positive(),
   /** Activation, blocked attempts, release — never deleted (J-22 step 5). */

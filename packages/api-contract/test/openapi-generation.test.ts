@@ -13,6 +13,18 @@ it("generates the checked-in OpenAPI contract including auth, query and concurre
     readFileSync(new URL("../openapi.json", import.meta.url), "utf8"),
   );
   expect(generated).toEqual(committed);
+  const correction = generated.paths["/api/v1/claims/{claimId}/versions"].post;
+  const request = correction.requestBody.content["application/json"].schema.definitions.correctClaimRequest;
+  // Request defaults remain optional on the wire; response objects describe the complete output.
+  expect(new Set(request.required)).toEqual(new Set(["valueText", "sourceCoordinate", "reason"]));
+  for (const field of ["unit", "asOf", "sourceReceiptId", "evidenceTier"]) {
+    expect(request.properties[field].default).toBeNull();
+  }
+  expect(request.properties.catalogEntryId).not.toHaveProperty("default");
+  expect(request.properties.documentUploadIds).not.toHaveProperty("default");
+  const response = correction.responses["200"].content["application/json"].schema.definitions.correctClaimResponse;
+  expect(response.additionalProperties).toBe(false);
+  expect(response.required).toEqual(expect.arrayContaining(["catalogEntryId", "documentUploadIds", "unit", "asOf"]));
   const operations = Object.values(generated.paths).flatMap((p) =>
     Object.values(p as Record<string, unknown>),
   ) as { tags: string[]; security?: unknown; parameters: { name: string }[] }[];

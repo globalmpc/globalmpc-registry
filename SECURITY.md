@@ -19,13 +19,13 @@ details private until a fix and coordinated disclosure are agreed with the maint
 | API, web and workers | `apps/` |
 | Shared packages | `packages/` |
 | Dependency and build configuration | Package manifests, lockfiles, `.gitmodules`, `contracts/foundry.toml`, CI workflows |
-| Deployment configuration | `Dockerfile`, `docker-compose.yml`, `deploy/` |
+| Deployment configuration | `docker/`, `config/`, `packages/db/sql/` |
 
 OpenZeppelin is installed by pnpm; forge-std is a Git submodule. Report defects in upstream
 libraries to their maintainers. Vulnerabilities in this project's integration, configuration
 or use of those libraries remain in scope here.
 
-The known development values in `deploy/local-secrets/` are not leaked production credentials.
+The known development values in `config/local-secrets/` are not leaked production credentials.
 Their exposure as real production credentials or use in a production deployment is in scope.
 
 ## Supported versions

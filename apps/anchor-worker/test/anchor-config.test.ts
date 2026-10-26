@@ -20,7 +20,7 @@ const base: AnchorEnv = {
 
 /**
  * The cap must be **the value produced by the sizing formula** — the formula and where to set it
- * are in `deploy/README.md`.
+ * are in `docs/operations/deployment.md`.
  *
  *   daily spend cap = submissions per day × gas per submission × gas price cap (gwei) × 1e9 × 1.5
  *

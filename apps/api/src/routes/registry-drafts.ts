@@ -65,7 +65,7 @@ export interface DraftRow {
   version: number;
 }
 
-export function parseBody<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, body: unknown): T {
+export function parseBody<T>(schema: z.ZodType<T, unknown>, body: unknown): T {
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
     throw badRequest("REQUEST_INVALID", "Request format is invalid", { issues: parsed.error.issues });

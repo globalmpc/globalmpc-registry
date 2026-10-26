@@ -1,6 +1,7 @@
 import type postgres from "postgres";
 import { claimTypeDefinition, structuredClaimValues } from "@mpc/api-contract";
 import { unprocessable } from "../errors.js";
+import { isProjectFactKey } from "./project-registry.js";
 
 type Values = Record<string, string | boolean>;
 export interface CatalogClaimInput {
@@ -45,11 +46,27 @@ export function validateCatalogValues(definition: unknown, values: Values): void
 
 export async function resolveCatalogClaim(
   tx: postgres.TransactionSql, projectId: string, claimType: string, input: CatalogClaimInput,
+  previousClaimId?: string,
 ): Promise<CatalogClaimContent> {
   const catalogEntryId = input.catalogEntryId ?? null;
   const values = input.structuredValues ?? null;
+  if (catalogEntryId !== null && isProjectFactKey(claimType)) {
+    // Only the correction route supplies this internal parent after authorizing and
+    // locking it. Historical reserved definitions remain unavailable for fresh claims.
+    const [previous] = previousClaimId ? await tx<{ id: string }[]>`
+      SELECT id FROM core.claims WHERE id=${previousClaimId} AND project_id=${projectId}
+        AND claim_type=${claimType} AND catalog_entry_id=${catalogEntryId}
+        AND superseded_by_claim_id IS NULL FOR UPDATE
+    ` : [];
+    if (!previous) throw unprocessable("CLAIM_TYPE_RESERVED", "Catalog claims cannot use a manual project fact key");
+  }
   if ((catalogEntryId === null) !== (values === null)) {
     throw unprocessable("CLAIM_CATALOG_REQUIRED", "Catalog entry and structured values must be provided together");
+  }
+  // Legacy snapshot fingerprints do not bind document IDs. Require structured claims
+  // rather than silently adding evidence that an existing review cannot authenticate.
+  if (catalogEntryId === null && (input.documentUploadIds?.length ?? 0) > 0) {
+    throw unprocessable("CLAIM_CATALOG_REQUIRED", "Document attachments require a catalog entry and structured values");
   }
   let catalogVersion: number | null = null;
   if (catalogEntryId !== null && values !== null) {

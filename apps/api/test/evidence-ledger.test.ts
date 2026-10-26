@@ -319,6 +319,9 @@ describeDb('computed ledger API and approved public boundary',()=>{
       await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
         VALUES(${claimIds[index]!},${fx.tenantA},${projectId},${entry.type},'Private synthetic input','{}',${entry.grade},${entry.catalog},1,${fx.sql.json(entry.values)},${[documentId]}::uuid[],current_date)`;
     }
+    // PostgreSQL now() has microseconds; an immediate JS evaluation can still be at
+    // the start of that millisecond. Eligibility is not the boundary under test here.
+    const eligibleAt=new Date(Date.now()-1000);
     const caseId=randomUUID(),assignmentId=randomUUID();
     await fx.sql`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id,state)
       VALUES(${caseId},${fx.tenantA},${projectId},${fx.schemaA},'signed')`;
@@ -327,12 +330,12 @@ describeDb('computed ledger API and approved public boundary',()=>{
     await fx.sql`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
       evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
       VALUES(${randomUUID()},${fx.tenantA},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${claimIds}::uuid[],
-      ${hash},'Synthetic scope only','{"status":"valid"}','1','1',${hash},${'0x'+'12'.repeat(65)},${fx.reviewerA.address},now(),'signed')`;
+      ${hash},'Synthetic scope only','{"status":"valid"}','1','1',${hash},${'0x'+'12'.repeat(65)},${fx.reviewerA.address},${eligibleAt},'signed')`;
     const definition={ruleSetId:'synthetic-unrelated',version:'1.0.0',effectiveFrom:'2020-01-01T00:00:00Z',supersededBy:null,jurisdictionProfile:'MNG',gateId:'stage.production',retroactive:false,
       requirements:[{requirementId:'primary',label:'Primary',appliesWhen:{op:'always'},requiredClaimTypes:[claimType],minimumGrade:'verified',freshnessThresholdDays:null,requiredAttestations:['professional_signoff'],blockingConflictTypes:[],notEvaluableWhen:{op:'never'},watchWhen:null},
         {requirementId:'unrelated',label:'Not applicable',appliesWhen:{op:'eq',path:'referenceStatus',value:'not_this_project'},requiredClaimTypes:[otherType],minimumGrade:'verified',freshnessThresholdDays:null,requiredAttestations:[],blockingConflictTypes:[],notEvaluableWhen:{op:'never'},watchWhen:null}]};
     await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-      VALUES(${randomUUID()},${fx.tenantA},'synthetic-unrelated','1.0.0','stage.production','MNG',now(),${fx.sql.json(definition)},'effective')`;
+      VALUES(${randomUUID()},${fx.tenantA},'synthetic-unrelated','1.0.0','stage.production','MNG',${eligibleAt},${fx.sql.json(definition)},'effective')`;
     const assessed=await assess(projectId);expect(assessed.statusCode,assessed.body).toBe(200);
     expect(assessed.json().snapshot.currentStage).toBe('stage.production');
     expect(assessed.json().snapshot.items.find((item:{claimType:string})=>item.claimType===otherType)).toMatchObject({status:'reviewed',grade:'self_reported'});

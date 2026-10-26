@@ -7,6 +7,7 @@ import {
   createRegistrationRequest,
   createStakeholderEventRequest,
   recordConfirmationRequest,
+  recordFactConfirmationRequest,
 } from "@mpc/api-contract";
 import { badRequest, notFound, unprocessable } from "../errors.js";
 import { assertAuthorized, projectResource, sessionFacts } from "../plugins/authorize.js";
@@ -121,7 +122,7 @@ export async function registerProjectPartyRoutes(
       const { session, tenantId, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
       const { projectId, factKey } = request.params;
-      const data = parseBody(recordConfirmationRequest, request);
+      const data = parseBody(recordFactConfirmationRequest, request);
 
       const effectiveRole = assertAuthorized(
         session,
@@ -134,7 +135,17 @@ export async function registerProjectPartyRoutes(
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           await assertProjectExists(tx, tenantId, projectId);
-          if (!isProjectFactKey(factKey)) {
+          if (isProjectFactKey(factKey)) {
+            if (data.factScope === "catalog") throw unprocessable("CLAIM_TYPE_RESERVED", "This key belongs only to the legacy confirmation matrix");
+            const [collision] = await tx<{ id: string }[]>`
+              SELECT id FROM core.claim_types
+              WHERE tenant_id = ${tenantId} AND claim_type = ${factKey} LIMIT 1
+            `;
+            // Older catalog entries may share this URL with a fixed matrix row. Refuse an
+            // ambiguous write rather than let a catalog applicability decision alter a gate.
+            if (collision && data.factScope !== "legacy") throw unprocessable("FACT_KEY_CATALOG_COLLISION", "This historical catalog key overlaps a legacy matrix row; explicitly select the legacy fact scope");
+          } else {
+            if (data.factScope === "legacy") throw unprocessable("FACT_SCOPE_INVALID", "This key belongs to the catalog, not the legacy confirmation matrix");
             const [catalog] = await tx<{ id: string }[]>`
               SELECT id FROM core.claim_types
               WHERE tenant_id = ${tenantId} AND claim_type = ${factKey} AND effective_from <= now()

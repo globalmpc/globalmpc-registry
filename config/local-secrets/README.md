@@ -4,7 +4,7 @@
 the MinIO default credentials, and none of them holds any real asset.
 
 They are here not because the values are secret but **to make the injection path the same
-as in deployment**. `docker-compose.yml` mounts these files as `file:` references, and the
+as in deployment**. `docker/docker-compose.yml` mounts these files as `file:` references, and the
 application reads them with the same code in `packages/config`. If only local used
 environment variable values, a "works locally but not in deployment" gap would appear.
 

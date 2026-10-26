@@ -19,7 +19,7 @@ export const AUDIT_EXPORT_MAX_LIMIT = 5000;
 
 export const auditExportQuery = z
   .object({
-    projectId: z.string().uuid().optional(),
+    projectId: z.string().guid().optional(),
     from: isoDateTime.optional(),
     to: isoDateTime.optional(),
     /** Keyset cursor: the last `id` of the previous page. */
@@ -98,7 +98,7 @@ export const projectExportJob = z.object({
    * `{ manifest, sections }` once built. Numbers are decimal strings (canonical profile);
    * section hashes in the manifest are over the canonical form of each section.
    */
-  package: z.record(z.unknown()).nullable(),
+  package: z.record(z.string(), z.unknown()).nullable(),
   requestId: z.string(),
   asOf: isoDateTime,
 });
