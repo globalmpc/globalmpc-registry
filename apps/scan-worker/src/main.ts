@@ -41,7 +41,7 @@ const leaseMs = Number(process.env["SCAN_LEASE_MS"] ?? String(2 * 60 * 1000));
 
 const scannerOptions = {
   ...DEFAULT_SCANNER_OPTIONS,
-  host: process.env["CLAMAV_HOST"] ?? "clamav",
+  host: process.env["CLAMAV_HOST"] ?? "127.0.0.1",
   port: Number(process.env["CLAMAV_PORT"] ?? "3310"),
   timeoutMs: Number(process.env["SCAN_TIMEOUT_MS"] ?? String(DEFAULT_SCANNER_OPTIONS.timeoutMs)),
   maxAttempts,

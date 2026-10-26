@@ -79,7 +79,7 @@ const GOVERNANCE_LIMITATIONS = [
 
 const createSchema = z.object({
   space: z.enum(["protocol", "project"]),
-  projectId: z.string().uuid().nullable().default(null),
+  projectId: z.string().guid().nullable().default(null),
   proposalType: z.string().min(1),
   title: z.string().min(1),
   rationale: z.string().min(1, "Proposal rationale cannot be empty"),

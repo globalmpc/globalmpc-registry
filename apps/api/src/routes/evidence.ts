@@ -75,8 +75,8 @@ const AUTHENTICATION_METHODS = [
 ] as const;
 
 const createReceiptSchema = z.object({
-  connectionId: z.string().uuid(),
-  authorityId: z.string().uuid(),
+  connectionId: z.string().guid(),
+  authorityId: z.string().guid(),
   result: z.enum(SOURCE_RESULTS),
   collectionMethod: z.enum([
     "authenticated_api",
@@ -84,7 +84,7 @@ const createReceiptSchema = z.object({
     "verifiable_signed_document",
     "manual_official_registry_confirmation",
   ]),
-  queryBasis: z.record(z.string()),
+  queryBasis: z.record(z.string(), z.string()),
   endpointOrDocumentRef: z.string().min(1),
   authenticationMethod: z.enum(AUTHENTICATION_METHODS),
   /**
@@ -124,7 +124,7 @@ const createReceiptSchema = z.object({
    *   must have passed scanning.
    * - `signatureBase64` — a detached signature over that document. The connection holds the public key.
    */
-  documentUploadId: z.string().uuid().nullable().default(null),
+  documentUploadId: z.string().guid().nullable().default(null),
   signatureBase64: z.string().min(1).nullable().default(null),
   limitations: z.array(z.string()).default([]),
 });
@@ -144,7 +144,7 @@ const createClaimSchema = z
     valueText: z.union([decimalString, z.string().min(1)]),
     unit: z.string().nullable().default(null),
     asOf: z.string().date().nullable().default(null),
-    sourceCoordinate: z.record(z.string()),
+    sourceCoordinate: z.record(z.string(), z.string()),
     /**
      * The Source Receipt this value came from — AC-04, AC-21.
      *
@@ -154,7 +154,7 @@ const createClaimSchema = z
      * Nullable because a manual-entry path remains. **Missing evidence is not filled in
      * as present** — `core.claims_without_evidence` surfaces it instead.
      */
-    sourceReceiptId: z.string().uuid().nullable().default(null),
+    sourceReceiptId: z.string().guid().nullable().default(null),
     evidenceTier: z.enum(["P1", "P2", "P3", "P4", "P5"]).nullable().default(null),
     /**
      * Accepted only as `unreviewed`, and `attestationTypes` only empty (REQ-DAPP-004).
@@ -1112,11 +1112,14 @@ export async function registerEvidenceRoutes(
           if (previous.catalog_entry_id && (data.catalogEntryId === null || data.structuredValues == null)) {
             throw unprocessable("CLAIM_STRUCTURED_CORRECTION_REQUIRED", "A structured correction must retain its catalog and provide replacement structured values");
           }
+          const catalogEntryId = data.catalogEntryId === undefined ? previous.catalog_entry_id : data.catalogEntryId;
           const structured = await resolveCatalogClaim(tx, projectId, previous.claim_type, {
             ...data,
-            catalogEntryId: data.catalogEntryId === undefined ? previous.catalog_entry_id : data.catalogEntryId,
-            documentUploadIds: data.documentUploadIds ?? previous.document_upload_ids,
-          });
+            catalogEntryId,
+            // Historical legacy rows may have attachments that their signed fingerprint
+            // did not bind. A legacy correction must not inherit those links.
+            documentUploadIds: data.documentUploadIds ?? (catalogEntryId ? previous.document_upload_ids : []),
+          }, previous.id);
           const id = randomUUID();
           const grade = computeClaimGrade({
             verificationState: "unreviewed",

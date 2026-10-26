@@ -86,6 +86,14 @@ DATABASE_URL="postgres://postgres@localhost:5432/mpc_test" pnpm test:coverage
 DATABASE_URL="postgres://postgres@localhost:5432/mpc_test" pnpm check
 ```
 
+`pnpm test:unit` includes DB-free decision tests named `*.unit.test.ts` under
+`packages/db/test/` and the API contract compatibility tests. Integration mode
+excludes those DB-free files; default and coverage runs include them once. These
+tests check domain decisions and existing input formats. They do not establish SQL
+behavior, tenant isolation, persisted hash integrity, publication correctness, or
+image readiness; verify affected boundaries with the corresponding local checks
+and manual review in [`review-guidelines.md`](review-guidelines.md).
+
 For contract changes, run `forge build --sizes` and `forge test` from `contracts/`.
 Use the existing Playwright configuration and fixtures for affected browser journeys.
 A test run without database execution does not establish tenant isolation or

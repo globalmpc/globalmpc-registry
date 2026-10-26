@@ -1806,10 +1806,10 @@ export const ROUTES: readonly RouteDefinition[] = [
     paramsSchema: publicRegistryEntryPathParams,
     // Read metadata and live warnings are not part of the immutable public projection.
     responseSchema: publicProjection.merge(responseMeta).extend({
-      entryVersionId: z.string().uuid(),
+      entryVersionId: z.string().guid(),
       publishedAt: z.string().nullable(),
       history: z.array(z.object({
-        entryVersionId: z.string().uuid(), version: z.string(), status: z.string(),
+        entryVersionId: z.string().guid(), version: z.string(), status: z.string(),
         revokedAt: z.string().nullable(),
       }).strict()),
       evidenceLedgerCurrent: publicEvidenceLedgerCurrent.nullable().optional(),

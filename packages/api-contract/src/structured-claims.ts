@@ -7,13 +7,13 @@ export const structuredClaimValues = z.record(
 ).refine((value) => Object.keys(value).length <= 50, "At most 50 declared fields");
 
 export const structuredClaimInput = {
-  catalogEntryId: z.string().uuid().nullable().optional(),
+  catalogEntryId: z.string().guid().nullable().optional(),
   structuredValues: structuredClaimValues.nullable().optional(),
-  documentUploadIds: z.array(z.string().uuid()).max(20).optional(),
+  documentUploadIds: z.array(z.string().guid()).max(20).optional(),
 };
 export const structuredClaimView = {
-  catalogEntryId: z.string().uuid().nullable(),
+  catalogEntryId: z.string().guid().nullable(),
   catalogVersion: z.number().int().positive().nullable(),
   structuredValues: structuredClaimValues.nullable(),
-  documentUploadIds: z.array(z.string().uuid()),
+  documentUploadIds: z.array(z.string().guid()),
 };

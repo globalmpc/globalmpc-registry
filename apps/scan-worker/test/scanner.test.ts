@@ -30,7 +30,7 @@ describe("ClamAV response parsing", () => {
   });
 
   // clamd reports what it could not look inside as a heuristic `FOUND` (`AlertEncrypted*`,
-  // `AlertExceedsMax` in deploy/clamav/Dockerfile). Treating these as clean would let a malicious
+  // `AlertExceedsMax` in docker/scan-worker/clamd.conf). Treating these as clean would let a malicious
   // file in a password-protected or oversized archive be promoted.
   it("reads an encrypted-archive heuristic as infected", () => {
     expect(parseClamResponse("stream: Heuristics.Encrypted.Zip FOUND\0")).toEqual({

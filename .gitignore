@@ -27,6 +27,7 @@ contracts/broadcast/
 
 # Real secrets never enter the repository.
 deploy/secrets/
+config/secrets/
 *.pem
 *.key
 *.p12
@@ -34,16 +35,17 @@ deploy/secrets/
 credentials.json
 service-account*.json
 
-# deploy/local-secrets/ holds only anvil and MinIO defaults (README in that directory). Only
+# config/local-secrets/ holds only anvil and MinIO defaults (README in that directory). Only
 # those named files are tracked; anything else put there — a real key included — stays ignored.
 deploy/local-secrets/*
-!deploy/local-secrets/README.md
-!deploy/local-secrets/anchor_signer_key
-!deploy/local-secrets/database_url
-!deploy/local-secrets/object_secret_key
-!deploy/local-secrets/scan_service_key
-!deploy/local-secrets/session_secret
-!deploy/local-secrets/worker_database_url
+config/local-secrets/*
+!config/local-secrets/README.md
+!config/local-secrets/anchor_signer_key
+!config/local-secrets/database_url
+!config/local-secrets/object_secret_key
+!config/local-secrets/scan_service_key
+!config/local-secrets/session_secret
+!config/local-secrets/worker_database_url
 
 # design-system/dist is a committed artifact. The exports of `@mpc/design` point to it, so
 # without it the web build cannot find `@mpc/design/tokens.css`.

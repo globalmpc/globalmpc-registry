@@ -122,12 +122,16 @@ export async function computeEvidenceLedger(
   const catalog = await tx<{ id: string; claim_type: string; catalog_version: number; display_name: string }[]>`
     SELECT ct.id, ct.claim_type, ct.catalog_version, ct.display_name
     FROM core.claim_types ct WHERE ct.tenant_id = ${tenantId} AND ct.effective_from <= ${evaluatedAt}
+      AND NOT core.is_reserved_catalog_key(ct.claim_type)
       AND (ct.catalog_version = (SELECT max(latest.catalog_version) FROM core.claim_types latest
         WHERE latest.tenant_id=ct.tenant_id AND latest.claim_type=ct.claim_type AND latest.effective_from <= ${evaluatedAt})
       OR EXISTS (SELECT 1 FROM core.claims c WHERE c.project_id=${projectId} AND c.catalog_entry_id=ct.id AND c.superseded_by_claim_id IS NULL))
     ORDER BY ct.claim_type, ct.catalog_version
   `;
-  const claims = await tx<LedgerClaim[]>`SELECT * FROM core.ledger_claim_health(${projectId}, ${evaluatedAt})`;
+  const claims = await tx<LedgerClaim[]>`
+    SELECT * FROM core.ledger_claim_health(${projectId}, ${evaluatedAt})
+    WHERE NOT core.is_reserved_catalog_key(claim_type)
+  `;
   const attestations = await tx<LedgerAttestation[]>`
     SELECT a.id, a.claim_scope, a.attestation_type, a.state, a.limitations, a.credential_id, a.valid_until,
       cr.subject_id AS reviewer_subject_id,cr.credential_type,a.signed_at,
@@ -142,11 +146,15 @@ export async function computeEvidenceLedger(
     JOIN core.attestation_schemas sch ON sch.id = a.schema_id AND sch.tenant_id = a.tenant_id
     WHERE vc.project_id = ${projectId} AND a.tenant_id = ${tenantId}
       AND a.state <> 'draft'
+      -- A review of filtered-out historical evidence cannot change this ledger's basis.
+      -- Mixed scopes remain intact whenever they cover at least one retained claim.
+      AND a.claim_scope && ${claims.map((claim) => claim.id)}::uuid[]
     ORDER BY a.id
   `;
   const manual = await tx<{ id: string; fact_key: string; status: string; version: number }[]>`
     SELECT DISTINCT ON (fact_key) id, fact_key, status, version FROM core.project_fact_versions
     WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+      AND fact_key = ANY(${catalog.map((definition) => definition.claim_type)}::text[])
     ORDER BY fact_key, version DESC
   `;
   const items = catalog.map((definition): LedgerItem => {

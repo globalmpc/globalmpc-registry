@@ -6,6 +6,21 @@ User journeys and security are joint highest priorities for every change. Review
 
 Before review, identify affected actors, entry points, expected outcomes, trust boundaries, persisted state, and failure/recovery paths. Read `CONTRIBUTING.md`, relevant repository invariants, `docs/security/threat-model.md`, and applicable nested agent instructions. Keep findings grounded in code or reproduction evidence; distinguish confirmed defects from hypotheses.
 
+## State and history decisions
+
+For changes to state decisions, security boundaries, or historical interpretation, write a small decision table before implementation. Identify the namespace of each identity, who may decide its meaning, which values are frozen or live, which inputs may affect the result, and the priority of overlapping conditions. Independent reviewers derive expected outcomes and counterexamples from these contracts and persisted-state semantics before evaluating the implementation rationale.
+
+For example, evidence-ledger changes can use the following cases. Adapt the table to the affected flow.
+
+| Identity / case | Authority and time basis | Input scope | Result / priority |
+| --- | --- | --- | --- |
+| Published historical catalog `rights` is N/A; legacy `rights` later becomes pending | Approved catalog exclusion stays frozen; the legacy matrix has separate authority | Current health within the published item/version scope; later legacy decisions are excluded | Missing positive evidence alone stays quiet; actual invalidation, rejection, and conflicts still apply |
+| Retained catalog evidence is rejected and below the required grade | Live claim decision and the approved requirement | Evidence relevant to this item | Rejection outranks unmet positive requirements |
+| Retained evidence is rejected, stale, and conflicting | Live evidence health | Relevant claims and reviews | Conflict outranks actual invalidation, which outranks rejection |
+| A review covers only excluded historical claims, or also covers a retained claim | Current retained claim scope | Exclude the unrelated review; preserve the full signed scope of a mixed review | An unrelated update preserves the assessment basis and publication eligibility; a relevant update is checked |
+
+Trace the same input boundary through selection, evaluation, snapshot construction, hashing, and publication checks. Verify both relevant and irrelevant mutations, including catalog applicability when no claim exists. Compare private and public results where they represent the same decision; explicitly record the exceptions needed to preserve an approved historical statement.
+
 ## User journeys
 
 - Trace relevant flows from UI through API, authorization, persistence/workers/contracts, and back to visible results. Check that users can finish the intended task and that displayed success matches durable state.
@@ -30,6 +45,11 @@ Every change receives a security assessment proportional to its affected attack 
 - Parallelize independent code reviews. Forward concrete reproduction hypotheses promptly while other review continues.
 - Assign one owner per shared browser session; reuse healthy servers/sessions and existing role fixtures. Isolate accounts, data, and ports when parallelism would otherwise collide.
 - Reuse the existing Playwright seed/configuration and tests. Add meaningful regression coverage for behavior changes, prioritizing repeated critical journeys and security boundaries over tests that merely mirror implementation.
+- For migrations that change historical interpretation, seed synthetic data under the preceding schema and migrate it forward. Exercise reachable historical states, including exclusions and absent evidence, and verify frozen records and hashes remain unchanged.
+- For behavior fixes, demonstrate that the core regression case fails with the faulty behavior and passes with the correction. Add a contrast that changes only the targeted condition and asserts the expected status and reasons; remove unrelated warning causes that could mask the defect. Include compound conditions and explicit N/A exemptions when testing decision priority.
+- For dependency upgrades, exercise a small corpus of existing valid and invalid inputs and inspect the semantic OpenAPI diff. Record intentional acceptance, default, output-shape, or serialization changes; preserve established stored-data and wire compatibility where no change was intended.
+- Give fixtures that require already-effective policies or reviews a known past timestamp. Test time boundaries separately with controlled timestamps, preserving the runtime's strict effective-date and signature-time checks.
+- For container or process-lifecycle changes, manually verify the built image through its configured startup path, with services running as their intended non-root users. Exercise actual readiness, startup, shutdown, and failure propagation; record which real services and update paths were exercised.
 - Do not parallelize destructive DB suites or reset shared seed data beneath active tests/workers. Respect the existing CI ordering, worker limits, and resource budgets documented in `docs/ci.md`.
 - Run focused checks first, then the required broader checks once. Repeat when fixes or new evidence justify it.
 
@@ -56,4 +76,4 @@ For external results, verify repository, commit SHA, scope, and measurement time
 
 For each actionable finding record severity, affected journey or security boundary, code location, evidence/reproduction, impact, and expected correction. Prioritize user impact and exploitability over style. Do not present unsupported suspicions as confirmed vulnerabilities.
 
-After corrections, inspect the new diff, reproduce the failure case again, and run relevant regression checks. Significant user defects and security vulnerabilities must be resolved and reverified before claiming completion. If blocked by missing infrastructure, accounts, or external evidence, state exactly what remains unverified and why. Report changed behavior, checks and their scope/results, and remaining issues concisely; do not claim a comprehensive independent security certification from an agent review.
+After corrections, inspect the new diff, reproduce the failure case again, and run relevant regression checks. Significant user defects and security vulnerabilities must be resolved and reverified before claiming completion. If blocked by missing infrastructure, accounts, or external evidence, state exactly what remains unverified and why. Report first-attempt failures and retries separately from the final result, with relevant restart, memory, or network evidence. Distinguish a confirmed environment event from a hypothesized cause. Report changed behavior, checks and their scope/results, and remaining issues concisely; do not claim a comprehensive independent security certification from an agent review.

@@ -4,6 +4,7 @@ import type postgres from "postgres";
 import { z } from "zod";
 import { withTenant } from "@mpc/db";
 import {
+  PROJECT_FACT_KEYS,
   decideRegistryProposalRequest,
   proposeClaimTypeRequest,
   claimTypeCatalogQuery,
@@ -132,9 +133,9 @@ interface KindSpec<Body extends { rationale: string }, Stored extends Record<str
   readonly segment: string;
   /** Audit resource type of the registry row approval creates. */
   readonly resourceType: string;
-  readonly requestSchema: z.ZodType<Body, z.ZodTypeDef, unknown>;
+  readonly requestSchema: z.ZodType<Body, unknown>;
   /** Shape of `payload` as stored. Re-read at decision time rather than trusted blindly. */
-  readonly storedSchema: z.ZodType<Stored, z.ZodTypeDef, unknown>;
+  readonly storedSchema: z.ZodType<Stored, unknown>;
   prepare(tx: Tx, tenantId: string, body: Body, now: Date): Promise<Validated<Prepared<Stored>>>;
   /** The registry row this version would duplicate, if one exists. */
   findExisting(tx: Tx, tenantId: string, stored: Stored): Promise<string | null>;
@@ -156,9 +157,9 @@ interface KindSpec<Body extends { rationale: string }, Stored extends Record<str
 const storedCredential = proposeCredentialRequest
   .omit({ rationale: true })
   .extend({
-    organizationId: z.string().uuid().nullable(),
+    organizationId: z.string().guid().nullable(),
     // Proposals stored before the issuer link was required have none.
-    issuerAuthorityId: z.string().uuid().nullable().default(null),
+    issuerAuthorityId: z.string().guid().nullable().default(null),
   });
 type StoredCredential = z.infer<typeof storedCredential>;
 
@@ -367,7 +368,10 @@ const JURISDICTION_PROFILE: KindSpec<
 // Claim types are definitions only; approval never changes existing claims or assessments.
 const storedClaimType = proposeClaimTypeRequest.omit({ rationale: true, effectiveFrom: true });
 type StoredClaimType = z.infer<typeof storedClaimType>;
-async function validateCatalogDate(tx: Tx, tenantId: string, claimType: string, effectiveFrom: Date): Promise<Validated<true>> {
+async function validateCatalogKeyAndDate(tx: Tx, tenantId: string, claimType: string, effectiveFrom: Date): Promise<Validated<true>> {
+  if ((PROJECT_FACT_KEYS as readonly string[]).includes(claimType)) {
+    return { ok: false, code: "CLAIM_TYPE_RESERVED", message: "This key belongs to the legacy project confirmation matrix; choose a distinct catalog key" };
+  }
   const [latest] = await tx<{ effective_from: Date }[]>`
     SELECT effective_from FROM core.claim_types WHERE tenant_id = ${tenantId} AND claim_type = ${claimType}
     ORDER BY catalog_version DESC LIMIT 1
@@ -381,14 +385,14 @@ const CLAIM_TYPE: KindSpec<z.infer<typeof proposeClaimTypeRequest>, StoredClaimT
   kind: "claim_type", segment: "claim-types", resourceType: "claim_type",
   requestSchema: proposeClaimTypeRequest, storedSchema: storedClaimType,
   async prepare(tx, tenantId, body) {
-    const checked = await validateCatalogDate(tx, tenantId, body.claimType, new Date(body.effectiveFrom));
+    const checked = await validateCatalogKeyAndDate(tx, tenantId, body.claimType, new Date(body.effectiveFrom));
     if (!checked.ok) return checked;
     const { rationale: _rationale, effectiveFrom, ...payload } = body;
     return { ok: true, value: { itemKey: body.claimType, effectiveFrom: new Date(effectiveFrom), payload } };
   },
   async findExisting() { return null; },
   async materialize(tx, tenantId, id, stored, _now, context) {
-    const checked = await validateCatalogDate(tx, tenantId, stored.claimType, context.effectiveFrom);
+    const checked = await validateCatalogKeyAndDate(tx, tenantId, stored.claimType, context.effectiveFrom);
     if (!checked.ok) return checked;
     const [latest] = await tx<{ version: number }[]>`
       SELECT COALESCE(max(catalog_version), 0)::integer AS version FROM core.claim_types
@@ -426,6 +430,7 @@ function registerCatalogReads(app: FastifyInstance, sql: postgres.Sql): void {
     const rows = await withTenant(sql, { tenantId }, (tx) => tx<CatalogRow[]>`
       SELECT DISTINCT ON (claim_type) * FROM core.claim_types
       WHERE tenant_id = ${tenantId} AND effective_from <= ${new Date(asOf)}
+        AND NOT (claim_type = ANY(${[...PROJECT_FACT_KEYS]}::text[]))
         AND claim_type > ${cursor ?? ""}
       ORDER BY claim_type, catalog_version DESC LIMIT ${limit + 1}
     `);
@@ -453,7 +458,7 @@ function registerCatalogReads(app: FastifyInstance, sql: postgres.Sql): void {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function parseBody<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, body: unknown): T {
+function parseBody<T>(schema: z.ZodType<T, unknown>, body: unknown): T {
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
     throw badRequest("REQUEST_INVALID", "Request format is invalid", { issues: parsed.error.issues });

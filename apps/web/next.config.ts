@@ -38,7 +38,7 @@ function demoAccountKeys(): string {
 }
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@mpc/ui", "@mpc/domain", "@mpc/canonical"],
+  transpilePackages: ["@mpc/ui", "@mpc/domain", "@mpc/canonical", "@mpc/api-contract", "@mpc/policy"],
 
   /**
    * Make the demo account keys **a value that is always defined at build time**.

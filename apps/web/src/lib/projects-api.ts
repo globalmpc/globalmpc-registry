@@ -1,3 +1,4 @@
+import { PROJECT_FACT_KEYS } from "@mpc/api-contract";
 import { ApiError, apiFetch, newIdempotencyKey, type ApiErrorEnvelope } from "./api";
 
 /**
@@ -262,7 +263,10 @@ export function recordProjectFact(
   version: number,
   body: ConfirmationInput,
 ): Promise<ProjectFact> {
-  return mutate(token, "POST", `/api/v1/projects/${projectId}/facts/${factKey}/confirmations`, body, version);
+  return mutate(token, "POST", `/api/v1/projects/${projectId}/facts/${factKey}/confirmations`, {
+    ...body,
+    factScope: (PROJECT_FACT_KEYS as readonly string[]).includes(factKey) ? "legacy" : "catalog",
+  }, version);
 }
 
 export function createProjectParty(

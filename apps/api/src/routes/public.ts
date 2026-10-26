@@ -69,7 +69,7 @@ const REGISTRY_TYPES = ["project", "verification", "asset"] as const;
 const TEXT_MATCH_LIMIT = 10;
 
 /** Parameters outside the contract are not ignored. Ignoring them turns a mistyped filter into "everything". */
-function parseQuery<T>(schema: { safeParse(input: unknown): { success: boolean; data?: T; error?: { issues: { path: (string | number)[]; message: string }[] } } }, input: unknown): T {
+function parseQuery<T>(schema: { safeParse(input: unknown): { success: boolean; data?: T; error?: { issues: { path: PropertyKey[]; message: string }[] } } }, input: unknown): T {
   const parsed = schema.safeParse(input);
   if (!parsed.success || parsed.data === undefined) {
     throw badRequest("INVALID_QUERY", "Query parameters do not match the contract", {
@@ -89,7 +89,7 @@ function parseQuery<T>(schema: { safeParse(input: unknown): { success: boolean; 
  * that cast and go out as a retryable 500. The code matches the central UUID check
  * (`plugins/request-context.ts`), which covers the `...Id` parameters.
  */
-function parseParams<T>(schema: { safeParse(input: unknown): { success: boolean; data?: T; error?: { issues: { path: (string | number)[] }[] } } }, input: unknown): T {
+function parseParams<T>(schema: { safeParse(input: unknown): { success: boolean; data?: T; error?: { issues: { path: PropertyKey[] }[] } } }, input: unknown): T {
   const parsed = schema.safeParse(input);
   if (!parsed.success || parsed.data === undefined) {
     const parameter = String(parsed.error?.issues[0]?.path[0] ?? "path");

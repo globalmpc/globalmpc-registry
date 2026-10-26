@@ -55,7 +55,7 @@ export const REFERENCE_STATUSES = ["none", "official_reference", "synthetic_test
 
 export const evidenceReference = z.object({
   kind: z.enum(EVIDENCE_KINDS),
-  id: z.string().uuid(),
+  id: z.string().guid(),
 });
 
 const confirmationFields = {
@@ -82,6 +82,12 @@ function requireEvidenceWhenConfirmed(
 
 export const recordConfirmationRequest = z
   .object(confirmationFields)
+  .strict()
+  .superRefine(requireEvidenceWhenConfirmed);
+
+/** An explicit namespace distinguishes fixed matrix rows from historical catalog collisions. */
+export const recordFactConfirmationRequest = z
+  .object({ ...confirmationFields, factScope: z.enum(["legacy", "catalog"]).optional() })
   .strict()
   .superRefine(requireEvidenceWhenConfirmed);
 
@@ -119,7 +125,7 @@ export const createProjectPartyRequest = z
   .object({
     partyRole: z.enum(PARTY_ROLES),
     legalName: z.string().trim().min(1).max(300),
-    organizationId: z.string().uuid().nullable().default(null),
+    organizationId: z.string().guid().nullable().default(null),
     jurisdiction: z.string().length(3).nullable().default(null),
   })
   .strict();
@@ -164,7 +170,7 @@ export const createStakeholderEventRequest = z
     occurredOn: z.string().date(),
     status: z.enum(CONFIRMATION_STATUSES),
     evidence: evidenceReference.nullable().default(null),
-    supersedesId: z.string().uuid().nullable().default(null),
+    supersedesId: z.string().guid().nullable().default(null),
   })
   .strict()
   .superRefine(requireEvidenceWhenConfirmed);
@@ -317,7 +323,7 @@ export const projectOverview = z.object({
 export const createClaimDerivationRequest = z
   .object({
     formula: z.string().trim().min(1).max(2000),
-    inputClaimIds: z.array(z.string().uuid()).min(1).max(100),
+    inputClaimIds: z.array(z.string().guid()).min(1).max(100),
     unit: z.string().trim().min(1).nullable().default(null),
     asOf: z.string().date().nullable().default(null),
   })
@@ -340,7 +346,7 @@ export const claimDetail = z.object({
   valueText: z.string(),
   unit: z.string().nullable(),
   asOf: z.string().nullable(),
-  sourceCoordinate: z.record(z.unknown()),
+  sourceCoordinate: z.record(z.string(), z.unknown()),
   sourceReceiptId: z.string().nullable(),
   evidenceTier: z.string().nullable(),
   verificationState: z.string(),
@@ -436,7 +442,7 @@ export const PROJECT_REGISTRY_ROUTES: readonly RouteDefinition[] = [
     mutation: true,
     requiresIfMatch: true,
     action: "project.fact.record",
-    requestSchema: recordConfirmationRequest,
+    requestSchema: recordFactConfirmationRequest,
     responseSchema: projectFactView,
   },
   {

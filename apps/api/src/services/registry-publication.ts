@@ -12,9 +12,9 @@ import {
 } from "@mpc/db";
 
 /** Keep assessment inputs stable until the publication transaction commits. */
-export async function lockEvidenceLedgerPublicationInputs(tx: postgres.TransactionSql): Promise<void> {
+export async function lockEvidenceLedgerPublicationInputs(tx: postgres.TransactionSql, projectId: string): Promise<void> {
   try {
-    await tx`SELECT core.lock_ledger_publication_inputs()`;
+    await tx`SELECT core.lock_ledger_publication_inputs(${projectId})`;
   } catch (error) {
     if ((error as {code?: string}).code === "55P03") {
       throw unavailable("PUBLICATION_EVIDENCE_BUSY", "Evidence is being updated; retry publication with the same idempotency key");

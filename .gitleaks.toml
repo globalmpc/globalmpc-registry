@@ -10,7 +10,7 @@ useDefault = true
 description = "Vendored external libraries — OpenZeppelin and forge-std's own test vectors"
 paths = ['''(^|/)contracts/lib/''']
 
-# deploy/local-secrets/ has **no path allowlist.** Its tracked files trigger no finding without
+# config/local-secrets/ has **no path allowlist.** Its tracked files trigger no finding without
 # one (checked with gitleaks 8.30.1, 2026-09-14). A path allowlist would also pass any real key
 # that someone drops there.
 

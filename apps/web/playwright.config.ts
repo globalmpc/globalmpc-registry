@@ -45,7 +45,7 @@ process.env["E2E_DEMO_ACCOUNT_KEYS"] = DEMO_ACCOUNT_KEYS;
  */
 
 /**
- * The default points at the port exposed by postgres in `docker-compose.yml` (55432).
+ * The default points at the port exposed by postgres in `docker/docker-compose.yml` (55432).
  *
  * That port was moved off the host's 5432, so if the default here diverges, a local run
  * without env fails at connection. Only the DB name differs (`mpc_e2e`) so `mpc_dev`

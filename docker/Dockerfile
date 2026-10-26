@@ -1,8 +1,8 @@
-# MPC dApp — API and web image; workers use deploy/workers.Dockerfile
+# MPC dApp — API and web image; workers use docker/Dockerfile.workers
 #
 # **The build context is the repository root.**
 #
-#   docker build -t mpc-dapp .
+#   docker build -f docker/Dockerfile -t mpc-dapp .
 #
 # API and web share this image. Worker images are built independently from the same
 # repository and lockfile, with only their production dependency closure.
@@ -14,7 +14,7 @@
 # The base is pinned by digest, in both stages. A tag can be repointed; a digest cannot, so the
 # same commit always builds on the same bytes. Update the tag and digest together, and keep the
 # two stages identical (`docker buildx imagetools inspect node:<tag>` — the index digest).
-FROM node:22.23.2-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS deps
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS deps
 
 WORKDIR /repo
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
@@ -46,7 +46,7 @@ FROM deps AS web-build
 RUN pnpm --filter @mpc/web build
 
 # --- Runtime --------------------------------------------------------------------
-FROM node:22.23.2-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS runtime
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS runtime
 
 WORKDIR /repo
 # Pin COREPACK_HOME to a shared path. The default is `$HOME/.cache`, so build (root) and

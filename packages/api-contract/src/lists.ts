@@ -62,7 +62,7 @@ export const documentGraphQuery = z
      * A document whose own node and direct neighbours must be in the payload even when they
      * fall outside the newest ones. The document page needs its own links in full.
      */
-    focus: z.string().uuid().optional(),
+    focus: z.string().guid().optional(),
   })
   .strict();
 

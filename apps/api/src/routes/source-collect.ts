@@ -73,7 +73,7 @@ const secondReviewSchema = z.object({
 });
 
 const collectSchema = z.object({
-  projectId: z.string().uuid(),
+  projectId: z.string().guid(),
   // Query parameters. Stored verbatim in the receipt as the basis for reproduction.
   queryBasis: z.record(z.string(), z.string()),
 });

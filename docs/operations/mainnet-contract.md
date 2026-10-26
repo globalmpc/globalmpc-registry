@@ -23,7 +23,7 @@ address differs."**
 |---|---|---|
 | Safe multisig signer list | The Safe holds `admin` and `submitter`. If one EOA holds all three, the premise that "even MPC itself cannot change this alone" collapses | **Undecided** — OD-12 |
 | Organization holding `pauser` | Security response must be in different hands from deployment and operations | **Undecided** — OD-12 |
-| Anchor wallet daily cap value | `ANCHOR_DAILY_SPEND_CAP_WEI`. Without it, the worker refuses to start | Sized per [Loss cap for the anchor wallet](README.md#loss-cap-for-the-anchor-wallet) |
+| Anchor wallet daily cap value | `ANCHOR_DAILY_SPEND_CAP_WEI`. Without it, the worker refuses to start | Sized per [Loss cap for the anchor wallet](deployment.md#loss-cap-for-the-anchor-wallet) |
 | Funding cap and procedure | Code cannot enforce it. It is a finance and operations procedure | **Undecided** |
 | Golden path completed on staging | Has it actually run against the mainnet contract? | **Not done** |
 
@@ -110,13 +110,13 @@ cast call "$ANCHOR_CONTRACT_ADDRESS" "hasRole(bytes32,address)(bool)" \
 
 # Does the worker start against that address? Without `ANCHOR_DAILY_SPEND_CAP_WEI` it
 # refuses to start — that refusal is the intent (O1).
-docker compose logs anchor-worker | grep anchor.worker.started
+docker compose -f docker/docker-compose.yml logs anchor-worker | grep anchor.worker.started
 ```
 
 ### 6. A person watches the first submission
 
 Until the first batch reaches `confirmed`, watch `/w/anchors` and the `mpc_anchor_transactions`
-gauge together (`deploy/observability/alerts.yml`). On failure, do not retry automatically — it
+gauge together (`config/observability/alerts.yml`). On failure, do not retry automatically — it
 fails again for the same reason, or becomes a duplicate submission.
 
 ## Rolling back

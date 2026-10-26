@@ -1,16 +1,21 @@
 # Deployment configuration
 
-This directory holds what `docker-compose.yml` needs to bring up the local stack.
+The local stack is defined in `docker/docker-compose.yml`. Docker image definitions live alongside it in `docker/`;
+service configuration and database setup live beside the responsibilities they support.
 Production values (hosts, domains, credentials, actual caps) never enter the repository.
+Run the commands in this guide from the repository root.
 
-| Path | Contents |
+| Path (from repository root) | Contents |
 |---|---|
-| `clamav/` | ClamAV image used by the scan worker. Built here because the official image is amd64-only |
-| `sql/login-roles.sql` | Login roles subject to RLS. Exists so the app never runs as superuser |
-| `local-secrets/` | **Public defaults, local use only.** See `README.md` in that directory for why |
-| `observability/*.yml` | Prometheus scrape configuration and alert rules |
-| `backup-restore.md` | What `scripts/ops/backup.sh`, `restore.sh`, and `drill.sh` capture, refuse, and verify |
-| `mainnet-contract.md` | Contract deployment procedure for mainnet (56) and what must be settled first |
+| [`docker/Dockerfile`](../../docker/Dockerfile) | API and web image |
+| [`docker/Dockerfile.workers`](../../docker/Dockerfile.workers) | Independent worker images |
+| [`docker/scan-worker/`](../../docker/scan-worker/) | Embedded ClamAV configuration and scan-worker process supervision |
+| [`packages/db/sql/login-roles.sql`](../../packages/db/sql/login-roles.sql) | Login roles subject to RLS, so the app never runs as superuser |
+| [`config/local-secrets/`](../../config/local-secrets/) | **Public defaults, local use only.** See its README for why |
+| [`config/observability/`](../../config/observability/) | Prometheus scrape configuration, alert rules and Alertmanager configuration |
+| [Backup and restore](backup-restore.md) | What the backup, restore and drill scripts capture, refuse and verify |
+| [Release rollback](rollback.md) | Compatibility checks and the release rollback procedure |
+| [Mainnet contract](mainnet-contract.md) | Contract deployment procedure for mainnet (56) and what must be settled first |
 
 ## Secret injection
 
@@ -171,7 +176,7 @@ README are unchanged by these settings.
 ## Observability
 
 ```sh
-docker compose --profile observability up -d
+docker compose -f docker/docker-compose.yml --profile observability up -d
 ```
 
 Prometheus is on `:9090` and Alertmanager on `:9093`. **By default neither port is
@@ -189,18 +194,45 @@ deployment — `scripts/ops/check-alertmanager.sh`.
 |---|---|---|
 | `jobs-worker` | `apps/jobs-worker` | Worker DB and configured webhook signing references |
 | `anchor-worker` | `apps/anchor-worker` | Worker DB, chain RPC and anchor signing key |
-| `scan-worker` | `apps/scan-worker` | Worker DB, quarantine storage, ClamAV and scan service identity |
+| `scan-worker` | `apps/scan-worker` | Worker DB, quarantine storage, embedded ClamAV and scan service identity |
 
 Build the three images from the same repository revision and lockfile:
 
 ```sh
-docker compose build jobs-worker anchor-worker scan-worker
-docker compose up -d jobs-worker anchor-worker scan-worker
+docker compose -f docker/docker-compose.yml build jobs-worker anchor-worker scan-worker
+docker compose -f docker/docker-compose.yml up -d jobs-worker anchor-worker scan-worker
 ```
 
-`deploy/workers.Dockerfile` selects an app with `WORKER` and uses `pnpm deploy --prod --legacy`
+`docker/Dockerfile.workers` selects an app with `WORKER` and uses `pnpm deploy --prod --legacy`
 to package only that app and its production dependencies, including the TS runtime. Worker
-images do not contain the web app or other worker apps. API and web keep the root Dockerfile.
+images do not contain the web app or other worker apps. API and web keep `docker/Dockerfile`.
+
+The scan image also installs ClamAV. Its `clamd` daemon listens only on `127.0.0.1:3310`
+inside the scan-worker container; there is no separate ClamAV service or published scanner
+port. The worker still sends file bytes through INSTREAM. Signature updates use the
+`clamavdata` volume so restarts retain downloaded definitions. The first start downloads
+signatures before scanning can begin; uploads remain quarantined while the scanner starts.
+ClamAV spools INSTREAM input and extracted content into the disk-backed `clamavscratch`
+volume at `/var/tmp/clamav`, separately from signatures. The directory is writable only by
+the runtime user; the container root filesystem stays read-only and `/tmp` stays a 256 MiB
+tmpfs. Large scans therefore need free host disk space, rather than that small tmpfs.
+Scratch can contain quarantined evidence bytes; exclude this disposable volume from backups.
+Normal scans remove temporary files, but
+an interrupted daemon can leave files behind; after stopping the scan worker, remove its
+scratch volume when disposing of local evidence. Do not remove the signatures volume just
+to clear scratch. Existing scanner size and extraction limits still apply.
+When running the TypeScript process directly, provide a local ClamAV daemon; `CLAMAV_HOST`
+and `CLAMAV_PORT` default to `127.0.0.1` and `3310`.
+The entrypoint waits for a scanner ping before starting the worker, supervises the worker,
+scanner and signature updater together, and exits the container if any process dies.
+The scan health check requires both a fresh worker heartbeat and a successful scanner ping.
+
+When upgrading an existing stack, rebuild and remove the former standalone ClamAV container
+with Compose orphan cleanup:
+
+```sh
+docker compose -f docker/docker-compose.yml up -d --build --remove-orphans
+```
 
 Compose provides an init process, a read-only filesystem, writable `/tmp`, and a 60-second
 shutdown grace period. Each loop refreshes its own health file after recording its DB heartbeat,

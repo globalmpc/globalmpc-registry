@@ -33,7 +33,7 @@ import { requireReadContext } from "./shared.js";
 /** Roles that sign attestations. Read from the policy table so a new reviewer role is included. */
 const REVIEWER_ROLES: readonly string[] = ACTION_POLICIES["attestation.sign"]?.allowedRoles ?? [];
 
-const projectIdSchema = z.string().uuid();
+const projectIdSchema = z.string().guid();
 
 type Tx = postgres.TransactionSql;
 

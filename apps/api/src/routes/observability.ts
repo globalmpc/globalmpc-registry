@@ -28,8 +28,8 @@ import { requireReadContext } from "./shared.js";
 
 const auditQuerySchema = z.object({
   resourceType: z.string().min(1).optional(),
-  resourceId: z.string().uuid().optional(),
-  projectId: z.string().uuid().optional(),
+  resourceId: z.string().guid().optional(),
+  projectId: z.string().guid().optional(),
   command: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });

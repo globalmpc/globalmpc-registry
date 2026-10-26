@@ -160,6 +160,7 @@ export async function readFacts(tx: Tx, tenantId: string, projectId: string) {
   const catalog = await tx<{ claim_type: string }[]>`
     SELECT DISTINCT claim_type FROM core.claim_types
     WHERE tenant_id = ${tenantId} AND effective_from <= now()
+      AND NOT core.is_reserved_catalog_key(claim_type)
     ORDER BY claim_type
   `;
   // Catalog confirmations use their exact claim-type key; no mapping to the seven gate facts.

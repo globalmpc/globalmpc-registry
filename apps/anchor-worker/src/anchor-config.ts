@@ -129,7 +129,7 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
 
   // Gas limit on every send. It is what makes a send's cost bounded before its receipt: the
   // daily cap reserves gas limit × fee for each one in flight. `submitRoot` measured at most
-  // 145,926 gas plus 21,000 base (deploy/README.md); 200,000 leaves room for calldata.
+  // 145,926 gas plus 21,000 base (docs/operations/deployment.md); 200,000 leaves room for calldata.
   const gasLimit = BigInt(positiveInteger(env, "ANCHOR_GAS_LIMIT", 200_000));
   const feeCapWei = BigInt(Math.round(feeCapGwei * 1e9));
   // Every send is reserved at gas limit × fee cap until settled, and a broadcast that failed is

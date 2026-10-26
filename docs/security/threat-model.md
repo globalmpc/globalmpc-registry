@@ -80,7 +80,7 @@ log leakage.
 **Not blocked yet**
 
 - The funding cap **cannot be enforced by code.** Holding only one day's worth in the wallet is a
-  finance and operations procedure (`deploy/README.md`, "Loss cap for the anchor wallet").
+  finance and operations procedure (`docs/operations/deployment.md`, "Loss cap for the anchor wallet").
 - The key rotation procedure exists only as a document; there is no drill record.
 
 ### T2 · Public boundary leak (Information Disclosure) — A2 · A3
@@ -136,15 +136,25 @@ not running.
 
 - Uploads enter as `quarantined` and are `promote`d only from `scanned_clean`. Only the
   `scan_service` role can write scan results.
-- The `scan` profile is **on by default.** Turning it off is an explicit act.
+- The scan worker starts by default in Compose, with ClamAV inside the same container.
+  Its scanner TCP listener is restricted to loopback.
 - A dead scanner is not silent — `core.worker_heartbeats` records liveness, and the Data Room
   says "the scanner has never reported — waiting will not resolve this."
 
 **Not blocked yet**
 
-- Whether `scan` is actually enabled in the deployed stack **cannot be known from inside the
-  repository.**
-- ClamAV is amd64-only, so it runs under emulation on Apple Silicon.
+- Whether the scan worker is actually running in the deployed stack **cannot be known from
+  inside the repository.**
+- ClamAV and the scan worker share a container and runtime user. A ClamAV exploit could
+  therefore read the worker's mounted credentials and access its DB/storage permissions.
+  Non-root execution, a read-only root filesystem and the loopback listener reduce exposure,
+  but do not isolate the daemon from worker secrets.
+- ClamAV spools streamed uploads to the disk-backed `clamavscratch` volume at
+  `/var/tmp/clamav`, separate from signature storage in `clamavdata`. The image creates the
+  scratch directory owned by `mpc` with mode `0700`; the parent filesystem stays read-only.
+  Quarantined document bytes may remain there after a crash. For the local demo, stop the
+  scan worker before removing its scratch volume. Production storage residency and retention
+  still require the decisions tracked by OD-17 and OD-18; this mount does not resolve them.
 
 ### T5 · Public API abuse (Denial of Service) — A6
 
@@ -222,8 +232,8 @@ not running.
 |---|---|---|
 | 1 | Jurisdiction of originals undecided | OD-17 — **blocks production** |
 | 2 | Ownership of encryption keys undecided | OD-18 — **blocks production** |
-| 3 | Actual profile and edge-limit state of the deployed stack unconfirmed | open items on the scan profile and rate limiting |
-| 4 | Wallet funding cap is an operations procedure | `deploy/README.md`, "Loss cap for the anchor wallet" |
+| 3 | Actual scanner and edge-limit state of the deployed stack unconfirmed | open items on scanner operation and rate limiting |
+| 4 | Wallet funding cap is an operations procedure | `docs/operations/deployment.md`, "Loss cap for the anchor wallet" |
 | 5 | Whether credential revocation is published | Excluded by current rules. Raise a new open item if needed |
 | 6 | No public-boundary check for new `SECURITY DEFINER` functions | follow-up candidate |
 | 7 | Egress restriction for notification sinks | follow-up candidate |
@@ -241,6 +251,12 @@ documents to immutable claim content. New structured review snapshots use versio
 evidence commitment; legacy unstructured commitments retain their version 1 bytes. The
 server validates field declarations, project-scoped receipts and scanned documents. A
 correction appends a claim; it does not rewrite previously signed content.
+
+Catalog definitions cannot use the seven fixed project-matrix keys. Historical definitions
+with colliding keys remain immutable and are excluded from catalog selection and computed
+ledger inputs. Confirmation writes for those keys require explicit `factScope: "legacy"`;
+`factScope: "catalog"` cannot write a fixed matrix row. Older ambiguous requests fail closed,
+while the current matrix client declares the namespace on every write.
 
 Computed ledger snapshots are separate from manual project confirmations and existing
 readiness or gate decisions. Their private input basis contains evidence and rule inputs,
@@ -278,19 +294,23 @@ change, write "checked, nothing changed" with the date.
 
 ### Evidence-ledger publication concurrency
 
-Ledger publication takes a fixed, database-enforced lock over assessment input tables before
-reading current evidence and holds it through commit. This includes inserts and direct SQL
-writes, not just API updates. A dedicated invokable function has a fixed search path and fixed
-relation list; it returns no rows and is executable only by the application role. Plain reads
-continue concurrently. `NOWAIT` rejects an existing writer or row-lock holder immediately,
-returning a retryable publication error; the transaction rolls back its idempotency record so
-the original request key remains usable. The assessment clock is refreshed after acquisition.
+Ledger publication takes transaction-scoped advisory locks before reading current evidence:
+a shared tenant-configuration lock and an exclusive tenant/project lock. It also locks the
+project row with `FOR UPDATE NOWAIT`, catching lifecycle writers that have not reached their
+write trigger. The invoker-rights function checks tenant access, has a fixed search path,
+returns no rows and is executable only by the application role. Failed advisory-lock attempts
+or a locked project row return a retryable publication error; rollback removes the request's
+idempotency record so the same key remains usable. The assessment clock is refreshed after
+acquisition.
 
-The barrier is deliberately conservative: ledger publication briefly excludes input writes
-across tenants. Concurrent writers cause publication to retry instead of accumulating a lock
-queue. A future finer-grained barrier must preserve protection against new input rows and
-consistent lock ordering across API, worker and direct SQL mutations. Changes to evaluator
-input relations must update the barrier relation list and concurrency regression coverage.
+Database row triggers make API, worker and direct SQL writes participate in the same barrier,
+including inserts. Project inputs acquire the matching exclusive project lock; shared
+definitions acquire an exclusive tenant-configuration lock. Moves lock both old and new scopes
+in deterministic order. Covered input tables reject `TRUNCATE`, which cannot be scoped by row.
+Plain reads, unrelated projects' evidence writes and other tenants' configuration writes can
+continue. Same-tenant configuration writes wait for publications, while publication fails fast
+when a conflicting writer already holds the barrier. Changes to evaluator input relations must
+update the trigger coverage and concurrency regression tests.
 
 The private assessment input also commits to the policy engine's applicable requirement IDs.
 Public grade warnings use this recorded applicability and the approved policy's minimum

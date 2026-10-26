@@ -1,0 +1,53 @@
+# Independent worker image. Build context is the repository root.
+# WORKER must be jobs-worker, anchor-worker, or scan-worker.
+# Keep the default final-stage reference valid; Compose explicitly selects each worker.
+ARG WORKER=jobs-worker
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS dependencies
+WORKDIR /repo
+ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+COPY . .
+ARG WORKER
+RUN case "$WORKER" in jobs-worker|anchor-worker|scan-worker) ;; *) exit 1 ;; esac
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile --filter "@mpc/${WORKER}..." --prod
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm --filter "@mpc/${WORKER}" deploy --prod --legacy /worker
+
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+RUN groupadd --system --gid 10001 mpc \
+    && useradd --system --uid 10001 --gid mpc --home /app mpc
+COPY --from=dependencies /worker /app
+USER mpc
+CMD ["node", "node_modules/tsx/dist/cli.mjs", "src/main.ts"]
+
+# Only scan-worker carries the antivirus runtime; other workers use the plain runtime.
+FROM runtime AS jobs-worker
+FROM runtime AS anchor-worker
+FROM runtime AS scan-worker
+# libclamunrar preserves RAR inspection from the former standalone antivirus image.
+# Match the Node 22.23.4 / NSS 3.131.1 distrust update for freshclam's OS trust store.
+# https://github.com/nodejs/node/pull/66877
+USER root
+RUN sed -i 's/Components: main/Components: main non-free/' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates clamav-daemon clamav-freshclam clamdscan libclamunrar \
+    && sed -i \
+      -e '\|^mozilla/emSign_ECC_Root_CA_-_G3\.crt$|s|^|!|' \
+      -e '\|^mozilla/emSign_Root_CA_-_C1\.crt$|s|^|!|' \
+      -e '\|^mozilla/emSign_ECC_Root_CA_-_C3\.crt$|s|^|!|' \
+      /etc/ca-certificates.conf \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/clamav /var/tmp/clamav \
+    && chown -R mpc:mpc /var/lib/clamav /var/tmp/clamav \
+    && chmod 700 /var/tmp/clamav
+COPY --chmod=644 docker/scan-worker/clamd.conf docker/scan-worker/freshclam.conf /etc/clamav/
+COPY --chmod=755 docker/scan-worker/entrypoint.sh docker/scan-worker/healthcheck.sh /usr/local/bin/
+USER mpc
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["node", "--import", "tsx", "src/main.ts"]
+
+FROM ${WORKER} AS final

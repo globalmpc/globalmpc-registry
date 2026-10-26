@@ -70,7 +70,7 @@ const lines = z
 const decisionContentSchema = z.object({
   gateId: z.string().min(1),
   decision: z.enum(["go", "hold", "rework", "stop"]),
-  inputAssessmentId: z.string().uuid(),
+  inputAssessmentId: z.string().guid(),
   rationale: z.string().trim().min(1, "A decision requires a rationale"),
   assumptions: lines,
   conditions: lines,
@@ -79,7 +79,7 @@ const decisionContentSchema = z.object({
 type DecisionContent = z.infer<typeof decisionContentSchema>;
 
 const createDecisionSchema = decisionContentSchema.extend({
-  signatureRequestId: z.string().uuid(),
+  signatureRequestId: z.string().guid(),
   // A 65-byte EIP-712 signature. It used to default to "" and was stored unchecked.
   signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/, "An EIP-712 signature is required"),
 });
@@ -332,7 +332,7 @@ export async function registerReadinessRoutes(
       const { session, tenantId, idempotencyKey } = requireMutationContext(request);
 
       const parsed = z
-        .object({ policySetId: z.string().uuid() })
+        .object({ policySetId: z.string().guid() })
         .safeParse(request.body);
       if (!parsed.success) {
         throw badRequest("REQUEST_INVALID", "policySetId is required");

@@ -21,7 +21,7 @@ can be published. A public Explorer lets readers inspect published records and t
 - **Blockchain:** BNB Smart Chain; local Anvil for development.
 - **Smart contracts:** Solidity 0.8.28, OpenZeppelin 5.6.1.
 - **Frontend:** Next.js, React, TypeScript, viem.
-- **Backend:** Fastify, PostgreSQL, S3-compatible storage, ClamAV.
+- **Backend:** Fastify, PostgreSQL, S3-compatible storage, ClamAV embedded in the scan worker.
 - **Development:** Foundry 1.8.5, forge-std 1.17.0, pnpm 10.33.0.
 
 ## Supported Networks
@@ -48,7 +48,7 @@ BNB Smart Chain is set as the target network in these files:
   when the registry is initialized.
 - [`contracts/foundry.toml`](contracts/foundry.toml) — declares a `bsc` RPC endpoint read from
   `BSC_RPC_URL`.
-- [`deploy/mainnet-contract.md`](deploy/mainnet-contract.md) — the BSC mainnet (Chain ID 56)
+- [`docs/operations/mainnet-contract.md`](docs/operations/mainnet-contract.md) — the BSC mainnet (Chain ID 56)
   deployment procedure and the decisions it waits on.
 - [`.env.example`](.env.example) — defaults to the local chain (31337) for development.
 
@@ -72,17 +72,21 @@ verify the underlying mining asset or confer ownership or regulatory approval.
 
 ## Run Locally
 
-Requires Node.js 22.12+, pnpm 10.33.0, Foundry 1.8.5 and Docker Compose.
+Requires a patched Node.js release: 22.23.4+, 24.22.1+, or 26.12.1+ within the supported release lines; pnpm 10.33.0, Foundry 1.8.5 and Docker Compose. Docker and CI use Node.js 22.23.4, which includes the October 2026 eMudhra CA security fix.
 
 ```bash
 pnpm install --frozen-lockfile
 git submodule update --init --recursive
-docker compose up --build
+docker compose -f docker/docker-compose.yml up --build
 ```
 
 Open **http://localhost:3000**. Compose starts the web app, API, background workers,
 PostgreSQL, object storage, file scanner and local Anvil chain. The initial stack has no
 published project records or deployed anchor contract.
+
+See the [deployment guide](docs/operations/deployment.md) for configuration locations,
+secret injection, observability and worker operation. The same guide links the backup,
+restore and release rollback procedures.
 
 ## Next Steps
 

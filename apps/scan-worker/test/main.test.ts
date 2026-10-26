@@ -53,6 +53,8 @@ beforeEach(() => {
   }))
     vi.stubEnv(k, v);
   vi.stubEnv("OBJECT_STORE", "memory");
+  vi.stubEnv("CLAMAV_HOST", undefined);
+  vi.stubEnv("CLAMAV_PORT", undefined);
   s.memory.mockReturnValue("memory-store");
   s.backlog.mockResolvedValue({ stuck: 2 });
   s.once.mockImplementation(async () => {
@@ -118,7 +120,7 @@ it("uses configured S3 storage and submits versioned scan results through the AP
   );
   expect(s.scan).toHaveBeenCalledWith(
     new Uint8Array([1]),
-    expect.objectContaining({ host: "clamav", port: 3310 }),
+    expect.objectContaining({ host: "127.0.0.1", port: 3310 }),
   );
   expect(s.post).toHaveBeenCalledWith(
     "/api/v1/uploads/u1/scan-result",
