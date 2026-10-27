@@ -14,13 +14,16 @@
 # The base is pinned by digest, in both stages. A tag can be repointed; a digest cannot, so the
 # same commit always builds on the same bytes. Update the tag and digest together, and keep the
 # two stages identical (`docker buildx imagetools inspect node:<tag>` — the index digest).
-FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS deps
+#
+# Alpine (musl) keeps the base small. The lockfile already carries the `*-musl` optional
+# binaries (Next SWC, sharp, rollup, esbuild); a new native dependency must ship one too.
+FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS deps
 
 WORKDIR /repo
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 # The pnpm version is pinned by packageManager in package.json. If corepack fetched the latest,
 # behavior would differ from local and show up only in this image.
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+RUN corepack enable pnpm && corepack prepare pnpm@10.33.0 --activate
 
 # Copy the whole source tree, then install.
 #
@@ -46,21 +49,20 @@ FROM deps AS web-build
 RUN pnpm --filter @mpc/web build
 
 # --- Runtime --------------------------------------------------------------------
-FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS runtime
+FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runtime
 
 WORKDIR /repo
-# Pin COREPACK_HOME to a shared path. The default is `$HOME/.cache`, so build (root) and
-# run (mpc) look in different places — then it tries to re-download at run time, and the
-# non-root user cannot create that directory.
-ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH NODE_ENV=production COREPACK_HOME=/opt/corepack
-# Prepare pnpm **at build time**. Leaving it to download at run time makes container
-# startup depend on the network.
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate \
- && chmod -R a+rX /opt/corepack
+ENV NODE_ENV=production
+# The runtime starts every process with `node` directly (see CMD and Compose), so no package
+# manager ships: npm, npx, yarn and corepack (with the pnpm it would fetch) are removed. Each
+# is extra code and CVE surface, and `pnpm` as PID 1's child only adds a process between the
+# signal and the server.
+RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
+      /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-v*
 
 # Do not run as root. On container escape, host privileges would follow.
-RUN groupadd --system --gid 10001 mpc \
- && useradd --system --uid 10001 --gid mpc --home /repo mpc
+RUN addgroup -S -g 10001 mpc \
+ && adduser -S -D -H -u 10001 -G mpc -h /repo -s /sbin/nologin mpc
 
 # Bring over the whole tree.
 #
@@ -74,7 +76,9 @@ COPY --from=web-build /repo /repo
 
 USER mpc
 
-# The process is chosen at run time:
-#   api    — pnpm --filter @mpc/api start
-#   web    — pnpm --filter @mpc/web exec next start
-CMD ["pnpm", "--filter", "@mpc/api", "start"]
+# The process is chosen at run time, each from its package directory:
+#   api     — /repo/apps/api:    node --import tsx src/main.ts
+#   web     — /repo/apps/web:    node node_modules/next/dist/bin/next start --port 3000
+#   migrate — /repo/packages/db: node --import tsx src/cli.ts
+WORKDIR /repo/apps/api
+CMD ["node", "--import", "tsx", "src/main.ts"]

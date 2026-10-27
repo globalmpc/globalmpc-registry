@@ -51,6 +51,9 @@ export async function registerCreReportRoutes(app: FastifyInstance, sql: postgre
       if (!evaluation) throw new Error("Report health clock was not produced");
       const [health] = await tx<{ overlay: { warnings: unknown[] } | null; stale: boolean; unavailable: boolean; sequence: string }[]>`
         SELECT core.public_evidence_ledger_current(${version.id},${evaluation.evaluated_at}::text::timestamptz) AS overlay,
+          -- Intentionally broader than the Explorer's per-item overlay: ANY open signal on this
+          -- version marks the whole on-chain record stale. Item scoping must never weaken the
+          -- record-level status reported on chain (fail closed).
           EXISTS (SELECT 1 FROM core.evidence_stale_signals signal
             WHERE signal.tenant_id=${tenantId} AND signal.project_id=${request.params.projectId}
               AND signal.target_type='registry_entry_version' AND signal.target_id=${version.id}

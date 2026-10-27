@@ -1,18 +1,31 @@
 # Dedicated antivirus image. Never copy application code or mount application secrets here.
-# Reuse the verified, digest-pinned Debian base already used by the application images.
-FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
-RUN groupadd --system --gid 10001 mpc \
-    && useradd --system --uid 10001 --gid mpc --home /var/lib/clamav mpc \
-    && sed -i 's/Components: main/Components: main non-free/' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates clamav-daemon clamav-freshclam clamdscan libclamunrar \
-    && sed -i \
-      -e '\|^mozilla/emSign_ECC_Root_CA_-_G3\.crt$|s|^|!|' \
-      -e '\|^mozilla/emSign_Root_CA_-_C1\.crt$|s|^|!|' \
-      -e '\|^mozilla/emSign_ECC_Root_CA_-_C3\.crt$|s|^|!|' \
-      /etc/ca-certificates.conf \
+# Reuse the verified, digest-pinned Alpine base already used by the application images. Node
+# stays only so the smoke drills (`scripts/ops/test-scan-worker-image.sh`) can inspect the trust
+# bundle and namespaces from inside; every package manager is removed.
+FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+# bash runs the supervisor and healthcheck (arrays, `compgen`, `wait -n`). freshclam uses the
+# OS trust bundle, so `ca-certificates` is installed and the three distrusted eMudhra roots
+# (October 2026) are excluded with `!` entries — current bundles no longer ship them, and the
+# exclusion keeps a future bundle from bringing them back. The build fails if any is present.
+RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
+      /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-v* \
+    && addgroup -S -g 10001 mpc \
+    && adduser -S -D -H -u 10001 -G mpc -h /var/lib/clamav -s /sbin/nologin mpc \
+    && apk add --no-cache bash ca-certificates clamav-daemon clamav-clamdscan freshclam clamav-libunrar \
+    && printf '%s\n' \
+      '!mozilla/emSign_ECC_Root_CA_-_G3.crt' \
+      '!mozilla/emSign_Root_CA_-_C1.crt' \
+      '!mozilla/emSign_ECC_Root_CA_-_C3.crt' \
+      >> /etc/ca-certificates.conf \
     && update-ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
+    && node -e ' \
+      const {X509Certificate} = require("node:crypto"); \
+      const pems = require("node:fs").readFileSync("/etc/ssl/certs/ca-certificates.crt", "utf8") \
+        .match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g); \
+      const names = pems.flatMap((pem) => new X509Certificate(pem).subject.split("\n")); \
+      for (const cn of ["emSign ECC Root CA - G3", "emSign Root CA - C1", "emSign ECC Root CA - C3"]) \
+        if (names.includes("CN=" + cn)) throw new Error("Distrusted root retained: " + cn);' \
+    && rm -rf /etc/clamav/* /var/lib/clamav/* \
     && mkdir -p /var/lib/clamav /var/tmp/clamav \
     && chown -R mpc:mpc /var/lib/clamav /var/tmp/clamav \
     && chmod 700 /var/tmp/clamav

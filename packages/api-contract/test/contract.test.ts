@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SOURCE_RESULTS } from "@mpc/domain";
-import { ROUTES, findRoutesWithoutAction } from "../src/routes.js";
+import { ROUTES, findRoutesWithoutAction, toFastifyPath } from "../src/routes.js";
 import {
   ACCESS_REQUEST_PATHS,
   ACTION_POLICIES,
@@ -54,6 +54,16 @@ describe("second-person actions", () => {
 describe("route definitions", () => {
   it("every mutation route has an action", () => {
     expect(findRoutesWithoutAction()).toEqual([]);
+  });
+
+  it("converts path parameters without nested braces and in linear time", () => {
+    expect(toFastifyPath("/projects/{id}/uploads/{uploadId}")).toBe("/projects/:id/uploads/:uploadId");
+    for (const route of ROUTES) expect(toFastifyPath(route.path)).not.toMatch(/[{}]/);
+    // Many repetitions of "{{|" took quadratic time with the previous pattern.
+    const hostile = `{{${"{{|".repeat(20_000)}`;
+    const started = performance.now();
+    expect(toFastifyPath(hostile)).toBe(hostile);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   it("every action is in the policy table", () => {

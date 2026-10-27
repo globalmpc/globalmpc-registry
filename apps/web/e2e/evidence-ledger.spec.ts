@@ -1,30 +1,15 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { connectAs } from "./connect-as";
-
-async function command(
-  page: Page,
-  path: string,
-  data: unknown,
-  version?: number,
-  method: "post" | "patch" = "post",
-) {
-  const token = await page.evaluate(() =>
-    localStorage.getItem("mpc.session.token"),
-  );
-  const response = await page.request[method](path, {
-    headers: {
-      authorization: `Bearer ${token}`,
-      "idempotency-key": crypto.randomUUID(),
-      ...(version === undefined ? {} : { "if-match": `"${version}"` }),
-    },
-    data,
-  });
-  expect(response.ok(), `${path}: ${await response.text()}`).toBe(true);
-  return response.json();
-}
-
-// CI runs this journey both before the worker (pending proof) and with the real chain.
-const CHAIN_ENABLED = process.env["E2E_CHAIN"] === "1";
+import {
+  CHAIN_ENABLED,
+  command,
+  expectApprovedLedgerPanel,
+  expectNoPrivateLedgerFields,
+  publishAndAnchor,
+  read,
+  registerSyntheticProject,
+  signScopedReview,
+} from "./evidence-ledger-journey";
 
 test.describe("evidence ledger complete journey", () => {
   test.setTimeout(240_000);
@@ -56,12 +41,13 @@ test.describe("evidence ledger complete journey", () => {
         rationale: "Synthetic end-to-end fixture",
       },
     );
+    const ruleSetId = `synthetic-stage-${Date.now()}`;
     const policyProposal = await command(
       page,
       "/api/v1/review-registry/policy-sets/proposals",
       {
         definition: {
-          ruleSetId: `synthetic-stage-${Date.now()}`,
+          ruleSetId,
           version: "1.0.0",
           effectiveFrom: "2026-01-01T00:00:00Z",
           supersededBy: null,
@@ -104,23 +90,11 @@ test.describe("evidence ledger complete journey", () => {
       policyProposal.version,
     );
     await connectAs(page, "Operator A");
-    await page.goto("/w/projects/new");
-    await page.getByRole("textbox", { name: "Project key" }).fill(projectKey);
-    await page
-      .getByRole("textbox", { name: "Name", exact: true })
-      .fill("Synthetic evidence lifecycle");
-    await page
-      .getByRole("textbox", { name: "Minerals (comma separated)" })
-      .fill("copper");
-    await page
-      .getByRole("combobox", { name: "Owning organization" })
-      .selectOption("aaaaaaaa-0000-0000-0000-000000000001");
-    await page
-      .getByRole("checkbox", { name: "Synthetic test project" })
-      .check();
-    await page.getByRole("button", { name: "Register", exact: true }).click();
-    await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
-    const projectId = new URL(page.url()).pathname.split("/").pop()!;
+    const projectId = await registerSyntheticProject(
+      page,
+      projectKey,
+      "Synthetic evidence lifecycle",
+    );
 
     // Catalog exclusions use the existing authorized, versioned confirmation UI.
     await connectAs(page, "Steward A");
@@ -192,19 +166,7 @@ test.describe("evidence ledger complete journey", () => {
       page.getByTestId("ledger-status-mining_right_registration"),
     ).toHaveText("Unreviewed");
 
-    await page.goto(`/w/projects/${projectId}/verification`);
-    await page.getByRole("checkbox").first().check();
-    await page.getByRole("button", { name: "Assign the review" }).click();
-    await expect(page.getByTestId("selected-case")).toContainText("assigned");
-    await connectAs(page, "Reviewer A");
-    await page.goto(`/w/projects/${projectId}/verification`);
-    await page.getByRole("button", { name: "Open this case" }).first().click();
-    await page.getByRole("button", { name: "Create the draft" }).click();
-    await page
-      .getByRole("button", { name: "Create a signature request" })
-      .click();
-    await page.getByTestId("sign-attestation").click();
-    await expect(page.getByTestId("signed-result")).toContainText("signed");
+    await signScopedReview(page, projectId);
     await page.goto(`/w/projects/${projectId}/data-room`);
     await expect(
       page.getByTestId("ledger-status-mining_right_registration"),
@@ -213,30 +175,11 @@ test.describe("evidence ledger complete journey", () => {
       "Exploration",
     );
 
-    await connectAs(page, "Operator A");
-    await page.goto(`/w/projects/${projectId}/publication`);
-    await page.getByTestId("draft").click();
-    await expect(page.getByTestId("pending-draft")).toBeVisible();
-    await connectAs(page, "Publisher A");
-    await page.goto(`/w/projects/${projectId}/publication`);
-    await page.getByTestId("irreversibility-ack").check();
-    await page.getByTestId("publish").click();
-    await expect(page.getByTestId("published-result")).toContainText(
-      projectKey,
-    );
-    await connectAs(page, "Operator A");
-    await page.goto(`/w/projects/${projectId}/publication`);
-    await page.getByTestId("anchor").click();
-    await expect(page.getByTestId("anchor-result")).toContainText("created");
-    if (CHAIN_ENABLED) {
-      const batchId = (
-        await page.getByTestId("anchor-result").innerText()
-      ).match(/0x[0-9a-f]{64}/)![0];
-      await page.goto("/w/anchors");
-      await expect(
-        page.getByTestId(`anchor-state-${batchId.slice(2, 10)}`),
-      ).toHaveText("confirmed", { timeout: 120_000 });
-    }
+    await publishAndAnchor(page, projectId, projectKey);
+    // Private basis of the approved item, read with Operator A's workspace access.
+    const privateLedger = (
+      await read(page, `/api/v1/projects/${projectId}/evidence-ledger`)
+    ).snapshot;
     await page.goto(`/explorer/projects/${projectKey}`);
     await expect(
       page.getByTestId("ledger-status-mining_right_registration"),
@@ -250,12 +193,34 @@ test.describe("evidence ledger complete journey", () => {
       path: test.info().outputPath("ledger-approved.png"),
       fullPage: true,
     });
-    const before = await (
-      await page.request.get(`/api/v1/public/registries/project/${projectKey}`)
-    ).json();
+    const beforeResponse = await page.request.get(
+      `/api/v1/public/registries/project/${projectKey}`,
+    );
+    const before = await beforeResponse.json();
+    await expectApprovedLedgerPanel(page, before.evidenceLedger, {
+      stage: "Exploration",
+      reviewedClaimTypes: ["mining_right_registration"],
+    });
+    const privateItem = privateLedger.items.find(
+      (item: { claimType: string }) => item.claimType === "mining_right_registration",
+    );
+    expect(privateItem.claimIds).toHaveLength(1);
+    expect(privateItem.attestationIds).toHaveLength(1);
+    expectNoPrivateLedgerFields(await beforeResponse.text(), [
+      ...privateItem.claimIds,
+      ...privateItem.attestationIds,
+      ...privateLedger.stages.map((stage: { policySetId: string }) => stage.policySetId),
+      ruleSetId,
+      "synthetic-licence\"",
+      uploadId,
+      `SYNTH-${projectKey}`,
+    ]);
     const proofBefore = await (
       await page.request.get(`/api/v1/public/proofs/${before.entryVersionId}`)
     ).json();
+    // Real hashes, so the unchanged-proof comparisons below cannot pass on missing values.
+    expect(proofBefore.leafHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(proofBefore.root).toMatch(/^0x[0-9a-f]{64}$/);
 
     // Recompute the actual path in the independent browser verifier, then simulate a
     // tampered proof response. A server's true merkleVerified flag must not mask it.
