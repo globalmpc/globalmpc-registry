@@ -72,7 +72,7 @@ verify the underlying mining asset or confer ownership or regulatory approval.
 
 ## Run Locally
 
-Requires a patched Node.js release: 22.23.4+, 24.22.1+, or 26.12.1+ within the supported release lines; pnpm 10.33.0, Foundry 1.8.5 and Docker Compose. Docker and CI use Node.js 22.23.4, which includes the October 2026 eMudhra CA security fix.
+Requires a patched Node.js release: 22.23.4+, 24.22.1+, or 26.12.1+ within the supported release lines; pnpm 10.33.0, Foundry 1.8.5 and Docker Compose. Docker images (Alpine) and CI use Node.js 24.22.1, which includes the October 2026 eMudhra CA security fix.
 
 ```bash
 pnpm install --frozen-lockfile
@@ -83,6 +83,16 @@ docker compose -f docker/docker-compose.yml up --build
 Open **http://localhost:3000**. Compose starts the web app, API, background workers,
 PostgreSQL, object storage, file scanner and local Anvil chain. The initial stack has no
 published project records or deployed anchor contract.
+
+Upgrading a stack created before the switch to the Chainguard MinIO image: that image runs as
+uid 65532, so an existing root-owned `miniodata` volume makes MinIO fail with "file access
+denied". Re-own only that volume — `docker compose down -v` would also delete the PostgreSQL
+volume. Pass the same `-p` you started the stack with, if any:
+
+```bash
+docker compose -f docker/docker-compose.yml stop minio
+docker compose -f docker/docker-compose.yml run --rm --no-deps -u 0 --entrypoint chown minio -R 65532:65532 /data
+```
 
 See the [deployment guide](docs/operations/deployment.md) for configuration locations,
 secret injection, observability and worker operation. The same guide links the backup,

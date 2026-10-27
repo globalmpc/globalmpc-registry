@@ -2001,7 +2001,8 @@ export function plannedRoutes(): RouteDefinition[] {
 /**
  * Converts an OpenAPI path (`{id}`) to a Fastify path (`:id`).
  * The notations differ, so automated comparison needs normalization.
+ * Parameter names exclude both braces, so matching stays linear on any input.
  */
 export function toFastifyPath(openApiPath: string): string {
-  return openApiPath.replace(/\{([^}]+)\}/g, ":$1");
+  return openApiPath.replace(/\{([^{}]+)\}/g, ":$1");
 }

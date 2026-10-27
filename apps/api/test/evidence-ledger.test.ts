@@ -222,12 +222,26 @@ describeDb('computed ledger API and approved public boundary',()=>{
     const originalDocument=await fx.sql`SELECT valid_until,state FROM core.object_uploads WHERE id=${documentId}`;
     const manualBefore=await fx.sql`SELECT * FROM core.project_facts WHERE project_id=${projectId}`;
     const [originalSnapshot]=await fx.sql`SELECT snapshot FROM core.evidence_ledger_snapshots WHERE id=${snapshot.id}`;
-    const {createLedgerSweep}=await import(new URL('../../jobs-worker/src/evidence-ledger.ts',import.meta.url).href);
+    const {createLedgerSweep,DEFAULT_LEDGER_BATCH_SIZE}=await import(new URL('../../jobs-worker/src/evidence-ledger.ts',import.meta.url).href);
     const futureTimestamp=Date.now()+2*24*60*60*1000;
     const futureWorker=postgres(process.env['DATABASE_URL']!,{max:1,connection:{options:'-c role=mpc_worker'},onnotice:()=>{}});
     try{
-      const result=await createLedgerSweep(futureWorker,1000,()=>futureTimestamp)();
-      expect(result.ran).toBe(true);expect(result.recorded).toBeGreaterThan(0);
+      // The sweep is global and pages by project ID, so earlier suites' projects can fill the
+      // first pages. Drive one full paginated pass at the same future clock (bounded), stopping
+      // once this project has been reassessed.
+      const [eligible]=await futureWorker<{count:string}[]>`SELECT count(*)::text AS count FROM core.projects p
+        WHERE EXISTS(SELECT 1 FROM core.claims c WHERE c.tenant_id=p.tenant_id AND c.project_id=p.id AND c.catalog_entry_id IS NOT NULL)
+          OR EXISTS(SELECT 1 FROM core.evidence_ledger_snapshots s WHERE s.tenant_id=p.tenant_id AND s.project_id=p.id)`;
+      const pages=Math.ceil(Number(eligible!.count)/DEFAULT_LEDGER_BATCH_SIZE);
+      expect(pages).toBeGreaterThan(0);
+      const sweep=createLedgerSweep(futureWorker,0,()=>futureTimestamp);
+      let recorded=0;let reassessed=false;
+      for(let page=0;page<pages&&!reassessed;page++){
+        const result=await sweep();expect(result.ran).toBe(true);recorded+=result.recorded;
+        const [current]=await fx.sql`SELECT id FROM core.evidence_ledger_snapshots WHERE project_id=${projectId} ORDER BY created_at DESC,id DESC LIMIT 1`;
+        reassessed=current!.id!==snapshot.id;
+      }
+      expect(recorded).toBeGreaterThan(0);
     }finally{await futureWorker.end();}
     const [futureSnapshot]=await fx.sql`SELECT id,snapshot FROM core.evidence_ledger_snapshots
       WHERE project_id=${projectId} ORDER BY created_at DESC,id DESC LIMIT 1`;
@@ -405,9 +419,25 @@ describeDb('computed ledger API and approved public boundary',()=>{
       SELECT ${catalog},tenant_id,item_key,1,'New catalog requirement',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
     await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic test only',materialized_id=${catalog},version=2 WHERE id=${proposal}`;
     });
-    const {createLedgerSweep}=await import(new URL('../../jobs-worker/src/evidence-ledger.ts',import.meta.url).href);
+    const {createLedgerSweep,DEFAULT_LEDGER_BATCH_SIZE}=await import(new URL('../../jobs-worker/src/evidence-ledger.ts',import.meta.url).href);
     const worker=postgres(process.env['DATABASE_URL']!,{max:1,connection:{options:'-c role=mpc_worker'},onnotice:()=>{}});
-    try {expect((await createLedgerSweep(worker,1000)()).recorded).toBeGreaterThan(0);}finally{await worker.end();}
+    try {
+      // The sweep is global and pages by project ID, so earlier suites' projects can fill the
+      // first pages. Drive one full paginated pass (bounded), stopping once this project is revisited.
+      const [eligible]=await worker<{count:string}[]>`SELECT count(*)::text AS count FROM core.projects p
+        WHERE EXISTS(SELECT 1 FROM core.claims c WHERE c.tenant_id=p.tenant_id AND c.project_id=p.id AND c.catalog_entry_id IS NOT NULL)
+          OR EXISTS(SELECT 1 FROM core.evidence_ledger_snapshots s WHERE s.tenant_id=p.tenant_id AND s.project_id=p.id)`;
+      const pages=Math.ceil(Number(eligible!.count)/DEFAULT_LEDGER_BATCH_SIZE);
+      expect(pages).toBeGreaterThan(0);
+      const sweep=createLedgerSweep(worker,0);
+      let recorded=0;let revisited=false;
+      for(let page=0;page<pages&&!revisited;page++){
+        const result=await sweep();expect(result.ran).toBe(true);recorded+=result.recorded;
+        const [current]=await fx.sql`SELECT id FROM core.evidence_ledger_snapshots WHERE project_id=${projectId} ORDER BY created_at DESC,id DESC LIMIT 1`;
+        revisited=current!.id!==initial.json().snapshot.id;
+      }
+      expect(recorded).toBeGreaterThan(0);
+    }finally{await worker.end();}
     const [latest]=await fx.sql`SELECT id,snapshot FROM core.evidence_ledger_snapshots WHERE project_id=${projectId} ORDER BY created_at DESC,id DESC LIMIT 1`;
     expect(latest!.id).not.toBe(initial.json().snapshot.id);
     expect(latest!.snapshot.items).toContainEqual(expect.objectContaining({claimType:newType,status:'missing'}));
