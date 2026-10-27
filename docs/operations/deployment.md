@@ -260,6 +260,9 @@ The scan deadline is one absolute budget: `SCAN_TIMEOUT_MS` (30 seconds by defau
 plus 125 ms per MiB, capped at 10 minutes. Both socket inactivity and the absolute deadline
 use that budget. The default maximum accepted file receives 280 seconds. Upload leases
 cover a bounded 60-second object read, that scan budget, and 120 seconds for API reporting;
+the read deadline aborts the S3 request and response body, and the worker waits for cleanup
+before releasing its lease or starting another attempt. Custom object stores must likewise
+honor the optional abort signal and settle only after their read resources are closed.
 `SCAN_LEASE_MS` remains a minimum, so a large file receives at least 460 seconds.
 The client honors socket backpressure instead of queuing a second full upload in memory.
 The scan worker has a 480-second Compose shutdown grace period so an accepted maximum-size

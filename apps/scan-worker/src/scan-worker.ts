@@ -20,8 +20,8 @@ import { MAX_SCAN_BYTES, scanDeadlineMs, type ScanVerdict } from "./scanner.js";
  */
 
 export interface ScanStore {
-  /** Reads a quarantine object. null if absent. */
-  get(key: string): Promise<Uint8Array | null>;
+  /** Reads a quarantine object. On abort, settle only after transport/body cleanup. null if absent. */
+  get(key: string, signal?: AbortSignal): Promise<Uint8Array | null>;
 }
 
 /**
@@ -156,17 +156,15 @@ export async function scanOnce(
   const row = await leaseOne(sql, options);
   if (!row) return { handled: false };
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("object read timeout")), options.objectReadTimeoutMs ?? 60_000);
   let bytes: Uint8Array | null;
   try {
-    bytes = await Promise.race([
-      store.get(row.object_key),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("object read timeout")), options.objectReadTimeoutMs ?? 60_000);
-      }),
-    ]);
+    // Await transport cancellation before releasing the lease: a timeout race alone leaves
+    // the old S3 download alive while the next attempt allocates another response buffer.
+    bytes = await store.get(row.object_key, controller.signal);
+    controller.signal.throwIfAborted();
   } catch {
-    // A late read is discarded: it cannot start a scan after its lease budget was released.
     await recordFailure(sql, row, "scan_error: object read failed or timed out");
     log({ level: "error", msg: "scan.object_read_failed", uploadId: row.id });
     return { handled: true, uploadId: row.id, verdict: "error" };

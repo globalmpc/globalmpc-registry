@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type postgres from "postgres";
 import type { FastifyInstance } from "fastify";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { keccak256, toBytes } from "viem";
@@ -22,6 +23,32 @@ async function delayedHealth(sql: TestFixture["sql"], delaySql: string, run: () 
     await sql`DROP FUNCTION IF EXISTS core.public_evidence_ledger_current(UUID,TIMESTAMPTZ)`;
     await sql`ALTER FUNCTION core.public_evidence_ledger_clock_test_original(UUID,TIMESTAMPTZ) RENAME TO public_evidence_ledger_current`;
   }
+}
+
+/** Substitute only report clock expressions; all health, locking, RLS and writes remain real SQL.
+ * Explicit phases avoid making a one-second TTL depend on the CI machine's wall-second phase.
+ */
+function reportClock(sql: TestFixture["appSql"], sample: () => string, finish: () => string): TestFixture["appSql"] {
+  return new Proxy(sql, {
+    get(target, property, receiver) {
+      if (property !== "begin") return Reflect.get(target, property, receiver);
+      return (run: (tx: postgres.TransactionSql) => Promise<unknown>) => target.begin(tx => run(new Proxy(tx, {
+        apply(query, thisArg, args: unknown[]) {
+          const template = args[0] as TemplateStringsArray;
+          const text = Array.isArray(template) ? template.join("") : "";
+          if (text.includes("WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS evaluated_at)")) {
+            const evaluatedAt = sample();
+            return tx`SELECT ${evaluatedAt}::timestamptz::text AS evaluated_at,
+              floor(extract(epoch FROM ${evaluatedAt}::timestamptz))::bigint::text AS observed_at`;
+          }
+          if (text.trim() === "SELECT floor(extract(epoch FROM clock_timestamp()))::bigint::text AS observed_at") {
+            return tx`SELECT floor(extract(epoch FROM ${finish()}::timestamptz))::bigint::text AS observed_at`;
+          }
+          return Reflect.apply(query, thisArg, args);
+        },
+      })));
+    },
+  });
 }
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
@@ -80,50 +107,68 @@ describeDb("destination-bound CRE report observations", () => {
     expect(stored!.n).toBe(1);
   });
 
-  it("starts a one-second TTL after waiting for a concurrent report reservation", async () => {
+  it("starts a one-second TTL only after the concurrent report reservation releases", async () => {
     const key = idempotencyKey();
+    let released = false;
+    let samples = 0;
+    const sample = "2026-10-27T12:00:46.988Z";
+    const controlled = await buildServer(loadConfig(testEnv()), reportClock(fx.appSql, () => {
+      samples++;
+      expect(released).toBe(true);
+      return sample;
+    }, () => "2026-10-27T12:00:46.999Z"));
     let pending: ReturnType<typeof report> | undefined;
-    let releasedAt = 0n;
-    await fx.sql.begin(async blocker => {
-      const [owner] = await blocker<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
-      await blocker`SELECT pg_advisory_xact_lock(hashtextextended(${'cre-report-key:' + fx.tenantA + ':' + key},0))`;
-      pending = report({ ttlSeconds: "1" }, token, fx.projectA, key).then(response => response);
-      let waiting = false;
-      for (let attempt = 0; attempt < 100; attempt++) {
-        const [blocked] = await fx.sql<{ waiting: boolean }[]>`
-          SELECT EXISTS(SELECT 1 FROM pg_stat_activity
-            WHERE ${owner!.pid} = ANY(pg_blocking_pids(pid))) AS waiting
-        `;
-        if (blocked?.waiting) { waiting = true; break; }
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
-      expect(waiting).toBe(true);
-      await blocker`SELECT pg_sleep(1.2)`;
-      const [clock] = await blocker<{ epoch: string }[]>`
-        SELECT floor(extract(epoch FROM clock_timestamp()))::bigint::text AS epoch
-      `;
-      releasedAt = BigInt(clock!.epoch);
-    });
-    const response = await pending!;
-    expect(response.statusCode, response.body).toBe(200);
-    const body = response.json<{ observedAt: string; validUntil: string }>();
-    expect(BigInt(body.observedAt)).toBeGreaterThanOrEqual(releasedAt);
-    expect(BigInt(body.validUntil) - BigInt(body.observedAt)).toBe(1n);
-    expect(BigInt(body.validUntil)).toBeGreaterThan(releasedAt);
+    try {
+      await fx.sql.begin(async blocker => {
+        const [owner] = await blocker<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+        await blocker`SELECT pg_advisory_xact_lock(hashtextextended(${'cre-report-key:' + fx.tenantA + ':' + key},0))`;
+        pending = controlled.inject({ method: "POST", url: `/api/v1/projects/${fx.projectA}/cre-reports`,
+          headers: { authorization: `Bearer ${token}`, "idempotency-key": key },
+          payload: {publicKey, chainId: String(loadConfig(testEnv()).chainId), receiver, ttlSeconds: "1"},
+        }).then(response => response);
+        let waiting = false;
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const [blocked] = await fx.sql<{ waiting: boolean }[]>`SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+            WHERE ${owner!.pid} = ANY(pg_blocking_pids(pid))) AS waiting`;
+          if (blocked?.waiting) { waiting = true; break; }
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        expect(waiting).toBe(true);
+        expect(samples).toBe(0);
+        released = true;
+      });
+      const response = await pending!;
+      expect(response.statusCode, response.body).toBe(200);
+      expect(samples).toBeGreaterThan(0);
+      expect(response.json().observedAt).toBe(String(Math.floor(Date.parse(sample) / 1000)));
+      expect(BigInt(response.json().validUntil) - BigInt(response.json().observedAt)).toBe(1n);
+    } finally { await controlled.close(); }
   });
 
-  it("rolls back an observation and its reservation when health evaluation spends its TTL", async () => {
+  it("rolls back TTL1 health evaluated at .988 when 92ms crosses the expiry second, then permits the same key", async () => {
     const key = idempotencyKey();
-    const before = await fx.sql`SELECT id FROM core.cre_reports WHERE tenant_id=${fx.tenantA} AND project_id=${fx.projectA}`;
-    await delayedHealth(fx.sql,"PERFORM pg_sleep(1.1)",async () => {
-      const expired = await report({ttlSeconds:"1"},token,fx.projectA,key);
-      expect(expired.statusCode,expired.body).toBe(503);
-      expect(expired.json()).toMatchObject({code:"CRE_OBSERVATION_EXPIRED",retryable:true});
+    let sampled = "2026-10-27T12:00:46.988Z";
+    let finished = "2026-10-27T12:00:47.080Z";
+    const controlled = await buildServer(loadConfig(testEnv()), reportClock(fx.appSql,
+      () => sampled, () => finished));
+    const observe = () => controlled.inject({ method: "POST", url: `/api/v1/projects/${fx.projectA}/cre-reports`,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": key },
+      payload: {publicKey, chainId: String(loadConfig(testEnv()).chainId), receiver, ttlSeconds: "1"},
+    });
+    try {
+      const before = await fx.sql`SELECT id FROM core.cre_reports WHERE tenant_id=${fx.tenantA} AND project_id=${fx.projectA}`;
+      const expired = await observe();
+      expect(expired.statusCode, expired.body).toBe(503);
+      expect(expired.json()).toMatchObject({code: "CRE_OBSERVATION_EXPIRED", retryable: true});
       expect(await fx.sql`SELECT id FROM core.cre_reports WHERE tenant_id=${fx.tenantA} AND project_id=${fx.projectA}`).toEqual(before);
       expect(await fx.sql`SELECT key FROM core.idempotency_keys WHERE tenant_id=${fx.tenantA} AND key=${key}`).toHaveLength(0);
-    });
-    const retry = await report({ttlSeconds:"1"},token,fx.projectA,key);
-    expect(retry.statusCode,retry.body).toBe(200);
+      sampled = "2026-10-27T12:00:47.988Z";
+      finished = "2026-10-27T12:00:47.999Z";
+      const retry = await observe();
+      expect(retry.statusCode, retry.body).toBe(200);
+      expect(retry.json().observedAt).toBe(String(Math.floor(Date.parse("2026-10-27T12:00:46.988Z") / 1000) + 1));
+      expect(BigInt(retry.json().validUntil) - BigInt(retry.json().observedAt)).toBe(1n);
+    } finally { await controlled.close(); }
   });
 
   it("detects a review credential expiring during the lock wait without changing approved bytes", async () => {
@@ -174,7 +219,7 @@ describeDb("destination-bound CRE report observations", () => {
       const approvedId = published.json().id as string;
       const before = await isolated.sql`SELECT content_hash,public_projection FROM core.registry_entry_versions WHERE id=${approvedId}`;
       const keyOf = await projectKeyOf(isolated.sql, isolated.projectA);
-      const observe = (key: string, ttlSeconds = "1") => server.inject({ method: "POST", url: `/api/v1/projects/${isolated.projectA}/cre-reports`,
+      const observe = (key: string, ttlSeconds = "300") => server.inject({ method: "POST", url: `/api/v1/projects/${isolated.projectA}/cre-reports`,
         headers: { authorization: `Bearer ${operator}`, "idempotency-key": key },
         payload: { publicKey: keyOf, chainId: String(loadConfig(testEnv()).chainId), receiver, ttlSeconds } });
       const current = await observe(idempotencyKey());
