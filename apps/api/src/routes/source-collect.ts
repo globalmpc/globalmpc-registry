@@ -17,6 +17,7 @@ import {
   invokeHttpAdapter,
   type HttpAdapterConfig,
 } from "../services/source-adapter.js";
+import { recordSourceObservation } from "../services/source-observations.js";
 import { pinnedFetch, type SourceFetch } from "../services/source-fetch.js";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import {
@@ -296,6 +297,7 @@ export async function registerSourceCollectRoutes(
         throw error;
       }
 
+      const observedAt = new Date();
       const body = buildReceiptBody(descriptor, invocation, {
         connectionId: connection.id,
         authorityId: connection.authority_id,
@@ -340,7 +342,7 @@ export async function registerSourceCollectRoutes(
             ) VALUES (
               ${id}, ${tenantId}, ${parsed.data.projectId}, ${connection.id},
               ${connection.authority_id}, ${connection.collection_method}, ${result},
-              ${tx.json(body["queryBasis"] as Record<string, string>)},
+              ${tx.json(parsed.data.queryBasis)},
               ${connection.endpoint}, ${connection.authentication_method},
               ${body["rawHash"] as string}, ${connection.source_schema_version},
               ${connection.adapter_version}, ${connection.terms_license},
@@ -351,6 +353,17 @@ export async function registerSourceCollectRoutes(
               ${tx.json(collectorEvidence as never)}
             )
           `;
+
+          await recordSourceObservation(tx, {
+            tenantId,
+            projectId: parsed.data.projectId,
+            connectionId: connection.id,
+            receiptId: id,
+            queryBasis: parsed.data.queryBasis,
+            observedAt,
+            result,
+            rawHash: (body["rawHash"] as string | null) ?? null,
+          });
 
           // Updated only on success. This value is "the last time a real answer was received".
           if (confirmed) {

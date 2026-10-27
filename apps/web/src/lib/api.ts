@@ -392,7 +392,7 @@ export interface ObjectUpload {
 }
 
 export interface ScannerStatus {
-  state: "running" | "stale" | "never_seen" | "unknown";
+  state: "running" | "unavailable" | "stale" | "never_seen" | "unknown";
   secondsSinceHeartbeat: number | null;
   detail: string;
 }

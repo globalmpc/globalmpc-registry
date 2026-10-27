@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { runMigrations } from "@mpc/db";
-import { parseClamResponse } from "../src/scanner.js";
+import { MAX_SCAN_BYTES, parseClamResponse } from "../src/scanner.js";
 import { scanBacklog, scanOnce, type ScanStore } from "../src/scan-worker.js";
 import type { ScanVerdict } from "../src/scanner.js";
 
@@ -21,6 +21,11 @@ describe("ClamAV response parsing", () => {
     expect(parseClamResponse("stream: OK\0")).toEqual({ kind: "clean" });
   });
 
+  it.each(["NOT OK\0", "stream: NOT OK\0", "error: OK\0", "stream: ERROR\nstream: OK\0"])(
+    "does not promote a malformed success suffix: %s",
+    (response) => expect(parseClamResponse(response).kind).toBe("error"),
+  );
+
   it("extracts the signature name from an infected response", () => {
     // False positives can only be checked if we know what triggered the verdict.
     expect(parseClamResponse("stream: Eicar-Test-Signature FOUND\0")).toEqual({
@@ -30,7 +35,7 @@ describe("ClamAV response parsing", () => {
   });
 
   // clamd reports what it could not look inside as a heuristic `FOUND` (`AlertEncrypted*`,
-  // `AlertExceedsMax` in docker/scan-worker/clamd.conf). Treating these as clean would let a malicious
+  // `AlertExceedsMax` in docker/clamav/clamd.conf). Treating these as clean would let a malicious
   // file in a password-protected or oversized archive be promoted.
   it("reads an encrypted-archive heuristic as infected", () => {
     expect(parseClamResponse("stream: Heuristics.Encrypted.Zip FOUND\0")).toEqual({
@@ -176,9 +181,9 @@ describeDb("scan worker", () => {
 
   async function stateOf() {
     const [row] = await sql<
-      { state: string; scan_attempts: number; rejection_reason: string | null; version: number }[]
+      { state: string; scan_attempts: number; scan_leased_until: string | null; rejection_reason: string | null; version: number }[]
     >`
-      SELECT state, scan_attempts, rejection_reason, version
+      SELECT state, scan_attempts, scan_leased_until::text, rejection_reason, version
       FROM core.object_uploads WHERE id = ${uploadId}
     `;
     return row!;
@@ -291,6 +296,129 @@ describeDb("scan worker", () => {
     // "pending and stuck are counted separately", not the absolute number.
     expect(backlog.pending).toBe(0);
     expect(backlog.stuck).toBeGreaterThanOrEqual(1);
+  });
+
+  it("preserves upload attempts across three unavailable polls and scans after recovery", async () => {
+    let available = false;
+    let reads = 0;
+    let scans = 0;
+    const guarded = { ...options, scannerAvailable: async () => available };
+    const countedStore = { get: async (key: string) => { reads++; return store.get(key); } };
+    const countedScan = async (): Promise<ScanVerdict> => { scans++; return { kind: "clean" }; };
+    const before = await stateOf();
+    for (let poll = 0; poll < 3; poll++) {
+      expect(await scanOnce(sql, countedStore, countedScan, report, guarded, log))
+        .toEqual({ handled: false, scannerUnavailable: true });
+    }
+    expect(await stateOf()).toEqual(before);
+    expect(reads).toBe(0);
+    expect(scans).toBe(0);
+    expect(reported).toEqual([]);
+    available = true;
+    expect((await scanOnce(sql, countedStore, countedScan, report, guarded, log)).verdict).toBe("clean");
+    expect((await stateOf()).state).toBe("scanned_clean");
+    expect((await stateOf()).scan_attempts).toBe(1);
+    expect(reads).toBe(1);
+    expect(scans).toBe(1);
+  });
+
+  it("refunds only pre-connect outages that race the successful readiness probe", async () => {
+    const guarded = { ...options, scannerAvailable: async () => true };
+    const disconnected = async (): Promise<ScanVerdict> => ({ kind: "error", reason: "connection refused", unavailable: true });
+    for (let poll = 0; poll < 3; poll++) {
+      expect((await scanOnce(sql, store, disconnected, report, guarded, log)).scannerUnavailable).toBe(true);
+      const after = await stateOf();
+      expect(after.scan_attempts).toBe(0);
+      expect(after.scan_leased_until).toBeNull();
+      expect(after.state).toBe("quarantined");
+    }
+    expect(reported).toEqual([]);
+    expect((await step()).verdict).toBe("clean");
+    expect((await stateOf()).state).toBe("scanned_clean");
+    expect((await stateOf()).scan_attempts).toBe(1);
+  });
+
+  it("still exhausts the budget when connected scans fail on the same file", async () => {
+    const guarded = { ...options, scannerAvailable: async () => true };
+    const connectedFailure = async (): Promise<ScanVerdict> => ({ kind: "error", reason: "connection reset after upload" });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect((await scanOnce(sql, store, connectedFailure, report, guarded, log)).handled).toBe(true);
+    }
+    expect((await scanOnce(sql, store, connectedFailure, report, guarded, log)).handled).toBe(false);
+    expect((await stateOf()).scan_attempts).toBe(3);
+    expect((await stateOf()).state).toBe("quarantined");
+    expect(reported).toEqual([]);
+  });
+
+  it("never refunds or releases a replacement worker's lease after its own lease expires", async () => {
+    let startedFirst!: () => void;
+    let finishFirst!: (result: ScanVerdict) => void;
+    const firstStarted = new Promise<void>((resolve) => { startedFirst = resolve; });
+    const first = scanOnce(sql, store, () => {
+      startedFirst();
+      return new Promise<ScanVerdict>((resolve) => { finishFirst = resolve; });
+    }, report, options, log);
+    await firstStarted;
+    await sql`UPDATE core.object_uploads SET scan_leased_until = now() - interval '1 second' WHERE id = ${uploadId}`;
+    let startedSecond!: () => void;
+    let finishSecond!: (result: ScanVerdict) => void;
+    const secondStarted = new Promise<void>((resolve) => { startedSecond = resolve; });
+    const second = scanOnce(sql, store, () => {
+      startedSecond();
+      return new Promise<ScanVerdict>((resolve) => { finishSecond = resolve; });
+    }, report, options, log);
+    await secondStarted;
+    const replacement = await stateOf();
+    expect(replacement.scan_attempts).toBe(2);
+    expect(replacement.scan_leased_until).not.toBeNull();
+    finishFirst({ kind: "error", reason: "connection refused", unavailable: true });
+    await first;
+    expect(await stateOf()).toEqual(replacement);
+    finishSecond({ kind: "error", reason: "file-specific scan failure" });
+    await second;
+    expect((await stateOf()).scan_attempts).toBe(2);
+    expect((await stateOf()).scan_leased_until).toBeNull();
+  });
+
+  it("leases the maximum accepted file for its full read, scan and report budget", async () => {
+    await sql`UPDATE core.object_uploads SET scan_attempts=999 WHERE id=${uploadId}`;
+    uploadId=randomUUID();
+    await sql`INSERT INTO core.object_uploads
+      (id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state)
+      VALUES(${uploadId},${tenantId},${projectId},${`quarantine/${tenantId}/${uploadId}`},${`0x${"22".repeat(32)}`},
+        ${MAX_SCAN_BYTES},'application/pdf','restricted','quarantined')`;
+    let started!: () => void;
+    let finish!: (bytes: Uint8Array | null) => void;
+    const reading = new Promise<void>((resolve) => { started=resolve; });
+    const pending = scanOnce(sql, {get: () => { started(); return new Promise((resolve) => { finish=resolve; }); }}, scan, report, options, log);
+    await reading;
+    const [lease] = await sql<{remaining:number}[]>`SELECT extract(epoch FROM(scan_leased_until-now()))::float8 AS remaining FROM core.object_uploads WHERE id=${uploadId}`;
+    expect(lease!.remaining).toBeGreaterThan(450);
+    expect(lease!.remaining).toBeLessThanOrEqual(461);
+    finish(null);
+    await pending;
+  });
+
+  it("discards a timed-out object read without scanning its late result", async () => {
+    let finish!: (bytes: Uint8Array) => void;
+    let scans=0;
+    const result = await scanOnce(sql, {get: () => new Promise((resolve) => { finish=resolve; })}, async () => { scans++; return {kind:"clean"}; }, report,
+      {...options,objectReadTimeoutMs:5}, log);
+    expect(result.verdict).toBe("error");
+    finish(new Uint8Array([1,2,3]));
+    await Promise.resolve();
+    expect(scans).toBe(0);
+    expect(reported).toEqual([]);
+    expect((await stateOf()).state).toBe("quarantined");
+    expect((await stateOf()).scan_leased_until).toBeNull();
+  });
+
+  it("does not scan or report an object whose bytes differ from leased size metadata", async () => {
+    let scans=0;
+    const result=await scanOnce(sql,{get:async()=>new Uint8Array(4)},async()=>{scans++;return {kind:"clean"};},report,options,log);
+    expect(result.verdict).toBe("error");
+    expect(scans).toBe(0);
+    expect(reported).toEqual([]);
   });
 
   it("does nothing when no uploads are pending", async () => {

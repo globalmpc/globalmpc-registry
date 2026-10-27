@@ -24,7 +24,7 @@ export type ScanVerdict =
   /** Infected. `signature` is what matched — needed to check false positives. */
   | { readonly kind: "infected"; readonly signature: string }
   /** The scan itself failed. **Distinct from infected** — a scanner outage must not be recorded as infected. */
-  | { readonly kind: "error"; readonly reason: string };
+  | { readonly kind: "error"; readonly reason: string; readonly unavailable?: true };
 
 export interface ScannerOptions {
   readonly host: string;
@@ -39,6 +39,17 @@ export const DEFAULT_SCANNER_OPTIONS: Omit<ScannerOptions, "host" | "port"> = {
   chunkBytes: 64 * 1024,
 };
 
+/** Match the multipart API limit and the configured ClamAV 2000M inspection limit. */
+export const MAX_SCAN_BYTES = 2000 * 1024 * 1024;
+const MAX_SCAN_DEADLINE_MS = 10 * 60 * 1000;
+
+/** A single absolute budget, allowing 8 MiB/s plus the configured processing allowance. */
+export function scanDeadlineMs(byteSize: number, baseTimeoutMs = DEFAULT_SCANNER_OPTIONS.timeoutMs): number {
+  if (!Number.isSafeInteger(byteSize) || byteSize < 0 || byteSize > MAX_SCAN_BYTES
+    || !Number.isFinite(baseTimeoutMs) || baseTimeoutMs <= 0) throw new RangeError("Invalid scan size or timeout");
+  return Math.min(MAX_SCAN_DEADLINE_MS, baseTimeoutMs + Math.ceil(byteSize / (1024 * 1024)) * 125);
+}
+
 /**
  * Turns a ClamAV response into a verdict.
  *
@@ -49,7 +60,7 @@ export const DEFAULT_SCANNER_OPTIONS: Omit<ScannerOptions, "host" | "port"> = {
 export function parseClamResponse(raw: string): ScanVerdict {
   const line = raw.replace(/\0+$/, "").trim();
 
-  if (line.endsWith("OK")) return { kind: "clean" };
+  if (line === "stream: OK") return { kind: "clean" };
 
   // Every FOUND is infected, including `Heuristics.*`. The encrypted-archive and scan-limit
   // alerts arrive this way — a file clamd could not look inside must not be promoted.
@@ -69,37 +80,96 @@ function frame(chunk: Uint8Array): Buffer {
 }
 
 export function scanBytes(bytes: Uint8Array, options: ScannerOptions): Promise<ScanVerdict> {
+  if (bytes.byteLength > MAX_SCAN_BYTES) return Promise.resolve({ kind: "error", reason: "file exceeds scanner size limit" });
+  const timeoutMs = scanDeadlineMs(bytes.byteLength, options.timeoutMs);
   return new Promise((resolve) => {
     let settled = false;
+    let connected = false;
+    const transportError = (reason: string): ScanVerdict => ({
+      kind: "error", reason, ...(!connected ? { unavailable: true as const } : {}),
+    });
     const finish = (verdict: ScanVerdict) => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadline);
       socket.destroy();
       resolve(verdict);
     };
 
     const socket: Socket = connect({ host: options.host, port: options.port });
-    socket.setTimeout(options.timeoutMs);
+    socket.setTimeout(timeoutMs);
+    // An idle timeout alone lets a faulty peer retain the worker indefinitely by dripping data.
+    const deadline = setTimeout(() => finish(transportError("scan timeout")), timeoutMs);
 
     const chunks: Buffer[] = [];
+    let responseBytes = 0;
 
-    socket.on("connect", () => {
-      socket.write("zINSTREAM\0");
-
-      for (let offset = 0; offset < bytes.byteLength; offset += options.chunkBytes) {
-        socket.write(frame(bytes.subarray(offset, offset + options.chunkBytes)));
+    let offset = 0;
+    let terminated = false;
+    const writeChunks = () => {
+      if (settled || terminated) return;
+      while (offset < bytes.byteLength) {
+        const chunk = frame(bytes.subarray(offset, offset + options.chunkBytes));
+        offset += options.chunkBytes;
+        // Keep at most the socket's bounded write buffer, rather than copying a 2 GiB upload
+        // into queued frames before the event loop can enforce its absolute deadline.
+        if (!socket.write(chunk)) return;
       }
-
-      // A zero-length frame marks the end of the stream.
+      terminated = true;
       socket.write(Buffer.alloc(4));
+    };
+    socket.on("drain", writeChunks);
+    socket.on("connect", () => {
+      connected = true;
+      socket.write("zINSTREAM\0");
+      writeChunks();
     });
 
-    socket.on("data", (chunk) => chunks.push(chunk));
+    socket.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      responseBytes += chunk.byteLength;
+      if (responseBytes > 4096) {
+        finish({ kind: "error", reason: "scanner response exceeds 4096 bytes" });
+        return;
+      }
+      chunks.push(chunk);
+    });
     socket.on("end", () => finish(parseClamResponse(Buffer.concat(chunks).toString("utf8"))));
 
     // Timeouts and connection failures are not infections. Marking every upload infected while
     // the scanner is down would mass-produce irreversible states.
-    socket.on("timeout", () => finish({ kind: "error", reason: "scan timeout" }));
-    socket.on("error", (error) => finish({ kind: "error", reason: error.message }));
+    socket.on("timeout", () => finish(transportError("scan timeout")));
+    socket.on("error", (error) => finish(transportError(error.message)));
+  });
+}
+
+/** Probe before leasing an upload: infrastructure downtime must not spend its retry budget. */
+export function scannerAvailable(options: Pick<ScannerOptions, "host" | "port" | "timeoutMs">): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = connect({ host: options.host, port: options.port });
+    const finish = (available: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      socket.destroy();
+      resolve(available);
+    };
+    const deadline = setTimeout(() => finish(false), options.timeoutMs);
+    socket.setTimeout(options.timeoutMs);
+    const chunks: Buffer[] = [];
+    let responseBytes = 0;
+    const complete = () => finish(Buffer.concat(chunks).toString("utf8").replace(/\0+$/, "").trim() === "PONG");
+    socket.on("connect", () => socket.write("zPING\0"));
+    socket.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      responseBytes += chunk.byteLength;
+      if (responseBytes > 4096) { finish(false); return; }
+      chunks.push(chunk);
+      if (chunk.includes(0) || chunk.includes(10)) complete();
+    });
+    socket.on("end", complete);
+    socket.on("timeout", () => finish(false));
+    socket.on("error", () => finish(false));
   });
 }

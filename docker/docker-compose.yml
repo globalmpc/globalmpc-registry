@@ -3,8 +3,8 @@
 # This file is **local and demo only**. Not for prod deployment — region and key ownership
 # are undecided (OD-17·OD-18), and every credential here is a known value.
 #
-# Passing secrets as `file:` references rather than env var values is intentional. Going
-# through the same code path as deployment avoids "works locally, fails in deployment" gaps.
+# Compose injects application credentials directly from environment variables. Defaults below
+# are existing public local fixtures only; supply environment values to override them.
 
 name: mpc-dapp
 
@@ -118,10 +118,10 @@ services:
       login-roles: { condition: service_completed_successfully }
       minio-init: { condition: service_completed_successfully }
     environment:
-      # References, not values. No secrets remain in the process env or `docker inspect`.
-      DATABASE_URL: file:/run/secrets/database_url
-      SESSION_SECRET: file:/run/secrets/session_secret
-      OBJECT_SECRET_ACCESS_KEY: file:/run/secrets/object_secret_key
+      # Values are injected into the process environment; keep real credentials out of Git.
+      DATABASE_URL: ${API_DATABASE_URL:-postgres://mpc_app_login:app@postgres:5432/mpc_dev}
+      SESSION_SECRET: ${SESSION_SECRET:-local-development-session-secret-32chars}
+      OBJECT_SECRET_ACCESS_KEY: ${OBJECT_SECRET_ACCESS_KEY:-minioadmin}
       PORT: "3001"
       SIWE_DOMAIN: localhost:3000
       SIWE_URI: http://localhost:3000
@@ -140,7 +140,6 @@ services:
       # blocks this value.
       OBJECT_SSE: none
       OBJECT_ACCESS_KEY_ID: minioadmin
-    secrets: [database_url, session_secret, object_secret_key]
     ports: ["127.0.0.1:3001:3001"]
     command: ["pnpm", "--filter", "@mpc/api", "start"]
 
@@ -170,8 +169,8 @@ services:
     environment:
       WORKER_HEALTH_FILE: /tmp/worker-heartbeat
       # The worker spans multiple tenants, so it connects with a dedicated role (0012).
-      DATABASE_URL: file:/run/secrets/worker_database_url
-      ANCHOR_SIGNER_PRIVATE_KEY: file:/run/secrets/anchor_signer_key
+      DATABASE_URL: ${WORKER_DATABASE_URL:-postgres://mpc_worker_login:worker@postgres:5432/mpc_dev}
+      ANCHOR_SIGNER_PRIVATE_KEY: ${ANCHOR_SIGNER_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}
       CHAIN_RPC_URL: http://anvil:8545
       CHAIN_ID: "31337"
       ANCHOR_CONTRACT_ADDRESS: "${ANCHOR_CONTRACT_ADDRESS:-0x5FbDB2315678afecb367f032d93F642f64180aa3}"
@@ -181,7 +180,6 @@ services:
       # Local anvil value only. anvil accounts hold no real assets. How to set the production
       # value is in `docs/operations/deployment.md`.
       ANCHOR_DAILY_SPEND_CAP_WEI: "1000000000000000000"
-    secrets: [worker_database_url, anchor_signer_key]
     command: ["node", "node_modules/tsx/dist/cli.mjs", "src/main.ts"]
 
   # Outbox publishing and notification webhook delivery. Without it, events and webhooks pile
@@ -210,7 +208,7 @@ services:
       login-roles: { condition: service_completed_successfully }
     environment:
       WORKER_HEALTH_FILE: /tmp/worker-heartbeat
-      DATABASE_URL: file:/run/secrets/worker_database_url
+      DATABASE_URL: ${WORKER_DATABASE_URL:-postgres://mpc_worker_login:worker@postgres:5432/mpc_dev}
       # Outbox event retries. At the cap the event is dead-lettered and shown on the audit
       # screen; `pnpm --filter @mpc/jobs-worker outbox:replay` puts it back (dry run by default).
       OUTBOX_MAX_ATTEMPTS: "5"
@@ -218,8 +216,31 @@ services:
       NOTIFY_MAX_ATTEMPTS: "5"
       NOTIFY_BACKOFF_MS: "30000"
       NOTIFY_TIMEOUT_MS: "10000"
-    secrets: [worker_database_url]
     command: ["node", "node_modules/tsx/dist/cli.mjs", "src/main.ts"]
+
+  # No application code, credentials, or access to the application network.
+  clamav:
+    image: mpc/clamav:local
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.clamav
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m,mode=1777"]
+    volumes:
+      - clamavdata:/var/lib/clamav
+      - clamavscratch:/var/tmp/clamav
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [scan-internal, clamav-updates]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
 
   # Scan worker. Kept separate so infected file bytes never pass through the API process.
   scan-worker:
@@ -231,35 +252,33 @@ services:
         WORKER: scan-worker
     init: true
     restart: unless-stopped
-    stop_grace_period: 60s
+    stop_grace_period: 480s
     read_only: true
-    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m,mode=1777"]
-    volumes:
-      - clamavdata:/var/lib/clamav
-      # INSTREAM spools uploads; large evidence must not exhaust the small /tmp tmpfs.
-      - clamavscratch:/var/tmp/clamav
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,mode=1777"]
+    networks: [default, scan-internal]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
-      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      test: ["CMD", "node", "-e", "const fs = require('node:fs'); try { process.exit(Date.now() - fs.statSync('/tmp/worker-heartbeat').mtimeMs < 90000 ? 0 : 1); } catch { process.exit(1); }"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 300s
+      start_period: 60s
     depends_on:
+      clamav: { condition: service_healthy }
       login-roles: { condition: service_completed_successfully }
       minio-init: { condition: service_completed_successfully }
       api: { condition: service_started }
     environment:
       WORKER_HEALTH_FILE: /tmp/worker-heartbeat
-      DATABASE_URL: file:/run/secrets/worker_database_url
-      OBJECT_SECRET_ACCESS_KEY: file:/run/secrets/object_secret_key
-      CLAMAV_HOST: 127.0.0.1
+      DATABASE_URL: ${WORKER_DATABASE_URL:-postgres://mpc_worker_login:worker@postgres:5432/mpc_dev}
+      OBJECT_SECRET_ACCESS_KEY: ${OBJECT_SECRET_ACCESS_KEY:-minioadmin}
+      CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"
       SCAN_POLL_MS: "3000"
       # Results are reported through the API. The worker takes the same SIWE path as a person.
       API_BASE_URL: http://api:3001
-      SCAN_SERVICE_PRIVATE_KEY: file:/run/secrets/scan_service_key
+      SCAN_SERVICE_PRIVATE_KEY: ${SCAN_SERVICE_PRIVATE_KEY:-0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b}
       CHAIN_ID: "31337"
       SIWE_DOMAIN: localhost:3000
       SIWE_URI: http://localhost:3000
@@ -272,7 +291,6 @@ services:
       OBJECT_FORCE_PATH_STYLE: "true"
       OBJECT_SSE: none
       OBJECT_ACCESS_KEY_ID: minioadmin
-    secrets: [worker_database_url, object_secret_key, scan_service_key]
     command: ["node", "--import", "tsx", "src/main.ts"]
 
   web:
@@ -287,23 +305,15 @@ services:
     ports: ["127.0.0.1:3000:3000"]
     command: ["pnpm", "--filter", "@mpc/web", "exec", "next", "start", "--port", "3000"]
 
-# Local-only values. Mounting them as files is the point; the values are meaningless.
-secrets:
-  database_url:
-    file: ../config/local-secrets/database_url
-  worker_database_url:
-    file: ../config/local-secrets/worker_database_url
-  session_secret:
-    file: ../config/local-secrets/session_secret
-  object_secret_key:
-    file: ../config/local-secrets/object_secret_key
-  anchor_signer_key:
-    file: ../config/local-secrets/anchor_signer_key
-  scan_service_key:
-    file: ../config/local-secrets/scan_service_key
-
 volumes:
   pgdata:
   miniodata:
   clamavdata:
   clamavscratch:
+
+# Only the scan worker can submit files. The scanner gets a separate network for
+# signature downloads, with no other application services on that network.
+networks:
+  scan-internal:
+    internal: true
+  clamav-updates:

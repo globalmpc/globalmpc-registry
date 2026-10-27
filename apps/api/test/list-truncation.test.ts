@@ -272,14 +272,34 @@ describeDb("capped lists", () => {
       expect(before).toMatchObject({ truncated: false, limit: 100, total: 1 });
 
       await fx.sql`
-        INSERT INTO core.source_receipts
-        SELECT (jsonb_populate_record(NULL::core.source_receipts, to_jsonb(t) || jsonb_build_object(
+        WITH cloned_receipts AS (
+      SELECT (jsonb_populate_record(NULL::core.source_receipts, to_jsonb(t) || jsonb_build_object(
           'id', gen_random_uuid(),
           'as_of', t.as_of - g * interval '1 second'
         ))).*
         FROM core.source_receipts t, generate_series(1, 100) g
         WHERE t.id = ${created.json().id as string}
-      `;
+      )
+      INSERT INTO core.source_receipts (
+        id, tenant_id, project_id, connection_id,
+        authority_id, collection_method, result, query_basis,
+        endpoint_or_document_ref, authentication_method, raw_hash, raw_object_key,
+        source_schema_version, adapter_version, normalization_version, terms_license,
+        commercial_reuse, disclosure_permission, received_at, as_of,
+        effective_at, freshness_status, correlation_id, limitations,
+        created_at, channel_evidence, first_confirmed_by, second_confirmed_by,
+        second_confirmed_at, supersedes_receipt_id, processing_state
+      )
+      SELECT
+        id, tenant_id, project_id, connection_id,
+        authority_id, collection_method, result, query_basis,
+        endpoint_or_document_ref, authentication_method, raw_hash, raw_object_key,
+        source_schema_version, adapter_version, normalization_version, terms_license,
+        commercial_reuse, disclosure_permission, received_at, as_of,
+        effective_at, freshness_status, correlation_id, limitations,
+        created_at, channel_evidence, first_confirmed_by, second_confirmed_by,
+        second_confirmed_at, supersedes_receipt_id, processing_state
+      FROM cloned_receipts`;
       const body = (await get(stewardToken, `/api/v1/projects/${fx.projectA}/source-receipts`)).json();
       expect(body.items).toHaveLength(100);
       expect(body).toMatchObject({ truncated: true, limit: 100, total: 101 });

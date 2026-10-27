@@ -1,5 +1,5 @@
 import type postgres from "postgres";
-import type { ScanVerdict } from "./scanner.js";
+import { MAX_SCAN_BYTES, scanDeadlineMs, type ScanVerdict } from "./scanner.js";
 
 /**
  * Quarantine upload scan loop — 05 §5.2.
@@ -52,10 +52,16 @@ export interface ScanOptions {
   readonly maxAttempts: number;
   /** Lease duration. Must comfortably exceed scan + report time. */
   readonly leaseMs: number;
+  readonly scannerTimeoutMs?: number;
+  /** Tests may lower the object read deadline; production defaults to 60 seconds. */
+  readonly objectReadTimeoutMs?: number;
+  /** Production checks PING before claiming a row; test doubles may omit the transport probe. */
+  readonly scannerAvailable?: () => Promise<boolean>;
 }
 
 export interface ScanStepResult {
   readonly handled: boolean;
+  readonly scannerUnavailable?: true;
   readonly uploadId?: string;
   readonly verdict?: ScanVerdict["kind"];
   readonly signature?: string;
@@ -66,6 +72,9 @@ interface LeasedUpload {
   readonly tenant_id: string;
   readonly object_key: string;
   readonly version: number;
+  readonly byte_size: string;
+  readonly scan_attempts: number;
+  readonly lease_token: string;
 }
 
 /**
@@ -81,7 +90,7 @@ async function leaseOne(
 ): Promise<LeasedUpload | undefined> {
   const rows = (await sql.begin(async (tx) => {
     const [row] = await tx<LeasedUpload[]>`
-      SELECT id, tenant_id, object_key, version
+      SELECT id, tenant_id, object_key, version, byte_size
       FROM core.object_uploads
       WHERE state = 'quarantined'
         AND scan_attempts < ${options.maxAttempts}
@@ -93,31 +102,42 @@ async function leaseOne(
 
     if (!row) return [];
 
+    // Include storage (60s) and all bounded API login/report requests (<=90s + 30s margin).
+    // Oversized legacy rows still get a bounded attempt and fail validation, rather than
+    // blocking every later upload before a lease can be obtained.
+    const scanBudget = scanDeadlineMs(Math.min(Number(row.byte_size), MAX_SCAN_BYTES), options.scannerTimeoutMs);
+    const leaseMs = Math.max(options.leaseMs, (options.objectReadTimeoutMs ?? 60_000) + scanBudget + 120_000);
     // Increment the attempt count **before** scanning. If the scanner dies on a particular file,
     // that file does not block the queue forever.
-    await tx`
+    const [leased] = await tx<LeasedUpload[]>`
       UPDATE core.object_uploads
       SET scan_attempts = scan_attempts + 1,
-          scan_leased_until = now() + ${`${Math.max(1, Math.round(options.leaseMs / 1000))} seconds`}::interval
+          scan_leased_until = now() + ${`${Math.max(1, Math.ceil(leaseMs / 1000))} seconds`}::interval
       WHERE id = ${row.id}
+      RETURNING id, tenant_id, object_key, version, byte_size, scan_attempts,
+                scan_leased_until::text AS lease_token
     `;
 
-    return [row];
+    return leased ? [leased] : [];
   })) as LeasedUpload[];
 
   return rows[0];
 }
 
-/** Records the failure and releases the lease at once. The next loop retries immediately. */
+/** Release only this exact lease; a late worker must not change a replacement worker's budget. */
 async function recordFailure(
   sql: postgres.Sql,
-  uploadId: string,
+  row: LeasedUpload,
   reason: string,
+  refundAttempt = false,
 ): Promise<void> {
   await sql`
     UPDATE core.object_uploads
-    SET rejection_reason = ${reason.slice(0, 300)}, scan_leased_until = NULL
-    WHERE id = ${uploadId}
+    SET rejection_reason = ${reason.slice(0, 300)}, scan_leased_until = NULL,
+        scan_attempts = scan_attempts - ${refundAttempt ? 1 : 0}
+    WHERE id = ${row.id} AND state = 'quarantined' AND version = ${row.version}
+      AND scan_attempts = ${row.scan_attempts}
+      AND scan_leased_until = ${row.lease_token}::text::timestamptz
   `;
 }
 
@@ -129,22 +149,52 @@ export async function scanOnce(
   options: ScanOptions,
   log: Log,
 ): Promise<ScanStepResult> {
+  if (options.scannerAvailable && !(await options.scannerAvailable())) {
+    log({ level: "warn", msg: "scan.unavailable" });
+    return { handled: false, scannerUnavailable: true };
+  }
   const row = await leaseOne(sql, options);
   if (!row) return { handled: false };
 
-  const bytes = await store.get(row.object_key);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let bytes: Uint8Array | null;
+  try {
+    bytes = await Promise.race([
+      store.get(row.object_key),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("object read timeout")), options.objectReadTimeoutMs ?? 60_000);
+      }),
+    ]);
+  } catch {
+    // A late read is discarded: it cannot start a scan after its lease budget was released.
+    await recordFailure(sql, row, "scan_error: object read failed or timed out");
+    log({ level: "error", msg: "scan.object_read_failed", uploadId: row.id });
+    return { handled: true, uploadId: row.id, verdict: "error" };
+  } finally { clearTimeout(timer); }
   if (!bytes) {
     // The DB has the row but the object is missing. No automatic cleanup — a storage outage and
     // an actual loss are indistinguishable here.
-    await recordFailure(sql, row.id, "scan_error: object missing");
+    await recordFailure(sql, row, "scan_error: object missing");
     log({ level: "error", msg: "scan.object_missing", uploadId: row.id });
     return { handled: true, uploadId: row.id, verdict: "error" };
   }
 
+  if (bytes.byteLength !== Number(row.byte_size)) {
+    await recordFailure(sql, row, "scan_error: object size does not match upload metadata");
+    return { handled: true, uploadId: row.id, verdict: "error" };
+  }
   const verdict = await scan(bytes);
 
+  if (verdict.kind === "error" && verdict.unavailable) {
+    // No connection accepted these bytes. Refund a pre-connect outage, but never a reset or
+    // timeout after connection: a pathological upload may itself have killed the parser.
+    await recordFailure(sql, row, "scan_unavailable", true);
+    log({ level: "warn", msg: "scan.unavailable", uploadId: row.id });
+    return { handled: false, scannerUnavailable: true, uploadId: row.id, verdict: "error" };
+  }
+
   if (verdict.kind === "error") {
-    await recordFailure(sql, row.id, `scan_error: ${verdict.reason}`);
+    await recordFailure(sql, row, `scan_error: ${verdict.reason}`);
     log({ level: "warn", msg: "scan.failed", uploadId: row.id, reason: verdict.reason });
     return { handled: true, uploadId: row.id, verdict: "error" };
   }
@@ -159,7 +209,7 @@ export async function scanOnce(
   } catch (error) {
     // A failed report equals no scan. Leave the state and retry — patching the DB directly here
     // would create a bypass path.
-    await recordFailure(sql, row.id, `report_error: ${String(error)}`);
+    await recordFailure(sql, row, `report_error: ${String(error)}`);
     log({ level: "error", msg: "scan.report_failed", uploadId: row.id, error: String(error) });
     return { handled: true, uploadId: row.id, verdict: "error" };
   }

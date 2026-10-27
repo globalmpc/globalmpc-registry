@@ -238,7 +238,7 @@ export const objectUpload = z.object({
  * difference itself.
  */
 export const scannerStatus = z.object({
-  state: z.enum(["running", "stale", "never_seen", "unknown"]),
+  state: z.enum(["running", "unavailable", "stale", "never_seen", "unknown"]),
   secondsSinceHeartbeat: z.number().int().nonnegative().nullable(),
   detail: z.string(),
 });

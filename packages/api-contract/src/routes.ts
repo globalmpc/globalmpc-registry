@@ -1,4 +1,5 @@
 import { responseMeta } from "./common.js";
+import { createCreReportRequest, creReport } from "./cre.js";
 import { evidenceLedgerResponse, publicEvidenceLedger, publicEvidenceLedgerCurrent } from "./evidence-ledger.js";
 import { proposeClaimTypeRequest, claimTypeCatalogEntry, claimTypeCatalogQuery, claimTypeCatalogList } from "./resources.js";
 import { z } from "zod";
@@ -1275,6 +1276,19 @@ export const ROUTES: readonly RouteDefinition[] = [
     implemented: true,
     requestSchema: sourceCollectRequest,
     responseSchema: sourceCollectResult,
+  },
+  {
+    method: "post",
+    path: "/api/v1/projects/{projectId}/cre-reports",
+    summary: "Persist a destination-bound observation of an approved public Registry version",
+    operationId: "createCreReport",
+    public: false,
+    mutation: true,
+    requiresIfMatch: false,
+    action: "source.collect",
+    implemented: true,
+    requestSchema: createCreReportRequest,
+    responseSchema: creReport,
   },
   ...RESTRICTION_ROUTES,
 

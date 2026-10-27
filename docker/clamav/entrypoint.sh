@@ -1,5 +1,5 @@
 #!/bin/bash
-# Keep all children supervised: an antivirus outage must stop this worker, never bypass scanning.
+# Supervise the scanner and updater; either child exiting makes this service unavailable.
 set -eu
 children=()
 cleanup() {
@@ -20,7 +20,7 @@ children+=("$bootstrap")
 if ! wait "$bootstrap"; then
   if ! compgen -G '/var/lib/clamav/main.c[vl]d' >/dev/null ||
      ! compgen -G '/var/lib/clamav/daily.c[vl]d' >/dev/null; then
-    echo 'Signature bootstrap failed; refusing to start the scan worker.' >&2
+    echo 'Signature bootstrap failed; refusing to start ClamAV.' >&2
     exit 1
   fi
   echo 'Signature update failed; loading the existing database.' >&2
@@ -46,11 +46,9 @@ for ((attempt=0; attempt<300; attempt++)); do
   unset 'children[-1]'
 done
 if [[ "$ready" != true ]]; then
-  echo 'ClamAV readiness timed out; refusing to start the scan worker.' >&2
+  echo 'ClamAV readiness timed out; refusing to start ClamAV.' >&2
   exit 1
 fi
-"$@" &
-children+=("$!")
 # Even a clean child exit means the container no longer provides its complete service.
 wait -n "${children[@]}" || true
 exit 1
