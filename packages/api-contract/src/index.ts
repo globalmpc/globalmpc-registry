@@ -22,3 +22,4 @@ export {
 export * from "./structured-claims.js";
 
 export * from "./evidence-ledger.js";
+export * from "./cre.js";

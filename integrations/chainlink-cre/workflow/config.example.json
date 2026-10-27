@@ -1,0 +1,11 @@
+{
+  "schedule": "0 */5 * * * *",
+  "reportUrl": "http://127.0.0.1:3001/api/v1/projects/00000000-0000-4000-8000-000000000001/cre-reports",
+  "publicKey": "replace-with-approved-public-key",
+  "chainName": "anvil-devnet",
+  "chainId": "31337",
+  "receiver": "0x0000000000000000000000000000000000000001",
+  "ttlSeconds": "300",
+  "gasLimit": "500000",
+  "allowLocalHttp": true
+}

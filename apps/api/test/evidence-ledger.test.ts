@@ -370,7 +370,19 @@ describeDb('computed ledger API and approved public boundary',()=>{
       const first=await sweep();expect(first.ran).toBe(true);
       expect(await sweep()).toEqual({ran:false,recorded:0});
       now+=1001;
-      const again=await sweep();expect(again).toEqual({ran:true,recorded:0});
+      expect((await sweep()).ran).toBe(true);
+      // The sweep is global and advances a bounded cursor. Another eligible page can contain
+      // untouched projects from earlier suites; it is not evidence of unstable outcomes.
+      // Exercise multiple small pages, then repeat the entire cycle at one evaluation clock.
+      const batchSize=2;
+      const [eligible]=await worker<{count:string}[]>`SELECT count(*)::text AS count FROM core.projects p
+        WHERE EXISTS(SELECT 1 FROM core.claims c WHERE c.tenant_id=p.tenant_id AND c.project_id=p.id AND c.catalog_entry_id IS NOT NULL)
+          OR EXISTS(SELECT 1 FROM core.evidence_ledger_snapshots s WHERE s.tenant_id=p.tenant_id AND s.project_id=p.id)`;
+      const pages=Math.ceil(Number(eligible!.count)/batchSize);
+      expect(pages).toBeGreaterThan(1);
+      const drain=createLedgerSweep(worker,0,()=>now,batchSize);
+      for(let page=0;page<pages;page++)expect((await drain()).ran).toBe(true);
+      for(let page=0;page<pages;page++)expect(await drain()).toEqual({ran:true,recorded:0});
       const events=await fx.sql`SELECT id FROM audit.events WHERE tenant_id=${fx.tenantA} AND command='evidence_ledger.assessed' AND detail->>'actor'='jobs_worker'`;
       expect(events.length).toBeGreaterThan(0);
       const [latest]=await fx.sql`SELECT snapshot FROM core.evidence_ledger_snapshots WHERE tenant_id=${fx.tenantA}

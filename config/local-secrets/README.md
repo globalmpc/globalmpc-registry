@@ -1,12 +1,11 @@
-# Local-only secrets
+# Optional local secret-file fixtures
 
-**Every value in this directory is public.** They are the anvil default account keys and
-the MinIO default credentials, and none of them holds any real asset.
+Every value in this directory is a public local test value, including Anvil default account
+keys and MinIO defaults. They are not real deployment credentials.
 
-They are here not because the values are secret but **to make the injection path the same
-as in deployment**. `docker/docker-compose.yml` mounts these files as `file:` references, and the
-application reads them with the same code in `packages/config`. If only local used
-environment variable values, a "works locally but not in deployment" gap would appear.
+Compose injects values directly as environment variables and no longer mounts these files.
+They remain optional fixtures for exercising the application's `file:` reference support.
+File references are one supported configuration format; direct values also work.
 
-Real deployments do not use this directory. Docker secrets, Kubernetes projected
-volumes, or a secret manager place the files at the same path.
+Use independently provisioned values for each deployed environment. Do not reuse these
+fixtures or the Compose demo defaults for a shared deployment.

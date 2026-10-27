@@ -1,0 +1,7 @@
+local:
+  user-workflow:
+    workflow-name: registry-state-local
+  workflow-artifacts:
+    workflow-path: .
+    config-path: ./config.example.json
+    secrets-path: ../secrets.yaml

@@ -21,7 +21,7 @@ can be published. A public Explorer lets readers inspect published records and t
 - **Blockchain:** BNB Smart Chain; local Anvil for development.
 - **Smart contracts:** Solidity 0.8.28, OpenZeppelin 5.6.1.
 - **Frontend:** Next.js, React, TypeScript, viem.
-- **Backend:** Fastify, PostgreSQL, S3-compatible storage, ClamAV embedded in the scan worker.
+- **Backend:** Fastify, PostgreSQL, S3-compatible storage, ClamAV in a separate scanner container.
 - **Development:** Foundry 1.8.5, forge-std 1.17.0, pnpm 10.33.0.
 
 ## Supported Networks

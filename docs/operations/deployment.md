@@ -9,9 +9,10 @@ Run the commands in this guide from the repository root.
 |---|---|
 | [`docker/Dockerfile`](../../docker/Dockerfile) | API and web image |
 | [`docker/Dockerfile.workers`](../../docker/Dockerfile.workers) | Independent worker images |
-| [`docker/scan-worker/`](../../docker/scan-worker/) | Embedded ClamAV configuration and scan-worker process supervision |
+| [`docker/Dockerfile.clamav`](../../docker/Dockerfile.clamav) | Antivirus image without application credentials |
+| [`docker/clamav/`](../../docker/clamav/) | Isolated ClamAV configuration and daemon/updater supervision |
 | [`packages/db/sql/login-roles.sql`](../../packages/db/sql/login-roles.sql) | Login roles subject to RLS, so the app never runs as superuser |
-| [`config/local-secrets/`](../../config/local-secrets/) | **Public defaults, local use only.** See its README for why |
+| [`config/local-secrets/`](../../config/local-secrets/) | Optional public fixtures for file-reference configuration; not mounted by Compose |
 | [`config/observability/`](../../config/observability/) | Prometheus scrape configuration, alert rules and Alertmanager configuration |
 | [Backup and restore](backup-restore.md) | What the backup, restore and drill scripts capture, refuse and verify |
 | [Release rollback](rollback.md) | Compatibility checks and the release rollback procedure |
@@ -19,11 +20,39 @@ Run the commands in this guide from the repository root.
 
 ## Secret injection
 
-Environment variables carry a **reference**, not the value (`file:/run/secrets/...` · `env:NAME`).
-No secret remains in the process environment or in `docker inspect`, and local and
-deployed environments read through the same code path (`packages/config`). In a real
-deployment, Docker secrets, Kubernetes projected volumes, or a secret manager place the
-file at the same location.
+Compose injects secret values directly through each service's `environment` block. It uses
+public local defaults when an override is unset or empty, and does not require secret files or
+mount `config/local-secrets/`. The application also supports optional `file:`, `env:` and
+`plain:` references; these are configuration choices, not required deployment conventions.
+
+| Container variable | Compose override | Scope |
+| --- | --- | --- |
+| `DATABASE_URL` | `API_DATABASE_URL` | API application login |
+| `DATABASE_URL` | `WORKER_DATABASE_URL` | Jobs, anchor and scan worker login |
+| `SESSION_SECRET` | `SESSION_SECRET` | API only |
+| `OBJECT_SECRET_ACCESS_KEY` | `OBJECT_SECRET_ACCESS_KEY` | API and scan worker |
+| `ANCHOR_SIGNER_PRIVATE_KEY` | `ANCHOR_SIGNER_PRIVATE_KEY` | Anchor worker only |
+| `SCAN_SERVICE_PRIVATE_KEY` | `SCAN_SERVICE_PRIVATE_KEY` | Scan worker only |
+
+Compose uses separate `API_DATABASE_URL` and `WORKER_DATABASE_URL` inputs so a host-process
+`DATABASE_URL` cannot silently replace either container login. ClamAV and web receive none
+of these credentials. Existing published hashes, roles and
+approval rules are unaffected by the injection format. Values belong to each environment;
+platforms may inject them directly from their secret manager. Direct values are visible to
+people with container-inspection access; file references do not protect against a compromised
+process authorized to read that file either.
+
+The Compose file remains a local/demo stack, including local database and storage setup.
+`.env.example` describes direct host-process execution, with host addresses. Keep it separate
+from a Compose override file, whose addresses must resolve inside the container network:
+
+```sh
+docker compose --env-file /path/to/local-compose.env -f docker/docker-compose.yml up -d
+```
+
+Use environment-specific deployment configuration and newly provisioned credentials for dev
+or production; changing these six variables does not convert the local infrastructure setup
+into a production deployment.
 
 **Notification webhook signing secrets** are references too, but only inside a namespace
 that holds nothing else: `env:WEBHOOK_SECRET_<NAME>` (`NAME` is `[A-Z0-9_]`, 1–64 characters)
@@ -194,41 +223,71 @@ deployment — `scripts/ops/check-alertmanager.sh`.
 |---|---|---|
 | `jobs-worker` | `apps/jobs-worker` | Worker DB and configured webhook signing references |
 | `anchor-worker` | `apps/anchor-worker` | Worker DB, chain RPC and anchor signing key |
-| `scan-worker` | `apps/scan-worker` | Worker DB, quarantine storage, embedded ClamAV and scan service identity |
+| `scan-worker` | `apps/scan-worker` | Worker DB, quarantine storage, scanner connection and scan service identity |
 
-Build the three images from the same repository revision and lockfile:
+Build the worker and scanner images from the same repository revision:
 
 ```sh
-docker compose -f docker/docker-compose.yml build jobs-worker anchor-worker scan-worker
-docker compose -f docker/docker-compose.yml up -d jobs-worker anchor-worker scan-worker
+docker compose -f docker/docker-compose.yml build jobs-worker anchor-worker scan-worker clamav
+docker compose -f docker/docker-compose.yml up -d jobs-worker anchor-worker scan-worker clamav
 ```
 
 `docker/Dockerfile.workers` selects an app with `WORKER` and uses `pnpm deploy --prod --legacy`
 to package only that app and its production dependencies, including the TS runtime. Worker
 images do not contain the web app or other worker apps. API and web keep `docker/Dockerfile`.
 
-The scan image also installs ClamAV. Its `clamd` daemon listens only on `127.0.0.1:3310`
-inside the scan-worker container; there is no separate ClamAV service or published scanner
-port. The worker still sends file bytes through INSTREAM. Signature updates use the
-`clamavdata` volume so restarts retain downloaded definitions. The first start downloads
-signatures before scanning can begin; uploads remain quarantined while the scanner starts.
+`docker/Dockerfile.clamav` builds a separate scanner image. Only the scan worker and
+ClamAV join the internal scan network; the scanner has an additional network for signature
+updates, separate from the application network. No scanner port is published on the host.
+The worker sends file bytes through INSTREAM to `clamav:3310`. The scanner receives no DB,
+object-store or scan-service credentials, application files, or worker secret mounts. A parser
+exploit therefore does not directly expose the worker's credentials through a shared process
+or filesystem. Keep this separation when overriding the Compose configuration.
+
+Signature updates use `clamavdata`, retaining downloaded definitions across restarts. The
+first start downloads signatures before the scanner becomes ready. Compose starts the worker
+after scanner readiness. The worker also probes readiness before claiming uploads, pausing
+during outages without consuming their attempt budgets. A connection failure racing that
+probe refunds only the attempt belonging to the same lease. Once a connection accepts the
+file, failures remain bounded so a parser-crashing file cannot retry forever. Every error
+keeps the upload quarantined. Monitor exhausted retries as well as scanner availability.
+
+Multipart uploads accept at most **2000 MiB** (2,097,152,000 bytes), matching ClamAV's
+configured `2000M` limits. This corrects the previous 2 GiB API allowance, which exceeded
+what the configured scanner could inspect by 48 MiB. Larger files must be reduced or split;
+existing oversized quarantined uploads are not automatically approved or marked infected.
+The scan deadline is one absolute budget: `SCAN_TIMEOUT_MS` (30 seconds by default)
+plus 125 ms per MiB, capped at 10 minutes. Both socket inactivity and the absolute deadline
+use that budget. The default maximum accepted file receives 280 seconds. Upload leases
+cover a bounded 60-second object read, that scan budget, and 120 seconds for API reporting;
+`SCAN_LEASE_MS` remains a minimum, so a large file receives at least 460 seconds.
+The client honors socket backpressure instead of queuing a second full upload in memory.
+The scan worker has a 480-second Compose shutdown grace period so an accepted maximum-size
+job can finish. If increasing `SCAN_TIMEOUT_MS` or `SCAN_LEASE_MS`, increase that grace period
+to cover the configured full read/scan/report cycle; unrelated workers retain their own limits.
+
+The worker performs bounded PING checks and refreshes availability every 15 seconds while
+an absolute-bounded scan is active. A stuck database lease/query still becomes stale. A fresh worker heartbeat with an unavailable daemon is shown as `unavailable`,
+not `running`; old heartbeat formats without scanner availability are `unknown` until upgraded.
+For a maximum-size manual drill, set `LARGE_SCAN_MIB=2000` when running
+`scripts/ops/test-scan-worker-image.sh`; the default remains a 300 MiB disk-spool check.
+
 ClamAV spools INSTREAM input and extracted content into the disk-backed `clamavscratch`
 volume at `/var/tmp/clamav`, separately from signatures. The directory is writable only by
-the runtime user; the container root filesystem stays read-only and `/tmp` stays a 256 MiB
-tmpfs. Large scans therefore need free host disk space, rather than that small tmpfs.
-Scratch can contain quarantined evidence bytes; exclude this disposable volume from backups.
-Normal scans remove temporary files, but
-an interrupted daemon can leave files behind; after stopping the scan worker, remove its
-scratch volume when disposing of local evidence. Do not remove the signatures volume just
-to clear scratch. Existing scanner size and extraction limits still apply.
-When running the TypeScript process directly, provide a local ClamAV daemon; `CLAMAV_HOST`
-and `CLAMAV_PORT` default to `127.0.0.1` and `3310`.
-The entrypoint waits for a scanner ping before starting the worker, supervises the worker,
-scanner and signature updater together, and exits the container if any process dies.
-The scan health check requires both a fresh worker heartbeat and a successful scanner ping.
+the scanner user; its root filesystem stays read-only and `/tmp` stays a 256 MiB tmpfs.
+Large scans require free host disk space. Scratch can contain quarantined evidence bytes;
+exclude it from backups. Normal scans remove temporary files, but interrupted scans may leave
+files behind. Stop ClamAV before removing its scratch volume when disposing of local evidence.
+Do not remove the signature volume just to clear scratch. Existing scanner limits still apply.
 
-When upgrading an existing stack, rebuild and remove the former standalone ClamAV container
-with Compose orphan cleanup:
+When running the TypeScript worker directly, provide a reachable ClamAV daemon;
+`CLAMAV_HOST` and `CLAMAV_PORT` default to `127.0.0.1` and `3310`.
+The scanner entrypoint supervises `clamd` and the signature updater, exiting if either dies.
+Its health check requires a scanner ping; the worker has its own heartbeat health check.
+The worker caps scanner responses at 4 KiB and enforces a total scan deadline, treating
+oversized, malformed or late responses as errors.
+
+Rebuild and recreate both services when upgrading from the combined image:
 
 ```sh
 docker compose -f docker/docker-compose.yml up -d --build --remove-orphans
