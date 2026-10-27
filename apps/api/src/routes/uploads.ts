@@ -59,7 +59,7 @@ import {
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /** Multipart cap. It streams to storage, so it can accept more. */
-const MAX_STREAM_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAX_STREAM_BYTES = 2000 * 1024 * 1024;
 
 /**
  * The streaming path is always restricted. Accepting the sensitive tier needs a secured route
@@ -271,14 +271,17 @@ export async function uploadProjectId(
  */
 const SCAN_STALE_SECONDS = 180;
 
-type ScannerState = "running" | "stale" | "never_seen" | "unknown";
+type ScannerState = "running" | "unavailable" | "stale" | "never_seen" | "unknown";
 
 async function scannerStatus(
   sql: postgres.Sql,
 ): Promise<{ state: ScannerState; secondsSinceHeartbeat: number | null; detail: string }> {
   try {
-    const [row] = await sql<{ seconds: string | null }[]>`
-      SELECT core.seconds_since_worker_heartbeat('scan') AS seconds
+    const [row] = await sql<{ seconds: string | null; available: boolean | null }[]>`
+      SELECT core.seconds_since_worker_heartbeat('scan') AS seconds,
+        (SELECT CASE WHEN jsonb_typeof(detail->'scannerAvailable') = 'boolean'
+          THEN (detail->>'scannerAvailable')::boolean ELSE NULL END
+         FROM core.worker_heartbeats WHERE worker_kind='scan') AS available
     `;
     const seconds = row?.seconds === null || row?.seconds === undefined ? null : Number(row.seconds);
 
@@ -297,10 +300,15 @@ async function scannerStatus(
         detail: `The scan worker has not been seen for ${seconds} seconds. Uploads stay in quarantine meanwhile.`,
       };
     }
-    return {
-      state: "running",
-      secondsSinceHeartbeat: seconds,
-      detail: "The scan worker is running.",
+    if (row?.available === false) return {
+      state: "unavailable", secondsSinceHeartbeat: seconds,
+      detail: "The worker is running but the malware scanner is unavailable. Uploads stay in quarantine until it recovers.",
+    };
+    return row?.available === true ? {
+      state: "running", secondsSinceHeartbeat: seconds, detail: "The scan worker and malware scanner are available.",
+    } : {
+      state: "unknown", secondsSinceHeartbeat: seconds,
+      detail: "The worker reported without scanner availability. Treat quarantined uploads as unverified.",
     };
   } catch {
     // Unknown is a state too. The listing does not fail.

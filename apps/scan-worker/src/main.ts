@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { resolveSecret } from "@mpc/config";
 import { createMemoryObjectStore, createS3ObjectStore } from "@mpc/storage";
-import { DEFAULT_SCANNER_OPTIONS, scanBytes } from "./scanner.js";
+import { DEFAULT_SCANNER_OPTIONS, scanBytes, scannerAvailable } from "./scanner.js";
 import { scanBacklog, scanOnce } from "./scan-worker.js";
 import { createApiClient } from "./api-client.js";
 import { createHeartbeat } from "@mpc/db";
@@ -106,12 +106,29 @@ emit({
 
 const heartbeat = createHeartbeat(sql, "scan", 15_000, process.env["WORKER_HEALTH_FILE"]);
 
+let probe: Promise<boolean> | undefined;
+let lastScannerAvailable: boolean | undefined;
+let scanActive = false;
+const probeAndBeat = () => probe ??= (async () => {
+  const available = await scannerAvailable({ ...scannerOptions, timeoutMs: Math.min(scannerOptions.timeoutMs, 2000) });
+  lastScannerAvailable = available;
+  await heartbeat({ scannerAvailable: available });
+  return available;
+})().finally(() => { probe = undefined; });
+// Refresh only while the absolute-bounded scan is active. A stuck lease/query must still
+// become stale instead of being masked forever by an independent timer.
+const healthTimer = setInterval(() => { if (scanActive) void probeAndBeat().catch(() => {}); }, 15_000);
+
 while (running) {
   try {
     const result = await scanOnce(
       sql,
       store,
-      (bytes) => scanBytes(bytes, scannerOptions),
+      async (bytes) => {
+        scanActive = true;
+        try { return await scanBytes(bytes, scannerOptions); }
+        finally { scanActive = false; }
+      },
       async ({ uploadId, version, result: verdict, detail }) => {
         await api.post(
           `/api/v1/uploads/${uploadId}/scan-result`,
@@ -124,13 +141,17 @@ while (running) {
           },
         );
       },
-      { maxAttempts, leaseMs },
+      {
+        maxAttempts, leaseMs, scannerTimeoutMs: scannerOptions.timeoutMs,
+        scannerAvailable: probeAndBeat,
+      },
       emit,
     );
 
     // Beat even when the queue is empty — telling "empty" apart from "no worker" is the point
     // of this signal.
-    await heartbeat({ handled: result.handled });
+    if (result.scannerUnavailable) lastScannerAvailable = false;
+    await heartbeat({ handled: result.handled, ...(lastScannerAvailable === undefined ? {} : { scannerAvailable: lastScannerAvailable }) });
 
     if (!result.handled) {
       const backlog = await scanBacklog(sql, maxAttempts);
@@ -147,5 +168,7 @@ while (running) {
   }
 }
 
+clearInterval(healthTimer);
+await probe;
 emit({ level: "info", msg: "scan.worker.stopped" });
 await sql.end();

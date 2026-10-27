@@ -206,6 +206,29 @@ describe("Data Room evidence and source workflows", () => {
     },
   );
 
+  it("distinguishes a live worker from an unavailable malware scanner", async () => {
+    const data: Record<string, unknown> = routes();
+    data[`GET ${root}/uploads`] = {
+      items: [], nextCursor: null, total: 0,
+      scanner: { state: "unavailable", secondsSinceHeartbeat: 1 },
+    };
+    mockHttp(data);
+    await mount();
+    const notice = screen.getByTestId("scanner-status");
+    expect(within(notice).getByText("The malware scanner is unavailable")).toBeTruthy();
+    expect(notice.textContent).toContain("The scan worker is running");
+    expect(notice.textContent).toContain("Scanning is paused");
+    expect(notice.textContent).toContain("uploads remain in quarantine");
+    expect(notice.textContent).toContain("cannot be promoted to evidence");
+    expect(notice.textContent).not.toMatch(/never reported|gone quiet|until a scanner runs/);
+  });
+
+  it("shows no scanner outage notice when availability is confirmed", async () => {
+    mockHttp(routes());
+    await mount();
+    expect(screen.queryByTestId("scanner-status")).toBeNull();
+  });
+
   it("requires an actual query and leaves confirmation to the server lookup", async () => {
     const data: Record<string, unknown> = routes();
     data["POST /api/v1/source-connections/connection-1/collect"] = {

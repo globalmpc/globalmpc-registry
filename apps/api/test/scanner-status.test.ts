@@ -53,13 +53,29 @@ describeDb("scanner liveness reporting", () => {
 
   it("is running with a recent heartbeat", async () => {
     await fx.sql`
-      INSERT INTO core.worker_heartbeats (worker_kind, last_seen_at)
-      VALUES ('scan', now())
+      INSERT INTO core.worker_heartbeats (worker_kind, last_seen_at, detail)
+      VALUES ('scan', now(), '{"scannerAvailable":true}'::jsonb)
     `;
 
     const response = await listUploads();
     expect(response.json().scanner.state).toBe("running");
     expect(response.json().scanner.secondsSinceHeartbeat).toBeLessThan(5);
+  });
+
+  it("reports unavailable when the worker is fresh but its scanner is down, and recovers", async () => {
+    await fx.sql`INSERT INTO core.worker_heartbeats(worker_kind,last_seen_at,detail)
+      VALUES('scan',now(),' {"scannerAvailable":false}'::jsonb)`;
+    const down = await listUploads();
+    expect(down.json().scanner.state).toBe("unavailable");
+    expect(down.json().scanner.secondsSinceHeartbeat).toBeLessThan(5);
+    expect(down.json().scanner.detail).toContain("quarantine");
+    await fx.sql`UPDATE core.worker_heartbeats SET detail='{"scannerAvailable":true}'::jsonb WHERE worker_kind='scan'`;
+    expect((await listUploads()).json().scanner.state).toBe("running");
+  });
+
+  it("does not infer scanner health from a legacy heartbeat without availability", async () => {
+    await fx.sql`INSERT INTO core.worker_heartbeats(worker_kind,last_seen_at) VALUES('scan',now())`;
+    expect((await listUploads()).json().scanner.state).toBe("unknown");
   });
 
   it("an old heartbeat is stale — distinct from absent", async () => {

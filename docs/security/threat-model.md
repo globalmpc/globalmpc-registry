@@ -74,8 +74,10 @@ log leakage.
   at once.
 - The gas cap `ANCHOR_FEE_CAP_GWEI`. Blocks submissions at abnormal prices.
 - The retry cap `ANCHOR_MAX_ATTEMPTS`.
-- Secrets are **stored as references only** — `file:` and `env:` forms; the values are not in the
-  repository (spec 05 §5.12).
+- Real credentials are supplied at runtime and must not be committed. The local Compose stack
+  injects environment values directly, with explicitly public demo defaults; these values are
+  visible in the container environment and `docker inspect`. Application configuration also
+  supports `file:` and `env:` references when the deployment uses them.
 
 **Not blocked yet**
 
@@ -136,25 +138,39 @@ not running.
 
 - Uploads enter as `quarantined` and are `promote`d only from `scanned_clean`. Only the
   `scan_service` role can write scan results.
-- The scan worker starts by default in Compose, with ClamAV inside the same container.
-  Its scanner TCP listener is restricted to loopback.
-- A dead scanner is not silent — `core.worker_heartbeats` records liveness, and the Data Room
-  says "the scanner has never reported — waiting will not resolve this."
+- ClamAV runs in a separate container without worker credentials, application files or
+  shared worker mounts. Only the scan worker joins its internal scan network; no scanner
+  port is published. Signature-update egress uses a separate network from the application.
+- A scanner failure leaves files quarantined; only a successful clean result permits promotion.
+- Worker liveness is recorded in `core.worker_heartbeats`; ClamAV has an independent daemon
+  health check. A live worker heartbeat alone does not prove scanner availability. Monitor
+  both container health and exhausted scan retries.
 
 **Not blocked yet**
 
 - Whether the scan worker is actually running in the deployed stack **cannot be known from
   inside the repository.**
-- ClamAV and the scan worker share a container and runtime user. A ClamAV exploit could
-  therefore read the worker's mounted credentials and access its DB/storage permissions.
-  Non-root execution, a read-only root filesystem and the loopback listener reduce exposure,
-  but do not isolate the daemon from worker secrets.
+- Container isolation still depends on the host kernel and runtime. Scanner compromise can
+  affect scan verdicts or availability; the container boundary does not establish that every
+  malicious file is detected. Signature updates require outbound connectivity, so scanner
+  compromise can also expose the document bytes it processes.
 - ClamAV spools streamed uploads to the disk-backed `clamavscratch` volume at
   `/var/tmp/clamav`, separate from signature storage in `clamavdata`. The image creates the
-  scratch directory owned by `mpc` with mode `0700`; the parent filesystem stays read-only.
-  Quarantined document bytes may remain there after a crash. For the local demo, stop the
-  scan worker before removing its scratch volume. Production storage residency and retention
+  scratch directory owned by the scanner user with mode `0700`; the parent filesystem stays
+  read-only.
+  Quarantined document bytes may remain there after a crash. For the local demo, stop
+  ClamAV before removing its scratch volume. Production storage residency and retention
   still require the decisions tracked by OD-17 and OD-18; this mount does not resolve them.
+
+### Scanner isolation decision table
+
+| Case / identity | Authority and state | Input scope | Result / priority |
+| --- | --- | --- | --- |
+| Uploaded bytes reach ClamAV | Scanner process; live untrusted parsing | INSTREAM bytes only; scanner signature/scratch volumes | No worker secrets, app files or application-network membership |
+| Worker reports a verdict | Existing scan-service identity and authorization | Matching quarantined document and successful scanner response | Clean result is required for promotion |
+| Scanner unavailable before accepting bytes | Live scanner PING; worker owns any acquired lease | Unreachable daemon before lease, or a connection failure before INSTREAM | Keep quarantine and preserve upload attempt budget; pause until recovery |
+| Scanner accepts a file but cannot complete it | Live bounded response; file can trigger parser failure | Timeout, reset, malformed or oversized verdict after connection | Keep quarantine and count a bounded attempt, preventing one file from retrying indefinitely |
+| Published evidence and Registry state | Existing approval and immutable hash rules | No change to frozen evidence, tenant authority or CRE reports | Container changes confer no new approval authority |
 
 ### T5 · Public API abuse (Denial of Service) — A6
 
@@ -317,3 +333,32 @@ Public grade warnings use this recorded applicability and the approved policy's 
 grade; private requirement IDs remain outside the public projection. Older ledger snapshots
 without this metadata conservatively warn on a below-minimum grade and may need a new
 assessment to disambiguate requirements that did not apply.
+
+### CRE status-relay proof of concept
+
+The isolated development workflow reads an authenticated, idempotent Registry report and
+relays only approved public identity/version/hash and current health metadata. It neither
+publishes records nor alters RegistryAnchor, readiness decisions or financial functionality.
+Source collection is separate: a real authority API is not required to relay our own Registry
+state. Mock-source and mock-forwarder checks do not establish a live official integration or
+DON authentication.
+
+The API enforces existing project permissions and tenant isolation and serializes concurrent
+requests sharing an idempotency key. Reports retain immutable approved content while carrying
+adverse live state separately. Their sequence is scoped to the project, avoiding a public
+counter of other tenants' activity. The consumer authenticates the pinned forwarder and
+workflow ID/owner, binds chain and receiver, rejects replay/version rollback/hash replacement,
+and stops treating a positive observation as current when its transport TTL expires.
+Health is evaluated using an explicit clock sampled after blocking publication/report locks.
+The report's `observedAt` and TTL use that same evaluation clock. A later wall-clock sample
+only checks that evaluation has not spent the TTL; if it has, the API returns retryable
+`503 CRE_OBSERVATION_EXPIRED` without storing a report or its idempotency reservation.
+Lock waits occur before evaluation, and a delayed health result is never relabeled as newer.
+The existing public overlay keeps its original one-argument transaction-time interface.
+
+The workflow is limited to the local Anvil chain. A positive observation describes health at
+its recorded time, not a guarantee through its TTL, a passing stage or legal/factual approval.
+The forwarder, workflow and Registry API remain trusted sources of the reported state; a
+compromised trusted workflow can lie. Confidential source documents, source-query identifiers,
+tenant IDs and credentials are excluded from the onchain report. Live DON execution, public
+chain deployment and production credential/data handling require separate verification.

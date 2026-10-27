@@ -5,6 +5,7 @@ const s = vi.hoisted(() => ({
   backlog: vi.fn(),
   heartbeat: vi.fn(),
   scan: vi.fn(),
+  available: vi.fn(),
   post: vi.fn(),
   s3: vi.fn(),
   memory: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("@mpc/storage", () => ({
 vi.mock("../src/scanner.js", () => ({
   DEFAULT_SCANNER_OPTIONS: { timeoutMs: 1000, chunkBytes: 64 },
   scanBytes: s.scan,
+  scannerAvailable: s.available,
 }));
 vi.mock("../src/scan-worker.js", () => ({
   scanOnce: s.once,
@@ -38,6 +40,7 @@ beforeEach(() => {
     s.backlog,
     s.heartbeat,
     s.scan,
+    s.available,
     s.post,
     s.s3,
     s.memory,
@@ -55,6 +58,7 @@ beforeEach(() => {
   vi.stubEnv("OBJECT_STORE", "memory");
   vi.stubEnv("CLAMAV_HOST", undefined);
   vi.stubEnv("CLAMAV_PORT", undefined);
+  s.available.mockResolvedValue(true);
   s.memory.mockReturnValue("memory-store");
   s.backlog.mockResolvedValue({ stuck: 2 });
   s.once.mockImplementation(async () => {
@@ -154,4 +158,61 @@ it("refuses to start without an API endpoint", async () => {
     "API_BASE_URL is required\n",
   );
   expect(s.once).not.toHaveBeenCalled();
+});
+
+it("pauses and keeps its heartbeat alive across repeated scanner outages, then resumes", async () => {
+  s.available.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true);
+  let polls = 0;
+  s.once.mockImplementation(async (_sql, _store, _scan, _report, options) => {
+    polls++;
+    if (!(await options.scannerAvailable())) return { handled: false, scannerUnavailable: true };
+    s.signals.get("SIGTERM")!();
+    return { handled: true };
+  });
+  await import("../src/main.js");
+  expect(polls).toBe(4);
+  expect(s.available).toHaveBeenCalledTimes(4);
+  expect(s.available).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+  expect(s.heartbeat).toHaveBeenCalledWith({ scannerAvailable: false });
+  expect(s.heartbeat).toHaveBeenLastCalledWith({ handled: true, scannerAvailable: true });
+});
+
+it("refreshes actual scanner availability during a long active scan", async () => {
+  let periodic!: () => void;
+  vi.spyOn(globalThis,"setInterval").mockImplementation(((callback: () => void) => { periodic=callback; return 1; }) as unknown as typeof setInterval);
+  vi.spyOn(globalThis,"clearInterval").mockImplementation(() => {});
+  s.available.mockResolvedValueOnce(true).mockResolvedValue(false);
+  s.scan.mockImplementation(async () => {
+    periodic();
+    for(let i=0;i<5;i++) await Promise.resolve();
+    expect(s.heartbeat).toHaveBeenCalledWith({scannerAvailable:false});
+    return {kind:"error",reason:"scan timeout"};
+  });
+  s.once.mockImplementation(async (_sql,_store,scan,_report,options) => {
+    await options.scannerAvailable();
+    await scan(new Uint8Array([1]));
+    s.signals.get("SIGTERM")!();
+    return {handled:true};
+  });
+  await import("../src/main.js");
+  expect(s.heartbeat).toHaveBeenLastCalledWith({handled:true,scannerAvailable:false});
+  expect(clearInterval).toHaveBeenCalledWith(1);
+});
+
+it("does not refresh heartbeat when the loop is stuck outside its bounded scanner call", async () => {
+  let periodic!: () => void;
+  vi.spyOn(globalThis,"setInterval").mockImplementation(((callback: () => void) => {periodic=callback;return 1;}) as unknown as typeof setInterval);
+  vi.spyOn(globalThis,"clearInterval").mockImplementation(() => {});
+  s.once.mockImplementation(async (_sql,_store,_scan,_report,options) => {
+    await options.scannerAvailable();
+    s.available.mockClear();
+    s.heartbeat.mockClear();
+    periodic();
+    for(let i=0;i<5;i++) await Promise.resolve();
+    expect(s.available).not.toHaveBeenCalled();
+    expect(s.heartbeat).not.toHaveBeenCalled();
+    s.signals.get("SIGTERM")!();
+    return {handled:false};
+  });
+  await import("../src/main.js");
 });

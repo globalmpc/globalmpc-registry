@@ -10,6 +10,7 @@ import { registerProjectRoutes } from "./routes/projects.js";
 import { registerProjectPartyRoutes } from "./routes/project-parties.js";
 import { registerClaimDetailRoutes } from "./routes/claim-detail.js";
 import { registerEvidenceLedgerRoutes } from "./routes/evidence-ledger.js";
+import { registerCreReportRoutes } from "./routes/cre-reports.js";
 import { registerEvidenceRoutes } from "./routes/evidence.js";
 import { registerVerificationRoutes } from "./routes/verification.js";
 import { registerReviewOptionRoutes } from "./routes/review-options.js";
@@ -327,6 +328,7 @@ export async function buildServer(
   await registerProjectPartyRoutes(app, sql);
   await registerClaimDetailRoutes(app, sql);
   await registerEvidenceLedgerRoutes(app, sql);
+  await registerCreReportRoutes(app, sql, config);
   await registerEvidenceRoutes(app, sql, objectStore);
   await registerVerificationRoutes(app, sql, config);
   await registerReviewOptionRoutes(app, sql);

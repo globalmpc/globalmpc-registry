@@ -81,6 +81,7 @@ checks before completion:
 ```sh
 pnpm install --frozen-lockfile
 pnpm test:unit
+pnpm audit --audit-level high
 DATABASE_URL="postgres://postgres@localhost:5432/mpc_test" pnpm test:integration
 DATABASE_URL="postgres://postgres@localhost:5432/mpc_test" pnpm test:coverage
 DATABASE_URL="postgres://postgres@localhost:5432/mpc_test" pnpm check
@@ -100,6 +101,10 @@ A test run without database execution does not establish tenant isolation or
 append-only guarantees. Do not parallelize destructive database suites or reset
 shared seed data while tests or workers are active. Keep browser sessions and test
 data isolated where concurrent work would otherwise interfere.
+
+Production-only dependency audits exclude development tools such as Vitest and Vite.
+Run the full dependency audit when investigating Dependabot alerts; a passing production
+audit does not establish that development dependencies have no advisories.
 
 Local results, CI results, and external-service results are distinct evidence.
 Record their scope and revision, and report required checks that remain unverified.
