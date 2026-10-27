@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import {
   CopyObjectCommand,
   GetObjectCommand,
+  type GetObjectCommandOutput,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
@@ -160,18 +161,66 @@ export function createS3ObjectStore(options: S3StoreOptions): ObjectStore {
       return { key, contentHash: keccak256(merged), byteSize, contentType };
     },
 
-    async get(key): Promise<Uint8Array | null> {
+    async get(key, signal): Promise<Uint8Array | null> {
+      let body: GetObjectCommandOutput["Body"];
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      const ignoreLateError = () => {};
+      let cleanup: Promise<void> = Promise.resolve();
+      const abortBody = () => {
+        if (body instanceof Readable) {
+          if (body.closed) return;
+          // Do not release the caller's lease while the old socket can still deliver bytes.
+          cleanup = new Promise<void>(resolve => (body as Readable).once("close", resolve));
+          body.destroy(new Error("Object read aborted"));
+        } else if (reader) {
+          cleanup = reader.cancel(signal?.reason).then(() => {}, () => {});
+        }
+      };
+      signal?.addEventListener("abort", abortBody, { once: true });
       try {
+        signal?.throwIfAborted();
         const response = await client.send(
           new GetObjectCommand({ Bucket: options.bucket, Key: key }),
+          ...(signal ? [{ abortSignal: signal }] : []),
         );
-        if (!response.Body) return null;
-        return new Uint8Array(await response.Body.transformToByteArray());
+        body = response.Body;
+        // send() may resolve concurrently with cancellation, including transports that return
+        // headers just after abort. Dispose of that late body before returning the failure.
+        if (signal?.aborted) {
+          if (body instanceof Readable) body.once("error", ignoreLateError);
+          if (body instanceof ReadableStream) reader = body.getReader();
+          abortBody();
+          await cleanup;
+          signal.throwIfAborted();
+        }
+        if (!body) return null;
+        let bytes: Uint8Array;
+        if (body instanceof ReadableStream) {
+          reader = body.getReader();
+          const chunks: Uint8Array[] = [];
+          let size = 0;
+          while (true) {
+            const next = await reader.read();
+            if (next.done) break;
+            chunks.push(next.value);
+            size += next.value.byteLength;
+          }
+          bytes = new Uint8Array(size);
+          let offset = 0;
+          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+        } else {
+          bytes = new Uint8Array(await body.transformToByteArray());
+        }
+        signal?.throwIfAborted();
+        return bytes;
       } catch (error) {
-        // Distinguish "absent" from "unreadable". Collapsing a permission error into "absent"
-        // makes a config mistake look like data loss.
+        if (signal?.aborted) { await cleanup; signal.throwIfAborted(); }
         if ((error as { name?: string }).name === "NoSuchKey") return null;
         throw error;
+      } finally {
+        signal?.removeEventListener("abort", abortBody);
+        reader?.releaseLock();
+        if (body instanceof Readable) body.off("error", ignoreLateError);
       }
     },
 

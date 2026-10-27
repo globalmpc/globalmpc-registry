@@ -1,3 +1,5 @@
+import { PassThrough } from "node:stream";
+import { getEventListeners } from "node:events";
 import { beforeEach, expect, it, vi } from "vitest";
 import { keccak256 } from "@mpc/canonical";
 const s = vi.hoisted(() => ({
@@ -137,4 +139,48 @@ it("signs browser downloads against the public endpoint, clamps expiry and force
     }),
     { expiresIn: 900 },
   );
+});
+
+it("rejects cancellation before sending an S3 request", async () => {
+  const store = createS3ObjectStore({ bucket:"evidence", region:"us-east-1", sse:"none" });
+  const controller = new AbortController();
+  controller.abort(new Error("already cancelled"));
+  await expect(store.get("object",controller.signal)).rejects.toThrow("already cancelled");
+  expect(s.send).not.toHaveBeenCalled();
+  expect(getEventListeners(controller.signal,"abort")).toHaveLength(0);
+});
+
+it("destroys a late SDK body before settling cancellation and removes its listeners", async () => {
+  const store = createS3ObjectStore({ bucket:"evidence", region:"us-east-1", sse:"none" });
+  const controller = new AbortController();
+  let finish!: (response: unknown) => void;
+  s.send.mockImplementation(() => new Promise(resolve => { finish=resolve; }));
+  const pending = store.get("object",controller.signal);
+  const rejected = expect(pending).rejects.toThrow("late cancellation");
+  expect(s.send.mock.calls[0]?.[1]).toEqual({abortSignal:controller.signal});
+  controller.abort(new Error("late cancellation"));
+  const body = new PassThrough();
+  finish({Body:body});
+  await rejected;
+  expect(body.closed).toBe(true);
+  expect(body.destroyed).toBe(true);
+  expect(body.listenerCount("error")).toBe(0);
+  expect(body.listenerCount("close")).toBe(0);
+  expect(getEventListeners(controller.signal,"abort")).toHaveLength(0);
+});
+
+it("cancels a pending web response reader and does not report an absent object", async () => {
+  const store = createS3ObjectStore({ bucket:"evidence", region:"us-east-1", sse:"none" });
+  const controller = new AbortController();
+  const cancelled = vi.fn();
+  const body = new ReadableStream<Uint8Array>({cancel:cancelled});
+  s.send.mockResolvedValue({Body:body});
+  const pending = store.get("object",controller.signal);
+  const rejected = expect(pending).rejects.toThrow("web cancellation");
+  await Promise.resolve();
+  controller.abort(new Error("web cancellation"));
+  await rejected;
+  expect(cancelled).toHaveBeenCalledOnce();
+  expect(body.locked).toBe(false);
+  expect(getEventListeners(controller.signal,"abort")).toHaveLength(0);
 });

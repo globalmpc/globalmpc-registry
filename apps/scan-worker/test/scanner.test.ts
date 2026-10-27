@@ -399,18 +399,31 @@ describeDb("scan worker", () => {
     await pending;
   });
 
-  it("discards a timed-out object read without scanning its late result", async () => {
-    let finish!: (bytes: Uint8Array) => void;
-    let scans=0;
-    const result = await scanOnce(sql, {get: () => new Promise((resolve) => { finish=resolve; })}, async () => { scans++; return {kind:"clean"}; }, report,
+  it.each(["reject", "late-bytes"])("awaits aborted read cleanup before releasing its lease (%s)", async mode => {
+    let aborted!: () => void;
+    const sawAbort = new Promise<void>(resolve => { aborted = resolve; });
+    let settle!: () => void;
+    let scans = 0;
+    const slowStore: ScanStore = { get: (_key, signal) => new Promise((resolve, reject) => {
+      expect(signal).toBeDefined();
+      signal!.addEventListener("abort", () => {
+        aborted();
+        settle = () => mode === "reject" ? reject(signal!.reason) : resolve(new Uint8Array([1,2,3]));
+      }, {once:true});
+    }) };
+    const pending = scanOnce(sql, slowStore, async () => { scans++; return {kind:"clean"}; }, report,
       {...options,objectReadTimeoutMs:5}, log);
-    expect(result.verdict).toBe("error");
-    finish(new Uint8Array([1,2,3]));
-    await Promise.resolve();
+    await sawAbort;
+    expect((await stateOf()).scan_leased_until).not.toBeNull();
+    expect((await scanOnce(sql, store, scan, report, options, log)).handled).toBe(false);
+    settle();
+    expect((await pending).verdict).toBe("error");
     expect(scans).toBe(0);
     expect(reported).toEqual([]);
     expect((await stateOf()).state).toBe("quarantined");
     expect((await stateOf()).scan_leased_until).toBeNull();
+    expect((await step()).verdict).toBe("clean");
+    expect((await stateOf()).scan_attempts).toBe(2);
   });
 
   it("does not scan or report an object whose bytes differ from leased size metadata", async () => {

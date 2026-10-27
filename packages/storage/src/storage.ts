@@ -49,7 +49,8 @@ export interface ObjectStore {
     body: AsyncIterable<Uint8Array>,
     contentType: string,
   ): Promise<StoredObject>;
-  get(key: string): Promise<Uint8Array | null>;
+  /** When signalled, cancel transport/body I/O and settle only after its cleanup completes. */
+  get(key: string, signal?: AbortSignal): Promise<Uint8Array | null>;
   /** Short-lived scoped URL. Never creates a permanent public URL (06 §6.7). */
   presignGet(key: string, ttlSeconds: number): Promise<string>;
   /** quarantine → evidence promotion. The source key remains. */
@@ -103,7 +104,8 @@ export function createMemoryObjectStore(): ObjectStore & { size(): number } {
       };
     },
 
-    async get(key) {
+    async get(key, signal) {
+      signal?.throwIfAborted();
       return objects.get(key)?.body ?? null;
     },
 
