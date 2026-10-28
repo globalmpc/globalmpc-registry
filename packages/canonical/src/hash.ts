@@ -1,4 +1,5 @@
-import { keccak_256 } from "@noble/hashes/sha3";
+// v2 is ESM-only and exports subpaths with their .js extension.
+import { keccak_256 } from "@noble/hashes/sha3.js";
 
 /** 0x-prefixed lowercase hex. Every hash leaving this package uses this format. */
 export type Hex = `0x${string}`;

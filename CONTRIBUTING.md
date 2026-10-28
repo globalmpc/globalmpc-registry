@@ -34,6 +34,10 @@ pnpm check                                 # must pass before a PR
 ```
 
 `pnpm check` covers typecheck, tests, OpenAPI drift and brand assets.
+
+Where code lives: `apps/` holds services that run on our own servers (API, workers, web).
+`packages/` holds shared libraries and artifacts deployed elsewhere, such as the Chainlink
+CRE workflow in `packages/cre-workflow/`, which runs on a CRE DON.
 Contracts: `cd contracts && forge test`.
 
 **A green run without `DATABASE_URL` is not green**: tenant-isolation and append-only

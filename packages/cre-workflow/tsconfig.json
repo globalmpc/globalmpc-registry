@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    // cre-compile bundles this workflow with Bun, and the SDK's declarations use
+    // extensionless relative imports that NodeNext resolution rejects.
+    "module": "preserve",
+    "moduleResolution": "bundler"
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+  // Node-only tests: checked by their own project without the SDK restricted declarations.
+  "exclude": ["test/node/**"]
+}

@@ -3,10 +3,14 @@ import { readdirSync, readFileSync } from "node:fs";
 
 // Referenced directories do not inherit the root configuration in Vitest 5.
 // Inline projects retain the shared single-worker budget across every DB suite.
+// Packages with their own Vitest config are added below with `extends` instead: inline
+// projects never load a package config. The CRE workflow needs its `bun:test` alias.
+const configuredPackages = new Set(["packages/cre-workflow"]);
 const roots = [
   ...readdirSync("packages", { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => `packages/${entry.name}`),
+    .map((entry) => `packages/${entry.name}`)
+    .filter((root) => !configuredPackages.has(root)),
   "apps/api", "apps/jobs-worker", "apps/anchor-worker", "apps/scan-worker",
 ];
 
@@ -47,6 +51,9 @@ export default defineConfig(({ mode }) => {
         ...(mode === "integration" ? [] : [{
           extends: "./apps/web/vitest.config.ts",
           test: { name: "web", root: "apps/web", fileParallelism: false, maxWorkers: 1 },
+        }, {
+          extends: "./packages/cre-workflow/vitest.config.ts",
+          test: { name: "@mpc/cre-workflow", root: "packages/cre-workflow", fileParallelism: false, maxWorkers: 1 },
         }]),
       ],
       /**

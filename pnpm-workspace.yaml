@@ -1,3 +1,23 @@
 packages:
   - "packages/*"
   - "apps/*"
+
+# cre-compile (the SDK's WASM build scripts) imports the TypeScript compiler API without
+# declaring it. Resolve it to the workflow package's TypeScript 5 instead of the root
+# TypeScript 7, which has no JavaScript API.
+packageExtensions:
+  "@chainlink/cre-sdk@1.23.0":
+    peerDependencies:
+      typescript: "5.9.3"
+
+# GHSA-mrhx-c7xc-m3w5 (zod < 4.6.6: memory exhaustion from issue accumulation on large
+# arrays). The only vulnerable copy is zod 3.25.76, pinned by @chainlink/cre-sdk 1.23.0,
+# whose zod 3 API (`z.function().args()`) zod 4 removed, so it cannot be overridden. The
+# SDK validates host bindings and author-supplied TEE constraints with it; untrusted
+# workflow input (configuration, Registry responses) is validated with zod 4.6.7 and holds
+# no arrays. The advisory ID is global, so packages/cre-workflow/test/node/audit-exception.test.ts
+# fails if any other package starts depending on a vulnerable zod. Remove when the SDK
+# moves to zod >= 4.6.6.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-mrhx-c7xc-m3w5

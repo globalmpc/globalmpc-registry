@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { catalogFixtureKey } from "./catalog-fixtures";
 import { connectAs } from "./connect-as";
 import {
   CHAIN_ENABLED,
@@ -17,6 +18,10 @@ test.describe("evidence ledger complete journey", () => {
     page,
   }) => {
     const projectKey = `LEDGER-${Date.now()}`;
+    // A synthetic per-attempt key, not the legacy `mining_right_registration` claim type other
+    // journeys use: a retry then proposes a fresh catalog item instead of meeting the failed
+    // attempt's pending proposal or a version 2, and no other journey sees this definition.
+    const licence = catalogFixtureKey("synthetic_ledger_licence", test.info().retry);
     await connectAs(page, "Operator A");
     // Synthetic definitions are proposed and independently approved through the real API.
     // They are test fixtures, not mining standards or a production bootstrap.
@@ -24,7 +29,7 @@ test.describe("evidence ledger complete journey", () => {
       page,
       "/api/v1/review-registry/claim-types/proposals",
       {
-        claimType: "mining_right_registration",
+        claimType: licence,
         displayName: "Synthetic mining licence",
         description: "Test fixture only",
         definition: {
@@ -63,7 +68,7 @@ test.describe("evidence ledger complete journey", () => {
                 path: "referenceStatus",
                 value: "synthetic_test_project",
               },
-              requiredClaimTypes: ["mining_right_registration"],
+              requiredClaimTypes: [licence],
               minimumGrade: "partially_verified",
               freshnessThresholdDays: "180",
               requiredAttestations: ["professional_signoff"],
@@ -101,22 +106,22 @@ test.describe("evidence ledger complete journey", () => {
     await page.goto(`/w/projects/${projectId}`);
     const matrix = page.getByTestId("fact-matrix");
     await matrix.getByText("Record a matrix row", { exact: true }).click();
-    await matrix.getByLabel("Item", { exact: true }).selectOption("mining_right_registration");
+    await matrix.getByLabel("Item", { exact: true }).selectOption(licence);
     await matrix.getByLabel("Status", { exact: true }).selectOption("not_applicable");
     await matrix.getByLabel("Reason", { exact: true }).fill("Synthetic catalog exclusion");
     await matrix.getByRole("button", { name: "Record version", exact: true }).click();
-    await expect(matrix.locator('[data-fact="mining_right_registration"] [data-status="not_applicable"]')).toBeVisible();
+    await expect(matrix.locator(`[data-fact="${licence}"] [data-status="not_applicable"]`)).toBeVisible();
     await page.goto(`/w/projects/${projectId}/data-room`);
-    await expect(page.getByTestId("ledger-status-mining_right_registration")).toHaveText("Not applicable");
+    await expect(page.getByTestId(`ledger-status-${licence}`)).toHaveText("Not applicable");
     await page.goto(`/w/projects/${projectId}`);
     await matrix.getByText("Record a matrix row", { exact: true }).click();
-    await matrix.getByLabel("Item", { exact: true }).selectOption("mining_right_registration");
+    await matrix.getByLabel("Item", { exact: true }).selectOption(licence);
     await matrix.getByLabel("Status", { exact: true }).selectOption("pending");
     await matrix.getByLabel("Reason", { exact: true }).fill("Synthetic exclusion withdrawn");
     await matrix.getByRole("button", { name: "Record version", exact: true }).click();
-    await expect(matrix.locator('[data-fact="mining_right_registration"] [data-status="pending"]')).toBeVisible();
+    await expect(matrix.locator(`[data-fact="${licence}"] [data-status="pending"]`)).toBeVisible();
     await page.goto(`/w/projects/${projectId}/data-room`);
-    await expect(page.getByTestId("ledger-status-mining_right_registration")).toHaveText("Missing evidence");
+    await expect(page.getByTestId(`ledger-status-${licence}`)).toHaveText("Missing evidence");
 
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/data-room`);
@@ -163,13 +168,13 @@ test.describe("evidence ledger complete journey", () => {
       page.getByText(`Licence number: SYNTH-${projectKey}`),
     ).toBeVisible();
     await expect(
-      page.getByTestId("ledger-status-mining_right_registration"),
+      page.getByTestId(`ledger-status-${licence}`),
     ).toHaveText("Unreviewed");
 
     await signScopedReview(page, projectId);
     await page.goto(`/w/projects/${projectId}/data-room`);
     await expect(
-      page.getByTestId("ledger-status-mining_right_registration"),
+      page.getByTestId(`ledger-status-${licence}`),
     ).toHaveText("Reviewed");
     await expect(page.getByTestId("evidence-ledger")).toContainText(
       "Exploration",
@@ -182,7 +187,7 @@ test.describe("evidence ledger complete journey", () => {
     ).snapshot;
     await page.goto(`/explorer/projects/${projectKey}`);
     await expect(
-      page.getByTestId("ledger-status-mining_right_registration"),
+      page.getByTestId(`ledger-status-${licence}`),
     ).toHaveText("Reviewed");
     await expect(page.getByTestId("proof-panel")).toBeVisible();
     await expect(page.getByText("Path matches")).toBeVisible();
@@ -199,10 +204,10 @@ test.describe("evidence ledger complete journey", () => {
     const before = await beforeResponse.json();
     await expectApprovedLedgerPanel(page, before.evidenceLedger, {
       stage: "Exploration",
-      reviewedClaimTypes: ["mining_right_registration"],
+      reviewedClaimTypes: [licence],
     });
     const privateItem = privateLedger.items.find(
-      (item: { claimType: string }) => item.claimType === "mining_right_registration",
+      (item: { claimType: string }) => item.claimType === licence,
     );
     expect(privateItem.claimIds).toHaveLength(1);
     expect(privateItem.attestationIds).toHaveLength(1);
@@ -273,13 +278,13 @@ test.describe("evidence ledger complete journey", () => {
     );
     await page.goto(`/w/projects/${projectId}/data-room`);
     await expect(
-      page.getByTestId("ledger-status-mining_right_registration"),
+      page.getByTestId(`ledger-status-${licence}`),
     ).toHaveText("Needs another review");
     await page.goto("/connect");
     await page.getByRole("button", { name: "Disconnect" }).click();
     await page.goto(`/explorer/projects/${projectKey}`);
     await expect(
-      page.getByTestId("ledger-status-mining_right_registration"),
+      page.getByTestId(`ledger-status-${licence}`),
     ).toHaveText("Reviewed");
     await expect(page.getByTestId("evidence-ledger-current")).toContainText(
       "Needs another review",

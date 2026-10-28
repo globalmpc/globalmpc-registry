@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { catalogFixtureKey } from "./catalog-fixtures";
 import { connectAs } from "./connect-as";
 import {
   CHAIN_ENABLED,
@@ -39,9 +40,10 @@ test.describe("evidence ledger broken chain journey", () => {
     page,
   }) => {
     const stamp = Date.now();
-    // Fixed keys: the seeded reviewer credential and its issuer are recognized for them.
-    const licence = "synthetic_chain_licence";
-    const permit = "synthetic_chain_permit";
+    // Per-attempt keys the seeded reviewer credential and its issuer recognize; a retry gets
+    // fresh catalog items at version 1 rather than the failed attempt's leftovers.
+    const licence = catalogFixtureKey("synthetic_chain_licence", test.info().retry);
+    const permit = catalogFixtureKey("synthetic_chain_permit", test.info().retry);
     const projectKey = `CHAIN-${stamp}`;
     const ruleSetId = `synthetic-chain-${stamp}`;
     const requirementIds = [`chain-licence-${stamp}`, `chain-permit-${stamp}`];

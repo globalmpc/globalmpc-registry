@@ -1,0 +1,11 @@
+{
+  // Workflow source only, without Node types: it runs in Javy/QuickJS, where the SDK's
+  // declarations describe the available globals. Tests use tsconfig.json with Node types.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [],
+    "tsBuildInfoFile": "dist/tsconfig.src.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": []
+}
