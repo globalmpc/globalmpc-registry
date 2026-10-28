@@ -116,12 +116,14 @@ const nextConfig: NextConfig = {
   // design-system outside the workspace is referenced via symlink, so raise the tracing root.
   outputFileTracingRoot: path.join(process.cwd(), "../.."),
 
+  // Keep webpack's default of resolving through pnpm's symlinks. With `resolve.symlinks = false`
+  // a package's imports fell through to pnpm's hidden hoist directory, which holds one version
+  // per name: viem's @noble/curves then got @mpc/canonical's @noble/hashes 2 instead of its own 1.x.
   webpack(config) {
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js"],
       ".mjs": [".mts", ".mjs"],
     };
-    config.resolve.symlinks = false;
     return config;
   },
 

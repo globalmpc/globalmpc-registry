@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { privateKeyToAccount } from "viem/accounts";
 import { runMigrations } from "@mpc/db";
+import { CATALOG_FIXTURE_KEYS } from "./catalog-fixtures";
 
 /**
  * Fixed seed for E2E.
@@ -352,7 +353,8 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
 
     // The body that issued the reviewer's credential. A credential whose issuer is not an
     // accepted authority recognized for the claim type cannot back a review (AC-15·AC-16).
-    // The synthetic_chain_* types are the broken-chain ledger journey's catalog fixtures.
+    // CATALOG_FIXTURE_KEYS are the ledger journeys' synthetic catalog keys, one set per attempt.
+    const reviewScope = ["mining_right_registration", "resource_estimate", ...CATALOG_FIXTURE_KEYS];
     await sql`
       INSERT INTO core.authorities (
         id, tenant_id, name, jurisdiction, proves, does_not_prove,
@@ -360,8 +362,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       ) VALUES (
         ${E2E_ISSUER_AUTHORITY_ID}, ${E2E_TENANT_A}, 'Professional Institute', 'AUS',
         ARRAY['member_competence'], ARRAY['opinion_accuracy','rights_completeness'],
-        ARRAY['mining_right_registration','resource_estimate',
-              'synthetic_chain_licence','synthetic_chain_permit'],
+        ${reviewScope}::text[],
         'verifiable_signed_document', 'public', '2000-01-01', 'accepted'
       )
     `;
@@ -375,8 +376,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       ) VALUES (
         ${E2E_CREDENTIAL_ID}, ${E2E_TENANT_A}, ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_REVIEW},
         'AusIMM CP(Geology) #123456', ${E2E_ISSUER_AUTHORITY_ID}, 'competent_person',
-        ARRAY['mining_right_registration','resource_estimate',
-              'synthetic_chain_licence','synthetic_chain_permit'], ARRAY['MNG','AUS'],
+        ${reviewScope}::text[], ARRAY['MNG','AUS'],
         '2024-01-01', '2030-01-01', 'valid'
       )
     `;

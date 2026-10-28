@@ -1,0 +1,12 @@
+{
+  // Node-only tests. Importing @chainlink/cre-sdk applies its restricted-runtime
+  // declarations (Node built-ins typed as `never`) to the whole program, so these tests
+  // import nothing from the SDK or the workflow. fixtures/ is checked by a test instead.
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../../dist/node-test"
+  },
+  "include": ["*.ts"],
+  "exclude": ["fixtures/**"]
+}

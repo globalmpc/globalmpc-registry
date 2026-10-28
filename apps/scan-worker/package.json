@@ -17,6 +17,6 @@
     "@mpc/storage": "workspace:*",
     "postgres": "^3.4.9",
     "tsx": "4.23.15",
-    "viem": "2.57.5"
+    "viem": "2.57.11"
   }
 }

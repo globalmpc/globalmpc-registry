@@ -84,9 +84,10 @@ incorrect data: neither these checks nor CRE establish the source's factual trut
 
 The workflow is deliberately restricted to Anvil chain 31337. Production CRE credentials,
 official source access, BSC rollout, contract authority and legal/data-residency decisions are
-separate prerequisites. The official Go SDK is isolated under `integrations/chainlink-cre/`;
-its tests/build are explicit local checks, not an added CI workflow. See its README for the
-workflow configuration, toolchain and CLI commands.
+separate prerequisites. The workflow is the TypeScript package `packages/cre-workflow/`
+(`@chainlink/cre-sdk` 1.23.0, pinned). Its SDK-harness tests run with the repository's unit
+tests and coverage; its WASM build needs an external Bun and is an explicit local check, not
+a CI step. See its README for the workflow configuration, toolchain, licence and CLI commands.
 
 ## Reproduce the local Registry-to-consumer demonstration
 
@@ -110,8 +111,8 @@ uses actual API reports and transactions to demonstrate current → needs-re-rev
 exact TTL expiry, replay rejection and unchanged approved content hashes.
 
 The local forwarder and professional signatures are synthetic fixtures. This command does
-not run CRE or authenticate a DON signature. Test the real Go SDK workflow separately using
-the commands in [`integrations/chainlink-cre/README.md`](../integrations/chainlink-cre/README.md).
+not run CRE or authenticate a DON signature. Test the CRE workflow separately using
+the commands in [`packages/cre-workflow/README.md`](../packages/cre-workflow/README.md).
 The official CLI currently requires a Chainlink login/API key even for simulation; without
 that access, WASM compilation, SDK capability tests and local consumer transactions remain
 distinct evidence rather than a claimed live CRE execution.

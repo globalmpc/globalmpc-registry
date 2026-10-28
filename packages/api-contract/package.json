@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Zod-defined API contract, generated OpenAPI 3.1 document, SIWE and authorization models.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./cre": "./src/cre.ts"
   },
   "scripts": {
     "build": "tsx src/build-openapi.ts",
@@ -15,7 +16,7 @@
   "dependencies": {
     "@mpc/domain": "workspace:*",
     "@mpc/policy": "workspace:*",
-    "zod": "4.6.6"
+    "zod": "4.6.7"
   },
   "files": [
     "src"

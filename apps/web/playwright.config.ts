@@ -1,5 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { generatePrivateKey } from "viem/accounts";
+import { E2E_MAX_RETRIES } from "./e2e/catalog-fixtures";
 
 /**
  * Demo account keys are **generated at run time.**
@@ -86,7 +87,8 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env["CI"],
-  retries: process.env["CI"] ? 1 : 0,
+  // The seed recognizes catalog fixture keys for this many retries (e2e/catalog-fixtures.ts).
+  retries: process.env["CI"] ? E2E_MAX_RETRIES : 0,
   reporter: process.env["CI"] ? [["github"], ["list"]] : [["list"]],
 
   globalSetup: "./e2e/global-setup.ts",

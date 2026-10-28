@@ -1,0 +1,24 @@
+{
+  "name": "@mpc/cre-workflow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chainlink CRE proof-of-concept workflow relaying observed Registry status to the local Anvil receiver.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.src.json && tsc --noEmit -p test/node",
+    "build:wasm": "bun x cre-compile src/main.ts dist/workflow.wasm"
+  },
+  "dependencies": {
+    "@chainlink/cre-sdk": "1.23.0",
+    "@mpc/api-contract": "workspace:*",
+    "viem": "2.57.11",
+    "zod": "4.6.7"
+  },
+  "files": [
+    "src"
+  ],
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
