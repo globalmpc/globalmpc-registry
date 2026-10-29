@@ -8,14 +8,33 @@ import { ANVIL_DEV_ADDRESSES, assertNotDevKey, PUBLIC_DEV_ADDRESSES } from "@mpc
  * The refused development addresses, pinned to their sources.
  *
  * `@mpc/config` hardcodes them so it needs no crypto dependency. This derives them again: from
- * the public mnemonic, and from every key fixture committed to the repository. A fixture added
- * without its address in the list fails here — committed means public.
+ * the public mnemonic and supported literal signing-fixture declarations in committed sources.
+ * This is a static fixture audit, not a general evaluator of arbitrary test expressions.
+ * A fixture added without its address in the list fails here — committed means public.
  *
  * Keys are never printed: failures name the file and the derived address only.
  */
 
 const ROOT = join(import.meta.dirname, "..", "..", "..");
 const KEY = /0x[0-9a-fA-F]{64}/g;
+
+/** Read only literal key expressions, never execute imported test code or treat hashes as keys. */
+function signingFixtureKeys(source: string): `0x${string}`[] {
+  const expression = '(?:["\']0x[0-9a-fA-F]{64}["\']|`0x\\$\\{["\'][0-9a-fA-F]{2}["\']\\.repeat\\(32\\)\\}`)';
+  const context = '(?:privateKeyToAccount\\(\\s*|(?:const|let)\\s+\\w*(?:KEY|Key)\\s*=\\s*|\\b[A-Z_]*PRIVATE_KEY\\s*:\\s*)';
+  return Array.from(source.matchAll(new RegExp(context + '(' + expression + ')', 'g')), (match): `0x${string}` => {
+    const literal = match[1]!;
+    const repeated = literal.match(/\$\{["']([0-9a-fA-F]{2})["']\.repeat\(32\)\}/);
+    return repeated ? `0x${repeated[1]!.repeat(32)}` : literal.slice(1, -1) as `0x${string}`;
+  });
+}
+
+function testSources(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const file = join(directory, entry.name);
+    return entry.isDirectory() ? testSources(file) : /\.(?:ts|tsx)$/.test(entry.name) ? [file] : [];
+  });
+}
 
 /** Every committed place a service or signer key is written down. */
 function committedFixtureKeys(): { source: string; key: `0x${string}` }[] {
@@ -39,10 +58,41 @@ function committedFixtureKeys(): { source: string; key: `0x${string}` }[] {
       for (const key of line.match(KEY) ?? []) found.push({ source: file, key: key as `0x${string}` });
     }
   }
+  for (const tree of ["apps", "packages"]) {
+    for (const entry of readdirSync(join(ROOT, tree), { withFileTypes: true })) {
+      const directory = join(ROOT, tree, entry.name, "test");
+      if (!entry.isDirectory()) continue;
+      // Not every workspace package has tests.
+      let files: string[];
+      try { files = testSources(directory); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      for (const file of files) {
+        for (const key of signingFixtureKeys(readFileSync(file, "utf8"))) found.push({ source: file.slice(ROOT.length + 1), key });
+      }
+    }
+  }
+  for (const file of readdirSync(join(ROOT, "contracts", "test")).filter((name) => name.endsWith(".sol"))) {
+    const source = `contracts/test/${file}`;
+    // Solidity fixture keys are integers; addresses and arbitrary bytes32 values are excluded.
+    const code = readFileSync(join(ROOT, source), "utf8");
+    const declaredKeys = /uint256\s+\w*[Kk]ey\s*=\s*(0x[0-9a-fA-F]+)\s*;/g;
+    for (const match of code.matchAll(declaredKeys)) {
+      found.push({ source, key: `0x${match[1]!.slice(2).padStart(64, "0")}` });
+    }
+  }
   return found;
 }
 
 describe("public development keys", () => {
+  it("distinguishes signing literals from hashes and generated keys", () => {
+    const literal = `0x${"33".repeat(32)}`;
+    expect(signingFixtureKeys(`const ROOT = "${literal}"; privateKeyToAccount(generatePrivateKey());`)).toEqual([]);
+    expect(signingFixtureKeys(`const SIGNER_KEY = "${literal}";`)).toEqual([literal]);
+    expect(signingFixtureKeys('privateKeyToAccount(`0x${"11".repeat(32)}`)')).toEqual([`0x${"11".repeat(32)}`]);
+  });
+
   it("include accounts 0–19 of the anvil/hardhat mnemonic", () => {
     const mnemonic = "test test test test test test test test test test test junk";
     const derived = Array.from({ length: 20 }, (_, addressIndex) =>
@@ -60,6 +110,9 @@ describe("public development keys", () => {
         "config/local-secrets/scan_service_key",
         "docker/docker-compose.yml",
         ".env.example",
+        "apps/api/test/auth.test.ts",
+        "apps/anchor-worker/test/safe-client.test.ts",
+        "contracts/test/DeployRegistryAnchor.t.sol",
       ]),
     );
     const missing = fixtures

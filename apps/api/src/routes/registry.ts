@@ -720,12 +720,14 @@ export async function registerRegistryRoutes(
 
           // Resets the attempt count to 0. A person checked the cause and decided, so the
           // previous attempts' cap is not inherited. The contract goes with the hash it was
-          // recorded for; the next send records its own.
+          // recorded for; the next send records its own. Its failed-search timing also starts
+          // fresh, including historical terminal rows that retained an old schedule.
           await tx`
             UPDATE chain.transactions
             SET state = 'created', attempts = 0,
                 tx_hash = NULL, contract_address = NULL, block_number = NULL, block_hash = NULL,
                 confirmations = 0, confirmed_at = NULL, submitted_at = NULL,
+                chain_search_failed_since = NULL, retry_after = NULL,
                 last_error = ${`resubmitted_from_${transaction.state}`},
                 updated_at = now()
             WHERE id = ${transaction.id}

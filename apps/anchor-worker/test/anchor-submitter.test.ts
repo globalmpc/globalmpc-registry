@@ -161,6 +161,7 @@ class FakeChain implements ChainClient {
   nextNonce = 0;
   /** Signer's nonce at the block `confirmationDepth` deep: every nonce below it is taken. */
   confirmedNonceValue = 0;
+  confirmedNonceError: Error | null = null;
   confirmedNonceAt: number[] = [];
   blockGasLimitValue = 30_000_000n;
 
@@ -189,6 +190,7 @@ class FakeChain implements ChainClient {
 
   async confirmedNonce(_address: string, blockNumber: number): Promise<number> {
     this.confirmedNonceAt.push(blockNumber);
+    if (this.confirmedNonceError) throw this.confirmedNonceError;
     return this.confirmedNonceValue;
   }
 
@@ -418,11 +420,15 @@ describeDb("anchor submission and finality", () => {
     await step();
 
     expect((await stateOf()).attempts).toBe(3);
+    await sql`UPDATE chain.transactions SET chain_search_failed_since = now() - interval '2 hours',
+      retry_after = now() WHERE id = ${transactionId}`;
 
     await step();
     const row = await stateOf();
     expect(row.state).toBe("failed");
     expect(row.last_error).toBe("MAX_ATTEMPTS_REACHED");
+    const [schedule] = await sql`SELECT chain_search_failed_since, retry_after FROM chain.transactions WHERE id = ${transactionId}`;
+    expect(schedule).toEqual({ chain_search_failed_since: null, retry_after: null });
   });
 
   it("does not submit above the gas cap and keeps the state", async () => {
@@ -1395,6 +1401,38 @@ describeDb("anchor submission and finality", () => {
         expect((await ledger())[0]?.settled_reason).toBe("receipt");
       });
 
+      it.each(["finality", "nonce"])("records mined receipts when the %s lookup fails", async (lookup) => {
+        await step();
+        await sql`UPDATE chain.transactions SET state = 'dropped' WHERE id = ${transactionId}`;
+        chain.observation = receipt(100, BLOCK_A, "success", { l1Fee: 17n });
+        chain.finalized = lookup === "finality" ? null : 100;
+        chain.confirmedNonceError = lookup === "nonce" ? new Error("nonce RPC unavailable") : null;
+
+        await stepOnce(sql, chain, { ...config, finalityTag: "safe" }, log);
+
+        expect((await ledger())[0]?.settled_reason).toBe("receipt");
+        const [spend] = await sql`SELECT gas_used::TEXT, effective_gas_price::TEXT, l1_fee::TEXT
+          FROM chain.gas_spend WHERE tx_hash = ${TX_HASH}`;
+        expect(spend).toEqual({ gas_used: GAS_USED.toString(), effective_gas_price: GAS_PRICE.toString(), l1_fee: "17" });
+        expect((await stateOf()).last_error).toBe("mined_after_drop");
+      });
+
+      it("keeps an unreceipted send open while finality is unavailable, then settles at the safe head", async () => {
+        await step();
+        await sql`UPDATE chain.transactions SET state = 'dropped' WHERE id = ${transactionId}`;
+        chain.observation = { kind: "unknown" };
+        chain.confirmedNonceValue = 1;
+        chain.finalized = null;
+        const safe = { ...config, finalityTag: "safe" as const };
+        await stepOnce(sql, chain, safe, log);
+        expect((await ledger())[0]?.settled_reason).toBeNull();
+        expect(chain.confirmedNonceAt).toEqual([]);
+        chain.finalized = 90;
+        await stepOnce(sql, chain, safe, log);
+        expect((await ledger())[0]?.settled_reason).toBe("nonce_consumed");
+        expect(chain.confirmedNonceAt).toEqual([90]);
+      });
+
       it("settles a send whose nonce another transaction took, confirmed at depth", async () => {
         await step();
         await resubmitFrom("dropped");
@@ -2006,6 +2044,149 @@ describeDb("anchor submission and finality", () => {
       expect(await step()).toMatchObject({ reason: "duplicate_check_failed", waiting: true });
       await failingFor(config.chainSearchGiveUpMs + 1);
       expect(await step()).toMatchObject({ to: "reconciliation_required", reason: "chain_search_unavailable" });
+    });
+
+    async function confirmedWithFailedSearch() {
+      await step();
+      chain.observation = receipt(100, BLOCK_A);
+      chain.head = 102;
+      expect(await step()).toMatchObject({ to: "confirmed" });
+      chain.observation = receipt(100, BLOCK_A, "success", { rootSubmissions: [] });
+      chain.anchoredError = new Error("RootSubmitted search incomplete");
+      expect(await stepOnce(sql, chain, retrying, log)).toMatchObject({ reason: "anchored_elsewhere_check_failed" });
+      await sql`UPDATE chain.transactions SET confirmed_at = now() - interval '2 hours',
+        retry_after = now(), updated_at = now() - interval '1 minute' WHERE id = ${transactionId}`;
+    }
+
+    it("keeps a failed confirmed search eligible after its reorg watch and escalates at the limit", async () => {
+      await confirmedWithFailedSearch();
+      const result = await stepOnce(sql, chain, retrying, log);
+      expect(result).toMatchObject({ transactionId, to: "confirmed", reason: "anchored_elsewhere_check_failed" });
+      const asked = chain.anchoredAsked.length;
+      expect(await stepOnce(sql, chain, retrying, log)).toMatchObject({ handled: false });
+      expect(chain.anchoredAsked).toHaveLength(asked);
+      await failingFor(config.chainSearchGiveUpMs + 1);
+      await sql`UPDATE chain.transactions SET retry_after = now() WHERE id = ${transactionId}`;
+      expect(await stepOnce(sql, chain, retrying, log)).toMatchObject({
+        to: "reconciliation_required", reason: "chain_search_unavailable",
+      });
+      expect(await scheduleOf()).toMatchObject({ chain_search_failed_since: null, retry_after: null });
+    });
+
+    it("clears the search when a complete receipt recovers, then stops watching the expired confirmation", async () => {
+      await confirmedWithFailedSearch();
+      chain.observation = receipt(100, BLOCK_A);
+      expect(await stepOnce(sql, chain, retrying, log)).toMatchObject({ transactionId, to: "confirmed" });
+      expect(await scheduleOf()).toMatchObject({ chain_search_failed_since: null, retry_after: null });
+      expect(await stepOnce(sql, chain, retrying, log)).toMatchObject({ handled: false });
+    });
+
+    it.each(["unchanged", "changed"])("keeps recovered %s receipts eligible until finality succeeds", async (block) => {
+      await confirmedWithFailedSearch();
+      chain.observation = block === "changed" ? receipt(101, BLOCK_B) : receipt(100, BLOCK_A);
+      chain.finalized = null;
+      const safe = { ...retrying, finalityTag: "safe" as const };
+
+      expect(await stepOnce(sql, chain, safe, log)).toMatchObject({
+        transactionId, to: "confirmed", reason: "finality_read_failed", waiting: true,
+      });
+      expect((await scheduleOf()).chain_search_failed_since).toBeNull();
+      expect((await scheduleOf()).retry_after).toBeInstanceOf(Date);
+      const [unchanged] = await sql`SELECT state, block_hash FROM chain.transactions WHERE id = ${transactionId}`;
+      expect(unchanged).toMatchObject({ state: "confirmed", block_hash: BLOCK_A });
+
+      // Still claimable after the failed finality read, even outside the reorg watch.
+      chain.finalized = 100;
+      await sql`UPDATE chain.transactions SET retry_after = now() WHERE id = ${transactionId}`;
+      expect(await stepOnce(sql, chain, safe, log)).toMatchObject({
+        transactionId, to: block === "changed" ? "included" : "confirmed",
+      });
+      expect(await scheduleOf()).toMatchObject({ chain_search_failed_since: null, retry_after: null });
+      const reorgs = await sql`SELECT previous_block_hash FROM chain.reorg_events WHERE transaction_id = ${transactionId}`;
+      expect(reorgs).toHaveLength(block === "changed" ? 1 : 0);
+      if (block === "changed") {
+        expect(reorgs[0]).toMatchObject({ previous_block_hash: BLOCK_A });
+        const [updated] = await sql`SELECT state, block_hash FROM chain.transactions WHERE id = ${transactionId}`;
+        expect(updated).toMatchObject({ state: "included", block_hash: BLOCK_B });
+      } else {
+        expect(await stepOnce(sql, chain, safe, log)).toMatchObject({ handled: false });
+      }
+    });
+
+    it("keeps a recovered reverted receipt eligible until its finality/state processing succeeds", async () => {
+      await confirmedWithFailedSearch();
+      chain.observation = receipt(101, BLOCK_B, "reverted");
+      chain.anchoredError = null;
+      chain.anchored = null;
+      chain.finalized = null;
+      const safe = { ...retrying, finalityTag: "safe" as const };
+      expect(await stepOnce(sql, chain, safe, log)).toMatchObject({ reason: "finality_read_failed" });
+      expect((await scheduleOf()).chain_search_failed_since).toBeNull();
+      expect((await scheduleOf()).retry_after).toBeInstanceOf(Date);
+      chain.finalized = 101;
+      await sql`UPDATE chain.transactions SET retry_after = now() WHERE id = ${transactionId}`;
+      expect(await stepOnce(sql, chain, safe, log)).toMatchObject({ transactionId, to: "reverted" });
+      expect(await scheduleOf()).toMatchObject({ chain_search_failed_since: null, retry_after: null });
+      expect(await stepOnce(sql, chain, safe, log)).toMatchObject({ handled: false });
+    });
+
+    it("ends an old failed-search episode on reconciliation so manual resubmission starts fresh", async () => {
+      await confirmedWithFailedSearch();
+      await failingFor(config.chainSearchGiveUpMs + 1);
+      chain.observation = { kind: "unknown" };
+      expect(await stepOnce(sql, chain, retrying, log)).toMatchObject({ to: "reconciliation_required" });
+      expect(await scheduleOf()).toMatchObject({ chain_search_failed_since: null, retry_after: null });
+      // The API's manual resubmit starts the next worker episode; its historical-row reset is
+      // independently checked through the real HTTP route in the API suite.
+      await sql`UPDATE chain.transactions SET state = 'created', attempts = 0, tx_hash = NULL,
+        submitted_at = NULL WHERE id = ${transactionId}`;
+      expect(await stepOnce(sql, chain, retrying, log)).toMatchObject({
+        to: "created", reason: "reconciliation_check_failed", waiting: true,
+      });
+      expect((await scheduleOf()).chain_search_failed_since!.getTime()).toBeGreaterThan(Date.now() - 10_000);
+    });
+
+    it.each(["matching receipt", "successful lookup"])("starts a fresh search failure episode after %s recovery and a finality outage", async (recovery) => {
+      await confirmedWithFailedSearch();
+      await failingFor(config.chainSearchGiveUpMs + 1);
+      chain.observation = recovery === "matching receipt" ? receipt(101, BLOCK_B) : receipt(101, BLOCK_B, "reverted");
+      chain.anchoredError = null;
+      chain.anchored = null;
+      chain.finalized = null;
+      const safe = { ...retrying, finalityTag: "safe" as const };
+      expect(await stepOnce(sql, chain, safe, log)).toMatchObject({ reason: "finality_read_failed" });
+      const schedule = await scheduleOf();
+      expect(schedule.chain_search_failed_since).toBeNull();
+      expect(schedule.retry_after).toBeInstanceOf(Date);
+      expect(await stepOnce(sql, chain, safe, log)).toMatchObject({ handled: false });
+
+      // The finality retry is eligible outside the watch, but the next search outage must
+      // start a new search clock rather than inherit the already recovered failure run.
+      await sql`UPDATE chain.transactions SET retry_after = now() WHERE id = ${transactionId}`;
+      chain.observation = receipt(101, BLOCK_B, "reverted");
+      chain.anchoredError = new Error("new search outage");
+      expect(await stepOnce(sql, chain, safe, log)).toMatchObject({
+        to: "confirmed", reason: "duplicate_check_failed", waiting: true,
+      });
+      expect((await scheduleOf()).chain_search_failed_since!.getTime()).toBeGreaterThan(Date.now() - 10_000);
+    });
+
+    it("retains the recheck interval for a failed confirmed search beyond the watch", async () => {
+      await confirmedWithFailedSearch();
+      await sql`UPDATE chain.transactions SET updated_at = now() WHERE id = ${transactionId}`;
+      const delayed = { ...retrying, recheckIntervalMs: 60_000 };
+      expect(await stepOnce(sql, chain, delayed, log)).toMatchObject({ handled: false });
+      await sql`UPDATE chain.transactions SET updated_at = now() - interval '2 minutes' WHERE id = ${transactionId}`;
+      expect(await stepOnce(sql, chain, delayed, log)).toMatchObject({ transactionId, reason: "anchored_elsewhere_check_failed" });
+    });
+
+    it("clears a recovered confirmed search after its reorg watch and follows the anchor", async () => {
+      await confirmedWithFailedSearch();
+      chain.anchoredError = null;
+      chain.anchored = { root: ROOT, txHash: TX_HASH_2 };
+      const result = await stepOnce(sql, chain, retrying, log);
+      expect(result).toMatchObject({ transactionId, to: "submitted", reason: "anchored_by_another_transaction" });
+      expect(await scheduleOf()).toMatchObject({ chain_search_failed_since: null, retry_after: null });
     });
 
     it("starts the bound again once a search answers", async () => {

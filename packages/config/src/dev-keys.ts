@@ -52,12 +52,17 @@ export const ANVIL_DEV_ADDRESSES: readonly string[] = [
  * Addresses of committed fixture keys that are not anvil accounts, lowercase.
  *
  * - `config/local-secrets/scan_service_key`, also the Compose `SCAN_SERVICE_PRIVATE_KEY` default.
+ * - Repeated-byte 0x11 and 0x22 signing fixtures in API and anchor tests.
+ * - The 0xA11CE deployment-test signing fixture.
  *
  * (`config/local-secrets/anchor_signer_key` and the Compose and CI anchor signer are anvil
  * account 0, already above.)
  */
 export const COMMITTED_FIXTURE_ADDRESSES: readonly string[] = [
   "0xda519e0e438d9836dc7e9ca61117e43a9773b598",
+  "0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a",
+  "0x1563915e194d8cfba1943570603f7606a3115508",
+  "0xe05fcc23807536bee418f142d19fa0d21bb0cff7",
 ];
 
 export const PUBLIC_DEV_ADDRESSES: readonly string[] = [

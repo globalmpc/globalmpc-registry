@@ -264,6 +264,8 @@ explorer and offers the chain to wallets that lack it.
   The worker refuses to start when the endpoint does not answer the tag. If a later read of it
   fails, the row keeps its current state (`submitted`, `included`, or `confirmed` on a reorg-watch
   recheck) with `last_error = finality_read_failed` rather than confirming on depth.
+  Open-send receipt checks still record actual costs during head, finality-tag or nonce RPC
+  failures; only settlement based on a consumed nonce waits for safe nonce evidence.
 - **Log lookback.** When the chain holds a batch the worker has no hash for (a lost send result,
   a resubmission), it looks for the `RootSubmitted` log back to the block the batch was stored
   in, in 5,000-block `eth_getLogs` ranges, up to `ANCHOR_LOG_LOOKBACK_BLOCKS` (default: a day of
@@ -278,7 +280,13 @@ explorer and offers the chain to wallets that lack it.
   search that answers starts it again), it becomes `reconciliation_required` with
   `last_error = chain_search_unavailable` and raises `anchor.needs_attention` — typically an
   endpoint whose `eth_getLogs` range limit is below 5,000 blocks, which has pruned the history,
-  or which stays rate-limited. Point `CHAIN_RPC_URL` at one that serves the range, then resubmit.
+  or which stays rate-limited. Confirmed rows with an unresolved search remain eligible beyond
+  the ordinary reorg watch until recovery or give-up, respecting retry and recheck delays.
+  A successful search or valid receipt ends the consecutive search-failure period. If finality
+  is still unavailable, an independent `retry_after` schedule keeps the row eligible without
+  retaining an old search-failure start. Completed tracking clears that schedule, so an expired
+  watch then stops normally. Terminal transitions and manual resubmission reset both timers.
+  Point `CHAIN_RPC_URL` at one that serves the range, then resubmit.
 - **Receipts must show the root.** A successful receipt confirms only if it carries
   `RootSubmitted` for that batch and root from the contract recorded with the transaction's hash
   (the configured one only for rows recorded before the contract was stored). Otherwise — a Safe
