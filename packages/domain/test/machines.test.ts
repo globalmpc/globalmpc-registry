@@ -4,6 +4,7 @@ import {
   SUSPENDABLE_STATES,
   atLifecycleMachine,
   attestationMachine,
+  CHAIN_TX_STATES,
   chainTransactionMachine,
   disclosureRestrictionMachine,
   proposalMachine,
@@ -182,12 +183,18 @@ describe("Attestation — stale can be undone but revoke cannot", () => {
 });
 
 describe("Chain transaction — included is not success", () => {
-  it("cannot skip from submitted to confirmed", () => {
-    expect(canTransition(chainTransactionMachine, "submitted", "confirmed")).toBe(false);
+  it("nothing reaches confirmed without a mined, hashed state", () => {
+    // Confirmation needs depth and finality on a receipt (anchor-state); the table only allows the
+    // states that hold a hash to get there.
+    const toConfirmed = CHAIN_TX_STATES.filter((from) =>
+      canTransition(chainTransactionMachine, from, "confirmed"),
+    );
+    expect(toConfirmed.sort()).toEqual(["included", "submitted"]);
   });
 
-  it("included becomes confirmed after confirmation depth is met", () => {
-    expect(canTransition(chainTransactionMachine, "included", "confirmed")).toBe(true);
+  it("a Safe proposal is not a submission: it confirms only after execution is tracked", () => {
+    expect(canTransition(chainTransactionMachine, "proposed", "confirmed")).toBe(false);
+    expect(canTransition(chainTransactionMachine, "proposed", "submitted")).toBe(true);
   });
 
   it("confirmed can be reorged too", () => {
@@ -199,6 +206,43 @@ describe("Chain transaction — included is not success", () => {
     expect(canTransition(chainTransactionMachine, "reorged", "reconciliation_required")).toBe(
       true,
     );
+  });
+
+  // Every move the anchor worker and the API resubmission route write (anchor-submitter.ts,
+  // anchor-state.ts trackTransaction, routes/registry.ts). The table is documentation; this list
+  // keeps it from drifting from the code again.
+  it.each([
+    ["created", "submitted", "EOA send, or an earlier attempt's hash recovered from chain"],
+    ["created", "proposed", "Safe proposal uploaded"],
+    ["created", "failed", "no batch, or the attempt cap"],
+    ["created", "reconciliation_required", "on chain with another root or an unfound transaction"],
+    ["proposed", "submitted", "executed on the Safe"],
+    ["proposed", "failed", "rejected or replaced on the Safe"],
+    ["submitted", "included", "mined, short of depth or finality"],
+    ["submitted", "confirmed", "first observation already deep and final"],
+    ["submitted", "reverted", "receipt reverted"],
+    ["submitted", "dropped", "unknown past the drop timeout"],
+    ["submitted", "failed", "no hash recorded"],
+    ["submitted", "reconciliation_required", "receipt_without_root_submitted"],
+    ["included", "confirmed", "depth and finality met"],
+    ["included", "submitted", "back in the mempool, or following another transaction"],
+    ["included", "reverted", "receipt reverted"],
+    ["included", "reconciliation_required", "block disappeared, or no RootSubmitted"],
+    ["confirmed", "included", "re-observed short of depth or finality"],
+    ["confirmed", "submitted", "back in the mempool, or following during the reorg watch"],
+    ["confirmed", "reverted", "re-mined and reverted"],
+    ["confirmed", "reconciliation_required", "block disappeared, or no RootSubmitted"],
+    ["reverted", "created", "resubmitted by a person"],
+    ["dropped", "created", "resubmitted by a person"],
+    ["failed", "created", "resubmitted by a person"],
+    ["reconciliation_required", "created", "resubmitted by a person"],
+  ] as const)("%s → %s (%s)", (from, to, _why) => {
+    expect(canTransition(chainTransactionMachine, from, to)).toBe(true);
+  });
+
+  it("has every state of chain.transaction_state, including proposed", () => {
+    expect(CHAIN_TX_STATES).toContain("proposed");
+    expect(CHAIN_TX_STATES).toHaveLength(12);
   });
 });
 

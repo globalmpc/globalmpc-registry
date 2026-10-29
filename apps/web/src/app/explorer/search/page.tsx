@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { searchPublicRecords, type PublicSearchMatch, type PublicSearchResult } from "@/lib/api";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { GlobalSearchForm } from "@/components/GlobalSearchForm";
+import { ContractLink } from "@/components/ContractLink";
 import { TxLink } from "@/components/TxLink";
 
 /** Wallet address shape. Public records carry no submitter address, so it cannot be found this way. */
@@ -102,7 +103,28 @@ export default function PublicSearchPage() {
                       <td className="mono">{match.version}</td>
                       <td>
                         {result.kind === "hash" ? (
-                          <TxLink chainId={result.chainId} hash={match.transactionHash} />
+                          <>
+                            {/* The match's own stored chain. An earlier anchor stays on the chain it
+                                was sent on after the deployment moves; the top-level chain is only
+                                a fallback. */}
+                            <TxLink
+                              chainId={match.chainId !== undefined ? match.chainId : result.chainId}
+                              hash={match.transactionHash}
+                            />
+                            {/* The contract it was sent to, as stored. Shown only with a hash:
+                                there is no fallback, since the deployment's current contract may
+                                not be the one holding this root. */}
+                            {match.transactionHash ? (
+                              <div className="meta" data-testid="search-contract" style={{ marginTop: 4 }}>
+                                Contract{" "}
+                                <ContractLink
+                                  chainId={match.chainId !== undefined ? match.chainId : result.chainId}
+                                  address={match.contractAddress}
+                                  transactionHash={match.transactionHash}
+                                />
+                              </div>
+                            ) : null}
+                          </>
                         ) : (
                           <span className="meta">Open the record</span>
                         )}

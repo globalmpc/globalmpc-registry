@@ -201,3 +201,17 @@ export {
   type RequirementCounts,
   type TierSummary,
 } from "./document-requirements.js";
+
+export {
+  BSC_MAINNET_CHAIN_ID,
+  OPBNB_TESTNET_CHAIN_ID,
+  LOCAL_CHAIN_ID,
+  SUPPORTED_CHAIN_IDS,
+  CHAIN_LABELS,
+  EOA_ANCHOR_ELIGIBLE_CHAIN_IDS,
+  isSupportedChainId,
+  parseSupportedChainId,
+  isEoaAnchorEligibleChainId,
+  describeChains,
+  type SupportedChainId,
+} from "./chains.js";

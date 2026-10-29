@@ -805,7 +805,8 @@ describeDb("Registry publication and public lookup", () => {
       const batchId = await makeBatch();
       await fx.sql`
         UPDATE chain.transactions
-        SET state = 'dropped', attempts = 3, tx_hash = ${`0x${"ab".repeat(32)}`}
+        SET state = 'dropped', attempts = 3, tx_hash = ${`0x${"ab".repeat(32)}`},
+            contract_address = ${`0x${"a1".repeat(20)}`}
         WHERE batch_id = ${batchId}
       `;
 
@@ -813,9 +814,13 @@ describeDb("Registry publication and public lookup", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json().previousState).toBe("dropped");
 
-      const [row] = await fx.sql<{ state: string; attempts: number; tx_hash: string | null }[]>`
-        SELECT state, attempts, tx_hash FROM chain.transactions WHERE batch_id = ${batchId}
+      const [row] = await fx.sql<
+        { state: string; attempts: number; tx_hash: string | null; contract_address: string | null }[]
+      >`
+        SELECT state, attempts, tx_hash, contract_address FROM chain.transactions WHERE batch_id = ${batchId}
       `;
+      // The contract belonged to the cleared hash; the next send records its own.
+      expect(row!.contract_address).toBeNull();
       // A person checked the cause and decided, so it does not inherit the previous attempt cap.
       expect(row!.state).toBe("created");
       expect(row!.attempts).toBe(0);

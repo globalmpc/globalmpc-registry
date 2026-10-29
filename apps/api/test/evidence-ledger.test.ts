@@ -21,7 +21,7 @@ describeDb('computed ledger API and approved public boundary',()=>{
     const proposal=randomUUID();const payload={claimType,displayName:'Synthetic licence',description:null,definition:{fields:[{key:'number',label:'Number',type:'string',required:true}]}};
     await fx.sql.begin(async tx=>{
       await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${proposal},${fx.tenantA},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic test',now(),${fx.operatorSubjectA})`;
+        VALUES(${proposal},${fx.tenantA},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic test',${new Date(Date.now()-60_000)},${fx.operatorSubjectA})`;
       await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
         SELECT ${catalogId},tenant_id,item_key,1,'Synthetic licence',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic test only',materialized_id=${catalogId},version=2 WHERE id=${proposal}`;
@@ -81,15 +81,19 @@ describeDb('computed ledger API and approved public boundary',()=>{
       VALUES(${caseId},${fx.tenantA},${projectId},${fx.schemaA},'signed')`;
     await fx.sql`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id)
       VALUES(${assignmentId},${fx.tenantA},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
+    // The API evaluates at a millisecond JS asOf, while PostgreSQL now() has microseconds and can
+    // fall later in that millisecond. Effective dates are not the boundary under test here, so the
+    // signature and v1 policy use a known past time; v2 below stays strictly newer than v1.
+    const eligibleAt=new Date(Date.now()-60_000);
     await fx.sql`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
       evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
       VALUES(${attestationId},${fx.tenantA},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${[claimId]}::uuid[],
-      ${hash},'Licence number only; no legal validity opinion','{"status":"valid"}','1','1',${hash},${'0x'+'12'.repeat(65)},${fx.reviewerA.address},now(),'signed')`;
+      ${hash},'Licence number only; no legal validity opinion','{"status":"valid"}','1','1',${hash},${'0x'+'12'.repeat(65)},${fx.reviewerA.address},${eligibleAt},'signed')`;
     const definition={ruleSetId:'synthetic-ledger',version:'1.0.0',effectiveFrom:'2020-01-01T00:00:00Z',supersededBy:null,jurisdictionProfile:'MNG',gateId:'stage.exploration',retroactive:false,
       requirements:[{requirementId:'synthetic-licence',label:'Synthetic licence',appliesWhen:{op:'eq',path:'referenceStatus',value:'synthetic_test_project'},requiredClaimTypes:[claimType],minimumGrade:'verified',freshnessThresholdDays:null,requiredAttestations:['professional_signoff'],blockingConflictTypes:['contradiction'],notEvaluableWhen:{op:'never'},watchWhen:null},
         {requirementId:'inapplicable-licence',label:'Inapplicable synthetic licence',appliesWhen:{op:'never'},requiredClaimTypes:[claimType],minimumGrade:'verified',freshnessThresholdDays:null,requiredAttestations:[],blockingConflictTypes:[],notEvaluableWhen:{op:'never'},watchWhen:null}]};
     await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-      VALUES(${policyId},${fx.tenantA},'synthetic-ledger','1.0.0','stage.exploration','MNG',now(),${fx.sql.json(definition)},'effective')`;
+      VALUES(${policyId},${fx.tenantA},'synthetic-ledger','1.0.0','stage.exploration','MNG',${eligibleAt},${fx.sql.json(definition)},'effective')`;
     const assessed=await assess(projectId);expect(assessed.statusCode,assessed.body).toBe(200);
     const snapshot=assessed.json().snapshot;
     expect(snapshot.stages[0]).toMatchObject({reviewedItems:'1',requiredItems:'1'});
@@ -192,8 +196,11 @@ describeDb('computed ledger API and approved public boundary',()=>{
     expect(ignoredPublic.json().evidenceLedgerCurrent.warnings).toEqual([]);
     const nextPolicy=randomUUID();
     const nextDefinition={...definition,version:'2.0.0',requirements:definition.requirements.map(requirement=>({...requirement,requiredAttestations:['professional_signoff','legal_notarization']}))};
+    // Already effective at the next request's millisecond asOf, yet strictly newer than v1.
+    const nextEffectiveAt=new Date(Date.now()-1000);
+    expect(nextEffectiveAt.getTime()).toBeGreaterThan(eligibleAt.getTime());
     await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-      VALUES(${nextPolicy},${fx.tenantA},'synthetic-ledger','2.0.0','stage.exploration','MNG',now(),${fx.sql.json(nextDefinition)},'effective')`;
+      VALUES(${nextPolicy},${fx.tenantA},'synthetic-ledger','2.0.0','stage.exploration','MNG',${nextEffectiveAt},${fx.sql.json(nextDefinition)},'effective')`;
     const changedPolicy=await get(projectId);
     expect(changedPolicy.json().snapshot.currentStage).toBeNull();
     expect(changedPolicy.json().snapshot.stages[0].policySetId).toBe(nextPolicy);
@@ -319,7 +326,7 @@ describeDb('computed ledger API and approved public boundary',()=>{
     const proposal=randomUUID(),payload={claimType:otherType,displayName:'Unrelated synthetic evidence',description:null,definition:{fields:[]}};
     await fx.sql.begin(async tx=>{
       await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${proposal},${fx.tenantA},'claim_type',${otherType},1,${tx.json(payload)},'Synthetic test',now(),${fx.operatorSubjectA})`;
+        VALUES(${proposal},${fx.tenantA},'claim_type',${otherType},1,${tx.json(payload)},'Synthetic test',${new Date(Date.now()-60_000)},${fx.operatorSubjectA})`;
       await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
         SELECT ${otherCatalog},tenant_id,item_key,1,payload->>'displayName',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic test only',materialized_id=${otherCatalog},version=2 WHERE id=${proposal}`;
@@ -414,7 +421,7 @@ describeDb('computed ledger API and approved public boundary',()=>{
     const payload={claimType:newType,displayName:'New catalog requirement',description:null,definition:{fields:[]}};
     await fx.sql.begin(async tx=>{
     await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-      VALUES(${proposal},${fx.tenantA},'claim_type',${newType},1,${tx.json(payload)},'Synthetic test',now(),${fx.operatorSubjectA})`;
+      VALUES(${proposal},${fx.tenantA},'claim_type',${newType},1,${tx.json(payload)},'Synthetic test',${new Date(Date.now()-60_000)},${fx.operatorSubjectA})`;
     await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
       SELECT ${catalog},tenant_id,item_key,1,'New catalog requirement',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
     await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic test only',materialized_id=${catalog},version=2 WHERE id=${proposal}`;

@@ -3,6 +3,9 @@ src = "src"
 out = "out"
 libs = ["lib"]
 allow_paths = ["../node_modules"]
+# Read-only, one file: the deploy-script test checks its development address list against the
+# TypeScript one so the two refusals cannot drift apart.
+fs_permissions = [{ access = "read", path = "../packages/config/src/dev-keys.ts" }]
 test = "test"
 solc_version = "0.8.28"
 optimizer = true
@@ -20,8 +23,11 @@ runs = 512
 
 [profile.default.invariant]
 runs = 256
-depth = 32
+# 64 calls per run: shorter runs rarely built a supersede chain longer than two links, so the
+# chain rules were barely exercised.
+depth = 64
 fail_on_revert = false
 
 [rpc_endpoints]
 bsc = "${BSC_RPC_URL}"
+opbnb_testnet = "${OPBNB_TESTNET_RPC_URL}"

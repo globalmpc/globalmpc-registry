@@ -71,7 +71,8 @@ export async function registerAuthRoutes(
 
     // A token is issued only after the SIWE signature is verified. The raw token reaches the
     // client only here, once; the server stores only its hash.
-    const issued = await issueSessionToken(sql, session.walletAddress, session.chainId);
+    // Bound to this API's chain; the request hook accepts the token only on that chain.
+    const issued = await issueSessionToken(sql, session.walletAddress, config.chainId);
 
     /**
      * Sign-in is recorded — 02 §2.7, 10 §10.3. Who held a session when matters as much as what

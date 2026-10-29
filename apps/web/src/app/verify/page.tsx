@@ -1,5 +1,6 @@
 "use client";
 
+import { ContractLink } from "@/components/ContractLink";
 import { TxLink } from "@/components/TxLink";
 
 import { useState } from "react";
@@ -346,6 +347,16 @@ export default function ProofVerifierPage() {
                     above. This page does not make that comparison.
                   </div>
                 ) : null}
+              </dd>
+              <dt>Anchor contract</dt>
+              <dd data-testid="verify-contract">
+                {/* The stored contract. A later version lives at a new address, so the root is
+                    read from this one, not from whichever contract the deployment uses now. */}
+                <ContractLink
+                  chainId={outcome.proof.chainId}
+                  address={outcome.proof.contractAddress}
+                  transactionHash={outcome.proof.transactionHash}
+                />
               </dd>
             </dl>
 

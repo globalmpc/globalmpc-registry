@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { EvidenceLedger, EvidenceLedgerWarnings } from "./EvidenceLedger";
 import type { LedgerSummary, LedgerCurrent } from "@/lib/evidence-ledger-api";
+import { ContractLink } from "@/components/ContractLink";
 import { TxLink } from "@/components/TxLink";
 import {
   getInclusionProof,
@@ -262,6 +263,14 @@ export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
                 <dt>Transaction</dt>
                 <dd>
                   <TxLink chainId={proof.chainId} hash={proof.transactionHash} />
+                </dd>
+                <dt>Anchor contract</dt>
+                <dd data-testid="proof-contract">
+                  <ContractLink
+                    chainId={proof.chainId}
+                    address={proof.contractAddress}
+                    transactionHash={proof.transactionHash}
+                  />
                 </dd>
               </dl>
 

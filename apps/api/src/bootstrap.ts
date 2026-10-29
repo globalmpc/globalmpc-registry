@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { ROLE_MINIMUM_ASSURANCE, satisfiesAssurance } from "@mpc/api-contract";
 import type { AssuranceLevel } from "@mpc/api-contract";
+import { isPublicDevAddress } from "@mpc/config";
+import { describeChains, isSupportedChainId, LOCAL_CHAIN_ID, SUPPORTED_CHAIN_IDS } from "@mpc/domain";
 
 /**
  * Operational bootstrap — inserts the first person into a deployed system.
@@ -39,7 +41,7 @@ export interface BootstrapInput {
   readonly jurisdiction: string;
   readonly subjectName: string;
   readonly walletAddress: string;
-  /** 56 (BSC mainnet) or 31337 (local chain). */
+  /** A chain the API accepts — 56 (BSC mainnet), 5611 (opBNB testnet), or 31337 (local chain). */
   readonly chainId: number;
   readonly role: string;
   readonly assuranceLevel: AssuranceLevel;
@@ -89,9 +91,17 @@ function validate(input: BootstrapInput): { walletAddress: string } {
     throw new BootstrapError(`walletAddress is malformed — ${input.walletAddress}`);
   }
 
-  // The API accepts only 56 and 31337. A wallet bound to another chain cannot log in.
-  if (input.chainId !== 56 && input.chainId !== 31337) {
-    throw new BootstrapError("chainId must be 56 (BSC mainnet) or 31337 (local chain)");
+  // The API accepts only the supported chains. A wallet bound to another chain cannot log in.
+  if (!isSupportedChainId(input.chainId)) {
+    throw new BootstrapError(`chainId must be one of ${describeChains(SUPPORTED_CHAIN_IDS)}`);
+  }
+
+  // Anyone can sign as a public development address (anvil/hardhat or a committed fixture), so
+  // on a shared chain it would hand the first operator's role to whoever tries it first.
+  if (input.chainId !== LOCAL_CHAIN_ID && isPublicDevAddress(walletAddress)) {
+    throw new BootstrapError(
+      `walletAddress is a public development address (anvil/hardhat or a committed fixture); bind a freshly generated wallet on chain ${input.chainId}`,
+    );
   }
 
   const required = ROLE_MINIMUM_ASSURANCE[input.role];

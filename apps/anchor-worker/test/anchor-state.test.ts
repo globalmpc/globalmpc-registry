@@ -18,6 +18,7 @@ function track(overrides: Partial<TrackInput> = {}) {
     observation: { kind: "pending" },
     headBlockNumber: 100,
     confirmationDepth: 12,
+    finalizedBlockNumber: null,
     elapsedSinceSubmitMs: 0,
     dropTimeoutMs: 10 * 60 * 1000,
   };
@@ -35,6 +36,8 @@ const receipt = (
   blockHash,
   gasUsed: 100_000n,
   effectiveGasPrice: 1_000_000_000n,
+  l1Fee: 0n,
+  rootSubmissions: [],
 });
 
 describe("confirmations calculation", () => {
@@ -66,6 +69,42 @@ describe("finality judgment", () => {
     // public proof presents a state that can still disappear (included) as true.
     const result = track({ observation: receipt(100, BLOCK_A), headBlockNumber: 100 });
     expect(result.nextState).not.toBe("confirmed");
+  });
+});
+
+describe("finality tag", () => {
+  // opBNB: 12 blocks deep is 3 s; the safe head trails the head by ~50 blocks.
+  const deep = { observation: receipt(100, BLOCK_A), headBlockNumber: 150 };
+
+  it("is not confirmed past the depth while the block is above the finalized head", () => {
+    const result = track({ ...deep, finalizedBlockNumber: 99 });
+    expect(result).toMatchObject({ nextState: "included", reason: "awaiting_finality", confirmations: 51 });
+  });
+
+  it("is confirmed once the block is at or below the finalized head and deep enough", () => {
+    expect(track({ ...deep, finalizedBlockNumber: 100 }).nextState).toBe("confirmed");
+    expect(track({ ...deep, finalizedBlockNumber: 140 }).nextState).toBe("confirmed");
+  });
+
+  it("still needs the depth when the finalized head is already past the block", () => {
+    // ANCHOR_CONFIRMATIONS stays a floor: a node whose tag runs ahead does not lower it.
+    const result = track({ observation: receipt(100, BLOCK_A), headBlockNumber: 105, finalizedBlockNumber: 105 });
+    expect(result).toMatchObject({ nextState: "included", reason: "included" });
+  });
+
+  it("uses depth alone when the tag is none", () => {
+    expect(track({ ...deep, finalizedBlockNumber: null }).nextState).toBe("confirmed");
+  });
+
+  it("returns a confirmed transaction to included if the finalized head falls below its block", () => {
+    const result = track({
+      ...deep,
+      state: "confirmed",
+      recordedBlockNumber: 100,
+      recordedBlockHash: BLOCK_A,
+      finalizedBlockNumber: 90,
+    });
+    expect(result.nextState).toBe("included");
   });
 });
 
@@ -194,6 +233,7 @@ describe("submission safety check (O1)", () => {
     inFlightMaxWei: 0n,
     // Small enough that one send at the fee cap (1e14) fits the cap, as a sized cap always does.
     gasLimit: 1_000n,
+    l1FeeBoundWei: 0n,
   };
   /** The most this submission can burn: gas limit × the 1 gwei quote = 1e12 wei. */
   const thisSendMax = 1_000n * 1_000_000_000n;
@@ -207,6 +247,24 @@ describe("submission safety check (O1)", () => {
     // that design would be pointless.
     const result = checkSubmitAllowed({ ...base, chainId: 56 });
     expect(result.allow).toBe(false);
+  });
+
+  it("submits via EOA on the opBNB testnet only when it is listed", () => {
+    expect(checkSubmitAllowed({ ...base, chainId: 5611, eoaAllowedChainIds: [31337, 5611] })).toEqual({
+      allow: true,
+      via: "eoa",
+    });
+    // The default list is the local chain alone; the testnet then takes the Safe path or nothing.
+    expect(checkSubmitAllowed({ ...base, chainId: 5611 }).allow).toBe(false);
+  });
+
+  it("never submits via EOA on mainnet, even when a list reaching the guard names it", () => {
+    // Startup refuses 56 in ANCHOR_EOA_CHAIN_IDS; this is the second line if that check is bypassed.
+    const safe = `0x${"ab".repeat(20)}`;
+    expect(checkSubmitAllowed({ ...base, chainId: 56, eoaAllowedChainIds: [56] }).allow).toBe(false);
+    expect(
+      checkSubmitAllowed({ ...base, chainId: 56, eoaAllowedChainIds: [56], safeAddress: safe }),
+    ).toEqual({ allow: true, via: "safe_proposal" });
   });
 
   it("only creates a proposal on mainnet with a Safe", () => {
@@ -283,6 +341,65 @@ describe("submission safety check (O1)", () => {
   it("blocks even when already over the cap", () => {
     const result = checkSubmitAllowed({ ...base, spentTodayWei: 5_000_000_000_000_000n });
     expect(result).toEqual({ allow: false, reason: "DAILY_SPEND_CAP_REACHED" });
+  });
+
+  it("counts this submission's reserved L1 data fee", () => {
+    // The fee is charged on top of gas on OP-stack chains, so gas limit × fee no longer bounds
+    // the send: exactly at the cap with gas alone, one wei of L1 fee is over it.
+    const atCap = { ...base, dailySpendCapWei: thisSendMax };
+    expect(checkSubmitAllowed(atCap)).toEqual({ allow: true, via: "eoa" });
+    expect(checkSubmitAllowed({ ...atCap, l1FeeBoundWei: 1n })).toEqual({
+      allow: false,
+      reason: "DAILY_SPEND_CAP_REACHED",
+    });
+  });
+
+  it("requires two gas and L1 reservations at the inclusive retry minimum", () => {
+    const l1FeeBoundWei = 70n;
+    const minimum = 2n * (base.gasLimit * base.feeCapWei + l1FeeBoundWei);
+    const opbnb = { ...base, chainId: 5611, eoaAllowedChainIds: [5611], l1FeeBoundWei };
+    expect(checkSubmitAllowed({ ...opbnb, dailySpendCapWei: minimum - 1n })).toEqual({
+      allow: false,
+      reason: "DAILY_SPEND_CAP_TOO_LOW_FOR_RETRY",
+    });
+    expect(checkSubmitAllowed({ ...opbnb, dailySpendCapWei: minimum })).toEqual({
+      allow: true,
+      via: "eoa",
+    });
+    expect(checkSubmitAllowed({ ...opbnb, dailySpendCapWei: minimum - 1n, attempts: base.maxAttempts })).toEqual({
+      allow: false,
+      reason: "MAX_ATTEMPTS_REACHED",
+    });
+    expect(checkSubmitAllowed({ ...opbnb, dailySpendCapWei: minimum - 1n, maxFeePerGas: base.feeCapWei + 1n })).toEqual({
+      allow: false,
+      reason: "FEE_ABOVE_CAP",
+    });
+    expect(checkSubmitAllowed({ ...opbnb, dailySpendCapWei: minimum - 1n, safeAddress: "0xsafe", eoaAllowedChainIds: [] })).toEqual({
+      allow: true,
+      via: "safe_proposal",
+    });
+  });
+
+  it("counts spent and open costs when preserving one additional retry reservation", () => {
+    const l1FeeBoundWei = 70n;
+    const reserve = base.gasLimit * base.feeCapWei + l1FeeBoundWei;
+    const input = { ...base, maxFeePerGas: base.feeCapWei, l1FeeBoundWei, dailySpendCapWei: 2n * reserve };
+    expect(checkSubmitAllowed({ ...input, spentTodayWei: 1n })).toEqual({
+      allow: false, reason: "DAILY_SPEND_CAP_TOO_LOW_FOR_RETRY",
+    });
+    expect(checkSubmitAllowed({ ...input, inFlightMaxWei: reserve })).toEqual({
+      allow: false, reason: "DAILY_SPEND_CAP_TOO_LOW_FOR_RETRY",
+    });
+    expect(checkSubmitAllowed({ ...input, inFlightMaxWei: reserve, retryReservationWei: reserve })).toEqual({
+      allow: true, via: "eoa",
+    });
+    // Matching identity affects only extra headroom; its old reservation still counts in full.
+    expect(checkSubmitAllowed({ ...input, spentTodayWei: 1n, inFlightMaxWei: reserve, retryReservationWei: reserve })).toEqual({
+      allow: false, reason: "DAILY_SPEND_CAP_REACHED",
+    });
+    expect(checkSubmitAllowed({ ...input, inFlightMaxWei: reserve, retryReservationWei: reserve - 1n })).toEqual({
+      allow: false, reason: "DAILY_SPEND_CAP_TOO_LOW_FOR_RETRY",
+    });
   });
 
   it("the daily cap is judged before the gas cap", () => {

@@ -5,6 +5,7 @@ import {
   ATTESTATION_TYPES,
   GATE_DECISIONS,
   GRADES,
+  isSupportedChainId,
   READINESS_STATUSES,
   SOURCE_RESULTS,
 } from "@mpc/domain";
@@ -1133,7 +1134,19 @@ export const inclusionProofResponse = z.object({
   proof: z.array(hex32),
   root: hex32,
   batchId: hex32,
-  chainId: z.number().int().positive(),
+  /**
+   * Chain the anchoring transaction was sent on — the stored value, frozen with the anchor, not
+   * this deployment's current chain. Null, like `transactionHash`, until the transaction has a
+   * hash: a batch nobody has sent is on no chain yet, even if a chain is queued for it.
+   */
+  chainId: z.number().int().positive().nullable(),
+  /**
+   * Contract the anchoring transaction was sent to, as stored with it (lowercase). An anchor is
+   * identified by chain, contract and batch id: a new contract version is deployed at a new
+   * address, so ask this contract for the root. Null whenever `chainId` is null, and for an
+   * anchor recorded before the contract was stored — never filled in from current configuration.
+   */
+  contractAddress: walletAddress.nullable(),
   transactionHash: hex32.nullable(),
   blockNumber: z.number().int().nonnegative().nullable(),
   confirmationState: z.enum([
@@ -1441,6 +1454,10 @@ export const publicSearchQuery = z
 
 export const publicSearchResult = z.object({
   query: z.string(),
+  /**
+   * This deployment's chain. A hash match carries the chain its transaction was actually sent on
+   * (`matches[].chainId`); link with that, and fall back to this only when a match has none.
+   */
   chainId: z.number().int().positive(),
   kind: z.enum(["hash", "text"]),
   matches: z.array(
@@ -1460,6 +1477,17 @@ export const publicSearchResult = z.object({
       status: z.string(),
       merkleRoot: z.string().nullable(),
       transactionHash: z.string().nullable(),
+      /**
+       * Chain `transactionHash` was sent on, as stored with the transaction. Present on hash
+       * matches (null until the transaction has a hash); text matches carry none and omit it.
+       */
+      chainId: z.number().int().positive().nullable().optional(),
+      /**
+       * Contract `transactionHash` was sent to, as stored with the transaction (lowercase). Present
+       * on hash matches; null whenever `chainId` is null and for an anchor recorded before the
+       * contract was stored. Text matches omit it.
+       */
+      contractAddress: walletAddress.nullable().optional(),
     }),
   ),
   requestId: z.string(),
@@ -1607,7 +1635,7 @@ export const createSubjectRequest = z.object({
  */
 export const bindWalletRequest = z.object({
   walletAddress: walletAddress,
-  chainId: z.number().int().refine((value) => value === 56 || value === 31337),
+  chainId: z.number().int().refine((value) => isSupportedChainId(value)),
   assuranceLevel: z.enum(["wallet_only", "identity_bound", "high_assurance"]),
   justification: z.string().trim().min(1).max(1000),
 });

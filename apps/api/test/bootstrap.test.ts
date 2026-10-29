@@ -124,9 +124,21 @@ describeDb("production bootstrap", () => {
     ).rejects.toThrow(BootstrapError);
   });
 
-  it("rejects a chain other than BSC mainnet and the local chain", async () => {
-    await expect(bootstrapOperator(fx.sql, input({ chainId: 1 }))).rejects.toThrow(BootstrapError);
-    await expect(bootstrapOperator(fx.sql, input({ chainId: 97 }))).rejects.toThrow(BootstrapError);
+  it("binds the wallet on each chain the API runs on, including the opBNB testnet", async () => {
+    for (const chainId of [56, 5611, 31337]) {
+      const result = await bootstrapOperator(fx.sql, input({ chainId }));
+      const [row] = await fx.sql<{ chain_id: number }[]>`
+        SELECT chain_id FROM core.wallet_identities WHERE subject_id = ${result.subjectId}`;
+      expect(row?.chain_id, String(chainId)).toBe(chainId);
+    }
+  });
+
+  it("rejects a chain the API does not run on", async () => {
+    for (const chainId of [1, 97, 204]) {
+      await expect(bootstrapOperator(fx.sql, input({ chainId })), String(chainId)).rejects.toThrow(
+        BootstrapError,
+      );
+    }
   });
 
   it("rejects a wallet already bound to another tenant", async () => {

@@ -1,6 +1,7 @@
 import { privateKeyToAccount } from "viem/accounts";
 import { createSiweMessage } from "viem/siwe";
 import type { Hex } from "viem";
+import { assertNotDevKey } from "@mpc/config";
 
 /**
  * Worker → API client.
@@ -53,6 +54,9 @@ export function createApiClient(
   fetchImpl: typeof fetch = fetch,
 ): ApiClient {
   const account = privateKeyToAccount(options.privateKey);
+  // This key is a login identity. A public anvil key on a shared chain lets anyone who knows the
+  // mnemonic log in as the scan service and report uploads clean.
+  assertNotDevKey("SCAN_SERVICE_PRIVATE_KEY", account.address, options.chainId);
   const walletAddress = account.address.toLowerCase();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let token: string | null = null;

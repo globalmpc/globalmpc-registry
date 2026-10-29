@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { generatePrivateKey } from "viem/accounts";
 import { createApiClient } from "../src/api-client.js";
 
 /**
@@ -113,3 +114,22 @@ it.each(["nonce", "verify", "target"])(
     });
   },
 );
+
+describe("service identity key", () => {
+  // anvil/hardhat account 1 — the key above. Public, so it may sign in only on the local chain.
+  it("accepts a public development key on the local chain", () => {
+    expect(createApiClient(options).walletAddress).toBe("0x70997970c51812dc3a010c7d01b50e0d17dc79c8");
+  });
+
+  it("refuses a public development key on a shared chain", () => {
+    expect(() => createApiClient({ ...options, chainId: 5611 })).toThrowError(
+      /^SCAN_SERVICE_PRIVATE_KEY is a public development key \(anvil\/hardhat or a committed fixture\)/,
+    );
+  });
+
+  it("accepts a freshly generated key on the testnet", () => {
+    expect(() =>
+      createApiClient({ ...options, chainId: 5611, privateKey: generatePrivateKey() }),
+    ).not.toThrow();
+  });
+});

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { fingerprintSecret, parseSecretReference, resolveSecret } from "@mpc/config";
 import type { SecretAudit } from "@mpc/config";
+import { describeChains, isSupportedChainId, SUPPORTED_CHAIN_IDS } from "@mpc/domain";
 
 /**
  * Environment variables are validated once at startup.
@@ -26,11 +27,16 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1),
   SIWE_DOMAIN: z.string().min(1),
   SIWE_URI: z.string().url(),
-  // Only BSC mainnet 56 and the local development chain 31337 are allowed. Anchoring on another
-  // chain splits the Explorer's verification path.
-  CHAIN_ID: z.coerce.number().refine((value) => value === 56 || value === 31337, {
-    message: "CHAIN_ID must be 56 (BSC mainnet) or 31337 (local chain)",
-  }),
+  // Only BSC mainnet 56, the opBNB testnet 5611 for the dev deployment, and the local chain 31337
+  // are allowed (`@mpc/domain` chains). Anchoring on another chain splits the Explorer's
+  // verification path. Plain digits only, as in the anchor worker: coercion would also read
+  // "0x15eb", " 56 " or "5.611e3" as a chain, and the two must agree on what a value means.
+  CHAIN_ID: z
+    .string()
+    .transform((raw) => (/^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN))
+    .refine((value) => isSupportedChainId(value), {
+      message: `CHAIN_ID must be one of ${describeChains(SUPPORTED_CHAIN_IDS)}`,
+    }),
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 

@@ -136,6 +136,8 @@ it("validates bootstrap variables before opening a connection", async () => {
 });
 it("bootstraps an operator with explicit defaults and emits only public identifiers", async () => {
   bootstrapEnv();
+  vi.stubEnv("BOOTSTRAP_CHAIN_ID", "");
+  vi.stubEnv("CHAIN_ID", "");
   await import("../src/bootstrap-cli.js");
   expect(s.bootstrap).toHaveBeenCalledWith(
     s.sql,
@@ -151,6 +153,26 @@ it("bootstraps an operator with explicit defaults and emits only public identifi
     expect.stringContaining('"wallet":"0xabcdef"'),
   );
   expect(s.sql.end).toHaveBeenCalledOnce();
+});
+it("binds the first wallet on the API's chain when no bootstrap chain is given", async () => {
+  // A 5611 deployment that bound its operator to 31337 would leave nobody able to log in.
+  bootstrapEnv();
+  vi.stubEnv("BOOTSTRAP_CHAIN_ID", "");
+  vi.stubEnv("CHAIN_ID", "5611");
+  await import("../src/bootstrap-cli.js");
+  expect(s.bootstrap).toHaveBeenCalledWith(s.sql, expect.objectContaining({ chainId: 5611 }));
+});
+it("prefers an explicit bootstrap chain, and passes a non-digit value on to be refused", async () => {
+  bootstrapEnv();
+  vi.stubEnv("CHAIN_ID", "5611");
+  vi.stubEnv("BOOTSTRAP_CHAIN_ID", "56");
+  await import("../src/bootstrap-cli.js");
+  expect(s.bootstrap).toHaveBeenLastCalledWith(s.sql, expect.objectContaining({ chainId: 56 }));
+
+  vi.resetModules();
+  vi.stubEnv("BOOTSTRAP_CHAIN_ID", "0x15eb");
+  await import("../src/bootstrap-cli.js");
+  expect(s.bootstrap).toHaveBeenLastCalledWith(s.sql, expect.objectContaining({ chainId: Number.NaN }));
 });
 it("reports bootstrap failure and closes its connection", async () => {
   bootstrapEnv();

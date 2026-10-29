@@ -258,7 +258,12 @@ export async function registerPublicRoutes(
         proof: proof.proof,
         root: proof.root,
         batchId: proof.batchId,
-        chainId: config.chainId,
+        // The chain the anchor was sent on, as stored. Answering with this deployment's
+        // CHAIN_ID would move earlier anchors to whatever chain the deployment runs on now.
+        chainId: proof.chainId,
+        // The contract holding the root, as stored with the transaction — never this
+        // deployment's configured contract, which a later version replaces at a new address.
+        contractAddress: proof.contractAddress,
         transactionHash: proof.transactionHash,
         blockNumber: proof.blockNumber,
         confirmationState: proof.confirmationState,
@@ -283,7 +288,8 @@ export async function registerPublicRoutes(
   app.get("/api/v1/public/search", async (request, reply) => {
     const { q } = parseQuery(publicSearchQuery, request.query);
     reply.header("cache-control", "public, max-age=30");
-    // chainId lets the UI link a transaction hash to that chain's explorer.
+    // This deployment's chain. Each hash match carries the chain its own transaction was sent on,
+    // which is the one to link with.
     const base = {
       query: q,
       chainId: config.chainId,
@@ -304,6 +310,8 @@ export async function registerPublicRoutes(
           status: string;
           merkle_root: string;
           transaction_hash: string | null;
+          chain_id: number | null;
+          contract_address: string | null;
         }[]
       >`SELECT * FROM core.public_hash_lookup(${lowered})`;
 
@@ -320,6 +328,8 @@ export async function registerPublicRoutes(
             status: row.status,
             merkleRoot: row.merkle_root,
             transactionHash: row.transaction_hash,
+            chainId: row.chain_id,
+            contractAddress: row.contract_address,
           }),
         ),
       };

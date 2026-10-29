@@ -66,10 +66,17 @@ describe("loadConfig", () => {
     );
   });
 
-  it("accepts only BSC mainnet and the local chain", () => {
-    expect(() => loadConfig({ ...VALID, CHAIN_ID: "1" })).toThrowError(/CHAIN_ID/);
-    expect(() => loadConfig({ ...VALID, CHAIN_ID: "97" })).toThrowError(/CHAIN_ID/);
+  it("accepts only BSC mainnet, the opBNB testnet, and the local chain", () => {
+    // 97 (BSC testnet) and 204 (opBNB mainnet) are near misses for the networks that are allowed.
+    for (const value of ["1", "97", "204"]) {
+      expect(() => loadConfig({ ...VALID, CHAIN_ID: value }), value).toThrowError(/CHAIN_ID/);
+    }
     expect(loadConfig({ ...VALID, CHAIN_ID: "56" }).chainId).toBe(56);
+    expect(loadConfig({ ...VALID, CHAIN_ID: "5611" }).chainId).toBe(5611);
+    // Number() reads each of these as a supported chain; only plain digits name one.
+    for (const value of ["0x15eb", " 56 ", "5.611e3"]) {
+      expect(() => loadConfig({ ...VALID, CHAIN_ID: value }), value).toThrowError(/CHAIN_ID/);
+    }
     expect(loadConfig({ ...VALID, CHAIN_ID: "31337" }).chainId).toBe(31337);
   });
 
