@@ -52,6 +52,9 @@ importers:
       '@mpc/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@mpc/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
@@ -133,6 +136,9 @@ importers:
       '@mpc/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@mpc/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@mpc/storage':
         specifier: workspace:*
         version: link:../../packages/storage

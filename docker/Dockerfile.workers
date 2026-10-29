@@ -7,6 +7,9 @@ WORKDIR /repo
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable pnpm && corepack prepare pnpm@10.33.0 --activate
 COPY . .
+# COPY keeps host file modes; a checkout under umask 077 would leave the deployed tree unreadable
+# by `mpc`. Normalize before deploy (docker/Dockerfile explains the same step).
+RUN chmod -R a+rX,go-w .
 ARG WORKER
 RUN case "$WORKER" in jobs-worker|anchor-worker|scan-worker) ;; *) exit 1 ;; esac
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \

@@ -1,6 +1,22 @@
 import type { Hex } from "viem";
-import { resolveSecret } from "@mpc/config";
+import { privateKeyToAccount } from "viem/accounts";
+import { assertNotDevKey, resolveSecret } from "@mpc/config";
+import {
+  describeChains,
+  EOA_ANCHOR_ELIGIBLE_CHAIN_IDS,
+  isEoaAnchorEligibleChainId,
+  isSupportedChainId,
+  LOCAL_CHAIN_ID,
+  SUPPORTED_CHAIN_IDS,
+} from "@mpc/domain";
 import type { SubmitterConfig } from "./anchor-submitter.js";
+import {
+  defaultFinalityTag,
+  defaultLogLookbackBlocks,
+  FINALITY_TAGS,
+  isFinalityTag,
+  type FinalityTag,
+} from "./chain-profile.js";
 
 /**
  * Anchor worker configuration.
@@ -33,6 +49,10 @@ export interface AnchorEnv {
   readonly SAFE_SERVICE_URL?: string;
   readonly ANCHOR_RECHECK_MS?: string;
   readonly ANCHOR_GAS_LIMIT?: string;
+  readonly ANCHOR_FINALITY_TAG?: string;
+  readonly ANCHOR_LOG_LOOKBACK_BLOCKS?: string;
+  readonly ANCHOR_CHAIN_SEARCH_RETRY_MS?: string;
+  readonly ANCHOR_CHAIN_SEARCH_GIVE_UP_MS?: string;
 }
 
 export interface AnchorConfig extends SubmitterConfig {
@@ -40,13 +60,9 @@ export interface AnchorConfig extends SubmitterConfig {
   readonly rpcUrl: string;
   readonly signerPrivateKey: Hex;
   readonly pollIntervalMs: number;
+  /** Blocks searched back for a `RootSubmitted` log. */
+  readonly logLookbackBlocks: number;
 }
-
-/**
- * The local development chain (anvil/hardhat). The only chain where the worker may sign alone —
- * the API accepts 56 and this one (`apps/api/src/config.ts`).
- */
-const LOCAL_CHAIN_ID = 31337;
 
 function required(env: AnchorEnv, key: keyof AnchorEnv): string {
   const value = env[key];
@@ -88,8 +104,24 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
     throw new Error("ANCHOR_SIGNER_PRIVATE_KEY has an invalid format");
   }
 
-  const chainId = Number(required(env, "CHAIN_ID"));
-  if (!Number.isInteger(chainId) || chainId <= 0) throw new Error("CHAIN_ID is invalid");
+  // The same chains the API accepts. A worker anchoring on any other chain writes roots the API
+  // and Explorer never look for, so it refuses startup instead of running unnoticed. Plain digits
+  // only, like ANCHOR_EOA_CHAIN_IDS: `Number()` would also read "0x38" or " 56 " as a chain.
+  const chainIdRaw = required(env, "CHAIN_ID");
+  const chainId = /^[0-9]+$/.test(chainIdRaw) ? Number(chainIdRaw) : Number.NaN;
+  if (!isSupportedChainId(chainId)) {
+    throw new Error(`CHAIN_ID must be one of ${describeChains(SUPPORTED_CHAIN_IDS)}`);
+  }
+
+  // A public anvil key on a shared chain lets anyone who knows the mnemonic anchor as this worker.
+  let signer: string;
+  try {
+    signer = privateKeyToAccount(signerPrivateKey as Hex).address;
+  } catch {
+    // Out of the curve's range. The library's error is not passed on — it may quote the input.
+    throw new Error("ANCHOR_SIGNER_PRIVATE_KEY is not a valid secp256k1 key");
+  }
+  assertNotDevKey("ANCHOR_SIGNER_PRIVATE_KEY", signer, chainId);
 
   const confirmationDepth = Number(env.ANCHOR_CONFIRMATIONS ?? "12");
   if (!Number.isInteger(confirmationDepth) || confirmationDepth < 1) {
@@ -97,14 +129,18 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
     throw new Error("ANCHOR_CONFIRMATIONS must be at least 1");
   }
 
+  const finalityTag = loadFinalityTag(env, chainId);
+
   const feeCapGwei = Number(env.ANCHOR_FEE_CAP_GWEI ?? "100");
   if (!(feeCapGwei > 0)) throw new Error("ANCHOR_FEE_CAP_GWEI must be greater than 0");
 
   const dailySpendCapWei = loadDailySpendCap(env);
 
-  // Solo EOA submission is for the local chain only. On any other chain the Safe multisig holds
-  // the submitter role, and a setting must not be able to open a path around it — so listing a
-  // non-local chain refuses startup instead of relying on the default.
+  // Solo EOA submission is for the local chain and, by explicit opt-in, the opBNB testnet. On
+  // mainnet the Safe multisig holds the submitter role, and a setting must not be able to open a
+  // path around it — so listing any other chain refuses startup instead of relying on the
+  // default. The default stays the local chain alone: a testnet signer is a funded key, and
+  // enabling it is the operator's decision.
   const eoaAllowedChainIds = (env.ANCHOR_EOA_CHAIN_IDS ?? String(LOCAL_CHAIN_ID))
     .split(",")
     .map((value) => value.trim())
@@ -112,9 +148,9 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
     .map((value) => {
       if (!/^[0-9]+$/.test(value)) throw new Error("ANCHOR_EOA_CHAIN_IDS has an invalid chain id");
       const id = Number(value);
-      if (id !== LOCAL_CHAIN_ID) {
+      if (!isEoaAnchorEligibleChainId(id)) {
         throw new Error(
-          `ANCHOR_EOA_CHAIN_IDS may list only the local chain ${LOCAL_CHAIN_ID}; chain ${id} anchors through the Safe`,
+          `ANCHOR_EOA_CHAIN_IDS may list only ${EOA_ANCHOR_ELIGIBLE_CHAIN_IDS.join(", ")}; chain ${id} anchors through the Safe`,
         );
       }
       return id;
@@ -154,12 +190,34 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
     maxAttempts: positiveInteger(env, "ANCHOR_MAX_ATTEMPTS", 3),
     dropTimeoutMs: positiveInteger(env, "ANCHOR_DROP_TIMEOUT_MS", 10 * 60 * 1000),
     pollIntervalMs: positiveInteger(env, "ANCHOR_POLL_MS", 2000),
+    finalityTag,
+    logLookbackBlocks: positiveInteger(env, "ANCHOR_LOG_LOOKBACK_BLOCKS", defaultLogLookbackBlocks(chainId)),
     eoaAllowedChainIds,
     safeAddress,
     reorgWatchMs: positiveInteger(env, "ANCHOR_REORG_WATCH_MS", 30 * 60 * 1000),
     recheckIntervalMs: positiveInteger(env, "ANCHOR_RECHECK_MS", 15000),
+    // A minute apart for an hour: long enough for a rate limit or a lagging node to clear,
+    // short enough that a provider that can never answer reaches a person the same hour.
+    chainSearchRetryMs: positiveInteger(env, "ANCHOR_CHAIN_SEARCH_RETRY_MS", 60 * 1000),
+    chainSearchGiveUpMs: positiveInteger(env, "ANCHOR_CHAIN_SEARCH_GIVE_UP_MS", 60 * 60 * 1000),
     gasLimit,
   };
+}
+
+/**
+ * `ANCHOR_FINALITY_TAG` — the block tag a receipt must also be at or below before `confirmed`.
+ *
+ * Unset or empty takes the chain's default: `safe` on shared chains, `none` on the local chain.
+ * Anything else but the three names refuses startup: a typo read as `none` would quietly confirm
+ * on depth alone, which on opBNB is 3 s.
+ */
+function loadFinalityTag(env: AnchorEnv, chainId: number): FinalityTag {
+  const raw = env.ANCHOR_FINALITY_TAG;
+  if (raw === undefined || raw === "") return defaultFinalityTag(chainId);
+  if (!isFinalityTag(raw)) {
+    throw new Error(`ANCHOR_FINALITY_TAG must be one of ${FINALITY_TAGS.join(", ")}`);
+  }
+  return raw;
 }
 
 function loadDailySpendCap(env: AnchorEnv): bigint {
@@ -181,4 +239,45 @@ function loadDailySpendCap(env: AnchorEnv): bigint {
     throw new Error("ANCHOR_DAILY_SPEND_CAP_WEI must be greater than 0");
   }
   return dailySpendCapWei;
+}
+
+/**
+ * Refusal message when the RPC endpoint serves another chain than `CHAIN_ID`, or null.
+ *
+ * The worker signs with `CHAIN_ID` and records rows under it. Pointed at another chain's node it
+ * would anchor where nobody verifies, or fail every send with no stated cause. The message carries
+ * no URL: hosted endpoints put their API key in it.
+ */
+export function rpcChainMismatch(expected: number, reported: number): string | null {
+  return reported === expected
+    ? null
+    : `CHAIN_RPC_URL serves chain ${reported}, but CHAIN_ID is ${expected}; refusing to start`;
+}
+
+/**
+ * Refusal message when `ANCHOR_CONTRACT_ADDRESS` holds no code on the chain, or null. Like the
+ * chain check, it names no URL.
+ */
+export function missingContractCode(chainId: number, hasCode: boolean): string | null {
+  return hasCode
+    ? null
+    : `ANCHOR_CONTRACT_ADDRESS has no contract code on chain ${chainId}; refusing to start`;
+}
+
+/**
+ * Refusal message when the endpoint does not answer the `ANCHOR_FINALITY_TAG` block tag, or null.
+ * Without it no receipt reaches `confirmed`; refusing at startup says so once, instead of every
+ * row waiting with `finality_read_failed`. `unreadable`: the read itself failed, which may be
+ * passing, so the message does not claim the node lacks the tag. Like the chain check, it names
+ * no URL.
+ */
+export function unansweredFinalityTag(
+  chainId: number,
+  tag: string,
+  answer: boolean | "unreadable",
+): string | null {
+  if (answer === true) return null;
+  return answer === "unreadable"
+    ? `CHAIN_RPC_URL could not be asked for the "${tag}" block tag (ANCHOR_FINALITY_TAG) on chain ${chainId}; refusing to start`
+    : `CHAIN_RPC_URL does not answer the "${tag}" block tag (ANCHOR_FINALITY_TAG) on chain ${chainId}; refusing to start`;
 }

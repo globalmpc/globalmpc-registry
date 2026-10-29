@@ -346,9 +346,23 @@ export const jurisdictionProfileMachine: StateMachine<JurisdictionProfileState> 
   },
 };
 
-/** Chain transaction — spec 07 §7.7 / 08 §8.9. */
+/**
+ * Chain transaction — spec 07 §7.7 / 08 §8.9. The states of `chain.transaction_state`.
+ *
+ * **Documentation, not enforcement.** Nothing calls `assertTransition` for these rows and no
+ * database rule checks the pair: the anchor worker (`apps/anchor-worker/src/anchor-submitter.ts`,
+ * with `trackTransaction` in `anchor-state.ts`) and the API's resubmission route write the state
+ * directly. This table records what they write, so a reader can rely on it; a change to either
+ * that adds a move must add it here, and the test beside this file lists each one.
+ *
+ * `signed`, `replaced` and `reorged` are in the enum but written by no path today: a send is
+ * signed and recorded in one step, and a reorg is recorded in `chain.reorg_events` while the row
+ * moves back (`confirmed → included`/`submitted`). Their moves are the specification's.
+ */
 export const CHAIN_TX_STATES = [
   "created",
+  /** Only a Safe proposal exists; nothing is on chain yet (0014). */
+  "proposed",
   "signed",
   "submitted",
   "included",
@@ -367,17 +381,46 @@ export const chainTransactionMachine: StateMachine<ChainTxState> = {
   initial: "created",
   states: CHAIN_TX_STATES,
   transitions: {
-    created: ["signed", "failed"],
+    // submitted: sent, or an earlier attempt's hash recovered from the chain. failed: no batch, or
+    // the attempt cap. reconciliation_required: the batch is on chain with another root or with a
+    // transaction that cannot be found.
+    created: ["proposed", "signed", "submitted", "failed", "reconciliation_required"],
+    // Executed by the Safe owners, or rejected/replaced there.
+    proposed: ["submitted", "failed"],
     signed: ["submitted", "failed"],
-    submitted: ["included", "replaced", "dropped", "failed"],
-    // included is not success. It is confirmed only once confirmation depth is met (§6.8).
-    included: ["confirmed", "reverted", "reorged", "replaced"],
-    confirmed: ["reorged"],
+    // included is not success. confirmed needs the depth and the finality tag (§6.8); one
+    // observation can show both at once, so a row may pass included within a single step.
+    // reverted: the receipt failed. reconciliation_required: a successful receipt without the
+    // batch's RootSubmitted. failed: a hashed state with no hash recorded.
+    submitted: [
+      "included",
+      "confirmed",
+      "reverted",
+      "replaced",
+      "dropped",
+      "failed",
+      "reconciliation_required",
+    ],
+    // submitted: back in the mempool, or following another transaction that stored the batch.
+    // reconciliation_required: the block disappeared, or the receipt stores no root.
+    included: [
+      "confirmed",
+      "submitted",
+      "reverted",
+      "reorged",
+      "replaced",
+      "failed",
+      "reconciliation_required",
+    ],
+    // Watched for reorgs after confirmation. included: re-observed in another block short of the
+    // depth or finality. submitted: back in the mempool, or following another transaction.
+    confirmed: ["included", "submitted", "reverted", "reorged", "failed", "reconciliation_required"],
     replaced: ["submitted", "failed"],
-    reverted: ["reconciliation_required"],
+    // created: a person resubmits (API, after checking the cause).
+    reverted: ["created", "reconciliation_required"],
     reorged: ["submitted", "reconciliation_required"],
-    dropped: ["submitted", "failed"],
-    failed: ["reconciliation_required"],
+    dropped: ["created", "submitted", "failed"],
+    failed: ["created", "reconciliation_required"],
     reconciliation_required: ["created", "failed"],
   },
 };

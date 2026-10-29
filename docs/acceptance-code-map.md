@@ -52,7 +52,9 @@ contract deliverables, so items that need an apps implementation are not closed 
 |---|---|---|
 | Registry root cannot be overwritten or deleted | Implemented | `contracts/test/RegistryAnchorInvariants.t.sol::invariant_rootNeverChanges` |
 | revoked/superseded only via a new event | Implemented | `invariant_revokedBatchesRetainRoot` |
-| pause does not change root or history | Implemented | `RegistryAnchorV1.t.sol::test_pause_blocksSubmissionOnly` |
+| pause does not change root or history; reads keep working | Implemented | `RegistryAnchorV1.t.sol::test_pause_blocksSubmissionButNotReads` |
+| pause stops corrections (revoke/supersede); they resume after unpause | Implemented | `test_pause_blocksRevoke`<br>`test_pause_blocksSupersede`<br>`test_unpause_restoresCorrections`<br>`invariant_noRuleViolations` |
+| Supersede chains have no cycles and no revoked ends at link time | Implemented | `test_supersedeBatch_refusesACycle`<br>`test_supersedeBatch_refusesARevokedTarget`<br>`test_supersedeBatch_refusesARevokedSource`<br>`invariant_supersedeWalksTerminate` |
 | No privileged call can change a root | Implemented | `test_noFunctionCanMutateStoredRoot` |
 | Empty batch rejected | Implemented | `invariant_noEmptyBatchStored` |
 | totalSupply fixed | Interface only | Separate release |

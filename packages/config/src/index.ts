@@ -39,3 +39,10 @@ export {
   WEBHOOK_SECRET_FILE_PREFIX,
   WebhookSecretReferenceError,
 } from "./webhook-secret.js";
+export {
+  ANVIL_DEV_ADDRESSES,
+  assertNotDevKey,
+  COMMITTED_FIXTURE_ADDRESSES,
+  isPublicDevAddress,
+  PUBLIC_DEV_ADDRESSES,
+} from "./dev-keys.js";

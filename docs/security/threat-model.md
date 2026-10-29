@@ -78,9 +78,26 @@ log leakage.
   injects environment values directly, with explicitly public demo defaults; these values are
   visible in the container environment and `docker inspect`. Application configuration also
   supports `file:` and `env:` references when the deployment uses them.
+- `pause` contains a stolen submitter key: it stops `submitRoot` **and** the permanent
+  corrections `revokeBatch` / `supersedeBatch`. Reads and proof verification keep working.
+  Recovery order: the admin rotates `ANCHOR_SUBMITTER_ROLE`, the pauser unpauses, then the new
+  key corrects.
+- Supersede links cannot form cycles or point at withdrawn roots: the successor must exist, must
+  not be revoked and must be the head of its chain, and a revoked batch cannot be superseded.
+- The admin role (`AccessControlDefaultAdminRules`) has one holder and moves only in two steps,
+  accepted after `ANCHOR_ADMIN_DELAY_SECONDS`; renouncing uses the same delayed flow. The deploy
+  script bounds the delay per chain: at least 300 s on 5611 and 1 day on Safe chains, at most
+  30 days off 31337 (a milliseconds typo would otherwise lock handovers for years). A stolen admin key cannot take the role at once, and the
+  current admin can cancel within the delay.
+- An EOA may hold the submitter role only on 31337 and opBNB testnet (5611). Elsewhere the deploy
+  script requires a contract (the Safe), and the worker submits directly only on chains in
+  `ANCHOR_EOA_CHAIN_IDS` (31337 by default, 5611 by opt-in, nothing else accepted); on other
+  chains it proposes to the Safe.
 
 **Not blocked yet**
 
+- Before the pauser reacts, a stolen submitter key can still revoke or supersede batches, and
+  those marks are permanent. The roots themselves stay unchanged.
 - The funding cap **cannot be enforced by code.** Holding only one day's worth in the wallet is a
   finance and operations procedure (`docs/operations/deployment.md`, "Loss cap for the anchor wallet").
 - The key rotation procedure exists only as a document; there is no drill record.
@@ -230,6 +247,8 @@ not running.
 - `chain.reorg_events` and the reconciliation worker.
 - `ANCHOR_CONFIRMATIONS` uses **the same value on staging as in production** — otherwise reorg
   handling is not verified.
+- Depth is a block count, not time (12 blocks are 3 s on opBNB), so on shared chains a receipt's
+  block must also be at or below the node's `safe` head (`ANCHOR_FINALITY_TAG`) before `confirmed`.
 
 ### T9 · Supply chain (Tampering)
 

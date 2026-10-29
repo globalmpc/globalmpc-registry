@@ -36,6 +36,12 @@ RUN corepack enable pnpm && corepack prepare pnpm@10.33.0 --activate
 # The pnpm store is a cache mount, so reinstalling is fast. What is lost is layer caching;
 # what is gained is not having to maintain the list.
 COPY . .
+# COPY keeps host file modes. A checkout made under a restrictive umask (077) arrives as 600/700,
+# root-owned, and the runtime's `mpc` user then cannot read `package.json`. Grant read (and
+# directory traversal) to everyone and drop group/other write, so the image does not depend on
+# the host umask. This stage is build-only: the extra layer stays here, and the runtime receives
+# the normalized modes through its `COPY --from` of the built tree.
+RUN chmod -R a+rX,go-w .
 
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { visibleNav } from "../src/lib/nav.js";
-import { blockExplorerTxUrl } from "../src/lib/wallet.js";
+import { blockExplorerAddressUrl, blockExplorerTxUrl } from "../src/lib/wallet.js";
 
 /** Menu visibility — spec 11 §11.2. */
 describe("visibleNav", () => {
@@ -47,10 +47,33 @@ describe("blockExplorerTxUrl", () => {
     expect(blockExplorerTxUrl(56, hash)).toBe(`https://bscscan.com/tx/${hash}`);
   });
 
+  it("links opBNB testnet transactions to opBNBScan", () => {
+    expect(blockExplorerTxUrl(5611, hash)).toBe(`https://testnet.opbnbscan.com/tx/${hash}`);
+  });
+
   it("makes no link for the local chain, an unknown chain, or a non-hash value", () => {
     expect(blockExplorerTxUrl(31337, hash)).toBeNull();
     expect(blockExplorerTxUrl(97, hash)).toBeNull();
     expect(blockExplorerTxUrl(1, hash)).toBeNull();
+    // opBNB mainnet is not a chain the server runs on, so it gets no link either.
+    expect(blockExplorerTxUrl(204, hash)).toBeNull();
     expect(blockExplorerTxUrl(56, "not-a-hash")).toBeNull();
+    expect(blockExplorerTxUrl(5611, "not-a-hash")).toBeNull();
+  });
+});
+
+describe("blockExplorerAddressUrl", () => {
+  const address = `0x${"ab".repeat(20)}`;
+
+  it("links the anchor contract on BscScan and opBNBScan", () => {
+    expect(blockExplorerAddressUrl(56, address)).toBe(`https://bscscan.com/address/${address}`);
+    expect(blockExplorerAddressUrl(5611, address)).toBe(`https://testnet.opbnbscan.com/address/${address}`);
+  });
+
+  it("makes no link for the local chain, an unknown chain, or a non-address value", () => {
+    expect(blockExplorerAddressUrl(31337, address)).toBeNull();
+    expect(blockExplorerAddressUrl(97, address)).toBeNull();
+    expect(blockExplorerAddressUrl(56, `0x${"ab".repeat(32)}`)).toBeNull();
+    expect(blockExplorerAddressUrl(5611, "not-an-address")).toBeNull();
   });
 });

@@ -43,6 +43,14 @@ interface IRegistryAnchor {
     /// @dev batchId 0 is indistinguishable from "not superseded" (supersededBy == 0).
     error ZeroBatchId();
     error SelfSupersede(bytes32 batchId);
+    /// @dev A revoked batch is already withdrawn. Pointing it at a successor would make a
+    ///      withdrawn root read as "replaced by" something, which it never was.
+    error RevokedBatchCannotBeSuperseded(bytes32 batchId);
+    /// @dev The successor is revoked: following the link would land on a withdrawn root.
+    error SupersedeTargetRevoked(bytes32 newBatchId);
+    /// @dev The successor is itself superseded. Link to the current head of its chain instead;
+    ///      this rule is also what keeps the supersede graph free of cycles.
+    error SupersedeTargetSuperseded(bytes32 newBatchId);
 
     struct Batch {
         bytes32 root;

@@ -260,6 +260,41 @@ it("searches by hash, links each registry correctly and blocks wallet-address lo
     (screen.getByTestId("global-search-submit") as HTMLButtonElement).disabled,
   ).toBe(false);
 });
+it("links each hash match to the explorer of the chain it was stored on", async () => {
+  // The deployment now runs on 5611; an anchor sent on BSC mainnet and one sent before the move
+  // on the local chain keep their own chains. A match without a chain falls back to the top level.
+  const tx = (n: string) => `0x${n.repeat(64)}`;
+  window.history.replaceState({}, "", `/explorer/search?q=${tx("a")}`);
+  mockHttp({
+    [`GET /api/v1/public/search?q=${tx("a")}`]: {
+      query: tx("a"),
+      kind: "hash",
+      chainId: 5611,
+      matches: [
+        { chainId: 56, hash: tx("b") },
+        { chainId: 31337, hash: tx("c") },
+        { chainId: undefined, hash: tx("d") },
+      ].map(({ chainId, hash }, i) => ({
+        entryVersionId: `v${i}`,
+        registryType: "project",
+        publicKey: `key${i}`,
+        matchedOn: "transaction_hash",
+        status: "published",
+        version: "1",
+        merkleRoot: null,
+        transactionHash: hash,
+        ...(chainId === undefined ? {} : { chainId }),
+      })),
+    },
+  });
+  render(<Search />);
+  await screen.findByTestId("search-results");
+  const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href"));
+  expect(hrefs).toContain(`https://bscscan.com/tx/${tx("b")}`);
+  expect(hrefs).toContain(`https://testnet.opbnbscan.com/tx/${tx("d")}`);
+  // The local chain has no explorer — not a link to opBNBScan, where the hash does not exist.
+  expect(hrefs.some((href) => href?.includes(tx("c")))).toBe(false);
+});
 it("paginates disclosure events while preserving scope and distinguishing corrections from revocations", async () => {
   const events = [
     {
@@ -378,4 +413,70 @@ it("opens protocol proposal details with frozen thresholds and transition histor
   expect(screen.queryByTestId("public-proposal-detail")).toBeNull();
   fireEvent.click(screen.getByText("Load more"));
   await screen.findByText("Other proposal");
+});
+it("shows the stored anchor contract of each hash match, linked on its chain's explorer", async () => {
+  // A later contract version lives at a new address: the contract comes from the match, and a
+  // match without one says so rather than borrowing another contract.
+  const tx = (n: string) => `0x${n.repeat(64)}`;
+  const v1 = `0x${"a1".repeat(20)}`;
+  const v2 = `0x${"b2".repeat(20)}`;
+  window.history.replaceState({}, "", `/explorer/search?q=${tx("e")}`);
+  mockHttp({
+    [`GET /api/v1/public/search?q=${tx("e")}`]: {
+      query: tx("e"),
+      kind: "hash",
+      chainId: 5611,
+      matches: [
+        { chainId: 5611, hash: tx("e"), contractAddress: v1 },
+        { chainId: 56, hash: tx("f"), contractAddress: v2 },
+        { chainId: 31337, hash: tx("1"), contractAddress: v1 },
+        { chainId: 5611, hash: tx("2"), contractAddress: null },
+        { chainId: null, hash: null, contractAddress: null },
+      ].map(({ chainId, hash, contractAddress }, i) => ({
+        entryVersionId: `c${i}`,
+        registryType: "project",
+        publicKey: `ckey${i}`,
+        matchedOn: "transaction_hash",
+        status: "published",
+        version: "1",
+        merkleRoot: null,
+        transactionHash: hash,
+        chainId,
+        contractAddress,
+      })),
+    },
+  });
+  render(<Search />);
+  await screen.findByTestId("search-results");
+  const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href"));
+  expect(hrefs).toContain(`https://testnet.opbnbscan.com/address/${v1}`);
+  expect(hrefs).toContain(`https://bscscan.com/address/${v2}`);
+  const cells = screen.getAllByTestId("search-contract").map((cell) => cell.textContent);
+  // Unsent match: no contract line at all.
+  expect(cells).toHaveLength(4);
+  // The local chain has no explorer: the address is shown, not linked.
+  expect(cells[2]).toContain(v1);
+  expect(hrefs.filter((href) => href?.endsWith(`/address/${v1}`))).toHaveLength(1);
+  expect(cells[3]).toContain("Not recorded for this anchor");
+});
+it("shows the stored anchor contract in the integrity proof", async () => {
+  const contract = `0x${"a1".repeat(20)}`;
+  const proof = {
+    included: true,
+    merkleVerified: true,
+    root: "0xroot",
+    batchId: "batch1",
+    leafHash: "leaf",
+    proof: [],
+    chainId: 5611,
+    contractAddress: contract,
+    transactionHash: `0x${"ab".repeat(32)}`,
+    proves: [],
+    doesNotProve: [],
+  };
+  mockHttp({ "GET /api/v1/public/proofs/v1": proof });
+  render(<PublicRecord entry={entry} />);
+  const cell = await screen.findByTestId("proof-contract");
+  expect(cell.querySelector("a")?.getAttribute("href")).toBe(`https://testnet.opbnbscan.com/address/${contract}`);
+  expect(cell.textContent).toBe(contract);
 });

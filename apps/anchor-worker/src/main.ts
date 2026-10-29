@@ -1,10 +1,22 @@
 import postgres from "postgres";
-import { loadAnchorConfig } from "./anchor-config.js";
+import {
+  loadAnchorConfig,
+  missingContractCode,
+  rpcChainMismatch,
+  unansweredFinalityTag,
+} from "./anchor-config.js";
 import { createHeartbeat } from "@mpc/db";
 import { chainBacklog, shouldBackOff, stepOnce } from "./anchor-submitter.js";
-import { createViemChainClient, signerAddress } from "./viem-chain-client.js";
+import {
+  contractHasCode,
+  createViemChainClient,
+  rpcAnswersBlockTag,
+  rpcChainId,
+  signerAddress,
+} from "./viem-chain-client.js";
 import { createSafeClient } from "./safe-client.js";
 import { redactUrls } from "./redact-urls.js";
+import { eoaSubmissionAllowed } from "./anchor-state.js";
 
 /**
  * Anchor submission loop.
@@ -28,6 +40,35 @@ try {
   process.exit(1);
 }
 
+// Before opening anything, confirm the endpoint serves CHAIN_ID. An unreachable endpoint also stops
+// here; the restart policy retries, which is clearer than a loop failing every step. viem quotes
+// the URL in its errors, so it is masked like every other RPC error.
+try {
+  const mismatch = rpcChainMismatch(config.chainId, await rpcChainId(config.rpcUrl));
+  if (mismatch) throw new Error(mismatch);
+  // Then that the contract is there. A send to an address without code succeeds and stores
+  // nothing, so a wrong address would otherwise surface only as batches never verifying.
+  const missing = missingContractCode(
+    config.chainId,
+    await contractHasCode(config.rpcUrl, config.contractAddress as `0x${string}`),
+  );
+  if (missing) throw new Error(missing);
+  // Then that it answers the finality tag. Without it nothing is ever confirmed. A failed read
+  // refuses too, with its own message; the restart policy retries.
+  if (config.finalityTag !== "none") {
+    const unanswered = unansweredFinalityTag(
+      config.chainId,
+      config.finalityTag,
+      await rpcAnswersBlockTag(config.rpcUrl, config.finalityTag).catch(() => "unreadable" as const),
+    );
+    if (unanswered) throw new Error(unanswered);
+  }
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`${redactUrls(message, [config.rpcUrl])}\n`);
+  process.exit(1);
+}
+
 // No prepared statements. The worker is long-lived; if a migration runs meanwhile, the cached
 // plan's result shape drifts and the loop dies. Anchor submission is nowhere near thousands per
 // second, so the outage risk outweighs the gain from prepared plans.
@@ -37,6 +78,7 @@ const chain = createViemChainClient({
   chainId: config.chainId,
   contractAddress: config.contractAddress as `0x${string}`,
   signerPrivateKey: config.signerPrivateKey,
+  logLookbackBlocks: config.logLookbackBlocks,
 });
 
 /**
@@ -71,8 +113,9 @@ emit({
   // The address is public. The private key is never printed anywhere.
   signer: signerAddress(config.signerPrivateKey),
   confirmationDepth: config.confirmationDepth,
+  finalityTag: config.finalityTag,
   // Whether this chain allows direct EOA submission. Otherwise only Safe proposals are created.
-  submissionMode: config.eoaAllowedChainIds.includes(config.chainId)
+  submissionMode: eoaSubmissionAllowed(config.chainId, config.eoaAllowedChainIds)
     ? "eoa"
     : config.safeAddress
       ? "safe_proposal"

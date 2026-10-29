@@ -9,6 +9,8 @@
  * such a distinction could let the demo path become looser than the real-wallet path.
  */
 
+import type { SupportedChainId } from "@mpc/domain";
+
 /** Defines only the parts of an EIP-1193 provider that we use. */
 export interface Eip1193Provider {
   request(args: { method: string; params?: unknown[] }): Promise<unknown>;
@@ -173,28 +175,32 @@ export async function currentChainId(): Promise<number> {
   return Number.parseInt(hex, 16);
 }
 
+interface ChainParams {
+  chainName: string;
+  nativeCurrency: { name: string; symbol: string; decimals: number };
+  rpcUrls: string[];
+  blockExplorerUrls: string[];
+}
+
 /**
  * Values used to offer adding the chain when the wallet does not know it.
  *
- * The server accepts only chains 56 and 31337 (`apps/api/src/config.ts`). Listing any other chain here
- * would move the wallet to a chain that cannot be used.
+ * The server accepts only the chains in `@mpc/domain` (`SUPPORTED_CHAIN_IDS`). `satisfies` keeps
+ * this table to exactly that set: a missing chain would leave its users unable to add it, and an
+ * extra one would move the wallet to a chain that cannot be used.
  */
-const CHAIN_PARAMS: Readonly<
-  Record<
-    number,
-    {
-      chainName: string;
-      nativeCurrency: { name: string; symbol: string; decimals: number };
-      rpcUrls: string[];
-      blockExplorerUrls: string[];
-    }
-  >
-> = {
+const CHAIN_PARAMS: Readonly<Partial<Record<number, ChainParams>>> = {
   56: {
     chainName: "BNB Smart Chain",
     nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
     rpcUrls: ["https://bsc-rpc.publicnode.com"],
     blockExplorerUrls: ["https://bscscan.com"],
+  },
+  5611: {
+    chainName: "opBNB Testnet",
+    nativeCurrency: { name: "tBNB", symbol: "tBNB", decimals: 18 },
+    rpcUrls: ["https://opbnb-testnet-rpc.bnbchain.org"],
+    blockExplorerUrls: ["https://testnet.opbnbscan.com"],
   },
   31337: {
     chainName: "Local chain",
@@ -202,18 +208,30 @@ const CHAIN_PARAMS: Readonly<
     rpcUrls: ["http://127.0.0.1:8545"],
     blockExplorerUrls: [],
   },
-};
+} satisfies Record<SupportedChainId, ChainParams>;
 
 /**
  * Block explorer URL for a transaction hash.
  *
- * Visitors must be able to check a public record's tx hash on BscScan themselves. If the chain is
- * not BSC mainnet (56) or the value is not hash-shaped, no link is made — plain
- * text is better than sending them to a page that does not exist.
+ * Visitors must be able to check a public record's tx hash on the chain's explorer themselves —
+ * BscScan for BSC mainnet (56), opBNBScan for the opBNB testnet (5611). The local chain has no
+ * explorer, so it, an unknown chain, or a value that is not hash-shaped gets no link — plain text
+ * is better than sending them to a page that does not exist.
  */
 export function blockExplorerTxUrl(chainId: number, hash: string): string | null {
   const base = CHAIN_PARAMS[chainId]?.blockExplorerUrls[0];
   return base && /^0x[0-9a-fA-F]{64}$/.test(hash) ? `${base}/tx/${hash}` : null;
+}
+
+/**
+ * Block explorer URL for a contract address — the anchor contract a proof names.
+ *
+ * Same rule as `blockExplorerTxUrl`: no explorer (local chain), an unknown chain, or a value that
+ * is not address-shaped gets no link.
+ */
+export function blockExplorerAddressUrl(chainId: number, address: string): string | null {
+  const base = CHAIN_PARAMS[chainId]?.blockExplorerUrls[0];
+  return base && /^0x[0-9a-fA-F]{40}$/.test(address) ? `${base}/address/${address}` : null;
 }
 
 /**

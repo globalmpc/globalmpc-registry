@@ -17,6 +17,7 @@ Run the commands in this guide from the repository root.
 | [Backup and restore](backup-restore.md) | What the backup, restore and drill scripts capture, refuse and verify |
 | [Release rollback](rollback.md) | Compatibility checks and the release rollback procedure |
 | [Mainnet contract](mainnet-contract.md) | Contract deployment procedure for mainnet (56) and what must be settled first |
+| [Testnet contract](testnet-contract.md) | Contract deployment procedure for opBNB testnet (5611) |
 
 ## Secret injection
 
@@ -78,7 +79,8 @@ the entire balance held in the wallet is exposed.
 ### Choosing the values
 
 ```
-expected spend (wei) = submissions per day × gas per submission × ANCHOR_FEE_CAP_GWEI × 1e9
+expected spend (wei) = submissions per day × (gas per submission × ANCHOR_FEE_CAP_GWEI × 1e9
+                                              + L1 data fee per submission)
 daily spend cap      = expected spend × 1.5
 funding cap          = daily spend cap (hold only one day's worth)
 ```
@@ -92,6 +94,11 @@ funding cap          = daily spend cap (hold only one day's worth)
 - **Gas price cap** — `ANCHOR_FEE_CAP_GWEI` (default 100). Above this value the worker
   does not submit, so this value is exactly the worst case. Changing only one of the two
   moves the cap off its intended multiple.
+- **L1 data fee per submission** — 0 on BSC (56) and anvil (31337). On opBNB (5611) every
+  transaction also pays for posting it to BSC, outside the gas price: the receipt's `l1Fee`.
+  `ANCHOR_FEE_CAP_GWEI` does not bound it. Use twice the GasPriceOracle quote the worker reserves
+  (below); measured on 2026-10-29 on opBNB testnet, the quote for a `submitRoot` was
+  1.09 × 10^10 wei, about 7% of its execution cost at 0.001 gwei.
 
 Set `ANCHOR_DAILY_SPEND_CAP_WEI` as an **integer in wei**. Notations such as `0.05` or
 `1e17` are rejected. **There is no default** — starting with it empty makes the anchor
@@ -110,20 +117,27 @@ a submission.
 1. `DAILY_SPEND_CAP_REACHED` — blocks when this submission could carry the day past the cap:
 
    ```
-   spent today (UTC, receipts in chain.gas_spend)
-     + Σ open sends: gas_limit × max_fee_per_gas      (chain.anchor_sends)
+   spent today (UTC, receipts in chain.gas_spend: gas_used × effective_gas_price + l1_fee)
+     + Σ open sends: gas_limit × max_fee_per_gas + l1_fee_bound      (chain.anchor_sends)
      + open sends without a gas limit × block gas limit × ANCHOR_FEE_CAP_GWEI × 1e9
-     + ANCHOR_GAS_LIMIT × min(quoted max fee, ANCHOR_FEE_CAP_GWEI × 1e9)
+     + ANCHOR_GAS_LIMIT × min(quoted max fee, ANCHOR_FEE_CAP_GWEI × 1e9) + this send's L1 bound
      > ANCHOR_DAILY_SPEND_CAP_WEI
    ```
+
+   The L1 terms are 0 except on opBNB. There a receipt's `l1Fee` is recorded as `l1_fee`, and a
+   send in flight reserves `l1_fee_bound`: the `GasPriceOracle.getL1Fee` quote (predeploy
+   `0x420000000000000000000000000000000000000F`) for the transaction about to be signed, × 2. A
+   failed quote, or an opBNB receipt without `l1Fee`, leaves the row waiting with a recorded
+   reason (`l1_fee_estimate_failed`) or the send open — never counted at gas alone.
 
    Every send is signed first and written to `chain.anchor_sends` (hash, signer, nonce, gas
    limit, max fee) **before** it is broadcast, and stays open — counted at its most — until it
    is settled by evidence only:
 
    - `receipt` — its receipt is recorded in `chain.gas_spend` at its actual cost;
-   - `nonce_consumed` — the signer's nonce at a block `ANCHOR_CONFIRMATIONS` deep is past this
-     send's nonce and the send has no receipt: another transaction took the nonce.
+   - `nonce_consumed` — the signer's nonce at a block `ANCHOR_CONFIRMATIONS` deep, and at or below
+     the `ANCHOR_FINALITY_TAG` head, is past this send's nonce and the send has no receipt: another
+     transaction took the nonce.
 
    Neither time nor the state of the `chain.transactions` row settles a send. A dropped row, or
    one reset by a resubmission, keeps counting until one of the two above holds; a failed
@@ -151,7 +165,9 @@ date changes.
 ### What this cap does not count
 
 - **Submissions whose receipt has not arrived yet — at their actual cost.** They are reserved at
-  their most (above) until settled. The cap must fit at least two sends at the fee cap
+  their most (above) until settled. On opBNB the L1 part of that reservation is an estimate with a
+  2× margin, not a ceiling the transaction signs: the fee follows the L1 base fee when the block
+  is built, so an L1 gas spike beyond the margin can make one send cost more than was reserved. The cap must fit at least two sends at the fee cap
   (`2 × ANCHOR_GAS_LIMIT × ANCHOR_FEE_CAP_GWEI × 1e9`) — the worker refuses to start below it:
   a broadcast that failed stays open until the next send reuses its nonce, and with room for
   only one, that next send never goes out.
@@ -177,6 +193,70 @@ stays `created` and the batch does not disappear. After UTC midnight, the next l
 
 If the cap needs raising, redo the calculation above, record the basis, then change the value.
 Do not raise it just because it blocked — that cap is all of O1.
+
+## opBNB testnet (dev)
+
+The dev deployment runs on opBNB testnet: `CHAIN_ID=5611` for the API, anchor worker and the
+other services that read it (RPC `https://opbnb-testnet-rpc.bnbchain.org`, explorer
+`https://testnet.opbnbscan.com`, gas paid in tBNB). The web app links transactions to that
+explorer and offers the chain to wallets that lack it.
+
+- **First operator.** `pnpm --filter @mpc/api bootstrap` binds the wallet on `BOOTSTRAP_CHAIN_ID`,
+  which defaults to `CHAIN_ID`; set either to 5611, or the wallet lands on 31337 and cannot log in.
+- **Earlier anchors keep their chain and contract.** Public proofs and hash search report the
+  chain and the anchor contract each transaction was stored with (`chainId`, `contractAddress`),
+  so anchors made before a chain change or a new contract version still point at the contract
+  that holds their root. The worker records the contract with the hash; an anchor recorded
+  before it did reports `contractAddress: null`, never the currently configured contract. Both
+  are null until the transaction has a hash.
+- **EOA submission is opt-in.** Set `ANCHOR_EOA_CHAIN_IDS=5611` for the worker to sign alone;
+  without it the default (`31337`) leaves 5611 on the Safe proposal path, or blocked when no Safe
+  is configured. Listing 56 refuses startup — mainnet stays Safe-only whatever is set.
+- **Keys and endpoint.** Generate fresh signer and scan-service keys: the anvil/hardhat defaults
+  and the keys committed in this repository are refused on any chain but 31337. The worker also
+  refuses to start unless `CHAIN_RPC_URL` reports chain 5611, `ANCHOR_CONTRACT_ADDRESS` holds
+  contract code there, and the endpoint answers the `ANCHOR_FINALITY_TAG` block tag.
+- **Fee cap.** Gas price was observed around 0.001 gwei, so `ANCHOR_FEE_CAP_GWEI=1` is ample and
+  keeps the worst case small.
+- **Spend cap.** Size it with the formula above at that fee cap, including the L1 data fee: it
+  follows BSC's gas price, so neither the fee cap nor the gas limit bounds it. It cannot be below
+  `2 × ANCHOR_GAS_LIMIT × ANCHOR_FEE_CAP_GWEI × 1e9` — 400,000,000,000,000 wei (0.0004 tBNB)
+  with the default gas limit and a 1 gwei cap; that floor leaves the L1 fee out, since it is
+  only known per send. Hold only that day's worth in the signer wallet.
+- **Confirmations.** Set `ANCHOR_CONFIRMATIONS=12` (the code default) explicitly — `.env.example`
+  sets 2 for anvil, so a copied file would lower it. Staging must use the production value so
+  reorg handling is exercised (threat model T8).
+- **Finality tag.** opBNB blocks are 0.25 s, so 12 confirmations are 3 s — no protection from a
+  sequencer reorg. `ANCHOR_FINALITY_TAG` (default `safe` on 5611 and 56, `none` on 31337) also
+  holds a receipt as `included` until its block is at or below the node's `safe` head — blocks
+  whose batch is posted on BSC; it trailed the head by ~50 blocks (~13 s) when measured.
+  `finalized` waits longer; `none` falls back to depth alone. Any other value refuses startup.
+  The worker refuses to start when the endpoint does not answer the tag. If a later read of it
+  fails, the row keeps its current state (`submitted`, `included`, or `confirmed` on a reorg-watch
+  recheck) with `last_error = finality_read_failed` rather than confirming on depth.
+- **Log lookback.** When the chain holds a batch the worker has no hash for (a lost send result,
+  a resubmission), it looks for the `RootSubmitted` log back to the block the batch was stored
+  in, in 5,000-block `eth_getLogs` ranges, up to `ANCHOR_LOG_LOOKBACK_BLOCKS` (default: a day of
+  blocks — 345,600 on opBNB). Only a completed search that finds nothing means
+  `reconciliation_required`, never a second send. A failed or rate-limited read, or a node whose
+  head is not yet past the block that stored the batch (a lagging node behind a load balancer),
+  keeps the row as it is with `last_error` `reconciliation_check_failed` (before a send),
+  `duplicate_check_failed` (after a reverted send) or `anchored_elsewhere_check_failed` (after a
+  receipt without the root). That row is not picked again for `ANCHOR_CHAIN_SEARCH_RETRY_MS`
+  (default 60,000 ms), so later rows on the chain keep moving. If searches for it keep failing
+  for `ANCHOR_CHAIN_SEARCH_GIVE_UP_MS` (default 3,600,000 ms, counted from the first failure; a
+  search that answers starts it again), it becomes `reconciliation_required` with
+  `last_error = chain_search_unavailable` and raises `anchor.needs_attention` — typically an
+  endpoint whose `eth_getLogs` range limit is below 5,000 blocks, which has pruned the history,
+  or which stays rate-limited. Point `CHAIN_RPC_URL` at one that serves the range, then resubmit.
+- **Receipts must show the root.** A successful receipt confirms only if it carries
+  `RootSubmitted` for that batch and root from the contract recorded with the transaction's hash
+  (the configured one only for rows recorded before the contract was stored). Otherwise — a Safe
+  execution whose inner call failed — the row follows another transaction that stored the batch
+  on that contract, or becomes
+  `reconciliation_required` with `last_error = receipt_without_root_submitted`.
+
+Testnet roots prove nothing anyone relies on; do not reuse its keys or contract on mainnet.
 
 ## Edge proxy path — web app on a CDN, API on its own host
 

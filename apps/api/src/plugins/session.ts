@@ -9,6 +9,8 @@ import {
   type AssuranceLevel,
 } from "@mpc/api-contract";
 import { withTenant } from "@mpc/db";
+import { isPublicDevAddress } from "@mpc/config";
+import { LOCAL_CHAIN_ID } from "@mpc/domain";
 import type { AppConfig } from "../config.js";
 import { unauthorized } from "../errors.js";
 
@@ -162,6 +164,23 @@ export async function resolveSession(
   walletAddress: `0x${string}`,
   chainId: number,
 ): Promise<Session> {
+  /**
+   * A public development address never holds a session off the local chain.
+   *
+   * Its key is printed by every anvil node or committed to this repository, so anyone can sign
+   * as it. Bootstrap and the admin bind refuse such a wallet on a shared chain; this covers a
+   * binding made before that check existed, at login and on every request that carries a token.
+   * `chainId` must be the API's configured chain, never one read from a token row: a token
+   * issued on the local chain would otherwise skip this check on a shared-chain API. The
+   * request hook drops tokens whose chain differs before calling this (server.ts).
+   */
+  if (chainId !== LOCAL_CHAIN_ID && isPublicDevAddress(walletAddress)) {
+    throw unauthorized(
+      "WALLET_PUBLIC_DEV_ADDRESS",
+      `This is a public development wallet; it cannot sign in on chain ${chainId}`,
+    );
+  }
+
   // At login the tenant is not yet known, so RLS policies cannot be satisfied.
   // Only the auth path is split into SECURITY DEFINER functions (0005_session_resolver.sql).
   // No path other than these two functions bypasses RLS.
