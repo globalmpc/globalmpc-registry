@@ -311,7 +311,12 @@ export async function buildServer(
     const resolved = await resolveSessionToken(sql, token);
     if (!resolved) return;
 
-    request.session = await resolveSession(sql, resolved.walletAddress, resolved.chainId);
+    // A token is valid only on the chain its SIWE message was signed for. APIs on different
+    // chains can share a database, so a token issued elsewhere reaches this one; it carries no
+    // session here, and roles and the public-dev-wallet refusal are resolved on this API's chain.
+    if (resolved.chainId !== config.chainId) return;
+
+    request.session = await resolveSession(sql, resolved.walletAddress, config.chainId);
   });
 
   /**

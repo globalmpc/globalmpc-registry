@@ -9,6 +9,7 @@ const s = vi.hoisted(() => ({
   post: vi.fn(),
   s3: vi.fn(),
   memory: vi.fn(),
+  client: vi.fn(),
   signals: new Map<string, () => void>(),
 }));
 vi.mock("postgres", () => ({ default: () => s.sql }));
@@ -30,7 +31,7 @@ vi.mock("../src/scan-worker.js", () => ({
   scanBacklog: s.backlog,
 }));
 vi.mock("../src/api-client.js", () => ({
-  createApiClient: () => ({ walletAddress: "0xpublic", post: s.post }),
+  createApiClient: s.client,
 }));
 beforeEach(() => {
   vi.resetModules();
@@ -47,12 +48,14 @@ beforeEach(() => {
   ])
     f.mockReset();
   s.signals.clear();
+  s.client.mockReset().mockImplementation(() => ({ walletAddress: "0xpublic", post: s.post }));
   for (const [k, v] of Object.entries({
     DATABASE_URL: "postgres://local/test",
     API_BASE_URL: "http://api.test",
     SCAN_SERVICE_PRIVATE_KEY: "secret",
     SIWE_DOMAIN: "api.test",
     SIWE_URI: "http://api.test",
+    CHAIN_ID: "31337",
   }))
     vi.stubEnv(k, v);
   vi.stubEnv("OBJECT_STORE", "memory");
@@ -158,6 +161,68 @@ it("refuses to start without an API endpoint", async () => {
     "API_BASE_URL is required\n",
   );
   expect(s.once).not.toHaveBeenCalled();
+});
+
+it("signs in on the configured chain", async () => {
+  vi.stubEnv("CHAIN_ID", "5611");
+  await import("../src/main.js");
+  expect(s.client).toHaveBeenCalledWith(expect.objectContaining({ chainId: 5611 }));
+});
+
+it("refuses to start without CHAIN_ID instead of assuming the local chain", async () => {
+  vi.stubEnv("CHAIN_ID", undefined);
+  vi.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("exit");
+  });
+  await expect(import("../src/main.js")).rejects.toThrow("exit");
+  expect(process.stderr.write).toHaveBeenCalledWith("CHAIN_ID is required\n");
+  expect(s.client).not.toHaveBeenCalled();
+  expect(s.once).not.toHaveBeenCalled();
+});
+
+it("refuses an unsupported or non-decimal CHAIN_ID, naming only the allowed chains", async () => {
+  // 97 is BSC testnet; the others are values `Number()` would read as a supported chain.
+  for (const value of ["97", "0x15eb", " 56 ", "5.611e3", "5611abc", ""]) {
+    vi.resetModules();
+    vi.mocked(process.stderr.write).mockClear();
+    vi.stubEnv("CHAIN_ID", value);
+    vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("exit");
+    });
+    await expect(import("../src/main.js"), value).rejects.toThrow("exit");
+    const errors = vi.mocked(process.stderr.write).mock.calls.flat().join("");
+    expect(errors, value).toBe(
+      value === ""
+        ? "CHAIN_ID is required\n"
+        : "CHAIN_ID must be one of 56 (BSC mainnet), 5611 (opBNB testnet), 31337 (local chain)\n",
+    );
+    expect(s.client, value).not.toHaveBeenCalled();
+  }
+});
+
+it("refuses to start with a public development key, naming the variable only", async () => {
+  s.client.mockImplementation(() => {
+    throw new Error("SCAN_SERVICE_PRIVATE_KEY is a public development key (anvil/hardhat or a committed fixture), accepted only on chain 31337; generate a fresh key for chain 5611");
+  });
+  vi.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("exit");
+  });
+  await expect(import("../src/main.js")).rejects.toThrow("exit");
+  expect(process.stderr.write).toHaveBeenCalledWith(
+    expect.stringMatching(/^SCAN_SERVICE_PRIVATE_KEY is a public development key \(anvil\/hardhat or a committed fixture\)/),
+  );
+  expect(s.once).not.toHaveBeenCalled();
+});
+it("does not pass on a key library error, which may quote the key", async () => {
+  s.client.mockImplementation(() => {
+    throw new Error("expected valid private key: 1 <= n < …, got 1157920892373161954235709850086879078532699846");
+  });
+  vi.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("exit");
+  });
+  await expect(import("../src/main.js")).rejects.toThrow("exit");
+  const errors = vi.mocked(process.stderr.write).mock.calls.flat().join("");
+  expect(errors).toBe("SCAN_SERVICE_PRIVATE_KEY is not a valid key\n");
 });
 
 it("pauses and keeps its heartbeat alive across repeated scanner outages, then resumes", async () => {

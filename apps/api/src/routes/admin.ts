@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { withTenant } from "@mpc/db";
+import { isPublicDevAddress } from "@mpc/config";
+import { LOCAL_CHAIN_ID } from "@mpc/domain";
 import {
   ROLE_MINIMUM_ASSURANCE,
   bindWalletRequest,
@@ -298,6 +300,19 @@ export async function registerAdminRoutes(
 
       const { requestId, asOf, correlationId } = request.context;
       const address = parsed.data.walletAddress.toLowerCase();
+
+      /**
+       * Anyone can sign as a public development address (anvil/hardhat or a committed fixture).
+       * Bound on a shared chain, its role would belong to whoever tries the key first. A value
+       * problem, like an assurance level outside the table.
+       */
+      if (parsed.data.chainId !== LOCAL_CHAIN_ID && isPublicDevAddress(address)) {
+        throw unprocessable(
+          "WALLET_PUBLIC_DEV_ADDRESS",
+          "This is a public development address. Bind a freshly generated wallet on this chain.",
+          { chainId: parsed.data.chainId },
+        );
+      }
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {

@@ -103,6 +103,21 @@ describe("independent public proof verification", () => {
     await screen.findByText("Record missing");
     expect(screen.queryByTestId("verify-not-anchored")).toBeNull();
   });
+  it("names the stored anchor contract to read the root from, or says none was recorded", async () => {
+    const contract = `0x${"a1".repeat(20)}`;
+    const sent = { ...proof, chainId: 5611, transactionHash: `0x${"ab".repeat(32)}` };
+    mockHttp({ [recordRoute]: { entryVersionId: "version" }, [route]: { ...sent, contractAddress: contract } });
+    const view = render(<Verifier />);
+    check();
+    const cell = await screen.findByTestId("verify-contract");
+    expect(cell.querySelector("a")?.getAttribute("href")).toBe(`https://testnet.opbnbscan.com/address/${contract}`);
+    view.unmount();
+
+    mockHttp({ [recordRoute]: { entryVersionId: "version" }, [route]: { ...sent, contractAddress: null } });
+    render(<Verifier />);
+    check();
+    expect((await screen.findByTestId("verify-contract")).textContent).toBe("Not recorded for this anchor");
+  });
   it("hashes saved JSON locally without sending its contents over HTTP", async () => {
     const calls = mockHttp({});
     render(<Verifier />);

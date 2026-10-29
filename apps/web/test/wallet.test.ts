@@ -110,6 +110,33 @@ describe("switchChain — wallet without the chain", () => {
     expect(wallet.chain()).toBe(31337);
   });
 
+  it("offers the opBNB testnet with its own network details", async () => {
+    // The dev deployment runs on 5611. Without an entry the wallet gets no add prompt, and a user
+    // whose wallet lacks the testnet is stuck at "switch failed".
+    const wallet = fakeWallet({ start: 56 });
+    const added: unknown[] = [];
+    const request = wallet.provider.request.bind(wallet.provider);
+    use({
+      request: async (args) => {
+        if (args.method === "wallet_addEthereumChain") added.push(args.params?.[0]);
+        return request(args);
+      },
+    });
+
+    await switchChain(5611);
+
+    expect(wallet.chain()).toBe(5611);
+    expect(added).toEqual([
+      {
+        chainId: "0x15eb",
+        chainName: "opBNB Testnet",
+        nativeCurrency: { name: "tBNB", symbol: "tBNB", decimals: 18 },
+        rpcUrls: ["https://opbnb-testnet-rpc.bnbchain.org"],
+        blockExplorerUrls: ["https://testnet.opbnbscan.com"],
+      },
+    ]);
+  });
+
   it("MetaMask mobile (4902 inside -32603) — offers to add", async () => {
     const wallet = fakeWallet({
       start: 1,

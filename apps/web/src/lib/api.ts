@@ -1874,7 +1874,13 @@ export interface InclusionProof {
   proof: string[];
   root: string;
   batchId: string;
-  chainId: number;
+  /** Chain the anchor was sent on, as stored — not this deployment's current chain. */
+  chainId: number | null;
+  /**
+   * Contract the anchor was sent to, as stored. Null with `chainId`, and for an anchor recorded
+   * before the contract was stored; undefined from an API that predates the field.
+   */
+  contractAddress?: string | null;
   transactionHash: string | null;
   blockNumber: number | null;
   confirmationState: string;
@@ -2403,10 +2409,15 @@ export interface PublicSearchMatch {
   status: string;
   merkleRoot: string | null;
   transactionHash: string | null;
+  /** Chain the transaction was sent on, as stored. Hash matches only; null until it has a hash. */
+  chainId?: number | null;
+  /** Contract the transaction was sent to, as stored. Hash matches only; null with `chainId`. */
+  contractAddress?: string | null;
 }
 
 export interface PublicSearchResult {
   query: string;
+  /** This deployment's chain — only a fallback for a match that carries no chain of its own. */
   chainId: number;
   kind: "hash" | "text";
   matches: PublicSearchMatch[];

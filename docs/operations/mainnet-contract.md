@@ -67,12 +67,22 @@ complete staging validation again before promoting it.
 export ANCHOR_ADMIN=0x...      # Safe multisig
 export ANCHOR_SUBMITTER=0x...  # Safe multisig
 export ANCHOR_PAUSER=0x...     # security response organization
+export ANCHOR_ADMIN_DELAY_SECONDS=172800   # required; script accepts 86400–2592000
 ```
 
-Outside the local chain (31337) the script reverts unless `ANCHOR_SUBMITTER` has contract code.
-Deploy the Safe first; an EOA or a Safe address not yet deployed is refused.
+The admin role can only be handed over in two steps, and the new admin can accept only after
+`ANCHOR_ADMIN_DELAY_SECONDS`. That delay is the window in which the Safe signers see an unwanted
+handover (`DefaultAdminTransferScheduled`) and cancel it. Use two days or more. The script
+refuses less than one day (86400) on 56 and on every other chain that needs a Safe submitter,
+and more than 30 days (2592000) everywhere but the local chain: a milliseconds typo would freeze
+handovers for years, and shortening the delay later waits out the difference.
 
-If the three are the same, the script prints `WARNING: single-key deployment. Local/testnet only.`
+On 56 the script reverts unless `ANCHOR_SUBMITTER` has contract code. Deploy the Safe first; an
+EOA or a Safe address not yet deployed is refused. Only the local chain (31337) and opBNB testnet
+(5611) accept an EOA submitter ([testnet procedure](testnet-contract.md)).
+
+If the three are the same, the script prints
+`WARNING: single-key deployment. Local chain or opBNB testnet only.`
 **Stop if that warning appears** — on mainnet, that layout is not the intent.
 
 ### 3. Deploy
@@ -98,6 +108,45 @@ CHAIN_ID=56
 
 Put both values in the deployment environment. **Not in code** — doing so makes staging and
 production different code, and the one-change rule is broken.
+
+**Switching to a new contract version.** New sends and Safe proposals go to the configured
+`ANCHOR_CONTRACT_ADDRESS`; a transaction already recorded is judged against the contract stored
+with its hash. After the switch the worker keeps tracking a send to the old contract still in
+flight, a confirmed row inside the reorg watch, and a Safe proposal built for the old contract and
+executed later, against that old contract's `RootSubmitted` log; when it follows another
+transaction that stored a batch, it looks on that same contract. Draining is therefore not needed
+for those rows to settle correctly, but the following still matter:
+
+- **The old contract stays readable** through `CHAIN_RPC_URL`: keep an endpoint on the same chain.
+  Tracking, following and public proofs of earlier anchors read it.
+- **Rows recorded before the worker stored the contract** (`contract_address` NULL with a
+  `tx_hash`) have only the configuration to go by. Before switching, check that none is still
+  tracked — with the default reorg watch (`ANCHOR_REORG_WATCH_MS`, 30 minutes), this returns 0:
+
+  ```sql
+  SELECT count(*) FROM chain.transactions
+  WHERE tx_hash IS NOT NULL AND contract_address IS NULL
+    AND (state IN ('submitted', 'included')
+         OR (state = 'confirmed' AND confirmed_at > now() - interval '30 minutes'));
+  ```
+
+  Otherwise wait for them to settle and leave the watch; switched earlier, they end
+  `reconciliation_required`.
+- **Signer roles.** The Safe must hold `ANCHOR_SUBMITTER_ROLE` on the new contract before the
+  switch (step 5); on mainnet it is the only submitter. Open Safe proposals for the old contract
+  stay useful only while the Safe keeps that role there: executed after it is revoked, the inner
+  call fails, no root is stored and the row ends `reconciliation_required` (resubmit it through
+  the API, which sends to the new contract). Reject such proposals in the Safe instead of
+  executing them.
+- **A batch already on the old contract is not checked on the new one.** A row a person resubmits
+  after the switch is sent to the new contract, even if an earlier attempt stored it on the old
+  one. Resolve `reconciliation_required`, `dropped` and `reverted` rows before switching, or
+  check the old contract (`getBatch`) before resubmitting one.
+
+The conservative order is still the safe default: let `submitted`, `included` and `proposed`
+rows settle (`SELECT state, count(*) FROM chain.transactions WHERE state IN
+('submitted','included','proposed') GROUP BY state` returns nothing) before switching. Anchors
+already recorded keep the contract stored with their hash.
 
 ### 5. Verify
 
@@ -127,3 +176,11 @@ contract. Explorer's proof verification would then span two addresses, so **not 
 state is the purpose of this procedure.**
 
 `pause` can be reversed. In a security incident, the `pauser` moves first, not a new deployment.
+Pause stops submissions **and** corrections (`revokeBatch`, `supersedeBatch`): both are
+permanent, so a compromised submitter must not be able to make them after the pause. Reads and
+proof verification keep working. Rotate the submitter role, then unpause, then correct.
+
+When correcting, supersede before you revoke. A batch takes one `supersededBy` link, and only an
+unrevoked chain head can become a successor, so **revoking a successor ends its predecessor's
+line for good** (after A→B, revoking B leaves A with no way forward). Submit the replacement,
+supersede the bad head with it, and revoke a head only when its line should end.

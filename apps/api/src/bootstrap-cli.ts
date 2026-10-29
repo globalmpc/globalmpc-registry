@@ -39,7 +39,7 @@ if (missing.length > 0) {
       "",
       "Optional:",
       "  BOOTSTRAP_JURISDICTION    3 uppercase ISO3 letters (default MNG)",
-      "  BOOTSTRAP_CHAIN_ID        56 or 31337 (default 31337)",
+      "  BOOTSTRAP_CHAIN_ID        56, 5611 or 31337 (default CHAIN_ID, else 31337)",
       "  BOOTSTRAP_ROLE            role (default mpc_operator)",
       "  BOOTSTRAP_ASSURANCE       wallet_only·identity_bound·high_assurance",
       "                            (default high_assurance)",
@@ -58,6 +58,12 @@ const databaseUrl = resolveSecret(
   process.env,
 );
 
+// The wallet must be bound on the chain the API runs on, or the first operator cannot log in.
+// Following CHAIN_ID keeps a 5611 deployment from binding its first wallet to the local chain.
+// Plain digits only, as in the API config; anything else fails bootstrap's chain check.
+const chainIdRaw = process.env["BOOTSTRAP_CHAIN_ID"] || process.env["CHAIN_ID"] || "31337";
+const chainId = /^[0-9]+$/.test(chainIdRaw) ? Number(chainIdRaw) : Number.NaN;
+
 const input: BootstrapInput = {
   tenantSlug: process.env["BOOTSTRAP_TENANT_SLUG"] as string,
   tenantName: process.env["BOOTSTRAP_TENANT_NAME"] as string,
@@ -65,7 +71,7 @@ const input: BootstrapInput = {
   jurisdiction: process.env["BOOTSTRAP_JURISDICTION"] ?? "MNG",
   subjectName: process.env["BOOTSTRAP_SUBJECT_NAME"] as string,
   walletAddress: process.env["BOOTSTRAP_WALLET"] as string,
-  chainId: Number(process.env["BOOTSTRAP_CHAIN_ID"] ?? "31337"),
+  chainId,
   role: process.env["BOOTSTRAP_ROLE"] ?? "mpc_operator",
   assuranceLevel: (process.env["BOOTSTRAP_ASSURANCE"] ??
     "high_assurance") as BootstrapInput["assuranceLevel"],

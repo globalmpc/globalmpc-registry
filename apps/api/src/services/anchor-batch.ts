@@ -130,6 +130,13 @@ export async function buildInclusionProof(
   readonly proof: Hex[];
   readonly root: Hex;
   readonly batchId: string;
+  /** Chain the latest transaction was sent on, as stored. Null until it has a hash. */
+  readonly chainId: number | null;
+  /**
+   * Contract the latest transaction was sent to, as the worker stored it. Null until it has a
+   * hash, and for an anchor recorded before the worker stored the contract.
+   */
+  readonly contractAddress: string | null;
   readonly confirmationState: string;
   readonly transactionHash: string | null;
   readonly blockNumber: number | null;
@@ -155,6 +162,8 @@ export async function buildInclusionProof(
       policy_version: string;
       schema_version: string;
       serialization_version: string;
+      chain_id: number | null;
+      contract_address: string | null;
     }[]
   >`SELECT * FROM core.public_inclusion_proof(${entryVersionId})`;
 
@@ -172,6 +181,8 @@ export async function buildInclusionProof(
     proof,
     root: row.merkle_root as Hex,
     batchId: row.external_batch_id,
+    chainId: row.chain_id,
+    contractAddress: row.contract_address,
     // included is not success. Only confirmed is success (06 §6.8).
     confirmationState: row.transaction_state ?? "created",
     transactionHash: row.transaction_hash,

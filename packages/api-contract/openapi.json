@@ -83420,6 +83420,29 @@
                                   "string",
                                   "null"
                                 ]
+                              },
+                              "chainId": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "contractAddress": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-f]{40}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -83789,9 +83812,27 @@
                           "pattern": "^0x[0-9a-f]{64}$"
                         },
                         "chainId": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "contractAddress": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "transactionHash": {
                           "anyOf": [
@@ -83869,6 +83910,7 @@
                         "root",
                         "batchId",
                         "chainId",
+                        "contractAddress",
                         "transactionHash",
                         "blockNumber",
                         "confirmationState",

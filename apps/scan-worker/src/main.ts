@@ -5,6 +5,7 @@ import { DEFAULT_SCANNER_OPTIONS, scanBytes, scannerAvailable } from "./scanner.
 import { scanBacklog, scanOnce } from "./scan-worker.js";
 import { createApiClient } from "./api-client.js";
 import { createHeartbeat } from "@mpc/db";
+import { describeChains, parseSupportedChainId, SUPPORTED_CHAIN_IDS } from "@mpc/domain";
 
 /**
  * Virus scan worker.
@@ -47,16 +48,36 @@ const scannerOptions = {
   maxAttempts,
 };
 
-const api = createApiClient({
+// Required, as in the API and the anchor worker: the worker signs in on this chain, so a
+// default would sign a 5611 deployment's worker in on the local chain, which the API refuses.
+// The message lists the allowed chains, never the value read.
+const chainId = parseSupportedChainId(required("CHAIN_ID"));
+if (chainId === null) {
+  process.stderr.write(`CHAIN_ID must be one of ${describeChains(SUPPORTED_CHAIN_IDS)}\n`);
+  process.exit(1);
+}
+
+const apiOptions = {
   baseUrl: required("API_BASE_URL"),
   privateKey: resolveSecret(
     "SCAN_SERVICE_PRIVATE_KEY",
     process.env["SCAN_SERVICE_PRIVATE_KEY"],
   ) as `0x${string}`,
-  chainId: Number(process.env["CHAIN_ID"] ?? "31337"),
+  chainId,
   siweDomain: required("SIWE_DOMAIN"),
   siweUri: required("SIWE_URI"),
-});
+};
+let api: ReturnType<typeof createApiClient>;
+try {
+  api = createApiClient(apiOptions);
+} catch (error) {
+  // A public development key off the local chain is refused here. That message names the
+  // variable, never the key; any other failure is reported without its message, which may quote
+  // the input.
+  const refused = error instanceof Error && error.message.startsWith("SCAN_SERVICE_PRIVATE_KEY");
+  process.stderr.write(`${refused ? error.message : "SCAN_SERVICE_PRIVATE_KEY is not a valid key"}\n`);
+  process.exit(1);
+}
 
 const store =
   process.env["OBJECT_STORE"] === "s3"

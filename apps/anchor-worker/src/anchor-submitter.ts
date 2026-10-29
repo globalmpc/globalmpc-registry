@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import {
   checkSubmitAllowed,
+  eoaSubmissionAllowed,
   trackTransaction,
   type Observation,
   type TransactionState,
 } from "./anchor-state.js";
 import { redactUrls } from "./redact-urls.js";
+import type { FinalityTag } from "./chain-profile.js";
 
 /**
  * Anchor batch chain submission — spec 06 §6.8, 08 §8.9.
@@ -28,8 +30,19 @@ import { redactUrls } from "./redact-urls.js";
 export interface ChainClient {
   /** Current head block number. */
   headBlockNumber(): Promise<number>;
+  /**
+   * The block the node reports for `tag`. A failed read throws: without it nothing may be
+   * confirmed, so the caller waits rather than falling back to depth alone.
+   */
+  finalizedBlockNumber(tag: Exclude<FinalityTag, "none">): Promise<number>;
   /** Current fee quote. Checked against the cap, then sent unchanged. */
   estimateFees(): Promise<FeeQuote>;
+  /**
+   * The L1 data fee to reserve for this send (wei), margin included; 0 on chains without one.
+   * A failed quote throws: on a chain that charges it, sending unreserved would let the cap
+   * undercount.
+   */
+  l1FeeBound(input: SendRootInput): Promise<bigint>;
   /**
    * Builds and signs a `submitRoot` transaction without sending it.
    *
@@ -48,13 +61,14 @@ export interface ChainClient {
   /** Gas limit of the latest block — the most any one transaction can burn in gas. */
   blockGasLimit(): Promise<bigint>;
   /**
-   * What the chain already holds for `batchId` (`getBatch`), with the hash of the transaction
-   * that stored it when its `RootSubmitted` log can be found. null if the batch is not on chain.
+   * What `contractAddress` already holds for `batchId` (`getBatch`), with the hash of the
+   * transaction that stored it when a completed search finds its `RootSubmitted` log. null if the
+   * batch is not on that contract. A failed read, or a search that could not finish, throws.
    *
    * The answer to a lost send result: a timeout or crash after the node accepted the transaction
    * leaves no hash in the DB, and sending again would anchor nothing new and burn gas.
    */
-  anchoredBatch(batchId: string): Promise<AnchoredBatch | null>;
+  anchoredBatch(batchId: string, contractAddress: string): Promise<AnchoredBatch | null>;
   /**
    * Builds `submitRoot` calldata. Used when proposing to Safe.
    *
@@ -116,7 +130,7 @@ export interface PreparedSend {
 
 export interface AnchoredBatch {
   readonly root: string;
-  /** null when the `RootSubmitted` log is outside the searched range or the node refused it. */
+  /** null when a completed search found no `RootSubmitted` log within the lookback range. */
   readonly txHash: string | null;
 }
 
@@ -128,10 +142,9 @@ export interface SubmitterConfig {
   readonly maxAttempts: number;
   readonly dropTimeoutMs: number;
   /**
-   * Total gas (wei) that may be burned per day.
-   *
-   * Even with the per-tx cap (`feeCapWei`) and retry cap (`maxAttempts`) honored, a steady
-   * stream of batches drains the wallet. The loss cap O1 requires is this daily total.
+   * Daily admission budget (wei), counting receipts and open fee reservations. OP-stack L1
+   * reservations are estimates, so actual spend can exceed this value. Limit the funded wallet
+   * balance separately; never use automatic refills to turn this budget into a loss guarantee.
    */
   readonly dailySpendCapWei: bigint;
   /**
@@ -146,6 +159,24 @@ export interface SubmitterConfig {
   readonly reorgWatchMs: number;
   /** Minimum interval before rechecking the same transaction. */
   readonly recheckIntervalMs: number;
+  /**
+   * Block tag a receipt's block must also be at or below before `confirmed`, and before a nonce
+   * read there settles a send (`ANCHOR_FINALITY_TAG`). `none`: depth alone.
+   */
+  readonly finalityTag: FinalityTag;
+  /**
+   * How long a row whose chain search failed stays unclaimed before it is searched again
+   * (`ANCHOR_CHAIN_SEARCH_RETRY_MS`). The failing row steps aside meanwhile, so later rows on the
+   * chain are not held behind it, and a public endpoint is not asked the whole search every poll.
+   */
+  readonly chainSearchRetryMs: number;
+  /**
+   * How long chain searches for one row may keep failing, from the first failure, before the row
+   * goes to `reconciliation_required` with `chain_search_unavailable`
+   * (`ANCHOR_CHAIN_SEARCH_GIVE_UP_MS`). A provider that can never finish the search — a smaller
+   * `eth_getLogs` range limit, pruned history, a lasting rate limit — then reaches a person.
+   */
+  readonly chainSearchGiveUpMs: number;
   /**
    * The RPC endpoint. Used only to mask it out of stored errors — hosted endpoints carry the API
    * key in the URL, and stored errors are served by the API.
@@ -202,6 +233,23 @@ interface PendingRow {
   readonly manifest_hash: string | null;
   readonly schema_version: string | null;
   readonly record_count: number | null;
+  /** The contract recorded with `tx_hash` (0101); NULL on rows recorded before that, or unsent. */
+  readonly contract_address: string | null;
+  /** When the current run of failed chain searches began (0102); NULL while none is failing. */
+  readonly chain_search_failed_since: Date | null;
+}
+
+/**
+ * The contract a hashed row's transaction is judged against: the one recorded with its hash.
+ *
+ * Not the current configuration — after `ANCHOR_CONTRACT_ADDRESS` moves to a new version, a send
+ * to the old contract still in flight, a confirmed row inside the reorg watch, or a Safe proposal
+ * built for the old contract and executed later all stored their root on the old one. Only a row
+ * recorded before the worker stored the contract has none; it falls back to the configuration,
+ * which is what it was judged against when it was sent.
+ */
+function trackedContractOf(row: PendingRow, config: SubmitterConfig): string {
+  return (row.contract_address ?? config.contractAddress).toLowerCase();
 }
 
 /**
@@ -228,7 +276,7 @@ async function claimPending(
     SELECT t.id, t.tenant_id, t.batch_id, t.state, t.tx_hash,
            t.block_number, t.block_hash, t.attempts, t.submitted_at,
            b.batch_id AS external_batch_id, b.merkle_root, b.manifest_hash,
-           b.schema_version, b.record_count
+           b.schema_version, b.record_count, t.contract_address, t.chain_search_failed_since
     FROM chain.transactions t
     LEFT JOIN chain.anchor_batches b ON b.id = t.batch_id
     -- Pick only this chain's transactions. Without the filter a worker on one chain looks up
@@ -236,6 +284,9 @@ async function claimPending(
     -- proposed is not picked. Until Safe executes it there is no transaction on chain, and a
     -- lookup would judge it "not found" and wrongly mark it dropped.
     WHERE t.chain_id = ${chainId}
+      -- A row whose chain search failed waits out its retry delay. Picked oldest-first, it would
+      -- otherwise be claimed again on every pass and hold back every row behind it.
+      AND (t.retry_after IS NULL OR t.retry_after <= now())
       AND (
         t.state IN ('created', 'submitted', 'included')
         OR (
@@ -323,6 +374,8 @@ interface OpenProposal {
   readonly id: string;
   readonly transaction_id: string;
   readonly safe_tx_hash: string;
+  /** The proposal's target: the contract the executed Safe transaction calls. */
+  readonly contract_address: string;
 }
 
 /**
@@ -343,7 +396,7 @@ async function trackProposals(
   log: Log,
 ): Promise<StepResult> {
   const proposals = await sql<OpenProposal[]>`
-    SELECT p.id, p.transaction_id, p.safe_tx_hash
+    SELECT p.id, p.transaction_id, p.safe_tx_hash, p.contract_address
     FROM chain.anchor_proposals p
     JOIN chain.transactions t ON t.id = p.transaction_id
     WHERE p.state = 'proposed' AND p.chain_id = ${config.chainId}
@@ -382,9 +435,12 @@ async function trackProposal(
       `;
       // From here it follows the regular tracking path. Confirmation depth and reorg watch apply
       // equally — execution via Safe does not exempt it from confirmation.
+      // The contract is the proposal's own target, recorded with the hash it produced — not
+      // this worker's current configuration, which may have moved to another deployment since.
       await tx`
         UPDATE chain.transactions
         SET state = 'submitted', tx_hash = ${status.transactionHash},
+            contract_address = ${proposal.contract_address},
             submitted_at = now(), updated_at = now()
         WHERE id = ${proposal.transaction_id}
       `;
@@ -453,7 +509,7 @@ async function closeUnexecutable(
 }
 
 /**
- * Total gas burned on this chain today (UTC).
+ * Total gas burned on this chain today (UTC), with the L1 data fee on chains that charge one.
  *
  * **Counts only transactions with a receipt.** A submitted transaction not yet in a block has no
  * known cost; `inFlightSends` reserves its most until the receipt arrives.
@@ -472,7 +528,7 @@ export async function spentTodayWei(
   chainId: number,
 ): Promise<bigint> {
   const [row] = await sql<{ spent: string }[]>`
-    SELECT COALESCE(SUM(gas_used * effective_gas_price), 0)::TEXT AS spent
+    SELECT COALESCE(SUM(gas_used * effective_gas_price + l1_fee), 0)::TEXT AS spent
     FROM chain.gas_spend
     WHERE chain_id = ${chainId}
       AND observed_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
@@ -488,7 +544,7 @@ export async function spentTodayWei(
  * of its `chain.transactions` row nor time settles it: a reset or dropped row's transaction can
  * still be mined. A row whose receipt is already in the gas ledger counts there instead.
  *
- * `bounded` sums gas limit × max fee for rows that recorded them. `unbounded` counts rows sent
+ * `bounded` sums gas limit × max fee, plus the reserved L1 data fee, for rows that recorded them. `unbounded` counts rows sent
  * before gas limits were fixed; the caller prices each at the block gas limit.
  */
 export async function inFlightSends(
@@ -499,8 +555,10 @@ export async function inFlightSends(
   const [row] = await sql<{ bounded: string; unbounded: string }[]>`
     SELECT
       COALESCE(
-        SUM(s.gas_limit * COALESCE(s.max_fee_per_gas, ${feeCapWei.toString()}::NUMERIC))
-          FILTER (WHERE s.gas_limit IS NOT NULL),
+        SUM(
+          s.gas_limit * COALESCE(s.max_fee_per_gas, ${feeCapWei.toString()}::NUMERIC)
+            + s.l1_fee_bound
+        ) FILTER (WHERE s.gas_limit IS NOT NULL),
         0
       )::TEXT AS bounded,
       count(*) FILTER (WHERE s.gas_limit IS NULL)::TEXT AS unbounded
@@ -567,7 +625,27 @@ async function submitPending(
     }
   }
   const fees = feeResult.quote;
-  const guard = checkSubmitAllowed({
+  const sendInput: SendRootInput = {
+    batchId: row.external_batch_id,
+    root: row.merkle_root,
+    manifestHash: row.manifest_hash,
+    schemaVersion: row.schema_version ?? "1",
+    recordCount: row.record_count,
+    fees,
+    gasLimit: config.gasLimit,
+  };
+  // Priced for exactly what will be signed: same calldata, fees and gas limit. Only a send this
+  // wallet pays for is priced; a Safe proposal spends the executing owner's gas, and a failed
+  // quote must not hold it back.
+  let l1FeeBound = 0n;
+  if (eoaSubmissionAllowed(config.chainId, config.eoaAllowedChainIds)) {
+    try {
+      l1FeeBound = await chain.l1FeeBound(sendInput);
+    } catch (error) {
+      return recordFailedRead(tx, config, log, row, "l1_fee_estimate_failed", error);
+    }
+  }
+  const guardInput = {
     chainId: config.chainId,
     maxFeePerGas: feeCeilingOf(fees),
     feeCapWei: config.feeCapWei,
@@ -579,30 +657,12 @@ async function submitPending(
     spentTodayWei: spentToday,
     inFlightMaxWei: inFlight,
     gasLimit: config.gasLimit,
-  });
+    l1FeeBoundWei: l1FeeBound,
+  };
+  const guard = checkSubmitAllowed(guardInput, "preflight");
 
   if (!guard.allow) {
-    // Record why it is blocked and keep the state. It proceeds on a later loop once conditions
-    // change. Hitting the attempt cap never changes, though, so that ends as failed.
-    if (guard.reason === "MAX_ATTEMPTS_REACHED") {
-      await fail(tx, row.id, guard.reason);
-      return { handled: true, transactionId: row.id, from: row.state, to: "failed" };
-    }
-
-    await tx`
-      UPDATE chain.transactions
-      SET last_error = ${guard.reason}, updated_at = now()
-      WHERE id = ${row.id}
-    `;
-    log({ level: "warn", msg: "anchor.submit.blocked", transactionId: row.id, reason: guard.reason });
-    return {
-      handled: true,
-      transactionId: row.id,
-      from: row.state,
-      to: row.state,
-      reason: guard.reason,
-      waiting: true,
-    };
+    return recordSubmissionBlocked(tx, log, row, guard.reason);
   }
 
   if (guard.via === "safe_proposal") {
@@ -615,34 +675,48 @@ async function submitPending(
   const reconciled = await reconcileBeforeSend(tx, chain, config, log, row);
   if (reconciled) return reconciled;
 
-  // Counts attempts that ended with an error. Commits with this step's outcome; the chain check
-  // above covers attempts whose outcome was never recorded.
-  await tx`
-    UPDATE chain.transactions
-    SET attempts = attempts + 1, updated_at = now()
-    WHERE id = ${row.id}
-  `;
-
   let prepared: PreparedSend;
   try {
-    prepared = await chain.prepareSubmitRoot({
-      batchId: row.external_batch_id,
-      root: row.merkle_root,
-      manifestHash: row.manifest_hash,
-      schemaVersion: row.schema_version ?? "1",
-      recordCount: row.record_count,
-      fees,
-      gasLimit: config.gasLimit,
-    });
+    prepared = await chain.prepareSubmitRoot(sendInput);
   } catch (error) {
+    await countSendAttempt(tx, row);
     return recordFailedSend(tx, config, log, row, error);
   }
+
+  // Only a reservation for this exact transaction, signer and nonce can occupy the retry
+  // slot. Signing supplies that identity; it does not broadcast or create a ledger entry.
+  let retryReservationWei = 0n;
+  if (l1FeeBound > 0n) {
+    try {
+      const [retry] = await tx<{ reserved: string }[]>`
+        SELECT COALESCE(MAX(s.gas_limit * COALESCE(s.max_fee_per_gas, ${config.feeCapWei.toString()}::NUMERIC)
+          + s.l1_fee_bound), 0)::TEXT AS reserved
+        FROM chain.anchor_sends s
+        WHERE s.chain_id = ${config.chainId} AND s.transaction_id = ${row.id}
+          AND s.signer = ${prepared.from.toLowerCase()} AND s.nonce = ${prepared.nonce}
+          AND s.settled_at IS NULL AND s.gas_limit IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM chain.gas_spend g
+            WHERE g.chain_id = s.chain_id AND g.tx_hash = s.tx_hash
+          )
+      `;
+      retryReservationWei = BigInt(retry?.reserved ?? "0");
+    } catch (error) {
+      return recordFailedRead(tx, config, log, row, "retry_reservation_read_failed", error);
+    }
+  }
+  const finalGuard = checkSubmitAllowed({
+    ...guardInput,
+    retryReservationWei,
+  });
+  if (!finalGuard.allow) return recordSubmissionBlocked(tx, log, row, finalGuard.reason);
+  await countSendAttempt(tx, row);
 
   // In the ledger before it can reach the network, committed on its own connection. If this
   // transaction rolls back or the process dies after the broadcast, the send still counts
   // against the cap until its receipt or its nonce settles it.
   try {
-    await recordSend(sql, config, row, prepared);
+    await recordSend(sql, config, row, prepared, l1FeeBound);
   } catch (error) {
     // Not in the ledger means not counted against the cap: never broadcast it. The row waits
     // and the same send is signed again next time.
@@ -670,20 +744,58 @@ async function submitPending(
   return { handled: true, transactionId: row.id, from: "created", to: "submitted" };
 }
 
+async function recordSubmissionBlocked(
+  tx: postgres.TransactionSql,
+  log: Log,
+  row: PendingRow,
+  reason: string,
+): Promise<StepResult> {
+  // Record why it is blocked and keep the state. It proceeds on a later loop once conditions
+  // change. Hitting the attempt cap never changes, though, so that ends as failed.
+  if (reason === "MAX_ATTEMPTS_REACHED") {
+    await fail(tx, row.id, reason);
+    return { handled: true, transactionId: row.id, from: row.state, to: "failed" };
+  }
+
+  await tx`
+    UPDATE chain.transactions
+    SET last_error = ${reason}, updated_at = now()
+    WHERE id = ${row.id}
+  `;
+  log({ level: "warn", msg: "anchor.submit.blocked", transactionId: row.id, reason });
+  return {
+    handled: true,
+    transactionId: row.id,
+    from: row.state,
+    to: row.state,
+    reason,
+    waiting: true,
+  };
+}
+
+async function countSendAttempt(tx: postgres.TransactionSql, row: PendingRow): Promise<void> {
+  await tx`
+    UPDATE chain.transactions SET attempts = attempts + 1, updated_at = now()
+    WHERE id = ${row.id}
+  `;
+}
+
 async function recordSend(
   sql: postgres.Sql,
   config: SubmitterConfig,
   row: PendingRow,
   prepared: PreparedSend,
+  l1FeeBound: bigint,
 ): Promise<void> {
   // Re-signing identical input gives the identical transaction and hash: one row.
   await sql`
     INSERT INTO chain.anchor_sends (
-      chain_id, tx_hash, transaction_id, tenant_id, signer, nonce, gas_limit, max_fee_per_gas
+      chain_id, tx_hash, transaction_id, tenant_id, signer, nonce, gas_limit, max_fee_per_gas,
+      l1_fee_bound
     ) VALUES (
       ${config.chainId}, ${prepared.txHash.toLowerCase()}, ${row.id}, ${row.tenant_id},
       ${prepared.from.toLowerCase()}, ${prepared.nonce}, ${prepared.gasLimit.toString()},
-      ${prepared.maxFeePerGas.toString()}
+      ${prepared.maxFeePerGas.toString()}, ${l1FeeBound.toString()}
     )
     ON CONFLICT (chain_id, tx_hash) DO NOTHING
   `;
@@ -762,9 +874,14 @@ async function settleSends(
   `;
   if (sends.length === 0) return;
 
+  // A nonce read at a block a reorg can still undo could settle a send that then gets mined, so
+  // the block is also held at or below the finalized head, like confirmation.
   let depthBlock: number;
   try {
     depthBlock = (await chain.headBlockNumber()) - config.confirmationDepth + 1;
+    if (config.finalityTag !== "none") {
+      depthBlock = Math.min(depthBlock, await chain.finalizedBlockNumber(config.finalityTag));
+    }
   } catch (error) {
     log({ level: "warn", msg: "anchor.sends.check_failed", error: errorText(config, null, error) });
     return;
@@ -811,10 +928,11 @@ async function settleSend(
     await sql.begin(async (tx) => {
       await tx`
         INSERT INTO chain.gas_spend (
-          chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price
+          chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price, l1_fee
         ) VALUES (
           ${config.chainId}, ${send.tx_hash}, ${send.transaction_id}, ${send.tenant_id},
-          ${observation.gasUsed.toString()}, ${observation.effectiveGasPrice.toString()}
+          ${observation.gasUsed.toString()}, ${observation.effectiveGasPrice.toString()},
+          ${observation.l1Fee.toString()}
         )
         ON CONFLICT (chain_id, tx_hash) DO NOTHING
       `;
@@ -874,26 +992,14 @@ async function reconcileBeforeSend(
 ): Promise<StepResult | null> {
   let anchored: AnchoredBatch | null;
   try {
-    anchored = await chain.anchoredBatch(row.external_batch_id!);
+    // A new send goes to the configured contract, so that is the one asked.
+    anchored = await chain.anchoredBatch(row.external_batch_id!, config.contractAddress);
   } catch (error) {
-    // Without an answer the worker must not send. Record why the row waits and back off, the
-    // same way a failed send does, instead of surfacing only as a loop error.
-    const message = errorText(config, "reconciliation_check_failed", error);
-    await tx`
-      UPDATE chain.transactions
-      SET last_error = ${message}, updated_at = now()
-      WHERE id = ${row.id}
-    `;
-    log({ level: "warn", msg: "anchor.reconcile.check_failed", transactionId: row.id, error: message });
-    return {
-      handled: true,
-      transactionId: row.id,
-      from: row.state,
-      to: row.state,
-      reason: "reconciliation_check_failed",
-      waiting: true,
-    };
+    // Without an answer the worker must not send. The row waits and is asked again later, until
+    // the search has failed for too long.
+    return recordFailedSearch(tx, config, log, row, "reconciliation_check_failed", error);
   }
+  await clearFailedSearch(tx, row);
   if (!anchored) return null;
 
   if (anchored.root !== row.merkle_root) {
@@ -926,10 +1032,13 @@ async function requireReconciliation(
   log: Log,
   row: PendingRow,
   reason: string,
+  lastError: string = reason,
 ): Promise<StepResult> {
+  // The search schedule ends here: a person decides, and a resubmission starts with none.
   await tx`
     UPDATE chain.transactions
-    SET state = 'reconciliation_required', last_error = ${reason}, updated_at = now()
+    SET state = 'reconciliation_required', last_error = ${lastError},
+        chain_search_failed_since = NULL, retry_after = NULL, updated_at = now()
     WHERE id = ${row.id}
   `;
   log({ level: "warn", msg: "anchor.reconciliation_required", transactionId: row.id, reason });
@@ -937,11 +1046,69 @@ async function requireReconciliation(
 }
 
 /**
- * A reverted receipt for a batch that is on chain anyway.
+ * A chain search for this row failed: a failed read, a refused range, or a node behind the batch.
+ * None of them is proof of absence, so the row keeps its state and is not claimed again for
+ * `chainSearchRetryMs`. Once searches have kept failing for `chainSearchGiveUpMs` since the first,
+ * the row goes to a person: a provider that cannot finish the search would otherwise leave it
+ * waiting forever, never counted as an attempt and never raising `anchor.needs_attention`.
+ */
+async function recordFailedSearch(
+  tx: postgres.TransactionSql,
+  config: SubmitterConfig,
+  log: Log,
+  row: PendingRow,
+  reason: string,
+  error: unknown,
+): Promise<StepResult> {
+  const message = errorText(config, reason, error);
+  // Timed on the database clock, like every other interval the claim compares.
+  const [schedule] = await tx<{ give_up: boolean }[]>`
+    UPDATE chain.transactions
+    SET last_error = ${message},
+        chain_search_failed_since = COALESCE(chain_search_failed_since, now()),
+        retry_after = now() + ${`${config.chainSearchRetryMs} milliseconds`}::interval,
+        updated_at = now()
+    WHERE id = ${row.id}
+    RETURNING chain_search_failed_since
+      <= now() - ${`${config.chainSearchGiveUpMs} milliseconds`}::interval AS give_up
+  `;
+  if (schedule?.give_up) {
+    return requireReconciliation(
+      tx,
+      log,
+      row,
+      "chain_search_unavailable",
+      errorText(config, "chain_search_unavailable", error),
+    );
+  }
+  log({ level: "warn", msg: "anchor.chain_search.failed", transactionId: row.id, reason, error: message });
+  return {
+    handled: true,
+    transactionId: row.id,
+    from: row.state,
+    to: row.state,
+    reason,
+    waiting: true,
+  };
+}
+
+/** A chain search for this row answered: the failure run, if any, is over. */
+async function clearFailedSearch(tx: postgres.TransactionSql, row: PendingRow): Promise<void> {
+  if (row.chain_search_failed_since === null) return;
+  await tx`
+    UPDATE chain.transactions SET chain_search_failed_since = NULL, retry_after = NULL
+    WHERE id = ${row.id}
+  `;
+}
+
+/**
+ * A receipt that did not store the batch, for a batch that is on chain anyway.
  *
  * The retry went out while the first send was still in the mempool; both were mined and ours
- * reverted with `BatchAlreadyExists`. The batch is anchored — by the first transaction. Follow
- * that one instead of marking the batch reverted. The reverted one's gas is already in the ledger.
+ * reverted with `BatchAlreadyExists` (`duplicate_send_reverted`) — or, through a Safe, the inner
+ * call failed and the execution still succeeded (`anchored_by_another_transaction`). The batch is
+ * anchored — by the other transaction. Follow that one instead of marking the batch reverted.
+ * This one's gas is already in the ledger.
  */
 async function followAnchoringTransaction(
   tx: postgres.TransactionSql,
@@ -949,46 +1116,48 @@ async function followAnchoringTransaction(
   config: SubmitterConfig,
   log: Log,
   row: PendingRow,
+  reason: "duplicate_send_reverted" | "anchored_by_another_transaction",
 ): Promise<StepResult | null> {
   if (!row.external_batch_id) return null;
+  // The contract this row's transaction was sent to. A duplicate reverted there because that
+  // contract already held the batch; another contract's copy would be a different anchor.
+  const contract = trackedContractOf(row, config);
   let anchored: AnchoredBatch | null;
   try {
-    anchored = await chain.anchoredBatch(row.external_batch_id);
+    anchored = await chain.anchoredBatch(row.external_batch_id, contract);
   } catch (error) {
-    // Without an answer a duplicate cannot be told from a real revert. Keep the state, record why
-    // the row waits and back off, instead of surfacing only as a loop error.
-    const message = errorText(config, "duplicate_check_failed", error);
-    await tx`
-      UPDATE chain.transactions
-      SET last_error = ${message}, updated_at = now()
-      WHERE id = ${row.id}
-    `;
-    log({ level: "warn", msg: "anchor.duplicate.check_failed", transactionId: row.id, error: message });
-    return {
-      handled: true,
-      transactionId: row.id,
-      from: row.state,
-      to: row.state,
-      reason: "duplicate_check_failed",
-      waiting: true,
-    };
+    // Without an answer a duplicate cannot be told from a real revert, nor a receipt without the
+    // root from a batch stored by another transaction. Keep the state and ask again later.
+    return recordFailedSearch(
+      tx,
+      config,
+      log,
+      row,
+      reason === "duplicate_send_reverted" ? "duplicate_check_failed" : "anchored_elsewhere_check_failed",
+      error,
+    );
   }
+  await clearFailedSearch(tx, row);
   if (!anchored?.txHash || anchored.root !== row.merkle_root || anchored.txHash === row.tx_hash) {
     return null;
   }
 
+  // The contract the hash was found on is recorded with it, in the same UPDATE: a public proof
+  // names the pair, and it must not pair this hash with another contract.
   await tx`
     UPDATE chain.transactions
     SET state = 'submitted', tx_hash = ${anchored.txHash},
+        contract_address = ${contract},
         block_number = NULL, block_hash = NULL, confirmations = 0, confirmed_at = NULL,
-        last_error = 'duplicate_send_reverted', updated_at = now()
+        last_error = ${reason}, updated_at = now()
     WHERE id = ${row.id}
   `;
   log({
     level: "warn",
-    msg: "anchor.duplicate_reverted",
+    msg: reason === "duplicate_send_reverted" ? "anchor.duplicate_reverted" : "anchor.anchored_elsewhere",
     transactionId: row.id,
-    revertedTxHash: row.tx_hash,
+    // The transaction that did not store the batch; the row now follows `txHash`.
+    previousTxHash: row.tx_hash,
     txHash: anchored.txHash,
   });
   return {
@@ -996,7 +1165,7 @@ async function followAnchoringTransaction(
     transactionId: row.id,
     from: row.state,
     to: "submitted",
-    reason: "duplicate_send_reverted",
+    reason,
   };
 }
 
@@ -1107,6 +1276,24 @@ async function proposeToSafe(
   return { handled: true, transactionId: row.id, from: "created", to: "proposed", reason: "safe_proposal_created" };
 }
 
+/**
+ * Whether this receipt carries `contract`'s `RootSubmitted` for exactly this batch and root. The
+ * same event from any other address stores nothing on the contract the row names.
+ */
+function storedRoot(
+  observation: Extract<Observation, { kind: "receipt" }>,
+  contract: string,
+  batchId: string,
+  root: string,
+): boolean {
+  return observation.rootSubmissions.some(
+    (log) =>
+      log.contract === contract &&
+      log.batchId === batchId.toLowerCase() &&
+      log.root === root.toLowerCase(),
+  );
+}
+
 async function trackPending(
   tx: postgres.TransactionSql,
   chain: ChainClient,
@@ -1146,10 +1333,11 @@ async function trackPending(
     `;
     await tx`
       INSERT INTO chain.gas_spend (
-        chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price
+        chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price, l1_fee
       ) VALUES (
         ${config.chainId}, ${row.tx_hash}, ${row.id}, ${row.tenant_id},
-        ${observation.gasUsed.toString()}, ${observation.effectiveGasPrice.toString()}
+        ${observation.gasUsed.toString()}, ${observation.effectiveGasPrice.toString()},
+        ${observation.l1Fee.toString()}
       )
       ON CONFLICT (chain_id, tx_hash) DO NOTHING
     `;
@@ -1157,8 +1345,40 @@ async function trackPending(
   }
 
   if (observation.kind === "receipt" && observation.status === "reverted") {
-    const followed = await followAnchoringTransaction(tx, chain, config, log, row);
+    const followed = await followAnchoringTransaction(tx, chain, config, log, row, "duplicate_send_reverted");
     if (followed) return followed;
+  }
+
+  if (
+    observation.kind === "receipt" &&
+    observation.status === "success" &&
+    row.external_batch_id &&
+    row.merkle_root &&
+    !storedRoot(observation, trackedContractOf(row, config), row.external_batch_id, row.merkle_root)
+  ) {
+    // Mined and successful, yet the contract recorded no root for this batch here: a Safe
+    // execution whose inner call failed, or a transaction to some other address. Confirming it
+    // would publish a proof the chain does not back. If another transaction stored the batch,
+    // follow that one; otherwise a person looks, as with any batch whose chain state is unclear.
+    const followed = await followAnchoringTransaction(
+      tx,
+      chain,
+      config,
+      log,
+      row,
+      "anchored_by_another_transaction",
+    );
+    if (followed) return followed;
+    return requireReconciliation(tx, log, row, "receipt_without_root_submitted");
+  }
+
+  let finalizedBlockNumber: number | null = null;
+  if (observation.kind === "receipt" && config.finalityTag !== "none") {
+    try {
+      finalizedBlockNumber = await chain.finalizedBlockNumber(config.finalityTag);
+    } catch (error) {
+      return recordFailedRead(tx, config, log, row, "finality_read_failed", error);
+    }
   }
 
   const result = trackTransaction({
@@ -1168,6 +1388,7 @@ async function trackPending(
     observation,
     headBlockNumber,
     confirmationDepth: config.confirmationDepth,
+    finalizedBlockNumber,
     elapsedSinceSubmitMs: row.submitted_at ? Date.now() - row.submitted_at.getTime() : 0,
     dropTimeoutMs: config.dropTimeoutMs,
   });

@@ -27,6 +27,7 @@ can be published. A public Explorer lets readers inspect published records and t
 ## Supported Networks
 
 - **BNB Smart Chain Mainnet (Chain ID: 56)** — intended production network; deployment pending.
+- **opBNB Testnet (Chain ID: 5611)** — shared dev/test deployment.
 - **Local Anvil (Chain ID: 31337)** — development and automated testing.
 
 ## Contract Addresses
@@ -34,7 +35,10 @@ can be published. A public Explorer lets readers inspect published records and t
 | Network | Contract | Address |
 |---|---|---|
 | BNB Smart Chain Mainnet | RegistryAnchorV1 | Not deployed |
+| opBNB Testnet (5611) | RegistryAnchorV1 | [`0x40197aff5a3db7542ceff4198fc52dc730a6c39f`](https://testnet.opbnbscan.com/address/0x40197aff5a3db7542ceff4198fc52dc730a6c39f) |
 
+The opBNB testnet deployment, its roles and transaction are recorded in
+[`docs/operations/testnet-contract.md`](docs/operations/testnet-contract.md#deployment-record).
 Local contract addresses are created during development and CI runs. They are not BSC
 addresses. The mainnet address and BscScan verification link will be added after deployment.
 
@@ -42,10 +46,15 @@ addresses. The mainnet address and BscScan verification link will be added after
 
 BNB Smart Chain is set as the target network in these files:
 
-- [`apps/api/src/config.ts`](apps/api/src/config.ts) — `CHAIN_ID` accepts only 56 (BSC mainnet)
-  or 31337 (local chain); any other value stops the API at startup.
-- [`apps/api/src/bootstrap.ts`](apps/api/src/bootstrap.ts) — applies the same 56-or-31337 rule
-  when the registry is initialized.
+- [`packages/domain/src/chains.ts`](packages/domain/src/chains.ts) — the one list of supported
+  chains: 56 (BSC mainnet), 5611 (opBNB testnet) and 31337 (local chain).
+- [`apps/api/src/config.ts`](apps/api/src/config.ts) — `CHAIN_ID` accepts only those chains; any
+  other value stops the API at startup.
+- [`apps/api/src/bootstrap.ts`](apps/api/src/bootstrap.ts) — applies the same rule when the
+  registry is initialized; `BOOTSTRAP_CHAIN_ID` defaults to `CHAIN_ID`.
+- [`apps/anchor-worker/src/anchor-config.ts`](apps/anchor-worker/src/anchor-config.ts) — refuses any
+  other `CHAIN_ID` too. Solo EOA anchoring is possible only on 31337 and, when listed in
+  `ANCHOR_EOA_CHAIN_IDS`, 5611. Mainnet anchors through the Safe only.
 - [`contracts/foundry.toml`](contracts/foundry.toml) — declares a `bsc` RPC endpoint read from
   `BSC_RPC_URL`.
 - [`docs/operations/mainnet-contract.md`](docs/operations/mainnet-contract.md) — the BSC mainnet (Chain ID 56)

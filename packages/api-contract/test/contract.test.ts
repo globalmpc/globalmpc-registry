@@ -21,8 +21,28 @@ import {
   castVoteRequest,
   createProposalRequest,
   recordExecutionRequest,
+  bindWalletRequest,
 } from "../src/resources.js";
 import { errorEnvelope, safetyFields, sourceStatusView } from "../src/common.js";
+
+describe("wallet bind chain", () => {
+  const request = (chainId: number) =>
+    bindWalletRequest.safeParse({
+      walletAddress: `0x${"ab".repeat(20)}`,
+      chainId,
+      assuranceLevel: "wallet_only",
+      justification: "Checked in person",
+    }).success;
+
+  it("accepts the chains the API runs on, including the opBNB testnet", () => {
+    for (const chainId of [56, 5611, 31337]) expect(request(chainId), String(chainId)).toBe(true);
+  });
+
+  it("refuses any other chain", () => {
+    // A wallet bound on a chain the API does not run on can never log in.
+    for (const chainId of [97, 204, 1]) expect(request(chainId), String(chainId)).toBe(false);
+  });
+});
 
 /**
  * Second-person actions — the deciding side of a two-person rule.
@@ -416,6 +436,7 @@ describe("AC-23 — inclusion proof also returns what it does not prove", () => 
       root: "0x" + "33".repeat(32),
       batchId: "0x" + "44".repeat(32),
       chainId: 56,
+      contractAddress: "0x" + "66".repeat(20),
       transactionHash: "0x" + "55".repeat(32),
       blockNumber: 100,
       confirmationState: "confirmed",
@@ -439,6 +460,7 @@ describe("AC-23 — inclusion proof also returns what it does not prove", () => 
       root: "0x" + "33".repeat(32),
       batchId: "0x" + "44".repeat(32),
       chainId: 56,
+      contractAddress: null,
       transactionHash: null,
       blockNumber: null,
       confirmationState: "confirmed",
@@ -456,6 +478,36 @@ describe("AC-23 — inclusion proof also returns what it does not prove", () => 
     }
   });
 
+  it("names the anchor contract: required, null allowed, lowercase 20-byte address only", () => {
+    // An anchor is (chain, contract, batch id); a new contract version lives at a new address.
+    // Optional would let a deployment drop it and still satisfy the contract.
+    const base = {
+      entryVersionId: "v1",
+      leafHash: "0x" + "11".repeat(32),
+      proof: [],
+      root: "0x" + "33".repeat(32),
+      batchId: "0x" + "44".repeat(32),
+      chainId: 5611,
+      contractAddress: "0x" + "66".repeat(20),
+      transactionHash: "0x" + "55".repeat(32),
+      blockNumber: 1,
+      confirmationState: "confirmed",
+      included: true,
+      proves: [...PROOF_PROVES],
+      doesNotProve: [...PROOF_DOES_NOT_PROVE],
+      policyVersion: "mn-core-1.0.0",
+      schemaVersion: "project-registry-1",
+      serializationVersion: "1",
+    };
+    expect(inclusionProofResponse.safeParse(base).success).toBe(true);
+    expect(inclusionProofResponse.safeParse({ ...base, contractAddress: null }).success).toBe(true);
+    const { contractAddress: _omitted, ...without } = base;
+    expect(inclusionProofResponse.safeParse(without).success).toBe(false);
+    for (const bad of ["0x" + "AB".repeat(20), "0x" + "66".repeat(19), "0x" + "66".repeat(32)]) {
+      expect(inclusionProofResponse.safeParse({ ...base, contractAddress: bad }).success, bad).toBe(false);
+    }
+  });
+
   it("serializationVersion is not pinned to \"1\"", () => {
     // Bumping the spec changes the value (CLAUDE.md). If the contract forced "1",
     // responses would violate the contract on that day.
@@ -466,6 +518,7 @@ describe("AC-23 — inclusion proof also returns what it does not prove", () => 
       root: "0x" + "33".repeat(32),
       batchId: "0x" + "44".repeat(32),
       chainId: 56,
+      contractAddress: null,
       transactionHash: null,
       blockNumber: null,
       confirmationState: "confirmed",
