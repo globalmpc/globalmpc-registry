@@ -60,7 +60,7 @@ describeDb("public development wallets off the local chain", () => {
     };
 
     it("refuses a public development wallet on 5611, creating nothing", async () => {
-      for (const address of [anvil0.address, COMMITTED_FIXTURE_ADDRESSES[0]!]) {
+      for (const address of [anvil0.address, ...COMMITTED_FIXTURE_ADDRESSES]) {
         const attempt = input(address, 5611);
         await expect(bootstrapOperator(fx.sql, attempt), address).rejects.toThrow(BootstrapError);
         await expect(bootstrapOperator(fx.sql, attempt), address).rejects.toThrow(/public development address/);
@@ -104,7 +104,7 @@ describeDb("public development wallets off the local chain", () => {
     }
 
     it("refuses a public development address on 5611", async () => {
-      for (const address of [anvil0.address.toLowerCase(), ANVIL_DEV_ADDRESSES[3]!, COMMITTED_FIXTURE_ADDRESSES[0]!]) {
+      for (const address of [anvil0.address.toLowerCase(), ANVIL_DEV_ADDRESSES[3]!, ...COMMITTED_FIXTURE_ADDRESSES]) {
         const response = await bind(address, 5611);
         expect(response.statusCode, address).toBe(422);
         expect(response.json(), address).toMatchObject({ code: "WALLET_PUBLIC_DEV_ADDRESS" });

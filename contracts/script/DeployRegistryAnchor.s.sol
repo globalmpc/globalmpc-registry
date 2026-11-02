@@ -157,7 +157,10 @@ contract DeployRegistryAnchor is Script {
     ///      `COMMITTED_FIXTURE_ADDRESSES` in `packages/config/src/dev-keys.ts`, whose own test
     ///      derives that list from the committed key files.
     function committedFixtureAddresses() internal pure returns (address[] memory list) {
-        list = new address[](1);
+        list = new address[](4);
+        list[1] = 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A; // repeated-byte 0x11 signing fixture
+        list[2] = 0x1563915e194D8CfBA1943570603F7606A3115508; // repeated-byte 0x22 signing fixture
+        list[3] = 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7; // deployment test fixture
         list[0] = 0xDA519e0e438D9836DC7E9Ca61117e43a9773B598; // config/local-secrets/scan_service_key
     }
 

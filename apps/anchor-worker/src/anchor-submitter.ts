@@ -265,6 +265,8 @@ function trackedContractOf(row: PendingRow, config: SubmitterConfig): string {
  *
  * Watching is not forever either. Some time after confirmation the chance of a reorg is
  * effectively gone, so the row leaves the set — otherwise the loop slows as confirmed rows pile up.
+ * An unresolved chain search is an exception: its persisted retry/give-up schedule must finish,
+ * even if the ordinary watch elapsed while the RPC was unavailable.
  */
 async function claimPending(
   tx: postgres.TransactionSql,
@@ -291,7 +293,11 @@ async function claimPending(
         t.state IN ('created', 'submitted', 'included')
         OR (
           t.state = 'confirmed'
-          AND t.confirmed_at > now() - ${`${Math.round(reorgWatchMs / 1000)} seconds`}::interval
+          AND (
+            t.confirmed_at > now() - ${`${Math.round(reorgWatchMs / 1000)} seconds`}::interval
+            OR t.chain_search_failed_since IS NOT NULL
+            OR t.retry_after IS NOT NULL
+          )
           AND t.updated_at < now() - ${`${Math.round(recheckIntervalMs / 1000)} seconds`}::interval
         )
       )
@@ -500,7 +506,8 @@ async function closeUnexecutable(
     `;
     await tx`
       UPDATE chain.transactions
-      SET state = 'failed', last_error = ${reason}, updated_at = now()
+      SET state = 'failed', last_error = ${reason},
+          chain_search_failed_since = NULL, retry_after = NULL, updated_at = now()
       WHERE id = ${proposal.transaction_id}
     `;
   });
@@ -876,15 +883,16 @@ async function settleSends(
 
   // A nonce read at a block a reorg can still undo could settle a send that then gets mined, so
   // the block is also held at or below the finalized head, like confirmation.
-  let depthBlock: number;
+  let depthBlock: number | null = null;
   try {
-    depthBlock = (await chain.headBlockNumber()) - config.confirmationDepth + 1;
-    if (config.finalityTag !== "none") {
-      depthBlock = Math.min(depthBlock, await chain.finalizedBlockNumber(config.finalityTag));
-    }
+    const atDepth = (await chain.headBlockNumber()) - config.confirmationDepth + 1;
+    depthBlock = config.finalityTag === "none"
+      ? atDepth
+      : Math.min(atDepth, await chain.finalizedBlockNumber(config.finalityTag));
   } catch (error) {
+    // Finality gates nonce consumption, not actual mined costs. Keep receipt settlement live
+    // while the head/tag RPC is unavailable, without guessing a nonce-safe block.
     log({ level: "warn", msg: "anchor.sends.check_failed", error: errorText(config, null, error) });
-    return;
   }
 
   const confirmedNonces = new Map<string, number>();
@@ -912,14 +920,20 @@ async function settleSend(
   config: SubmitterConfig,
   log: Log,
   send: OpenSend,
-  depthBlock: number,
+  depthBlock: number | null,
   confirmedNonces: Map<string, number>,
 ): Promise<void> {
   let takenBelow: number | null = null;
-  if (send.nonce !== null && send.signer !== null && depthBlock >= 0) {
-    const cached = confirmedNonces.get(send.signer);
-    takenBelow = cached ?? (await chain.confirmedNonce(send.signer, depthBlock));
-    confirmedNonces.set(send.signer, takenBelow);
+  if (send.nonce !== null && send.signer !== null && depthBlock !== null && depthBlock >= 0) {
+    try {
+      const cached = confirmedNonces.get(send.signer);
+      takenBelow = cached ?? (await chain.confirmedNonce(send.signer, depthBlock));
+      confirmedNonces.set(send.signer, takenBelow);
+    } catch (error) {
+      // An unavailable nonce cannot release a reservation, but its receipt can still account
+      // for the real fee. Successful nonce reads remain before the receipt to avoid the race.
+      log({ level: "warn", msg: "anchor.sends.check_failed", txHash: send.tx_hash, error: errorText(config, null, error) });
+    }
   }
 
   const observation = await chain.observe(send.tx_hash);
@@ -1094,10 +1108,9 @@ async function recordFailedSearch(
 
 /** A chain search for this row answered: the failure run, if any, is over. */
 async function clearFailedSearch(tx: postgres.TransactionSql, row: PendingRow): Promise<void> {
-  if (row.chain_search_failed_since === null) return;
   await tx`
     UPDATE chain.transactions SET chain_search_failed_since = NULL, retry_after = NULL
-    WHERE id = ${row.id}
+    WHERE id = ${row.id} AND (chain_search_failed_since IS NOT NULL OR retry_after IS NOT NULL)
   `;
 }
 
@@ -1137,6 +1150,8 @@ async function followAnchoringTransaction(
       error,
     );
   }
+  // This successful lookup ends the consecutive search-failure episode. If finality later
+  // fails, its retry schedule independently keeps unfinished confirmed tracking eligible.
   await clearFailedSearch(tx, row);
   if (!anchored?.txHash || anchored.root !== row.merkle_root || anchored.txHash === row.tx_hash) {
     return null;
@@ -1152,6 +1167,7 @@ async function followAnchoringTransaction(
         last_error = ${reason}, updated_at = now()
     WHERE id = ${row.id}
   `;
+  await clearFailedSearch(tx, row);
   log({
     level: "warn",
     msg: reason === "duplicate_send_reverted" ? "anchor.duplicate_reverted" : "anchor.anchored_elsewhere",
@@ -1372,6 +1388,10 @@ async function trackPending(
     return requireReconciliation(tx, log, row, "receipt_without_root_submitted");
   }
 
+  // A complete receipt (or a handled reverted receipt whose lookup answered) resolves the
+  // search episode independently of the finality prerequisite that remains below.
+  if (observation.kind === "receipt") await clearFailedSearch(tx, row);
+
   let finalizedBlockNumber: number | null = null;
   if (observation.kind === "receipt" && config.finalityTag !== "none") {
     try {
@@ -1418,6 +1438,8 @@ async function trackPending(
     // Stamp the check time even when nothing changed. Otherwise the same row is re-picked
     // immediately and pending rows behind it never progress.
     await tx`UPDATE chain.transactions SET updated_at = now() WHERE id = ${row.id}`;
+    // Completed tracking clears any finality retry schedule as well as the search episode.
+    if (observation.kind === "receipt") await clearFailedSearch(tx, row);
     return {
       handled: true,
       transactionId: row.id,
@@ -1440,6 +1462,12 @@ async function trackPending(
         updated_at = now()
     WHERE id = ${row.id}
   `;
+
+  // A resolved receipt or a terminal/manual-decision transition ends this search episode.
+  // Clear only after its state update succeeds; failed finality reads must keep eligibility.
+  if (observation.kind === "receipt" || result.nextState === "reconciliation_required" || result.nextState === "dropped") {
+    await clearFailedSearch(tx, row);
+  }
 
   log({
     level: "info",
@@ -1475,7 +1503,11 @@ async function recordFailedRead(
   const message = errorText(config, reason, error);
   await tx`
     UPDATE chain.transactions
-    SET last_error = ${message}, updated_at = now()
+    SET last_error = ${message},
+        retry_after = CASE WHEN ${reason} = 'finality_read_failed'
+          THEN now() + ${`${config.chainSearchRetryMs} milliseconds`}::interval
+          ELSE retry_after END,
+        updated_at = now()
     WHERE id = ${row.id}
   `;
   log({ level: "warn", msg: "anchor.chain_read.failed", transactionId: row.id, reason, error: message });
@@ -1496,7 +1528,8 @@ async function fail(
 ): Promise<void> {
   await tx`
     UPDATE chain.transactions
-    SET state = 'failed', last_error = ${reason}, updated_at = now()
+    SET state = 'failed', last_error = ${reason},
+        chain_search_failed_since = NULL, retry_after = NULL, updated_at = now()
     WHERE id = ${id}
   `;
 }

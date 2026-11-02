@@ -93,6 +93,9 @@ log leakage.
   script requires a contract (the Safe), and the worker submits directly only on chains in
   `ANCHOR_EOA_CHAIN_IDS` (31337 by default, 5611 by opt-in, nothing else accepted); on other
   chains it proposes to the Safe.
+- Shared-chain key checks reject the known committed signing fixtures from configuration and
+  test sources as well as the standard anvil accounts. The fixture audit recognizes supported
+  literal declarations; it cannot identify every key that could be derived from public data.
 
 **Not blocked yet**
 

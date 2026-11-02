@@ -801,23 +801,24 @@ describeDb("Registry publication and public lookup", () => {
       expect(response.json().details.currentState).toBe("created");
     });
 
-    it("resets the attempt count of a stuck batch and resubmits", async () => {
+    it.each(["dropped", "reconciliation_required", "failed", "reverted"])("resets attempts and search timers when resubmitting %s", async (previousState) => {
       const batchId = await makeBatch();
       await fx.sql`
         UPDATE chain.transactions
-        SET state = 'dropped', attempts = 3, tx_hash = ${`0x${"ab".repeat(32)}`},
-            contract_address = ${`0x${"a1".repeat(20)}`}
+        SET state = ${previousState}, attempts = 3, tx_hash = ${`0x${"ab".repeat(32)}`},
+            contract_address = ${`0x${"a1".repeat(20)}`},
+            chain_search_failed_since = now() - interval '2 hours', retry_after = now() + interval '1 hour'
         WHERE batch_id = ${batchId}
       `;
 
       const response = await resubmit(batchId);
       expect(response.statusCode).toBe(200);
-      expect(response.json().previousState).toBe("dropped");
+      expect(response.json().previousState).toBe(previousState);
 
       const [row] = await fx.sql<
-        { state: string; attempts: number; tx_hash: string | null; contract_address: string | null }[]
+        { state: string; attempts: number; tx_hash: string | null; contract_address: string | null; chain_search_failed_since: Date | null; retry_after: Date | null }[]
       >`
-        SELECT state, attempts, tx_hash, contract_address FROM chain.transactions WHERE batch_id = ${batchId}
+        SELECT state, attempts, tx_hash, contract_address, chain_search_failed_since, retry_after FROM chain.transactions WHERE batch_id = ${batchId}
       `;
       // The contract belonged to the cleared hash; the next send records its own.
       expect(row!.contract_address).toBeNull();
@@ -825,6 +826,24 @@ describeDb("Registry publication and public lookup", () => {
       expect(row!.state).toBe("created");
       expect(row!.attempts).toBe(0);
       expect(row!.tx_hash).toBeNull();
+      expect(row!.chain_search_failed_since).toBeNull();
+      expect(row!.retry_after).toBeNull();
+    });
+
+    it("another tenant cannot reset a stuck batch or its retry schedule", async () => {
+      const batchId = await makeBatch();
+      await fx.sql`UPDATE chain.transactions SET state = 'reconciliation_required',
+        chain_search_failed_since = now() - interval '2 hours', retry_after = now() + interval '1 hour'
+        WHERE batch_id = ${batchId}`;
+      const [before] = await fx.sql`SELECT state, chain_search_failed_since, retry_after FROM chain.transactions WHERE batch_id = ${batchId}`;
+      const response = await app.inject({
+        method: "POST", url: `/api/v1/anchor-batches/${batchId}/resubmit`,
+        headers: { authorization: `Bearer ${await signIn(app, fx.operatorB)}`, "idempotency-key": idempotencyKey() },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(404);
+      const [after] = await fx.sql`SELECT state, chain_search_failed_since, retry_after FROM chain.transactions WHERE batch_id = ${batchId}`;
+      expect(after).toEqual(before);
     });
 
     it("resubmission also requires anchor.submit", async () => {

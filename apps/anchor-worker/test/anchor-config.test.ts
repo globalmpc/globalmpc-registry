@@ -21,7 +21,7 @@ const base: AnchorEnv = {
   CHAIN_RPC_URL: "http://localhost:8545",
   CHAIN_ID: "31337",
   ANCHOR_CONTRACT_ADDRESS: `0x${"ab".repeat(20)}`,
-  ANCHOR_SIGNER_PRIVATE_KEY: `0x${"11".repeat(32)}`,
+  ANCHOR_SIGNER_PRIVATE_KEY: generatePrivateKey(),
   ANCHOR_DAILY_SPEND_CAP_WEI: "50000000000000000",
 };
 
@@ -136,6 +136,17 @@ describe("public development keys", () => {
       }
       expect(message, chainId).toMatch(/ANCHOR_SIGNER_PRIVATE_KEY is a public development key \(anvil\/hardhat or a committed fixture\)/);
       expect(message).not.toContain(anvil0.slice(2, 18));
+    }
+  });
+
+  it("refuses committed repeated-byte signing fixtures on shared chains", () => {
+    for (const byte of ["11", "22"]) {
+      const key = `0x${byte.repeat(32)}`;
+      for (const chainId of ["5611", "56"]) {
+        expect(() => loadAnchorConfig({ ...base, CHAIN_ID: chainId, ANCHOR_SIGNER_PRIVATE_KEY: key }))
+          .toThrowError(/public development key/);
+      }
+      expect(loadAnchorConfig({ ...base, ANCHOR_SIGNER_PRIVATE_KEY: key }).chainId).toBe(31337);
     }
   });
 

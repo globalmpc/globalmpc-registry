@@ -53,12 +53,14 @@ contract SafeStandIn {}
 ///      deployment — the one layout under which "not even MPC can change it alone" fails.
 contract DeployRegistryAnchorTest is Test {
     DeployRegistryAnchorHarness internal script;
+    uint256 internal freshDeployerKey;
 
     /// @dev Valid on every chain: the Safe-chain minimum.
     uint48 internal constant ADMIN_DELAY = 1 days;
 
     function setUp() public {
         script = new DeployRegistryAnchorHarness();
+        freshDeployerKey = bound(vm.randomUint(), 1, 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140);
     }
 
     function test_RevertWhen_RoleVariableIsUnset() public {
@@ -78,7 +80,7 @@ contract DeployRegistryAnchorTest is Test {
     }
 
     function test_RunGrantsEachRoleToItsNamedHolder() public {
-        uint256 deployerKey = 0xA11CE;
+        uint256 deployerKey = freshDeployerKey;
         address admin = address(0xA1);
         address submitter = address(0xB2);
         address pauser = address(0xC3);
@@ -109,14 +111,14 @@ contract DeployRegistryAnchorTest is Test {
     function test_RevertWhen_SubmitterIsAnEoaOffTheLocalChain() public {
         vm.chainId(56);
         vm.expectRevert(bytes(SUBMITTER_NOT_CONTRACT));
-        script.deployWith(0xA11CE, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
+        script.deployWith(freshDeployerKey, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
     }
 
     function test_DeploysWithAContractSubmitterOffTheLocalChain() public {
         address safe = address(new SafeStandIn());
         vm.chainId(56);
 
-        RegistryAnchorV1 anchor = script.deployWith(0xA11CE, ADMIN_DELAY, address(0xA1), safe, address(0xC3));
+        RegistryAnchorV1 anchor = script.deployWith(freshDeployerKey, ADMIN_DELAY, address(0xA1), safe, address(0xC3));
 
         assertTrue(anchor.hasRole(anchor.ANCHOR_SUBMITTER_ROLE(), safe));
     }
@@ -124,7 +126,7 @@ contract DeployRegistryAnchorTest is Test {
     function test_DeploysWithAnEoaSubmitterOnTheLocalChain() public {
         vm.chainId(31337);
 
-        RegistryAnchorV1 anchor = script.deployWith(0xA11CE, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
+        RegistryAnchorV1 anchor = script.deployWith(freshDeployerKey, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
 
         assertTrue(anchor.hasRole(anchor.ANCHOR_SUBMITTER_ROLE(), address(0xB2)));
     }
@@ -134,14 +136,14 @@ contract DeployRegistryAnchorTest is Test {
     function test_DeploysWithAnEoaSubmitterOnOpBnbTestnet() public {
         vm.chainId(5611);
 
-        RegistryAnchorV1 anchor = script.deployWith(0xA11CE, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
+        RegistryAnchorV1 anchor = script.deployWith(freshDeployerKey, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
 
         assertTrue(anchor.hasRole(anchor.ANCHOR_SUBMITTER_ROLE(), address(0xB2)));
     }
 
     /// @dev The single-key layout the testnet docs describe: one address holds every role.
     function test_DeploysASingleKeyLayoutOnOpBnbTestnet() public {
-        uint256 deployerKey = 0xA11CE;
+        uint256 deployerKey = freshDeployerKey;
         address deployer = vm.addr(deployerKey);
         vm.chainId(5611);
 
@@ -157,13 +159,13 @@ contract DeployRegistryAnchorTest is Test {
     function test_RevertWhen_SubmitterIsAnEoaOnBscTestnet() public {
         vm.chainId(97);
         vm.expectRevert(bytes(SUBMITTER_NOT_CONTRACT));
-        script.deployWith(0xA11CE, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
+        script.deployWith(freshDeployerKey, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
     }
 
     function test_RevertWhen_SubmitterIsAnEoaOnOpBnbMainnet() public {
         vm.chainId(204);
         vm.expectRevert(bytes(SUBMITTER_NOT_CONTRACT));
-        script.deployWith(0xA11CE, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
+        script.deployWith(freshDeployerKey, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
     }
 
     /// @dev The set is exactly {31337, 5611}; the worker's `ANCHOR_EOA_CHAIN_IDS` uses the same.
@@ -180,7 +182,7 @@ contract DeployRegistryAnchorTest is Test {
         vm.assume(chainId != 31337 && chainId != 5611);
         vm.chainId(chainId);
         vm.expectRevert(bytes(SUBMITTER_NOT_CONTRACT));
-        script.deployWith(0xA11CE, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
+        script.deployWith(freshDeployerKey, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
     }
 
     // --- Public development addresses ---------------------------------------------------------
@@ -199,24 +201,39 @@ contract DeployRegistryAnchorTest is Test {
     /// @dev A public admin can grant itself the submitter role, so every role is checked, not
     ///      only the submitter. Both kinds of public address are refused in every position.
     function test_RevertWhen_ARoleHolderIsAPublicDevAddressOnOpBnbTestnet() public {
-        address[2] memory publicAddresses = [vm.addr(_anvil0Key()), SCAN_SERVICE_FIXTURE];
+        address[] memory fixtures = script.fixtureList();
+        address[] memory publicAddresses = new address[](fixtures.length + 1);
+        publicAddresses[0] = vm.addr(_anvil0Key());
+        for (uint256 i = 0; i < fixtures.length; i++) publicAddresses[i + 1] = fixtures[i];
         vm.chainId(5611);
         for (uint256 i = 0; i < publicAddresses.length; i++) {
             address dev = publicAddresses[i];
 
             vm.expectRevert(bytes(_devKey("ANCHOR_ADMIN", "5611")));
-            script.deployWith(0xA11CE, ADMIN_DELAY, dev, address(0xB2), address(0xC3));
+            script.deployWith(freshDeployerKey, ADMIN_DELAY, dev, address(0xB2), address(0xC3));
 
             vm.expectRevert(bytes(_devKey("ANCHOR_SUBMITTER", "5611")));
-            script.deployWith(0xA11CE, ADMIN_DELAY, address(0xA1), dev, address(0xC3));
+            script.deployWith(freshDeployerKey, ADMIN_DELAY, address(0xA1), dev, address(0xC3));
 
             vm.expectRevert(bytes(_devKey("ANCHOR_PAUSER", "5611")));
-            script.deployWith(0xA11CE, ADMIN_DELAY, address(0xA1), address(0xB2), dev);
+            script.deployWith(freshDeployerKey, ADMIN_DELAY, address(0xA1), address(0xB2), dev);
         }
     }
 
     /// @dev Derived from the mnemonic, not copied from the list, so a wrong entry in the list
     ///      fails here too.
+    function test_RevertWhen_TheDeployerUsesCommittedSigningFixtures() public {
+        uint256 deployerKey = 0xA11CE;
+        vm.chainId(5611);
+        vm.expectRevert(bytes(_devKey("ANCHOR_DEPLOYER_KEY", "5611")));
+        script.deployWith(deployerKey, ADMIN_DELAY, address(0xA1), address(0xB2), address(0xC3));
+        address[] memory fixtures = script.fixtureList();
+        for (uint256 i = 0; i < fixtures.length; i++) {
+            vm.expectRevert(bytes(_devKey("ANCHOR_ADMIN", "5611")));
+            script.deployWith(freshDeployerKey, ADMIN_DELAY, fixtures[i], address(0xB2), address(0xC3));
+        }
+    }
+
     function testFuzz_RevertWhen_TheDeployerIsAnAnvilAccountOnOpBnbTestnet(uint32 index) public {
         uint256 key = vm.deriveKey(DEV_MNEMONIC, uint32(bound(index, 0, 19)));
         vm.chainId(5611);
@@ -228,7 +245,7 @@ contract DeployRegistryAnchorTest is Test {
         address safe = address(new SafeStandIn());
         vm.chainId(56);
         vm.expectRevert(bytes(_devKey("ANCHOR_ADMIN", "56")));
-        script.deployWith(0xA11CE, ADMIN_DELAY, vm.addr(_anvil0Key()), safe, address(0xC3));
+        script.deployWith(freshDeployerKey, ADMIN_DELAY, vm.addr(_anvil0Key()), safe, address(0xC3));
     }
 
     /// @dev The local flow and the CI deployment (`integration-tests.yml`) use anvil account 0
@@ -339,19 +356,19 @@ contract DeployRegistryAnchorTest is Test {
         vm.chainId(56);
         address safe = address(new SafeStandIn());
         vm.expectRevert(bytes(_tooShort(56, 86_400)));
-        script.deployWith(0xA11CE, 1, address(0xA1), safe, address(0xC3));
+        script.deployWith(freshDeployerKey, 1, address(0xA1), safe, address(0xC3));
     }
 
     /// @dev The bound applies on the deploy path, not only in the helper.
     function test_RevertWhen_AdminDelayIsZeroOffTheLocalChain() public {
         vm.chainId(5611);
         vm.expectRevert(bytes(_tooShort(5611, 300)));
-        script.deployWith(0xA11CE, 0, address(0xA1), address(0xB2), address(0xC3));
+        script.deployWith(freshDeployerKey, 0, address(0xA1), address(0xB2), address(0xC3));
     }
 
     function test_DeploysWithTheRecommendedTestnetDelay() public {
         vm.chainId(5611);
-        RegistryAnchorV1 anchor = script.deployWith(0xA11CE, 3600, address(0xA1), address(0xB2), address(0xC3));
+        RegistryAnchorV1 anchor = script.deployWith(freshDeployerKey, 3600, address(0xA1), address(0xB2), address(0xC3));
         assertEq(anchor.defaultAdminDelay(), 3600);
     }
 
@@ -391,7 +408,7 @@ contract DeployRegistryAnchorTest is Test {
     /// @dev The local flow and CI may deploy with no delay; nothing there is worth stealing.
     function test_DeploysWithZeroAdminDelayOnTheLocalChain() public {
         vm.chainId(31337);
-        RegistryAnchorV1 anchor = script.deployWith(0xA11CE, 0, address(0xA1), address(0xB2), address(0xC3));
+        RegistryAnchorV1 anchor = script.deployWith(freshDeployerKey, 0, address(0xA1), address(0xB2), address(0xC3));
         assertEq(anchor.defaultAdminDelay(), 0);
         assertEq(anchor.defaultAdmin(), address(0xA1));
     }
