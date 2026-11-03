@@ -34,17 +34,12 @@ export interface ReadContext {
   readonly tenantId: string;
 }
 
-/** Where someone goes whose wallet is connected but not bound to a workspace. */
-const ENROLLMENT_PATH = "/w/access-requests";
-
 /**
  * A signed-in session bound to a workspace (tenant).
  *
- * **The two are not both answered with 401.** Any wallet can sign in with SIWE
- * (`1d56c35`), but if that wallet is not bound to an organization there is no tenant. This
- * used to be `401 UNAUTHENTICATED` too, and someone who had just signed saw "authentication
- * required" and hit the same screen after signing again. 401 means "we do not know who you
- * are"; 403 means "we know who you are, but there is no place for you yet".
+ * Every session belongs to a subject in a tenant: the unbound wallet session (SIWE, answered
+ * here with 403 `WALLET_NOT_ENROLLED`) is gone with wallet sign-in (WP7). A session without a
+ * tenant would be a resolver defect, so it is refused as unauthenticated.
  */
 export function requireEnrolledSession(request: FastifyRequest): ReadContext {
   const session = request.session;
@@ -52,10 +47,7 @@ export function requireEnrolledSession(request: FastifyRequest): ReadContext {
     throw unauthorized("UNAUTHENTICATED", "Authentication required");
   }
   if (session.tenantId === null) {
-    throw forbidden("WALLET_NOT_ENROLLED", "This wallet is not yet connected to a workspace", {
-      reason: "WALLET_NOT_ENROLLED",
-      accessRequestPath: ENROLLMENT_PATH,
-    });
+    throw unauthorized("UNAUTHENTICATED", "Authentication required");
   }
   const tenantId = session.tenantId;
   return { session: { ...session, tenantId }, tenantId };

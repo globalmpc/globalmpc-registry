@@ -79,12 +79,25 @@ test.describe("review lifecycle", () => {
     // --- The reviewer signs (reviewer_cp_qp) ------------------------------
     await connectAs(page, "Reviewer A");
     await page.goto(`/w/projects/${projectId}/verification`);
-    await page.getByRole("button", { name: "Open this case" }).first().click();
+    const open = page.getByRole("button", { name: "Open this case" }).first();
+    const caseId = (await open.getAttribute("data-testid"))!.replace("select-case-", "");
+    await open.click();
 
-    // The reviewer cannot change the state. Signing is their act.
+    // The reviewer cannot change the state. Signing is their act: the screen does not offer the
+    // change, and the server refuses it when asked directly.
     await page.getByLabel("Reason (required)").fill("Attempting it without the role");
-    await page.getByTestId("transition-cancelled").click();
-    await expect(page.getByTestId("error-notice")).toContainText("AUTHORIZATION_DENIED");
+    await expect(page.getByTestId("transition-cancelled")).toBeDisabled();
+    const direct = await page.request.post(`/api/v1/verification-cases/${caseId}/transitions`, {
+      headers: {
+        origin: new URL(page.url()).origin,
+        "content-type": "application/json",
+        "idempotency-key": crypto.randomUUID(),
+        "if-match": '"1"',
+      },
+      data: { toState: "cancelled", reason: "Attempting it without the role" },
+    });
+    expect(direct.status()).toBe(403);
+    expect(((await direct.json()) as { code?: string }).code).toBe("AUTHORIZATION_DENIED");
 
     await page.getByRole("button", { name: "Create the draft" }).click();
     await page.getByRole("button", { name: "Create a signature request" }).click();

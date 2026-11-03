@@ -103,6 +103,20 @@ services:
     ports:
       - "127.0.0.1:9093:9093"
 
+  # Local mail catcher for sign-in, invitation and email-change codes (account auth WP2). The
+  # jobs worker sends to it over plain SMTP (EMAIL_TRANSPORT=smtp); read the mail at
+  # http://localhost:8025. Nothing leaves the machine. Deployments use Resend, and production
+  # refuses any other transport.
+  mailpit:
+    image: axllent/mailpit:v1.27.10@sha256:b1f1be18af530d939a11ee8820b379e0c88eeec204d904bfad68862adced3a5a
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      MP_MAX_MESSAGES: "500"
+    # Only the web UI is published. SMTP (1025) is reachable from the compose network alone.
+    ports: ["127.0.0.1:8025:8025"]
+
   anvil:
     image: ghcr.io/foundry-rs/foundry:v1.8.5@sha256:32c8ea9ef052a440cb1620175987a3f49eff8b068a0c6a3d09ebf7f5f9a0e043
     # Match the chain id with the whole stack. Otherwise the chain_id the API records and the
@@ -120,6 +134,28 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/mpc_dev
     working_dir: /repo/packages/db
     command: ["node", "--import", "tsx", "src/cli.ts"]
+
+  # The scan worker's service token, as a deploy registers it (docs/operations/deployment.md,
+  # "Service tokens"): generated once into the `scantoken` volume, its hash registered for the
+  # `scan-worker` service subject of SCAN_SERVICE_TENANT_SLUG. Root only to give the file to the
+  # worker's group; it holds the CHOWN capability and nothing else.
+  scan-token:
+    build: *build
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/mpc_dev
+      SCAN_SERVICE_TENANT_SLUG: ${SCAN_SERVICE_TENANT_SLUG:-}
+    volumes:
+      - scantoken:/run/scan-token
+    working_dir: /repo/apps/api
+    # docker/scan-token.sh, from the image (a bind mount of a checkout under umask 077 would be
+    # unreadable here without CAP_DAC_OVERRIDE).
+    command: ["sh", "/repo/docker/scan-token.sh"]
 
   # login role creation. The SQL lives in a file because `$$` in a compose command string
   # is substituted with the PID by the shell, breaking the PL/pgSQL block.
@@ -145,10 +181,18 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-local-development-session-secret-32chars}
       OBJECT_SECRET_ACCESS_KEY: ${OBJECT_SECRET_ACCESS_KEY:-minioadmin}
       PORT: "3001"
-      SIWE_DOMAIN: localhost:3000
-      SIWE_URI: http://localhost:3000
+      # The web origin: invitation links, the passkey origin and the OIDC redirect base.
+      WEB_ORIGIN: http://localhost:3000
+      WEBAUTHN_RP_ID: localhost
+      WEBAUTHN_ORIGIN: http://localhost:3000
       CHAIN_ID: "31337"
       NODE_ENV: development
+      # Google / Microsoft sign-in: off unless both id and secret are set for a provider.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+      MICROSOFT_ALLOWED_TENANTS: ${MICROSOFT_ALLOWED_TENANTS:-}
       OBJECT_STORE: s3
       OBJECT_BUCKET: mpc-evidence
       # Local MinIO has no notion of region. The real deployment's region is set by OD-17.
@@ -229,8 +273,16 @@ services:
       start_period: 60s
     depends_on:
       login-roles: { condition: service_completed_successfully }
+      mailpit: { condition: service_started }
     environment:
       WORKER_HEALTH_FILE: /tmp/worker-heartbeat
+      # The worker image defaults to production, which allows only Resend. Locally, codes go to
+      # Mailpit instead.
+      NODE_ENV: development
+      EMAIL_TRANSPORT: smtp
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      EMAIL_FROM: "MPC Registry <no-reply@registry.localhost.test>"
       DATABASE_URL: ${WORKER_DATABASE_URL:-postgres://mpc_worker_login:worker@postgres:5432/mpc_dev}
       # Outbox event retries. At the cap the event is dead-lettered and shown on the audit
       # screen; `pnpm --filter @mpc/jobs-worker outbox:replay` puts it back (dry run by default).
@@ -291,6 +343,7 @@ services:
       clamav: { condition: service_healthy }
       login-roles: { condition: service_completed_successfully }
       minio-init: { condition: service_completed_successfully }
+      scan-token: { condition: service_completed_successfully }
       api: { condition: service_started }
     environment:
       WORKER_HEALTH_FILE: /tmp/worker-heartbeat
@@ -299,12 +352,13 @@ services:
       CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"
       SCAN_POLL_MS: "3000"
-      # Results are reported through the API. The worker takes the same SIWE path as a person.
+      # Results are reported through the API with a service token (scope scan_result), generated
+      # and registered by `scan-token` above and read from its volume. The worker scans only the
+      # uploads of SCAN_SERVICE_TENANT_SLUG, the tenant the token is registered for; until that
+      # is set to a bootstrapped tenant it exits at start and uploads stay unscanned.
       API_BASE_URL: http://api:3001
-      SCAN_SERVICE_PRIVATE_KEY: ${SCAN_SERVICE_PRIVATE_KEY:-0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b}
-      CHAIN_ID: "31337"
-      SIWE_DOMAIN: localhost:3000
-      SIWE_URI: http://localhost:3000
+      SCAN_SERVICE_TOKEN: ${SCAN_SERVICE_TOKEN:-file:/run/scan-token/token}
+      SCAN_SERVICE_TENANT_SLUG: ${SCAN_SERVICE_TENANT_SLUG:-}
       # Uses the **same storage settings** as the API. Otherwise the worker looks at a different
       # bucket and the scan backlog grows with no visible cause.
       OBJECT_STORE: s3
@@ -314,6 +368,8 @@ services:
       OBJECT_FORCE_PATH_STYLE: "true"
       OBJECT_SSE: none
       OBJECT_ACCESS_KEY_ID: ${OBJECT_ACCESS_KEY_ID:-minioadmin}
+    volumes:
+      - scantoken:/run/scan-token:ro
     command: ["node", "--import", "tsx", "src/main.ts"]
 
   web:
@@ -330,6 +386,7 @@ services:
     command: ["node", "node_modules/next/dist/bin/next", "start", "--port", "3000"]
 
 volumes:
+  scantoken:
   pgdata:
   miniodata:
   clamavdata:

@@ -46,3 +46,11 @@ export {
   isPublicDevAddress,
   PUBLIC_DEV_ADDRESSES,
 } from "./dev-keys.js";
+export {
+  EMAIL_TRANSPORTS,
+  EmailConfigError,
+  emailFromAddress,
+  LOCAL_EMAIL_FROM,
+  resolveEmailTransportKind,
+  type EmailTransportKind,
+} from "./email.js";

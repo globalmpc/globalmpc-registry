@@ -25,6 +25,8 @@ import {
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { AssuranceNotice } from "@/components/AssuranceNotice";
+import { assuranceNarrowedFor, can, effectiveRoles } from "@/lib/access";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { Address } from "@/components/Address";
 
@@ -70,6 +72,9 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
   const [schemaId, setSchemaId] = useState("");
   // Only the assigner reads the options. The server decides; this only avoids a certain 403.
   const canAssign = session?.actions?.includes("claim.curate") ?? false;
+  // The same guidance for signing and disputes: a button whose action the session lacks is off.
+  const canSign = can(session, "attestation.sign");
+  const canDispute = can(session, "attestation.dispute");
 
   const load = useCallback(async (): Promise<VerificationCase[]> => {
     if (!token) return [];
@@ -138,8 +143,10 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
     );
   }
 
-  const roles = session?.roleBindings?.map((binding) => binding.role) ?? [];
-  const isReviewer = roles.some((role) => role.startsWith("reviewer_"));
+  // Roles in effect, not merely held: a reviewer below the assurance minimum cannot sign, and
+  // AssuranceNotice says why instead of the "cannot sign" notice.
+  const isReviewer = effectiveRoles(session).some((role) => role.startsWith("reviewer_"));
+  const signerInactive = assuranceNarrowedFor(session, ["attestation.sign"]).length > 0;
   const chosenReviewer = options?.reviewers.find((item) => item.subjectId === reviewerId);
 
   const renderEvidenceAssignment = () => {
@@ -421,7 +428,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
             <button
               key={state}
               data-testid={`transition-${state}`}
-              disabled={busy || transitionReason.trim().length === 0}
+              disabled={busy || !canAssign || transitionReason.trim().length === 0}
               onClick={() =>
                 void run(async () => {
                   await transitionCase(
@@ -492,7 +499,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
           Leave it empty and no draft is created. The server and the database each refuse it.
         </p>
         <button
-          disabled={busy || !verificationCase || limitations.trim().length === 0}
+          disabled={busy || !canSign || !verificationCase || limitations.trim().length === 0}
           onClick={() =>
             void run(async () => {
               if (!verificationCase) return;
@@ -538,7 +545,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
       <div className="panel">
         <h2>3. What you are signing</h2>
         <button
-          disabled={busy || !attestation}
+          disabled={busy || !canSign || !attestation}
           onClick={() =>
             void run(async () => {
               if (!attestation) return;
@@ -585,7 +592,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
         <button
           className="primary"
           data-testid="sign-attestation"
-          disabled={busy || !signatureRequest || !attestation}
+          disabled={busy || !canSign || !signatureRequest || !attestation}
           onClick={() =>
             void run(async () => {
               if (!signatureRequest || !attestation) return;
@@ -637,7 +644,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
         </p>
         <button
           data-testid="dispute-attestation"
-          disabled={busy}
+          disabled={busy || !canDispute}
           onClick={() =>
             void run(async () => {
               if (!attestation) return;
@@ -699,7 +706,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
                               <button
                                 key={outcome}
                                 data-testid={`resolve-${outcome}-${item.id}`}
-                                disabled={busy || resolution.trim().length === 0}
+                                disabled={busy || !canDispute || resolution.trim().length === 0}
                                 onClick={() =>
                                   void run(async () => {
                                     const result = await resolveDispute(
@@ -753,9 +760,11 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
         <Link href={`/w/projects/${id}`}>← Project</Link>
       </div>
 
-      {error ? <ErrorNotice error={error} /> : null}
+      {error ? <ErrorNotice error={error} context="signing" /> : null}
 
-      {!isReviewer ? (
+      <AssuranceNotice actions={["attestation.sign", "attestation.dispute", "claim.curate"]} />
+
+      {!isReviewer && !signerInactive ? (
         <div className="notice" style={{ color: "var(--alert)" }}>
           <div className="title">This account cannot sign</div>
           Signing an attestation requires one of <span className="mono">reviewer_cp_qp</span>·

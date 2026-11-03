@@ -18,7 +18,7 @@ export async function registerCreReportRoutes(app: FastifyInstance, sql: postgre
   app.post<{ Params: { projectId: string } }>("/api/v1/projects/:projectId/cre-reports", async request => {
     const { session, tenantId, idempotencyKey } = requireMutationContext(request);
     parseBody(z.object({projectId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)}), request.params);
-    const effectiveRole = assertAuthorized(session, "source.collect", projectResource(tenantId, request.params.projectId), sessionFacts(session));
+    const effectiveRole = assertAuthorized(session, "cre.report", projectResource(tenantId, request.params.projectId), sessionFacts(session));
     const body = parseBody(createCreReportRequest, request.body);
     if (body.chainId !== String(config.chainId)) throw badRequest("REQUEST_INVALID", "Report chain must match the configured chain");
     return withTenant(sql, { tenantId }, async tx => {

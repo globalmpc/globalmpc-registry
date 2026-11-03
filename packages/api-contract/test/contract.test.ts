@@ -21,26 +21,21 @@ import {
   castVoteRequest,
   createProposalRequest,
   recordExecutionRequest,
-  bindWalletRequest,
 } from "../src/resources.js";
+import { bindWalletByProofRequest, walletBindingChallengeRequest } from "../src/wallets.js";
 import { errorEnvelope, safetyFields, sourceStatusView } from "../src/common.js";
 
-describe("wallet bind chain", () => {
-  const request = (chainId: number) =>
-    bindWalletRequest.safeParse({
-      walletAddress: `0x${"ab".repeat(20)}`,
-      chainId,
-      assuranceLevel: "wallet_only",
-      justification: "Checked in person",
-    }).success;
-
-  it("accepts the chains the API runs on, including the opBNB testnet", () => {
-    for (const chainId of [56, 5611, 31337]) expect(request(chainId), String(chainId)).toBe(true);
+describe("wallet binding by proof", () => {
+  it("states no chain, level or subject: the server takes them from its config and the session", () => {
+    const parsed = walletBindingChallengeRequest.parse({ walletAddress: `0x${"AB".repeat(20)}` });
+    // Lower-cased once here, so the challenge row, the signed message and the binding agree.
+    expect(parsed).toEqual({ walletAddress: `0x${"ab".repeat(20)}` });
+    expect(walletBindingChallengeRequest.safeParse({ walletAddress: "0x1234" }).success).toBe(false);
   });
 
-  it("refuses any other chain", () => {
-    // A wallet bound on a chain the API does not run on can never log in.
-    for (const chainId of [97, 204, 1]) expect(request(chainId), String(chainId)).toBe(false);
+  it("names the challenge it spends", () => {
+    expect(bindWalletByProofRequest.safeParse({ signature: "0x00" }).success).toBe(false);
+    expect(bindWalletByProofRequest.safeParse({ challengeId: "not-a-uuid", signature: "0x00" }).success).toBe(false);
   });
 });
 

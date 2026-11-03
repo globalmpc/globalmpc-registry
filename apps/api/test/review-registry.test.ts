@@ -18,8 +18,7 @@ import {
   signIn,
   testEnv,
   type TestAccount,
-  type TestFixture,
-} from "./helpers/db.js";
+  type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
 import rulesFixture from "../../../packages/policy/test/fixtures/registry-gate.rules.json" with { type: "json" };
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
@@ -79,6 +78,7 @@ describeDb("review registry proposals", () => {
         ${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${account.address}, 31337, 'high_assurance', now()
       )
     `;
+    await syncSubjectAssurance(fx.sql);
     for (const role of roles) {
       await fx.sql`
         INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
@@ -743,19 +743,18 @@ describeDb("review registry proposals", () => {
    */
   describe("bootstrap and API approval produce identical rows", () => {
     let bootstrapSlug: string;
-    let bootstrapWallet: string;
+    let bootstrapEmail: string;
 
     beforeAll(async () => {
       bootstrapSlug = `rr-${randomUUID().slice(0, 8)}`;
-      bootstrapWallet = newAccount().address;
+      bootstrapEmail = `parity-${randomUUID().slice(0, 8)}@example.test`;
       await bootstrapOperator(fx.sql, {
         tenantSlug: bootstrapSlug,
         tenantName: "Review registry parity tenant",
         organizationName: "Parity org",
         jurisdiction: "MNG",
         subjectName: "Parity reviewer",
-        walletAddress: bootstrapWallet,
-        chainId: 31337,
+        email: bootstrapEmail,
         role: "reviewer_cp_qp",
         assuranceLevel: "high_assurance",
       });
@@ -815,7 +814,7 @@ describeDb("review registry proposals", () => {
       const body = credentialBody(fx.reviewerSubjectA);
       const viaBootstrap = await bootstrapCredential(fx.sql, {
         tenantSlug: bootstrapSlug,
-        walletAddress: bootstrapWallet,
+        email: bootstrapEmail,
         issuerReference: body.issuerReference,
         credentialType: body.credentialType,
         credentialScope: body.credentialScope,

@@ -17,7 +17,7 @@ describeDb("Source Receipt", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
-    // From R1, authentication is SIWE signature → session token. Tests take the same path.
+    // Tests hold an account session (`signIn` issues one for the person holding the key).
     tokens = {
       operatorB: await signIn(app, fx.operatorB),
       readerA: await signIn(app, fx.readerA),

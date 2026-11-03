@@ -1,5 +1,5 @@
 import { PROJECT_FACT_KEYS } from "@mpc/api-contract";
-import { ApiError, apiFetch, newIdempotencyKey, type ApiErrorEnvelope } from "./api";
+import { ApiError, apiFetch, authHeader, newIdempotencyKey, type ApiErrorEnvelope } from "./api";
 
 /**
  * Project Registry client — Project List, Project Overview, confirmed/pending matrix, parties,
@@ -201,7 +201,7 @@ async function read<T>(response: Response): Promise<T> {
 }
 
 function get<T>(token: string, path: string): Promise<T> {
-  return apiFetch(path, { headers: { authorization: `Bearer ${token}` }, cache: "no-store" }).then(
+  return apiFetch(path, { headers: authHeader(token), cache: "no-store" }).then(
     (response) => read<T>(response),
   );
 }
@@ -216,7 +216,7 @@ function mutate<T>(
   return apiFetch(path, {
     method,
     headers: {
-      authorization: `Bearer ${token}`,
+      ...authHeader(token),
       "content-type": "application/json",
       // One key per user action; a network retry of the same request reuses it.
       "idempotency-key": newIdempotencyKey(),

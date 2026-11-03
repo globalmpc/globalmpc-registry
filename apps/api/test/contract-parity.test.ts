@@ -42,7 +42,7 @@ describeDb("contract ↔ implementation parity", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
-    // From R1, auth is SIWE signature → session token. Tests take the same path.
+    // Tests hold an account session (`signIn` issues one for the person holding the key).
     tokens = {
       operatorA: await signIn(app, fx.operatorA),
     };

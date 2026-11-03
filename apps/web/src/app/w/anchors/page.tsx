@@ -9,9 +9,11 @@ import {
   type AnchorBatchStatus,
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { Address } from "@/components/Address";
+import { moveRefusalText, moveWaitText } from "./move-text";
 
 /**
  * Anchor state — spec 08 §8.9, 06 §6.8.
@@ -23,7 +25,9 @@ import { Address } from "@/components/Address";
  * facts, and the difference sets the `included` field of the public proof.
  */
 export default function AnchorsPage() {
-  const { token, loading: sessionLoading } = useSession();
+  const { token, session, loading: sessionLoading } = useSession();
+  // Resubmitting is `anchor.submit` (guidance; the server decides).
+  const maySubmit = can(session, "anchor.submit");
   const [items, setItems] = useState<AnchorBatchStatus[]>([]);
   // The server caps the list and says so. An older batch needing attention would be off it.
   const [truncated, setTruncated] = useState(false);
@@ -165,6 +169,22 @@ export default function AnchorsPage() {
                         // Keep included from reading as success (06 §6.8).
                         <div className="meta">Not confirmed yet</div>
                       ) : null}
+                      {item.moveRequest ? (
+                        // A request is not a move: the old chain's worker first checks that the
+                        // old contract lacks this batch.
+                        <div className="meta" data-testid={`anchor-move-${item.batchId.slice(2, 10)}`}>
+                          Move to chain {item.moveRequest.toChainId} requested ·{" "}
+                          {moveWaitText(item.moveRequest, item.chainId)}
+                        </div>
+                      ) : item.moveRefusal ? (
+                        <div
+                          className="meta"
+                          style={{ color: "var(--destructive-text)" }}
+                          data-testid={`anchor-move-refused-${item.batchId.slice(2, 10)}`}
+                        >
+                          {moveRefusalText(item.moveRefusal, item.chainId)}
+                        </div>
+                      ) : null}
                       {item.proposal ? (
                         // A proposal existing does not mean it was submitted. Collecting signatures
                         // and executing happen in Safe, by people.
@@ -189,7 +209,7 @@ export default function AnchorsPage() {
                     </td>
                     <td className="meta">{item.lastError ?? "—"}</td>
                     <td>
-                      {item.needsAttention ? (
+                      {item.needsAttention && maySubmit ? (
                         <button
                           data-testid={`resubmit-${item.batchId.slice(2, 10)}`}
                           disabled={busy}

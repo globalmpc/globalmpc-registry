@@ -51,7 +51,8 @@ export const ANVIL_DEV_ADDRESSES: readonly string[] = [
 /**
  * Addresses of committed fixture keys that are not anvil accounts, lowercase.
  *
- * - `config/local-secrets/scan_service_key`, also the Compose `SCAN_SERVICE_PRIVATE_KEY` default.
+ * - `config/local-secrets/scan_service_key`, the scan worker's former wallet key (it now uses a
+ *   service token); still public, so still refused as a login identity.
  * - Repeated-byte 0x11 and 0x22 signing fixtures in API and anchor tests.
  * - The 0xA11CE deployment-test signing fixture.
  *

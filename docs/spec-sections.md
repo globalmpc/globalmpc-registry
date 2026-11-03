@@ -34,6 +34,9 @@ written so that you never need the specification to read them.
 | `REQ-DAPP-nnn` | Requirement number |
 | `ADR-Tnn` | Architecture Decision Record (technical) |
 | `D-nn` | Design principle number |
+| `D1`–`D9`, `Q4` (no hyphen) | Decision and open-question numbers inside [`account-authentication-plan.md`](account-authentication-plan.md) — not design principles |
+| `AUTH-nn` | Account-authentication acceptance criterion from that plan's §8. Mapping: [`acceptance-code-map.md`](acceptance-code-map.md) |
+| `AAL` | Authentication assurance level a session proved (first factor only, TOTP, passkey). Separate from a subject's identity assurance (`assurance_level`) |
 | `R-04` | Prohibited-language rule. Canonical list: `packages/ui/src/prohibited-language.ts` |
 | `R0`–`R7` | Release stages |
 

@@ -24,7 +24,7 @@ describeDb("uploads", () => {
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     stewardToken = await signIn(app, fx.stewardA);
     operatorToken = await signIn(app, fx.operatorA);
-    scanToken = await signIn(app, fx.scanServiceA);
+    scanToken = fx.scanServiceToken;
   });
 
   afterAll(async () => {
@@ -447,6 +447,24 @@ describeDb("uploads", () => {
         payload: Buffer.from("------x--\r\n"),
       });
       expect(response.statusCode).toBe(400);
+    });
+
+    it.each([
+      ["application/json", JSON.stringify({ file: "not multipart" })],
+      ["text/plain", "not multipart"],
+    ])("answers 415, not 500, to a streaming upload sent as %s", async (contentType, payload) => {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/projects/${fx.projectA}/uploads/stream`,
+        headers: {
+          authorization: `Bearer ${stewardToken}`,
+          "idempotency-key": idempotencyKey(),
+          "content-type": contentType,
+        },
+        payload,
+      });
+      expect(response.statusCode).toBe(415);
+      expect(response.json()).toMatchObject({ code: "UPLOAD_NOT_MULTIPART", retryable: false });
     });
 
     it("rejects streamed uploads from an unauthorized account", async () => {

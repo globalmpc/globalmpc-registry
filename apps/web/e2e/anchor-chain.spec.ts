@@ -81,7 +81,7 @@ test.describe("chain confirmation", () => {
     );
 
     // --- Check the proof without sign-in ---------------------------------
-    await page.getByRole("button", { name: "Disconnect" }).click();
+    await page.getByRole("button", { name: "Sign out" }).click();
     await page.goto(`/explorer?registryType=project&publicKey=${projectKey}`);
     await page.getByRole("button", { name: "Search" }).click();
 

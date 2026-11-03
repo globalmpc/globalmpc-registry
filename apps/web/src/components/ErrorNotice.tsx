@@ -1,5 +1,10 @@
+"use client";
+
 import Link from "next/link";
 import { ApiError } from "@/lib/api";
+import { stepUpNeed } from "@/lib/auth-errors";
+import { AUTH_COPY, COPY } from "@/lib/copy";
+import { StepUpCancelled, useOptionalStepUp } from "@/components/auth/StepUp";
 
 /**
  * Error display.
@@ -9,8 +14,13 @@ import { ApiError } from "@/lib/api";
  * the access request path" reaches the screen.
  *
  * Flattening it into "The request failed" leaves the user with no next action.
+ *
+ * `context` names the flow the error came from when one code means different things in different
+ * flows: `SIGNATURE_SIGNER_MISMATCH` is "not the wallet being bound" while binding, but "not your
+ * signing wallet" when an attestation or a gate decision is signed.
  */
-export function ErrorNotice({ error }: { error: unknown }) {
+export function ErrorNotice({ error, context }: { error: unknown; context?: "signing" }) {
+  const stepUp = useOptionalStepUp();
   if (!(error instanceof ApiError)) {
     return (
       <div className="notice" style={{ color: "var(--destructive-text)" }} role="alert" data-testid="error-notice">
@@ -28,26 +38,77 @@ export function ErrorNotice({ error }: { error: unknown }) {
     return (
       <div className="notice" style={{ color: "var(--alert)" }} role="alert" data-testid="error-notice">
         <div className="title">Your session has ended</div>
-        Sessions last eight hours, and disconnecting ends them.{" "}
-        <Link href="/connect">Connect your wallet again →</Link>
+        Sessions last eight hours, end after 30 minutes without use, and signing out ends them.{" "}
+        <Link href="/connect">Sign in again →</Link>
       </div>
     );
   }
-  if (envelope.code === "WALLET_NOT_ENROLLED") {
+
+  /**
+   * The session's level is below what this action needs (plan §3 rules 2 and 4). Not a missing
+   * role: the person holds it and proves a stronger factor — then the screen is read again.
+   */
+  const need = stepUpNeed(error);
+  if (need) {
     return (
       <div className="notice" style={{ color: "var(--alert)" }} role="alert" data-testid="error-notice">
-        <div className="title">This wallet is not linked to a workspace yet</div>
-        An operator must link it to your organization first. Signing in again will not change this.
+        <div className="title">{AUTH_COPY.stepUp.heading}</div>
+        {need.kind === "step_up" ? (
+          <>
+            {need.level === "aal3" ? AUTH_COPY.stepUp.passkeyLead : AUTH_COPY.stepUp.factorLead}{" "}
+            {stepUp ? (
+              <button
+                type="button"
+                onClick={() =>
+                  void stepUp
+                    .prompt(need.level)
+                    .then(() => window.location.reload())
+                    .catch((caught: unknown) => {
+                      if (!(caught instanceof StepUpCancelled)) throw caught;
+                    })
+                }
+              >
+                {AUTH_COPY.stepUp.errorAction}
+              </button>
+            ) : null}
+          </>
+        ) : (
+          <Link href="/auth/mfa">{AUTH_COPY.mfa.heading} →</Link>
+        )}
       </div>
     );
   }
+
+  /**
+   * Identity assurance below the role's minimum (plan priority rule 4): the person holds the role
+   * but an administrator has to verify their identity first — say that, not a refusal code.
+   */
+  if (envelope.details?.reason === "ASSURANCE_LEVEL_INSUFFICIENT") {
+    return (
+      <div className="notice" style={{ color: "var(--alert)" }} role="alert" data-testid="error-notice">
+        <div className="title" data-testid="assurance-needed">
+          {COPY.assurance.heading}
+        </div>
+        <div>{COPY.assurance.lead(envelope.details.requiredAssurance ?? "high_assurance")}</div>
+        <div className="meta" style={{ marginTop: 8, color: "inherit" }}>
+          <span className="mono">
+            ({status} {envelope.details.reason})
+          </span>{" "}
+          · Trace ID <span className="mono">{envelope.correlationId}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const friendly =
+    (context === "signing" ? COPY.signing[envelope.code] : undefined) ?? AUTH_COPY.errors[envelope.code];
 
   const tone = status === 403 || status === 401 ? "var(--alert)" : "var(--destructive-text)";
 
   return (
     <div className="notice" style={{ color: tone }} role="alert" data-testid="error-notice">
       <div className="title">
-        {envelope.message}{" "}
+        {friendly ?? envelope.message}{" "}
         <span className="mono meta" style={{ color: "inherit" }}>
           ({status} {envelope.code})
         </span>

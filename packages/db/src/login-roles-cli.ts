@@ -28,15 +28,18 @@ if (missing.length > 0) {
 const sql = postgres(url as string, { onnotice: () => {} });
 
 try {
-  const { created } = await ensureLoginRoles(sql, {
+  const { created, warnings } = await ensureLoginRoles(sql, {
     appPassword: appPassword as string,
     workerPassword: workerPassword as string,
   });
+  // Warnings name settings and their values only.
+  for (const warning of warnings) process.stderr.write(`Login roles warning — ${warning}\n`);
   // Never print passwords. Record only what was created.
   process.stdout.write(
     `${JSON.stringify({
       msg: "login-roles.ready",
       created,
+      warnings,
     })}\n`,
   );
 } catch (error) {

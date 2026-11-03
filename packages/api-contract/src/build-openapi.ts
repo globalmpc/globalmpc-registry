@@ -118,7 +118,9 @@ for (const route of ROUTES) {
       "400": errorResponse("Invalid request"),
       "401": errorResponse("Authentication required"),
       "403": errorResponse("Forbidden — returns the required role and the access request path"),
-      "409": errorResponse("resourceVersion conflict or idempotency key reuse"),
+      "409": errorResponse(
+        "resourceVersion conflict, idempotency key reuse, or CONCURRENT_REQUEST (another request changed the same data; retryable)",
+      ),
       // Only where a body is sent: the server refuses an oversized body before the route runs,
       // so the caller has to send less. Distinct from 422 UPLOAD_TOO_LARGE, which is the upload
       // cap judged by the route after the body arrived.
@@ -134,7 +136,20 @@ for (const route of ROUTES) {
     operation["x-mpc-action"] = route.action;
   }
   if (!route.public) {
-    operation["security"] = [{ siweSession: [] }];
+    // A service route also accepts a service token whose scopes include the route's scope.
+    operation["security"] =
+      route.serviceScope !== undefined
+        ? [{ accountSession: [] }, { serviceToken: [] }]
+        : [{ accountSession: [] }];
+  }
+  if (route.serviceScope !== undefined) {
+    operation["x-mpc-service-scope"] = route.serviceScope;
+  }
+  if (route.allowsFirstFactorOnly === true) {
+    operation["x-mpc-first-factor-only"] = true;
+  }
+  if (route.refusals !== undefined && route.refusals.length > 0) {
+    operation["x-mpc-refusals"] = [...route.refusals];
   }
 
   if (route.requestSchema !== undefined) {
@@ -180,12 +195,21 @@ const document = {
   ],
   components: {
     securitySchemes: {
-      siweSession: {
+      accountSession: {
         type: "http",
         scheme: "bearer",
         description:
-          "Session token issued by SIWE (EIP-4361) login. A wallet signature alone grants only " +
-          "public read and governance participation (OD-04).",
+          "Session token of a subject. The authentication level (aal1-aal3) is derived from the " +
+          "factors the session proved; a first-factor-only session reaches only the operations " +
+          "marked `x-mpc-first-factor-only`, and a role is effective only when the session meets " +
+          "its minimum level and identity assurance.",
+      },
+      serviceToken: {
+        type: "http",
+        scheme: "bearer",
+        description:
+          "Opaque service token (`mpcsvc_` prefix) bound to a service subject. Accepted only on " +
+          "operations whose `x-mpc-service-scope` is one of the token's scopes; refused everywhere else.",
       },
     },
   },

@@ -10,8 +10,7 @@ import {
   setupFixture,
   signIn,
   testEnv,
-  type TestFixture,
-} from "./helpers/db.js";
+  type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -78,6 +77,7 @@ describeDb("review assignment options", () => {
         ${input.assurance}, now(), ${input.walletDisabled ? new Date() : null}
       )
     `;
+    await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (
         id, tenant_id, subject_id, organization_id, project_id, role, revoked_at

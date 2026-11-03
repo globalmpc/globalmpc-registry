@@ -18,6 +18,7 @@ import {
   type ObjectUpload,
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { DocumentTree } from "@/components/DocumentTree";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
@@ -48,7 +49,10 @@ export default function DocumentPage({
   params: Promise<{ id: string; uploadId: string }>;
 }) {
   const { id, uploadId } = use(params);
-  const { token, loading: sessionLoading } = useSession();
+  const { token, session, loading: sessionLoading } = useSession();
+  // Every change on this screen is `source.upload`. Without it the screen is read-only (guidance;
+  // the server decides).
+  const mayChange = can(session, "source.upload");
 
   const [graph, setGraph] = useState<DocumentGraph | null>(null);
   const [preview, setPreview] = useState<DocumentImpactPreview | null>(null);
@@ -152,7 +156,7 @@ export default function DocumentPage({
   const revoked = self?.revokedAt ?? null;
   const usable = self ? !UNUSABLE_STATES.has(self.state) : false;
   // A revoked document is kept as it was; only a corrected version moves things on.
-  const editable = usable && !revoked;
+  const editable = mayChange && usable && !revoked;
 
   const renderMissingDocument = () => {
     return graph && !self ? (
@@ -608,7 +612,7 @@ export default function DocumentPage({
           projectId={id}
           nodes={nodes}
           busy={busy}
-          onRemove={setRemoveFor}
+          onRemove={mayChange ? setRemoveFor : undefined}
           empty="This document rests on no other document."
         />
       </div>
@@ -622,20 +626,20 @@ export default function DocumentPage({
           projectId={id}
           nodes={nodes}
           busy={busy}
-          onRemove={setRemoveFor}
+          onRemove={mayChange ? setRemoveFor : undefined}
           empty="No document rests on this one."
         />
       </div>
 
-      {renderRemoveALink()}
+      {mayChange ? renderRemoveALink() : null}
 
-      {renderAddALink()}
+      {mayChange ? renderAddALink() : null}
 
       {renderIfThisDocumentChanges()}
 
-      {renderUploadANewVersion()}
+      {mayChange ? renderUploadANewVersion() : null}
 
-      {renderRevokeThisDocument()}
+      {mayChange ? renderRevokeThisDocument() : null}
 
       {created ? (
         <div className="notice" data-testid="new-version-created">
@@ -665,7 +669,8 @@ function LinkTable({
   projectId: string;
   nodes: Map<string, import("@/lib/api").DocumentNode>;
   busy: boolean;
-  onRemove: (link: DocumentLink) => void;
+  /** Absent: the session cannot remove links, so no Remove button is offered. */
+  onRemove?: ((link: DocumentLink) => void) | undefined;
   empty: string;
 }) {
   if (links.length === 0) {
@@ -702,9 +707,11 @@ function LinkTable({
                 <td className="meta">{ORIGIN_LABEL[link.origin]}</td>
                 <td className="meta">{link.note ?? "—"}</td>
                 <td>
-                  <button disabled={busy} onClick={() => onRemove(link)}>
-                    Remove
-                  </button>
+                  {onRemove ? (
+                    <button disabled={busy} onClick={() => onRemove(link)}>
+                      Remove
+                    </button>
+                  ) : null}
                 </td>
               </tr>
             );

@@ -1,135 +1,103 @@
 import { describe, expect, it } from "vitest";
-import { generatePrivateKey } from "viem/accounts";
 import { createApiClient } from "../src/api-client.js";
 
 /**
- * Timeout for worker → API calls.
+ * Worker → API client — a service token bearer (decision D7).
  *
- * If the API stalls, the worker's request never ends. The outbox publisher and anchor submitter
- * call this client inside their loops, so one hang backs up every later event — it shows up as a
- * stall, not a failure.
+ * Held here: every request carries the token and the caller's mutation headers; a request that
+ * never answers is aborted; a refusal keeps the API's status and code; a 401 is not retried (the
+ * token is revoked or expired, and the same token cannot fix that); and a value that is not a
+ * service token is refused before the first request, without quoting it.
  */
 
-const PRIVATE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
-
-const options = {
-  baseUrl: "http://api.test",
-  privateKey: PRIVATE_KEY as `0x${string}`,
-  chainId: 31337,
-  siweDomain: "api.test",
-  siweUri: "http://api.test",
-};
-
-/** Login responds normally; only the main request goes to the given handler. */
-function stubFetch(onTarget: (init: RequestInit) => Promise<Response>): typeof fetch {
-  return (async (input: Parameters<typeof fetch>[0], init: RequestInit = {}) => {
-    const url = String(input);
-    if (url.endsWith("/auth/siwe/nonce")) {
-      return Response.json({ nonce: "abcdef123456", statement: "sign in", domain: "api.test" });
-    }
-    if (url.endsWith("/auth/siwe/verify")) {
-      return Response.json({ sessionToken: "tok" });
-    }
-    return onTarget(init);
-  }) as typeof fetch;
-}
+// Synthetic bearer used only by the local fetch mock; never issued by a server.
+const TOKEN = `mpcsvc_${Buffer.from("scan worker test token").toString("base64url")}`;
+const options = { baseUrl: "http://api.test", serviceToken: TOKEN };
 
 describe("worker API client", () => {
   it("aborts with a timeout when no response arrives", async () => {
-    const client = createApiClient(
-      { ...options, timeoutMs: 50 },
-      stubFetch(
-        (init) =>
-          new Promise<Response>((resolve, reject) => {
-            // No signal means no timeout is set.
-            // In that case just succeed, so this test fails.
-            if (!init.signal) {
-              resolve(Response.json({ ok: true }));
-              return;
-            }
-            init.signal.addEventListener("abort", () => reject(new Error("aborted")));
-          }),
-      ),
-    );
+    const client = createApiClient({ ...options, timeoutMs: 50 }, ((_input, init: RequestInit = {}) =>
+      new Promise<Response>((resolve, reject) => {
+        // No signal means no timeout is set. In that case just succeed, so this test fails.
+        if (!init.signal) {
+          resolve(Response.json({ ok: true }));
+          return;
+        }
+        init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      })) as typeof fetch);
 
-    await expect(client.post("/api/v1/anchor", {})).rejects.toThrow(/aborted/);
+    await expect(client.post("/api/v1/uploads/u1/scan-result", {})).rejects.toThrow(/aborted/);
   });
-});
 
-it("refreshes an expired session once, keeps mutation headers and caches the new token", async () => {
-  const calls: { url: string; init: RequestInit }[] = [];
-  let logins = 0,
-    sends = 0;
-  const client = createApiClient(options, (async (input, init = {}) => {
-    const url = String(input);
-    calls.push({ url, init });
-    if (url.endsWith("/nonce"))
-      return Response.json({ nonce: "abcdef123456", statement: "sign in" });
-    if (url.endsWith("/verify"))
-      return Response.json({ sessionToken: `token${++logins}` });
-    return ++sends === 1
-      ? new Response("", { status: 401 })
-      : Response.json({ ok: true });
-  }) as typeof fetch);
-  expect(
-    await client.post("/scan", undefined, {
-      "if-match": '"2"',
-      "idempotency-key": "scan1",
-    }),
-  ).toEqual({ ok: true });
-  await client.post("/scan", {});
-  expect(logins).toBe(2);
-  const targets = calls.filter((c) => c.url.endsWith("/scan"));
-  expect(targets).toHaveLength(3);
-  expect(targets[1]!.init.headers).toMatchObject({
-    authorization: "Bearer token2",
-    "if-match": '"2"',
-    "idempotency-key": "scan1",
-  });
-  expect(targets[0]!.init.body).toBe("{}");
-});
-it.each(["nonce", "verify", "target"])(
-  "preserves %s authentication or request failures",
-  async (stage) => {
-    const client = createApiClient(options, (async (input) => {
-      const url = String(input);
-      if (url.endsWith("/nonce"))
-        return stage === "nonce"
-          ? new Response("", { status: 503 })
-          : Response.json({ nonce: "abcdef123456", statement: "sign in" });
-      if (url.endsWith("/verify"))
-        return stage === "verify"
-          ? Response.json({}, { status: 403 })
-          : Response.json({ sessionToken: "token" });
-      return new Response("not json", { status: 500 });
+  it("sends the token with the caller's mutation headers, and an empty body as {}", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const client = createApiClient(options, (async (input, init = {}) => {
+      calls.push({ url: String(input), init });
+      return Response.json({ ok: true });
     }) as typeof fetch);
-    await expect(client.post("/scan", {})).rejects.toMatchObject({
-      code:
-        stage === "nonce"
-          ? "SIWE_NONCE_FAILED"
-          : stage === "verify"
-            ? "SIWE_VERIFY_FAILED"
-            : "UNKNOWN",
-      status: stage === "nonce" ? 503 : stage === "verify" ? 403 : 500,
+
+    expect(
+      await client.post("/api/v1/uploads/u1/scan-result", undefined, {
+        "if-match": '"2"',
+        "idempotency-key": "scan-u1-v2",
+      }),
+    ).toEqual({ ok: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("http://api.test/api/v1/uploads/u1/scan-result");
+    expect(calls[0]!.init).toMatchObject({
+      method: "POST",
+      body: "{}",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "application/json",
+        "if-match": '"2"',
+        "idempotency-key": "scan-u1-v2",
+      },
     });
-  },
-);
-
-describe("service identity key", () => {
-  // anvil/hardhat account 1 — the key above. Public, so it may sign in only on the local chain.
-  it("accepts a public development key on the local chain", () => {
-    expect(createApiClient(options).walletAddress).toBe("0x70997970c51812dc3a010c7d01b50e0d17dc79c8");
   });
 
-  it("refuses a public development key on a shared chain", () => {
-    expect(() => createApiClient({ ...options, chainId: 5611 })).toThrowError(
-      /^SCAN_SERVICE_PRIVATE_KEY is a public development key \(anvil\/hardhat or a committed fixture\)/,
-    );
+  it("does not retry a 401: a revoked or expired token stays refused", async () => {
+    let sends = 0;
+    const client = createApiClient(options, (async () => {
+      sends += 1;
+      return Response.json({ code: "UNAUTHENTICATED", message: "no session" }, { status: 401 });
+    }) as typeof fetch);
+    await expect(client.post("/scan", {})).rejects.toMatchObject({ status: 401, code: "UNAUTHENTICATED" });
+    expect(sends).toBe(1);
   });
 
-  it("accepts a freshly generated key on the testnet", () => {
-    expect(() =>
-      createApiClient({ ...options, chainId: 5611, privateKey: generatePrivateKey() }),
-    ).not.toThrow();
+  it("keeps the API's refusal, and reads a body that is not JSON as unknown", async () => {
+    const refusing = createApiClient(options, (async () =>
+      Response.json(
+        { code: "SERVICE_TOKEN_SCOPE_DENIED", message: "out of scope" },
+        { status: 403 },
+      )) as typeof fetch);
+    await expect(refusing.post("/scan", {})).rejects.toMatchObject({
+      status: 403,
+      code: "SERVICE_TOKEN_SCOPE_DENIED",
+      message: "403 SERVICE_TOKEN_SCOPE_DENIED: out of scope",
+    });
+
+    const broken = createApiClient(options, (async () => new Response("not json", { status: 500 })) as typeof fetch);
+    await expect(broken.post("/scan", {})).rejects.toMatchObject({ status: 500, code: "UNKNOWN" });
+  });
+
+  it("refuses a value that is not a service token, without quoting it", () => {
+    for (const value of [
+      "",
+      // A wallet private key: what this variable held before.
+      "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+      // A person's session token.
+      "c2Vzc2lvbiB0b2tlbg",
+    ]) {
+      let message = "";
+      try {
+        createApiClient({ ...options, serviceToken: value });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message, value).toMatch(/^SCAN_SERVICE_TOKEN must be a service token/);
+      if (value) expect(message).not.toContain(value);
+    }
   });
 });

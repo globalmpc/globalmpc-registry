@@ -4,7 +4,7 @@ import type postgres from "postgres";
 import { z } from "zod";
 import { withTenant } from "@mpc/db";
 import { hashProjection, verifyMerkleProof, type Hex } from "@mpc/canonical";
-import { checkPublishable, isPublicField } from "@mpc/domain";
+import { checkPublishable, isPublicField, sameChainEnvironment } from "@mpc/domain";
 import {
   PROOF_DOES_NOT_PROVE,
   PROOF_PROVES,
@@ -602,6 +602,14 @@ export async function registerRegistryRoutes(
           proposal_calldata_hash: string | null;
           proposal_state: string | null;
           proposal_created_at: Date | null;
+          move_to_chain_id: number | null;
+          move_requested_at: Date | null;
+          move_checked_at: Date | null;
+          move_wait_reason: string | null;
+          last_move_command: string | null;
+          last_move_at: Date | null;
+          last_move_reason: string | null;
+          last_move_detail: { toChainId?: unknown; result?: unknown } | null;
         }[]
       >`
         SELECT b.id, b.batch_id, b.merkle_root, b.manifest_hash, b.record_count,
@@ -613,11 +621,28 @@ export async function registerRegistryRoutes(
                p.safe_address AS proposal_safe_address,
                p.calldata_hash AS proposal_calldata_hash,
                p.state AS proposal_state,
-               p.created_at AS proposal_created_at
+               p.created_at AS proposal_created_at,
+               t.move_to_chain_id, t.move_requested_at, t.move_checked_at, t.move_wait_reason,
+               last_move.command AS last_move_command, last_move.occurred_at AS last_move_at,
+               last_move.reason AS last_move_reason, last_move.detail AS last_move_detail
         FROM chain.anchor_batches b
         LEFT JOIN chain.transactions t ON t.batch_id = b.id
         LEFT JOIN chain.anchor_proposals p
           ON p.transaction_id = t.id AND p.state = 'proposed'
+        -- The batch's latest resubmit or move outcome; shown only when the worker refused the
+        -- move, so a refusal stays visible until a person resubmits again (audit_events_resource_idx).
+        LEFT JOIN LATERAL (
+          SELECT e.command, e.occurred_at, e.reason, e.detail
+          FROM audit.events e
+          WHERE e.resource_type = 'anchor_batch' AND e.resource_id = b.id
+            AND e.command IN (
+              'anchor.batch.resubmit_requested',
+              'anchor.batch.chain_moved',
+              'anchor.batch.chain_move_refused'
+            )
+          ORDER BY e.occurred_at DESC, e.id DESC
+          LIMIT 1
+        ) last_move ON true
         ORDER BY b.created_at DESC, b.id DESC
         LIMIT ${ANCHOR_BATCH_LIST_LIMIT + 1}
       `,
@@ -657,6 +682,8 @@ export async function registerRegistryRoutes(
               createdAt: row.proposal_created_at!.toISOString(),
             }
           : null,
+        moveRequest: moveRequestOf(row),
+        moveRefusal: moveRefusalOf(row),
       })),
       requestId,
       asOf,
@@ -696,9 +723,10 @@ export async function registerRegistryRoutes(
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
           const [transaction] = await tx<
-            { id: string; state: string; attempts: number; batch_id: string }[]
+            StuckTransaction[]
           >`
-            SELECT t.id, t.state, t.attempts, t.batch_id
+            SELECT t.id, t.state, t.attempts, t.batch_id, t.chain_id, t.move_to_chain_id,
+                   t.move_requested_at, t.move_checked_at, t.move_wait_reason
             FROM chain.transactions t
             WHERE t.batch_id = ${request.params.batchId}
             ORDER BY t.created_at DESC
@@ -718,16 +746,120 @@ export async function registerRegistryRoutes(
             });
           }
 
+          // Workers claim only their own CHAIN_ID's rows, so a reset left on another chain would
+          // be reported as resubmitted while no worker ever sends it. Nor can this deployment
+          // move the row: once moved, only the new chain's worker looks at it, so the root must
+          // provably not be on the old chain, and only the old contract can say so — any holder
+          // of its submitter role (the Safe, another signer) could have stored the batch there
+          // without a trace in this database. So it records a request (0105) that the old
+          // chain's worker carries out once nothing of the row is in flight there: it resets the
+          // row onto the requested chain if the old contract lacks the batch, or drops the
+          // request and reconciles the batch it found.
+          const fromChainId = transaction.chain_id;
+          if (fromChainId !== config.chainId) {
+            // A testnet deployment must not move a mainnet batch, nor the reverse: the record
+            // would claim an anchor on a network of another standing. The old chain's worker checks
+            // the same rule again before it moves anything (`processChainMoves`).
+            if (!sameChainEnvironment(fromChainId, config.chainId)) {
+              throw conflict(
+                "ANCHOR_CHAIN_MOVE_BLOCKED",
+                "This batch was recorded on a network of another environment (mainnet/testnet)",
+                {
+                  reason: "cross_environment",
+                  transactionChainId: fromChainId,
+                  currentChainId: config.chainId,
+                },
+              );
+            }
+
+            // Another transaction for the same batch has (or may get) an anchor of its own; the
+            // move could only collide with it.
+            const [other] = await tx<{ exists: boolean }[]>`
+              SELECT EXISTS (
+                SELECT 1 FROM chain.transactions
+                WHERE id <> ${transaction.id} AND batch_id = ${transaction.batch_id}
+              ) AS exists
+            `;
+            if (other!.exists) {
+              throw conflict(
+                "ANCHOR_CHAIN_MOVE_BLOCKED",
+                "This batch has another transaction; resolve it on its own chain",
+                {
+                  reason: "other_transaction",
+                  transactionChainId: fromChainId,
+                  currentChainId: config.chainId,
+                },
+              );
+            }
+
+            const moveResponse = (requested: Parameters<typeof moveRequestOf>[0]) => ({
+              id: request.params.batchId,
+              confirmationState: transaction.state,
+              previousState: transaction.state,
+              attempts: transaction.attempts,
+              moveRequest: moveRequestOf(requested),
+              requestId,
+              asOf,
+            });
+
+            // Asking again for the same chain changes nothing: the request stands, with what the
+            // old chain's worker last saw of it. Touching the row (`updated_at`) would void the
+            // check that worker may be part way through — it moves a row only if the row is
+            // exactly as it checked it — and a repeated click is not a new decision to audit.
+            if (transaction.move_to_chain_id === config.chainId) {
+              return moveResponse(transaction);
+            }
+
+            // Asking for a different chain replaces the request, starts its wait afresh, and the
+            // audit records the target it replaced.
+            const [requested] = await tx<
+              { move_requested_at: Date; move_checked_at: Date | null; move_wait_reason: string | null }[]
+            >`
+              UPDATE chain.transactions
+              SET move_to_chain_id = ${config.chainId}, move_requested_at = now(),
+                  move_checked_at = NULL, move_wait_reason = NULL, updated_at = now()
+              WHERE id = ${transaction.id}
+              RETURNING move_requested_at, move_checked_at, move_wait_reason
+            `;
+
+            await recordAudit(tx, {
+              effectiveRole,
+              tenantId,
+              session,
+              command: "anchor.batch.resubmit_requested",
+              resourceType: "anchor_batch",
+              resourceId: request.params.batchId,
+              reason: "chain_move_requested",
+              correlationId,
+              requestIp: request.clientIp,
+              detail: {
+                fromChainId,
+                toChainId: config.chainId,
+                state: transaction.state,
+                ...(transaction.move_to_chain_id === null
+                  ? {}
+                  : { replacedToChainId: transaction.move_to_chain_id }),
+              },
+            });
+
+            return moveResponse({ move_to_chain_id: config.chainId, ...requested! });
+          }
+
           // Resets the attempt count to 0. A person checked the cause and decided, so the
           // previous attempts' cap is not inherited. The contract goes with the hash it was
           // recorded for; the next send records its own. Its failed-search timing also starts
-          // fresh, including historical terminal rows that retained an old schedule.
+          // fresh, including historical terminal rows that retained an old schedule. A pending
+          // request to move to another chain is withdrawn: the row is resubmitted where it is.
+          // The old chain's worker carries out a move with this same reset, onto the requested
+          // chain.
           await tx`
             UPDATE chain.transactions
             SET state = 'created', attempts = 0,
                 tx_hash = NULL, contract_address = NULL, block_number = NULL, block_hash = NULL,
                 confirmations = 0, confirmed_at = NULL, submitted_at = NULL,
                 chain_search_failed_since = NULL, retry_after = NULL,
+                move_to_chain_id = NULL, move_requested_at = NULL,
+                move_checked_at = NULL, move_wait_reason = NULL,
                 last_error = ${`resubmitted_from_${transaction.state}`},
                 updated_at = now()
             WHERE id = ${transaction.id}
@@ -743,7 +875,12 @@ export async function registerRegistryRoutes(
             reason: `from_${transaction.state}`,
             correlationId,
             requestIp: request.clientIp,
-            detail: { previousAttempts: transaction.attempts },
+            detail: {
+              previousAttempts: transaction.attempts,
+              ...(transaction.move_to_chain_id === null
+                ? {}
+                : { withdrawnMoveToChainId: transaction.move_to_chain_id }),
+            },
           });
 
           return {
@@ -751,6 +888,7 @@ export async function registerRegistryRoutes(
             confirmationState: "created",
             previousState: transaction.state,
             attempts: 0,
+            moveRequest: null,
             requestId,
             asOf,
           };
@@ -758,6 +896,57 @@ export async function registerRegistryRoutes(
       );
     },
   );
+}
+
+interface StuckTransaction {
+  readonly id: string;
+  readonly state: string;
+  readonly attempts: number;
+  readonly batch_id: string;
+  readonly chain_id: number;
+  readonly move_to_chain_id: number | null;
+  readonly move_requested_at: Date | null;
+  readonly move_checked_at: Date | null;
+  readonly move_wait_reason: string | null;
+}
+
+function moveRequestOf(row: {
+  move_to_chain_id: number | null;
+  move_requested_at: Date | null;
+  move_checked_at: Date | null;
+  move_wait_reason: string | null;
+}): {
+  toChainId: number;
+  requestedAt: string;
+  lastCheckedAt: string | null;
+  waitReason: string | null;
+} | null {
+  return row.move_to_chain_id === null || row.move_requested_at === null
+    ? null
+    : {
+        toChainId: row.move_to_chain_id,
+        requestedAt: row.move_requested_at.toISOString(),
+        lastCheckedAt: row.move_checked_at?.toISOString() ?? null,
+        waitReason: row.move_wait_reason,
+      };
+}
+
+/** The old chain's worker refused the batch's last requested move (its audit event). */
+function moveRefusalOf(row: {
+  last_move_command: string | null;
+  last_move_at: Date | null;
+  last_move_reason: string | null;
+  last_move_detail: { toChainId?: unknown; result?: unknown } | null;
+}): { toChainId: number | null; reason: string; result: string | null; refusedAt: string } | null {
+  if (row.last_move_command !== "anchor.batch.chain_move_refused") return null;
+  if (row.last_move_at === null || row.last_move_reason === null) return null;
+  const detail = row.last_move_detail ?? {};
+  return {
+    toChainId: typeof detail.toChainId === "number" ? detail.toChainId : null,
+    reason: row.last_move_reason,
+    result: typeof detail.result === "string" ? detail.result : null,
+    refusedAt: row.last_move_at.toISOString(),
+  };
 }
 
 function assertDraftStillPublishable(

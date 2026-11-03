@@ -4,8 +4,7 @@ import { ConfigError, loadConfig } from "../src/config.js";
 const VALID = {
   PORT: "3001",
   DATABASE_URL: "postgres://postgres@localhost:5432/mpc_test",
-  SIWE_DOMAIN: "localhost:3000",
-  SIWE_URI: "http://localhost:3000",
+  WEB_ORIGIN: "http://localhost:3000",
   CHAIN_ID: "31337",
   SESSION_SECRET: "a".repeat(32),
 };
@@ -15,7 +14,7 @@ describe("loadConfig", () => {
     const config = loadConfig(VALID);
     expect(config.port).toBe(3001);
     expect(config.chainId).toBe(31337);
-    expect(config.siweDomain).toBe("localhost:3000");
+    expect(config.webOrigin).toBe("http://localhost:3000");
   });
 
   it("the public route cap defaults to the authenticated cap and can be set apart", () => {
@@ -42,16 +41,21 @@ describe("loadConfig", () => {
       OBJECT_KMS_KEY_ID: "",
       OBJECT_ACCESS_KEY_ID: "",
       OBJECT_SECRET_ACCESS_KEY: "",
+      GOOGLE_CLIENT_ID: "",
+      GOOGLE_CLIENT_SECRET: "",
+      MICROSOFT_ALLOWED_TENANTS: "",
+      OIDC_REDIRECT_BASE: "",
     });
 
     expect(config.chainRpcUrl).toBeNull();
+    expect(config.oidc.google).toBeNull();
     expect(config.governanceTokenAddress).toBeNull();
     expect(config.objectStore.endpoint).toBeUndefined();
     expect(config.objectStore.credentials).toBeUndefined();
   });
 
   it("reports a required variable given as an empty string as missing", () => {
-    expect(() => loadConfig({ ...VALID, SIWE_URI: "" })).toThrowError(/SIWE_URI/);
+    expect(() => loadConfig({ ...VALID, WEB_ORIGIN: "" })).toThrowError(/WEB_ORIGIN/);
   });
 
   it("fails at startup when a required variable is missing", () => {
@@ -78,6 +82,96 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ ...VALID, CHAIN_ID: value }), value).toThrowError(/CHAIN_ID/);
     }
     expect(loadConfig({ ...VALID, CHAIN_ID: "31337" }).chainId).toBe(31337);
+  });
+
+  /**
+   * Wallet sign-in was removed (D3, WP7). `LEGACY_WALLET_LOGIN` is refused rather than ignored
+   * whenever it asks for wallet sign-in: a deployment that still sets `1` expected something that
+   * no longer exists, and must find out at startup, not from a sign-in screen without the button.
+   * `0` asks for what every deployment now gets, so it is accepted and changes nothing. The SIWE
+   * variables are simply no longer read.
+   */
+  describe("wallet sign-in removed", () => {
+    it("refuses LEGACY_WALLET_LOGIN unless it is 0", () => {
+      for (const value of ["1", "true", "yes"]) {
+        expect(() => loadConfig({ ...VALID, LEGACY_WALLET_LOGIN: value }), value).toThrowError(
+          /LEGACY_WALLET_LOGIN: wallet sign-in was removed/,
+        );
+      }
+      expect(loadConfig({ ...VALID, LEGACY_WALLET_LOGIN: "0" })).not.toHaveProperty("legacyWalletLogin");
+      // A platform's empty placeholder is "unset", as for every other variable.
+      expect(() => loadConfig({ ...VALID, LEGACY_WALLET_LOGIN: "" })).not.toThrow();
+    });
+
+    it("reads nothing from the SIWE variables", () => {
+      const config = loadConfig({ ...VALID, SIWE_DOMAIN: "evil.example", SIWE_URI: "https://evil.example" });
+      expect(config.webOrigin).toBe("http://localhost:3000");
+      expect(JSON.stringify(config)).not.toContain("evil.example");
+    });
+
+    it("requires WEB_ORIGIN — it no longer falls back to SIWE_URI", () => {
+      const { WEB_ORIGIN: _origin, ...withoutOrigin } = VALID;
+      expect(() => loadConfig({ ...withoutOrigin, SIWE_URI: "http://localhost:3000" })).toThrowError(/WEB_ORIGIN/);
+    });
+  });
+
+  /**
+   * The E2E stand-in for Google and Microsoft (`OIDC_TEST_RELAY_URL`). Whoever sets it chooses
+   * which server the API trusts for ID tokens, so it exists only where nothing real signs in.
+   */
+  describe("OIDC_TEST_RELAY_URL", () => {
+    const production = {
+      ...VALID,
+      NODE_ENV: "production",
+      OBJECT_STORE: "s3",
+      OBJECT_BUCKET: "mpc-evidence",
+      OBJECT_REGION: "ap-northeast-2",
+      WEB_ORIGIN: "https://registry.example.com",
+      WEBAUTHN_RP_ID: "registry.example.com",
+      WEBAUTHN_ORIGIN: "https://registry.example.com",
+    };
+
+    it("is off unless set, and kept without a trailing slash", () => {
+      expect(loadConfig(VALID).oidcTestRelayUrl).toBeNull();
+      expect(loadConfig({ ...VALID, OIDC_TEST_RELAY_URL: "" }).oidcTestRelayUrl).toBeNull();
+      expect(loadConfig({ ...VALID, OIDC_TEST_RELAY_URL: "http://127.0.0.1:4555/" }).oidcTestRelayUrl).toBe(
+        "http://127.0.0.1:4555",
+      );
+      expect(loadConfig({ ...VALID, NODE_ENV: "test", OIDC_TEST_RELAY_URL: "https://localhost:4555/oidc" }).oidcTestRelayUrl).toBe(
+        "https://localhost:4555/oidc",
+      );
+      expect(loadConfig({ ...VALID, OIDC_TEST_RELAY_URL: "http://[::1]:4555" }).oidcTestRelayUrl).toBe("http://[::1]:4555");
+    });
+
+    it("refuses a relay that is not this machine, even outside production", () => {
+      for (const value of [
+        "https://attacker.example",
+        "http://127.0.0.1.attacker.example:4555",
+        "http://localhost.attacker.example",
+        "http://10.0.0.5:4555",
+        "http://user:pass@127.0.0.1:4555",
+      ]) {
+        expect(() => loadConfig({ ...VALID, NODE_ENV: "test", OIDC_TEST_RELAY_URL: value }), value).toThrowError(
+          /OIDC_TEST_RELAY_URL must name this machine/,
+        );
+      }
+    });
+
+    it("is refused in production and on mainnet", () => {
+      expect(loadConfig(production).oidcTestRelayUrl).toBeNull();
+      expect(() => loadConfig({ ...production, OIDC_TEST_RELAY_URL: "http://127.0.0.1:4555" })).toThrowError(
+        /OIDC_TEST_RELAY_URL is for test builds only/,
+      );
+      expect(() => loadConfig({ ...VALID, CHAIN_ID: "56", OIDC_TEST_RELAY_URL: "http://127.0.0.1:4555" })).toThrowError(
+        ConfigError,
+      );
+    });
+
+    it("refuses anything but a plain http(s) URL", () => {
+      for (const value of ["file:///etc/passwd", "javascript:alert(1)", "not a url", "ftp://relay.test", "http://relay.test/?x=1", "http://relay.test/#a"]) {
+        expect(() => loadConfig({ ...VALID, OIDC_TEST_RELAY_URL: value }), value).toThrowError(/OIDC_TEST_RELAY_URL/);
+      }
+    });
   });
 
   /**
@@ -229,8 +323,7 @@ describe("R1: the dev auth switch is removed", () => {
   describe("secret references", () => {
     const base = {
       DATABASE_URL: "postgres://localhost/x",
-      SIWE_DOMAIN: "localhost:3000",
-      SIWE_URI: "http://localhost:3000",
+      WEB_ORIGIN: "http://localhost:3000",
       CHAIN_ID: "31337",
       SESSION_SECRET: "s".repeat(32),
     };
@@ -284,11 +377,199 @@ describe("R1: the dev auth switch is removed", () => {
     });
   });
 
+  /** The web and relying-party settings production requires (WP3), consistent with each other. */
+  const WEBAUTHN_PRODUCTION = {
+    WEB_ORIGIN: "https://registry.example.com",
+    WEBAUTHN_RP_ID: "registry.example.com",
+    WEBAUTHN_ORIGIN: "https://registry.example.com",
+  };
+
+  describe("account email (WP2)", () => {
+    it("takes the invitation-link origin from WEB_ORIGIN, reduced to its origin", () => {
+      expect(loadConfig(VALID).webOrigin).toBe("http://localhost:3000");
+      expect(
+        loadConfig({ ...VALID, WEB_ORIGIN: "https://app.example.com/some/path" }).webOrigin,
+      ).toBe("https://app.example.com");
+    });
+
+    it("refuses a WEB_ORIGIN that is not http(s)", () => {
+      expect(() => loadConfig({ ...VALID, WEB_ORIGIN: "javascript:alert(1)" })).toThrow(
+        /WEB_ORIGIN/,
+      );
+    });
+
+    it("sends through the test sink outside production and Resend in production by default", () => {
+      expect(loadConfig(VALID).emailTransport).toBe("log");
+      expect(
+        loadConfig({ ...VALID, NODE_ENV: "production", OBJECT_STORE: "s3", OBJECT_BUCKET: "b", OBJECT_REGION: "r", ...WEBAUTHN_PRODUCTION })
+          .emailTransport,
+      ).toBe("resend");
+    });
+
+    it("refuses a test transport in production", () => {
+      for (const transport of ["log", "smtp"]) {
+        expect(() =>
+          loadConfig({
+            ...VALID,
+            NODE_ENV: "production",
+            OBJECT_STORE: "s3",
+            OBJECT_BUCKET: "b",
+            OBJECT_REGION: "r",
+            ...WEBAUTHN_PRODUCTION,
+            EMAIL_TRANSPORT: transport,
+          }),
+        ).toThrow(/cannot be used in production/);
+      }
+    });
+
+    it("refuses an unknown transport", () => {
+      expect(() => loadConfig({ ...VALID, EMAIL_TRANSPORT: "sendmail" })).toThrow(
+        /EMAIL_TRANSPORT must be one of/,
+      );
+    });
+  });
+
+  /**
+   * WebAuthn relying party (WP3). Passkeys are bound to the RP ID and every ceremony must come
+   * from the one configured origin, so a missing or loose value would either break sign-in or
+   * accept assertions made for another site.
+   */
+  describe("Google and Microsoft sign-in (WP4)", () => {
+    const production = {
+      ...VALID,
+      NODE_ENV: "production",
+      OBJECT_STORE: "s3",
+      OBJECT_BUCKET: "mpc-evidence",
+      OBJECT_REGION: "ap-northeast-2",
+      ...WEBAUTHN_PRODUCTION,
+    };
+    const google = { GOOGLE_CLIENT_ID: "id.apps.example", GOOGLE_CLIENT_SECRET: "google-secret-value" };
+    const microsoft = { MICROSOFT_CLIENT_ID: "5b4f3a2c-0000-4000-8000-00000000c1d1", MICROSOFT_CLIENT_SECRET: "ms-secret-value" };
+    const TID = "11111111-1111-4111-8111-111111111111";
+
+    it("is off unless a provider's id and secret are both set; the redirect base is the web origin", () => {
+      expect(loadConfig(VALID).oidc).toEqual({ redirectBase: "http://localhost:3000", google: null, microsoft: null });
+      const on = loadConfig({ ...production, ...google, ...microsoft }).oidc;
+      expect(on.redirectBase).toBe("https://registry.example.com");
+      expect(on.google).toEqual({ clientId: google.GOOGLE_CLIENT_ID, clientSecret: google.GOOGLE_CLIENT_SECRET });
+      expect(on.microsoft).toMatchObject({ clientId: microsoft.MICROSOFT_CLIENT_ID, allowedTenants: null });
+    });
+
+    it("refuses half a client in production, and leaves the provider off elsewhere", () => {
+      expect(() => loadConfig({ ...production, GOOGLE_CLIENT_ID: "id-only" })).toThrow(/GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/);
+      expect(() => loadConfig({ ...production, MICROSOFT_CLIENT_SECRET: "secret-only" })).toThrow(/MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET/);
+      expect(loadConfig({ ...VALID, GOOGLE_CLIENT_ID: "id-only" }).oidc.google).toBeNull();
+    });
+
+    it("accepts the redirect base only as the web origin itself", () => {
+      expect(loadConfig({ ...production, OIDC_REDIRECT_BASE: "https://registry.example.com/" }).oidc.redirectBase)
+        .toBe("https://registry.example.com");
+      expect(() => loadConfig({ ...production, OIDC_REDIRECT_BASE: "https://evil.example.com" })).toThrow(/web origin/);
+      expect(() => loadConfig({ ...production, OIDC_REDIRECT_BASE: "https://registry.example.com/cb" })).toThrow(/origin only/);
+      expect(() => loadConfig({ ...production, OIDC_REDIRECT_BASE: "not a url" })).toThrow(/OIDC_REDIRECT_BASE/);
+      expect(() =>
+        loadConfig({ ...production, WEB_ORIGIN: "http://registry.example.com", WEBAUTHN_ORIGIN: "http://registry.example.com" }),
+      ).toThrow(/https/);
+    });
+
+    it("reads the Microsoft allowlist as directory GUIDs, and refuses anything else", () => {
+      const config = loadConfig({ ...VALID, ...microsoft, MICROSOFT_ALLOWED_TENANTS: ` ${TID.toUpperCase()} , ` });
+      expect(config.oidc.microsoft?.allowedTenants).toEqual([TID]);
+      expect(() => loadConfig({ ...VALID, ...microsoft, MICROSOFT_ALLOWED_TENANTS: "contoso.onmicrosoft.com" })).toThrow(/GUID/);
+      expect(() => loadConfig({ ...VALID, ...microsoft, MICROSOFT_ALLOWED_TENANTS: "," })).toThrow(/GUID/);
+    });
+
+    it("keeps the client secrets out of the audit trail and error messages", () => {
+      const config = loadConfig({ ...production, ...google, ...microsoft });
+      const audit = JSON.stringify(config.secretAudit);
+      expect(audit).toContain("GOOGLE_CLIENT_SECRET");
+      expect(audit).toContain("MICROSOFT_CLIENT_SECRET");
+      expect(audit).not.toContain(google.GOOGLE_CLIENT_SECRET);
+      expect(audit).not.toContain(microsoft.MICROSOFT_CLIENT_SECRET);
+      try {
+        loadConfig({ ...production, GOOGLE_CLIENT_SECRET: "leaky-secret-value" });
+        expect.unreachable();
+      } catch (error) {
+        expect(String(error)).not.toContain("leaky-secret-value");
+      }
+    });
+  });
+
+  describe("WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN", () => {
+    const production = {
+      ...VALID,
+      NODE_ENV: "production",
+      OBJECT_STORE: "s3",
+      OBJECT_BUCKET: "mpc-evidence",
+      OBJECT_REGION: "ap-northeast-2",
+      WEB_ORIGIN: "https://registry.example.com",
+      WEBAUTHN_RP_ID: "registry.example.com",
+      WEBAUTHN_ORIGIN: "https://registry.example.com",
+    };
+
+    it("defaults to localhost outside production", () => {
+      expect(loadConfig(VALID).webauthn).toEqual({ rpId: "localhost", origin: "http://localhost:3000" });
+    });
+
+    it("is required in production", () => {
+      expect(() => loadConfig({ ...production, WEBAUTHN_RP_ID: undefined })).toThrow(/WEBAUTHN_RP_ID/);
+      expect(() => loadConfig({ ...production, WEBAUTHN_ORIGIN: undefined })).toThrow(/WEBAUTHN_ORIGIN/);
+      expect(loadConfig(production).webauthn).toEqual({
+        rpId: "registry.example.com",
+        origin: "https://registry.example.com",
+      });
+    });
+
+    it("accepts an origin on a subdomain of the RP ID", () => {
+      expect(
+        loadConfig({
+          ...production,
+          WEB_ORIGIN: "https://app.registry.example.com",
+          WEBAUTHN_ORIGIN: "https://app.registry.example.com",
+        }).webauthn.origin,
+      ).toBe("https://app.registry.example.com");
+    });
+
+    it("must be the web origin the invitation links point at", () => {
+      // Defaults follow the web origin outside production.
+      expect(loadConfig({ ...VALID, WEB_ORIGIN: "https://app.example.com" }).webauthn).toEqual({
+        rpId: "app.example.com",
+        origin: "https://app.example.com",
+      });
+      expect(() =>
+        loadConfig({
+          ...production,
+          WEB_ORIGIN: "https://registry.example.com",
+          WEBAUTHN_ORIGIN: "https://app.registry.example.com",
+        }),
+      ).toThrow(/must equal the web origin/);
+      expect(() => loadConfig({ ...production, WEB_ORIGIN: "http://localhost:3000" })).toThrow(
+        /must equal the web origin \(WEB_ORIGIN\): http:\/\/localhost:3000/,
+      );
+    });
+
+    it("refuses an origin that is not the RP ID or under it", () => {
+      for (const origin of ["https://evil.example.com", "https://registry.example.com.evil.test", "https://xregistry.example.com"]) {
+        expect(() => loadConfig({ ...production, WEBAUTHN_ORIGIN: origin })).toThrow(/subdomain/);
+      }
+    });
+
+    it("refuses http in production and anything but a bare origin", () => {
+      expect(() => loadConfig({ ...production, WEBAUTHN_ORIGIN: "http://registry.example.com" })).toThrow(/https/);
+      expect(() => loadConfig({ ...production, WEBAUTHN_ORIGIN: "https://registry.example.com/app" })).toThrow(
+        /origin only/,
+      );
+      expect(() => loadConfig({ ...production, WEBAUTHN_ORIGIN: "not a url" })).toThrow(/WEBAUTHN_ORIGIN/);
+      expect(() => loadConfig({ ...production, WEBAUTHN_RP_ID: "https://registry.example.com" })).toThrow(
+        /WEBAUTHN_RP_ID/,
+      );
+    });
+  });
+
   describe("object storage (OD-17·OD-22)", () => {
     const base = {
       DATABASE_URL: "postgres://localhost/x",
-      SIWE_DOMAIN: "localhost:3000",
-      SIWE_URI: "http://localhost:3000",
+      WEB_ORIGIN: "http://localhost:3000",
       CHAIN_ID: "31337",
       SESSION_SECRET: "s".repeat(32),
     };

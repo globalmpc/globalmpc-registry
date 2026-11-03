@@ -15,6 +15,7 @@ import {
   type DocumentStatusSummary,
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { validityText } from "@/lib/documents";
 import {
@@ -44,7 +45,9 @@ const PAGE_SIZE = 50;
 
 export default function DocumentStatusPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { token, loading: sessionLoading } = useSession();
+  const { token, session, loading: sessionLoading } = useSession();
+  // Declaring and retiring expected types is `source.upload`; without it they are shown, not offered.
+  const mayDeclare = can(session, "source.upload");
 
   const [summary, setSummary] = useState<DocumentStatusSummary | null>(null);
   const [items, setItems] = useState<DocumentListItem[]>([]);
@@ -300,7 +303,7 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
                     />
                     <button
                       type="button"
-                      disabled={busy || !retireReason[progress.requirement.id]?.trim()}
+                      disabled={busy || !mayDeclare || !retireReason[progress.requirement.id]?.trim()}
                       onClick={() => void retire(progress.requirement.id)}
                     >
                       Retire
@@ -338,7 +341,7 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
             value={newNote}
             onChange={(event) => setNewNote(event.target.value)}
           />
-          <button type="submit" disabled={busy || !newType.trim()}>
+          <button type="submit" disabled={busy || !mayDeclare || !newType.trim()}>
             Declare type
           </button>
         </form>

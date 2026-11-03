@@ -382,3 +382,20 @@ describe("contract code at startup", () => {
     );
   });
 });
+
+describe("SAFE_SERVICE_URL", () => {
+  it("is kept so stored errors can be masked against it", () => {
+    expect(
+      loadAnchorConfig({ ...base, SAFE_SERVICE_URL: "https://KEY.safe.example" }).safeServiceUrl,
+    ).toBe("https://KEY.safe.example");
+    expect(loadAnchorConfig(base).safeServiceUrl).toBeNull();
+  });
+});
+
+describe("ANCHOR_FEE_CAP_GWEI", () => {
+  it.each(["1e300", "1e-12"])("refuses %s, which is no usable number of wei", (value) => {
+    expect(() => loadAnchorConfig({ ...base, ANCHOR_FEE_CAP_GWEI: value })).toThrowError(
+      /ANCHOR_FEE_CAP_GWEI must be a finite number of at least 1 wei/,
+    );
+  });
+});

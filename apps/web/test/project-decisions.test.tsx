@@ -19,6 +19,7 @@ const auth = vi.hoisted(() => ({
     authenticated: true,
     subjectId: "reviewer",
     roleBindings: [{ role: "mpc_operator" }, { role: "disclosure_approver" }],
+    actions: ["gate.decide", "readiness.recompute"] as string[],
   },
   signTypedData: vi.fn(),
 }));
@@ -130,6 +131,28 @@ describe("signed gate decisions", () => {
     });
     expect(auth.signTypedData).toHaveBeenCalledWith({ domain: {} });
     expect(screen.getByText("Decision signed by reviewer")).toBeTruthy();
+  });
+  it("offers no decision to a session without gate.decide, and says why when assurance is short", async () => {
+    const saved = auth.session;
+    auth.session = {
+      ...saved,
+      roleBindings: [{ role: "gate_approver" }],
+      actions: ["readiness.recompute"],
+      assuranceLevel: "wallet_only",
+    } as typeof saved;
+    try {
+      mockHttp({ "POST /api/v1/projects/p1/readiness-assessments": assessment() });
+      await mount(Gate);
+      expect(screen.getByTestId("assurance-notice").textContent).toContain("gate_approver");
+      fireEvent.click(screen.getByText("Load current readiness"));
+      await screen.findByText("1 requirements are on watch");
+      fireEvent.change(screen.getByLabelText("Rationale (required)"), { target: { value: "Wait" } });
+      for (const name of ["hold", "rework", "stop"]) {
+        expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+      }
+    } finally {
+      auth.session = saved;
+    }
   });
   it("blocks go for gaps but permits a signed hold", async () => {
     mockHttp({

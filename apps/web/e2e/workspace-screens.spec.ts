@@ -53,18 +53,23 @@ test.describe("workspace navigation", () => {
 });
 
 test.describe("wallet addresses are shown in full and copyable", () => {
-  test("the top bar and admin screen show the full 42-character address and the copy button works", async ({ page, context }) => {
+  test("account settings and the admin screen show the full 42-character address and the copy button works", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await connectAs(page, "Operator A");
 
+    // The header names how the person signed in, not a wallet: a wallet only signs (WP7).
     const header = page.getByRole("banner");
-    const headerAddress = header.getByTestId("wallet-address");
-    await expect(headerAddress).toHaveText(/^0x[0-9a-f]{40}$/);
+    await expect(header.getByTestId("sign-in-method")).toHaveText("email");
+    await expect(header.getByTestId("wallet-address")).toHaveCount(0);
 
-    await header.getByRole("button", { name: "Copy wallet address" }).click();
-    await expect(header.getByRole("button", { name: "Copy wallet address" })).toHaveText("Copied");
+    await page.goto("/w/settings");
+    const wallets = page.getByTestId("wallet-list");
+    const address = wallets.getByTestId("wallet-address").first();
+    await expect(address).toHaveText(/^0x[0-9a-f]{40}$/);
+    await wallets.getByRole("button", { name: "Copy wallet address" }).first().click();
+    await expect(wallets.getByRole("button", { name: "Copy wallet address" }).first()).toHaveText("Copied");
     const copied = await page.evaluate(() => navigator.clipboard.readText());
-    expect(copied).toBe(await headerAddress.textContent());
+    expect(copied).toBe(await address.textContent());
 
     await page.goto("/w/admin");
     const cells = page.getByTestId("admin-subjects").getByTestId("wallet-address");

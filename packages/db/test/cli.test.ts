@@ -60,7 +60,7 @@ it("refuses migrations without a database URL", async () => {
 it("creates login roles without printing either password", async () => {
   vi.stubEnv("APP_DB_PASSWORD", "app-secret");
   vi.stubEnv("WORKER_DB_PASSWORD", "worker-secret");
-  s.roles.mockResolvedValue({ created: ["mpc_app_login"] });
+  s.roles.mockResolvedValue({ created: ["mpc_app_login"], warnings: [] });
   await import("../src/login-roles-cli.js");
   expect(s.roles).toHaveBeenCalledWith(s.sql, {
     appPassword: "app-secret",
@@ -70,6 +70,17 @@ it("creates login roles without printing either password", async () => {
   expect(log).toContain("mpc_app_login");
   expect(log).not.toContain("secret");
   expect(s.sql.end).toHaveBeenCalledOnce();
+});
+it("prints login role warnings on stderr and in the result", async () => {
+  vi.stubEnv("APP_DB_PASSWORD", "app-secret");
+  vi.stubEnv("WORKER_DB_PASSWORD", "worker-secret");
+  const warning = "Not permitted to turn off log_statement for this run";
+  s.roles.mockResolvedValue({ created: [], warnings: [warning] });
+  await import("../src/login-roles-cli.js");
+  expect(process.stderr.write).toHaveBeenCalledWith(`Login roles warning — ${warning}\n`);
+  const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  expect(JSON.parse(log)).toEqual({ msg: "login-roles.ready", created: [], warnings: [warning] });
+  expect(process.exitCode).toBe(0);
 });
 it("reports login role creation errors and closes the connection", async () => {
   vi.stubEnv("APP_DB_PASSWORD", "a");

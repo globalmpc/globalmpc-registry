@@ -64,7 +64,7 @@ export default function PublicLandingPage() {
           </p>
         </div>
         <Link href="/connect" className="btn-connect">
-          Connect account →
+          Sign in →
         </Link>
       </section>
 

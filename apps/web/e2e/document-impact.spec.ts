@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { connectAs } from "./connect-as";
+import { reportScan } from "./scan-service";
 
 /**
  * Document relations E2E.
@@ -11,12 +12,6 @@ import { connectAs } from "./connect-as";
  * the one the new version carries, and the impact the database raises is the one the impacts
  * page lets a person close.
  */
-
-async function sessionToken(page: Page): Promise<string> {
-  const token = await page.evaluate(() => window.localStorage.getItem("mpc.session.token"));
-  expect(token).not.toBeNull();
-  return token as string;
-}
 
 async function uploadIds(page: Page): Promise<string[]> {
   const cells = page.locator('[data-testid^="upload-state-"]');
@@ -30,20 +25,11 @@ async function uploadIds(page: Page): Promise<string[]> {
 }
 
 /**
- * The scan is the scan service's act, never the uploader's. E2E calls the API with that
- * session, as the golden path does — the screen has no button for it on purpose.
+ * The scan is the scan service's act, never the uploader's. E2E calls the API with the scan
+ * service's token, as the worker does — the screen has no button for it on purpose.
  */
 async function scanClean(page: Page, uploadId: string, version: number): Promise<void> {
-  const token = await sessionToken(page);
-  const response = await page.request.post(`/api/v1/uploads/${uploadId}/scan-result`, {
-    headers: {
-      authorization: `Bearer ${token}`,
-      "idempotency-key": `e2e-doc-scan-${uploadId}-${version}`,
-      "if-match": `"${version}"`,
-    },
-    data: { result: "clean" },
-  });
-  expect(response.ok()).toBe(true);
+  await reportScan(page, uploadId, version);
 }
 
 test.describe("document relations", () => {
@@ -88,7 +74,6 @@ test.describe("document relations", () => {
     await expect(page.locator('[data-testid^="upload-state-"]')).toHaveCount(2);
     const reportId = (await uploadIds(page)).find((uploadId) => uploadId !== licenseId)!;
 
-    await connectAs(page, "Scan Service");
     await scanClean(page, licenseId!, 1);
     await scanClean(page, reportId, 1);
 
@@ -125,7 +110,6 @@ test.describe("document relations", () => {
     await expect(page.getByTestId("impacts-empty")).toBeVisible();
 
     // Uploaded at version 1, marked as the new version at 2.
-    await connectAs(page, "Scan Service");
     await scanClean(page, renewedId, 2);
 
     await connectAs(page, "Steward A");

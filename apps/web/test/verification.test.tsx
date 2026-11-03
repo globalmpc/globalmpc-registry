@@ -5,7 +5,10 @@ import Verification from "../src/app/w/projects/[id]/verification/page";
 import { mockHttp } from "./support/http";
 const auth = vi.hoisted(() => ({
   token: "token" as string | null,
-  session: { actions: ["claim.curate"], roleBindings: [{ role: "reviewer_cp_qp" }] },
+  session: {
+    actions: ["claim.curate", "attestation.sign", "attestation.dispute"],
+    roleBindings: [{ role: "reviewer_cp_qp" }],
+  },
   signTypedData: vi.fn(),
 }));
 vi.mock("../src/lib/session", () => ({ useSession: () => auth }));
@@ -98,7 +101,7 @@ async function sign() {
 }
 beforeEach(() => {
   auth.token = "token";
-  auth.session.actions = ["claim.curate"];
+  auth.session.actions = ["claim.curate", "attestation.sign", "attestation.dispute"];
   auth.signTypedData.mockReset().mockResolvedValue("0xsigned");
 });
 afterEach(() => {
@@ -147,6 +150,28 @@ describe("independent verification", () => {
     expect(screen.getByRole("button", { name: "Assign the review" }).hasAttribute("disabled")).toBe(
       true,
     );
+  });
+  it("offers no signing to a reviewer whose role is below its assurance minimum, and says why", async () => {
+    const saved = auth.session;
+    auth.session = {
+      actions: ["claim.curate"],
+      roleBindings: [{ role: "reviewer_cp_qp" }],
+      authenticated: true,
+      assuranceLevel: "wallet_only",
+    } as typeof saved;
+    try {
+      await mount();
+      const notice = screen.getByTestId("assurance-notice");
+      expect(notice.textContent).toContain("Identity verification needed — ask an admin");
+      expect(notice.textContent).toContain("reviewer_cp_qp");
+      // Not the generic "cannot sign" notice: the role is held, the assurance is short.
+      expect(screen.queryByText("This account cannot sign")).toBeNull();
+      fireEvent.click(screen.getByTestId("select-case-case"));
+      expect(screen.getByRole("button", { name: "Create the draft" }).hasAttribute("disabled")).toBe(true);
+      expect(screen.getByTestId("sign-attestation").hasAttribute("disabled")).toBe(true);
+    } finally {
+      auth.session = saved;
+    }
   });
   it("requires limitations and fixes the selected evidence scope in the draft", async () => {
     const calls = await mount();

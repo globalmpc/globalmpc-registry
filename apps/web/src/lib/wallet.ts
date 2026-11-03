@@ -1,12 +1,9 @@
 /**
  * Browser wallet (EIP-1193) integration.
  *
- * Demo accounts sign directly in the browser with known private keys. Real users
- * never give us their keys — the wallet extension signs and we receive only the result.
- *
- * **Both paths use the same SIWE and EIP-712 flow.** Only the signer differs; what the server
- * sees is identical. So the server has no code distinguishing "demo or real wallet" —
- * such a distinction could let the demo path become looser than the real-wallet path.
+ * A wallet is a **signing key, never a way to sign in** (WP7). It is asked for at the moment
+ * something is signed (EIP-712) or bound to an account. Users never give us their keys — the
+ * wallet extension signs and we receive only the result.
  */
 
 import type { SupportedChainId } from "@mpc/domain";
@@ -294,69 +291,6 @@ export async function ensureChain(
   if (before === chainId) return { before, switched: false };
   await switchChain(chainId);
   return { before, switched: true };
-}
-
-/**
- * Flags the responding wallet reports about itself.
- *
- * **For logging only — not for decisions.** A flag is only what a wallet calls itself
- * (many wallets set `isMetaMask`); branching on it produces per-wallet code.
- * Recorded because reproducing a problem requires knowing what responded.
- */
-export function walletFlags(provider: Eip1193Provider | null): string[] {
-  if (!provider) return [];
-  const flags = provider as unknown as Record<string, unknown>;
-  return [
-    "isMetaMask",
-    "isBraveWallet",
-    "isTrust",
-    "isTrustWallet",
-    "isCoinbaseWallet",
-    "isRabby",
-    "isOkxWallet",
-  ].filter((name) => flags[name] === true);
-}
-
-/**
- * Listen for account and chain changes in the wallet.
- *
- * The session is bound to the old address on the server, so it is not a permission problem. The problem is that
- * the account the user sees in the wallet differs from the one on screen — when a signature is requested,
- * it is signed with the wrong account or rejected for no visible reason.
- */
-export function subscribeProviderEvents(handlers: {
-  onAccounts(accounts: string[]): void;
-  onChain(chainId: number): void;
-}): () => void {
-  const provider = getInjectedProvider();
-  if (!provider?.on || !provider.removeListener) return () => undefined;
-
-  const onAccounts = (...args: unknown[]) =>
-    handlers.onAccounts(((args[0] as string[] | undefined) ?? []).map((a) => a.toLowerCase()));
-  const onChain = (...args: unknown[]) =>
-    handlers.onChain(Number.parseInt(String(args[0]), 16));
-
-  provider.on("accountsChanged", onAccounts);
-  provider.on("chainChanged", onChain);
-  return () => {
-    provider.removeListener?.("accountsChanged", onAccounts);
-    provider.removeListener?.("chainChanged", onChain);
-  };
-}
-
-/** SIWE message signature. `personal_sign` takes arguments in (message, address) order. */
-export async function personalSign(message: string, address: string): Promise<string> {
-  const provider = getInjectedProvider();
-  if (!provider) throw new WalletError("No browser wallet is available", false);
-
-  try {
-    return (await provider.request({
-      method: "personal_sign",
-      params: [message, address],
-    })) as string;
-  } catch (caught) {
-    throw toWalletError(caught, "Could not sign");
-  }
 }
 
 /**

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
+import { normalizeEmail } from "@mpc/api-contract";
 import { ROLE_DEPLOY_BOUND } from "./audit.js";
 import {
   findAttestationSchema,
@@ -101,10 +102,15 @@ async function requireTenant(tx: postgres.TransactionSql, slug: string): Promise
 
 // --- credential -------------------------------------------------------------
 
+/**
+ * The credential holder is named by exactly one of: the account address `bootstrap` created them
+ * with, or a wallet the holder bound (WP5). Bootstrap binds no wallet any more (WP7), so the
+ * address is the usual way.
+ */
 export interface CredentialInput extends CredentialFields {
   readonly tenantSlug: string;
-  /** Wallet of the credential holder. Must already be in via `bootstrap`. */
-  readonly walletAddress: string;
+  readonly email?: string | null;
+  readonly walletAddress?: string | null;
 }
 
 export interface BootstrapRegistryResult {
@@ -117,7 +123,16 @@ export async function bootstrapCredential(
   sql: postgres.Sql,
   input: CredentialInput,
 ): Promise<BootstrapRegistryResult> {
-  const wallet = input.walletAddress.toLowerCase();
+  const rawEmail = input.email?.trim() ? input.email : null;
+  const wallet = input.walletAddress?.trim() ? input.walletAddress.toLowerCase() : null;
+  if ((rawEmail === null) === (wallet === null)) {
+    throw new BootstrapRegistryError("Name the holder by exactly one of email or walletAddress");
+  }
+  const email = rawEmail === null ? null : normalizeEmail(rawEmail);
+  if (rawEmail !== null && email === null) {
+    // Not echoed: an address is personal data, and this lands in deploy logs.
+    throw new BootstrapRegistryError("email is not one email address");
+  }
 
   const checked = validateCredential(input, new Date());
   if (!checked.ok) throw new BootstrapRegistryError(checked.message);
@@ -125,16 +140,36 @@ export async function bootstrapCredential(
   return sql.begin(async (tx) => {
     const tenantId = await requireTenant(tx, input.tenantSlug);
 
-    const [identity] = await tx<{ subject_id: string | null }[]>`
-      SELECT subject_id FROM core.wallet_identities
-      WHERE wallet_address = ${wallet} AND tenant_id = ${tenantId}
-        AND disabled_at IS NULL
-      ORDER BY created_at
-      LIMIT 1
-    `;
+    const [identity] = email !== null
+      ? await tx<{ subject_id: string }[]>`
+          SELECT id AS subject_id FROM core.subjects
+          WHERE email = ${email} AND tenant_id = ${tenantId} AND kind = 'person'
+        `
+      : await tx<{ subject_id: string }[]>`
+          SELECT subject_id FROM core.wallet_identities
+          WHERE wallet_address = ${wallet} AND tenant_id = ${tenantId}
+            AND disabled_at IS NULL
+          ORDER BY created_at
+          LIMIT 1
+        `;
+    // A wallet address names a person only while it has had one holder. Once a key was disabled
+    // it can be bound again by someone else (0130), and a deploy written for the earlier holder
+    // would issue the credential to the new one. Such an address is ambiguous: name the email.
+    if (wallet !== null) {
+      const [history] = await tx`
+        SELECT 1 FROM core.wallet_identities WHERE wallet_address = ${wallet} AND disabled_at IS NOT NULL LIMIT 1
+      `;
+      if (history) {
+        throw new BootstrapRegistryError(
+          `Wallet ${wallet} was disabled before and may have changed hands. Name the holder by email instead`,
+        );
+      }
+    }
     if (!identity?.subject_id) {
       throw new BootstrapRegistryError(
-        `Wallet ${wallet} is not in this tenant. Insert people first`,
+        email !== null
+          ? "No person with this email address in this tenant. Insert people first"
+          : `Wallet ${wallet} is not in this tenant. Insert people first`,
       );
     }
 

@@ -1,9 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
-import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
+import {
+  idempotencyKey,
+  issueTestSession,
+  newAccount,
+  setupFixture,
+  signIn,
+  testEnv,
+  type TestFixture,
+} from "./helpers/db.js";
 import { addGovernanceAccount } from "./helpers/governance-accounts.js";
+import { bindWalletByProof } from "./helpers/wallets.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -383,12 +393,19 @@ describeDb("Governance — on-chain snapshot", () => {
   /** Reading a wrong address returns 0. 0 cannot be a denominator. */
   let totalSupplyValue = TOTAL_SUPPLY;
 
+  /** Snapshot balances by address (5 when unset), and every address the API read one for. */
+  const balances = new Map<string, bigint>();
+  const reads: string[] = [];
+
   const chain = {
     tokenAddress: `0x${"ab".repeat(20)}`,
     chainId: 31337,
     confirmationDepth: 12,
     headBlockNumber: async () => 1000,
-    readBalance: async () => 5n,
+    readBalance: async ({ walletAddress }: { walletAddress: string }) => {
+      reads.push(walletAddress);
+      return balances.get(walletAddress) ?? 5n;
+    },
     readTotalSupply: async () => {
       if (totalSupplyFails) throw new Error("archive node required");
       return totalSupplyValue;
@@ -477,6 +494,138 @@ describeDb("Governance — on-chain snapshot", () => {
     expect(body.snapshotBlock).toBeNull();
     expect(body.weightSource).toBe("manual");
     expect(body.eligibleWeightSource).toBe("manual");
+  });
+
+  /**
+   * D9 with one wallet per account (0130): the voter's active wallet is the governance wallet. A
+   * snapshot vote pins the wallet and weight it was first cast with, so a replace cannot vote the
+   * same proposal again with another wallet's balance, and the old wallet's next holder cannot
+   * vote its balance a second time.
+   */
+  describe("snapshot weight from the active wallet, across a replace", () => {
+    const subjectOf = async (address: string) => {
+      const [row] = await fx.sql<{ subject_id: string }[]>`
+        SELECT subject_id FROM core.wallet_identities WHERE wallet_address = ${address} AND disabled_at IS NULL
+      `;
+      return row!.subject_id;
+    };
+    const vote = (proposalId: string, token: string, choice: "for" | "against") =>
+      app.inject({
+        method: "POST",
+        url: `/api/v1/governance/proposals/${proposalId}/votes`,
+        headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
+        payload: { choice },
+      });
+    const stored = async (proposalId: string, subjectId: string) => {
+      const [row] = await fx.sql<{ choice: string; weight: string; weight_wallet_address: string | null }[]>`
+        SELECT choice, weight::text AS weight, weight_wallet_address FROM core.governance_votes
+        WHERE proposal_id = ${proposalId} AND voter_subject_id = ${subjectId}
+      `;
+      return row;
+    };
+
+    it("refuses a voter with no signing wallet rather than counting zero", async () => {
+      const opened = await openVoting({});
+      const walletless = await addGovernanceAccount(fx, "protocol_voter");
+      const subjectId = await subjectOf(walletless.address);
+      await fx.sql`UPDATE core.wallet_identities SET disabled_at = now() WHERE wallet_address = ${walletless.address}`;
+      const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, {
+        firstFactor: "email_code",
+        secondFactor: "passkey",
+      });
+      const refused = await vote(opened.json().id, token, "for");
+      expect(refused.statusCode).toBe(422);
+      expect(refused.json().code).toBe("GOVERNANCE_WALLET_REQUIRED");
+    });
+
+    it("pins the first vote's wallet and weight: a replace changes the choice, never the weight", async () => {
+      const opened = await openVoting({});
+      expect(opened.statusCode).toBe(200);
+      const id = opened.json().id as string;
+      const voter = await addGovernanceAccount(fx, "protocol_voter");
+      const voterSubject = await subjectOf(voter.address);
+      const token = await signIn(app, voter);
+      balances.set(voter.address, 5n);
+
+      expect((await vote(id, token, "for")).statusCode).toBe(200);
+      expect(await stored(id, voterSubject)).toEqual({ choice: "for", weight: "5", weight_wallet_address: voter.address });
+
+      // The voter replaces their wallet with one holding more at the snapshot block.
+      const passkey = await issueTestSession(fx.appSql, fx.tenantA, voterSubject, {
+        firstFactor: "email_code",
+        secondFactor: "passkey",
+      });
+      const richer = newAccount();
+      balances.set(richer.address, 70n);
+      const replaced = await bindWalletByProof(app, passkey, richer.account);
+      expect(replaced.statusCode, replaced.body).toBe(200);
+      reads.length = 0;
+
+      const again = await vote(id, token, "against");
+      expect(again.statusCode, again.body).toBe(200);
+      // Same subject, same weight, same weight wallet: the new wallet's balance is never read.
+      expect(await stored(id, voterSubject)).toEqual({ choice: "against", weight: "5", weight_wallet_address: voter.address });
+      expect(reads).not.toContain(richer.address);
+      const [count] = await fx.sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM core.governance_votes WHERE proposal_id = ${id}
+      `;
+      expect(count!.n).toBe(1);
+
+      // The old wallet's next holder binds it by proof and tries to vote its balance again.
+      const holder = await addGovernanceAccount(fx, "protocol_voter");
+      const holderSubject = await subjectOf(holder.address);
+      const holderToken = await signIn(app, holder);
+      const holderPasskey = await issueTestSession(fx.appSql, fx.tenantA, holderSubject, {
+        firstFactor: "email_code",
+        secondFactor: "passkey",
+      });
+      const rebound = await bindWalletByProof(app, holderPasskey, voter.account);
+      expect(rebound.statusCode, rebound.body).toBe(200);
+      const twice = await vote(id, holderToken, "for");
+      expect(twice.statusCode).toBe(409);
+      expect(twice.json().code).toBe("GOVERNANCE_WALLET_ALREADY_VOTED");
+      expect(await stored(id, holderSubject)).toBeUndefined();
+
+      // On a new proposal, the replacement wallet is the weight source.
+      const next = await openVoting({});
+      expect((await vote(next.json().id, token, "for")).statusCode).toBe(200);
+      expect(await stored(next.json().id, voterSubject)).toEqual({
+        choice: "for",
+        weight: "70",
+        weight_wallet_address: richer.address,
+      });
+    });
+
+    it("the database pins a snapshot vote's weight wallet and weight, even for the owner", async () => {
+      const opened = await openVoting({});
+      const voter = await addGovernanceAccount(fx, "protocol_voter");
+      const voterSubject = await subjectOf(voter.address);
+      expect((await vote(opened.json().id, await signIn(app, voter), "for")).statusCode).toBe(200);
+      await expect(
+        fx.sql`UPDATE core.governance_votes SET weight = 999 WHERE voter_subject_id = ${voterSubject}`,
+      ).rejects.toThrow(/GOVERNANCE_VOTE_WEIGHT_PINNED/);
+      await expect(
+        fx.sql`UPDATE core.governance_votes SET weight_wallet_address = ${newAccount().address} WHERE voter_subject_id = ${voterSubject}`,
+      ).rejects.toThrow(/GOVERNANCE_VOTE_WEIGHT_PINNED/);
+    });
+
+    it("pins a snapshot vote's weight even with no recorded weight wallet (a vote from before 0130)", async () => {
+      const opened = await openVoting({});
+      const proposalId = opened.json().id as string;
+      const voter = await addGovernanceAccount(fx, "protocol_voter");
+      const voterSubject = await subjectOf(voter.address);
+      await fx.sql`
+        INSERT INTO core.governance_votes (id, tenant_id, proposal_id, voter_subject_id, choice, weight)
+        VALUES (${randomUUID()}, ${fx.tenantA}, ${proposalId}, ${voterSubject}, 'for', 5)
+      `;
+      await expect(
+        fx.sql`UPDATE core.governance_votes SET weight = 999 WHERE voter_subject_id = ${voterSubject}`,
+      ).rejects.toThrow(/GOVERNANCE_VOTE_WEIGHT_PINNED/);
+      // The voter may still change their choice; the weight stays the recorded one.
+      const again = await vote(proposalId, await signIn(app, voter), "against");
+      expect(again.statusCode, again.body).toBe(200);
+      expect(await stored(proposalId, voterSubject)).toEqual({ choice: "against", weight: "5", weight_wallet_address: null });
+    });
   });
 
   it("cannot open voting when total supply cannot be read", async () => {

@@ -106,17 +106,16 @@ describeDb("my activity and session actions", () => {
     expect(response.statusCode).toBe(401);
   });
 
-  it("a wallet with no organization gets 403 WALLET_NOT_ENROLLED, not 401", async () => {
-    // Any wallet can sign in by signature. If the later rejection reads as "sign in
-    // again", users repeat the same signature.
-    const unbound = await signIn(app, newAccount());
+  it("a key bound to no one opens nothing — there is no unenrolled wallet session (WP7)", async () => {
+    // Before WP7 any wallet signed in, and one with no organization got 403 WALLET_NOT_ENROLLED.
+    // Wallets no longer sign anyone in, so such a key has no session at all.
+    const unbound = newAccount();
+    await expect(signIn(app, unbound)).rejects.toThrow(/not an active wallet of any person/);
 
     for (const url of ["/api/v1/projects", "/api/v1/my-work", "/api/v1/me/activity"]) {
-      const response = await app.inject({ method: "GET", url, headers: bearer(unbound) });
-      expect(response.statusCode).toBe(403);
-      const body = response.json() as { code: string; details?: { accessRequestPath?: string } };
-      expect(body.code).toBe("WALLET_NOT_ENROLLED");
-      expect(body.details?.accessRequestPath).toBe("/w/access-requests");
+      const response = await app.inject({ method: "GET", url, headers: bearer(unbound.address) });
+      expect(response.statusCode).toBe(401);
+      expect(response.json().code).toBe("UNAUTHENTICATED");
     }
   });
 

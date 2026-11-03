@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { catalogFixtureKey } from "./catalog-fixtures";
-import { connectAs } from "./connect-as";
+import { connectAs, sessionToken } from "./connect-as";
+import { reportScan } from "./scan-service";
 import {
   CHAIN_ENABLED,
   command,
@@ -136,13 +137,7 @@ test.describe("evidence ledger complete journey", () => {
       "upload-state-",
       "",
     );
-    await connectAs(page, "Scan Service");
-    await command(
-      page,
-      `/api/v1/uploads/${uploadId}/scan-result`,
-      { result: "clean" },
-      1,
-    );
+    await reportScan(page, uploadId, 1);
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/data-room`);
     await page.getByTestId(`promote-${uploadId}`).click();
@@ -258,9 +253,7 @@ test.describe("evidence ledger complete journey", () => {
     await page.unroute(`**${proofPath}`);
 
     await connectAs(page, "Steward A");
-    const token = await page.evaluate(() =>
-      localStorage.getItem("mpc.session.token"),
-    );
+    const token = await sessionToken(page);
     const uploads = await (
       await page.request.get(`/api/v1/projects/${projectId}/uploads`, {
         headers: { authorization: `Bearer ${token}` },
@@ -281,7 +274,7 @@ test.describe("evidence ledger complete journey", () => {
       page.getByTestId(`ledger-status-${licence}`),
     ).toHaveText("Needs another review");
     await page.goto("/connect");
-    await page.getByRole("button", { name: "Disconnect" }).click();
+    await page.getByRole("button", { name: "Sign out" }).click();
     await page.goto(`/explorer/projects/${projectKey}`);
     await expect(
       page.getByTestId(`ledger-status-${licence}`),
@@ -314,7 +307,7 @@ test.describe("evidence ledger complete journey", () => {
     await connectAs(page, "Steward A");
     const currentUploads = await (
       await page.request.get(`/api/v1/projects/${projectId}/uploads`, {
-        headers: { authorization: `Bearer ${await page.evaluate(() => localStorage.getItem("mpc.session.token"))}` },
+        headers: { authorization: `Bearer ${await sessionToken(page)}` },
       })
     ).json();
     const currentUpload = currentUploads.items.find((item: { id: string }) => item.id === uploadId);

@@ -3,9 +3,13 @@ import { createLedgerSweep, createLedgerSweepRunner } from "./evidence-ledger.js
 import { resolveSecret, resolveWebhookSecret } from "@mpc/config";
 import { SESSION_CONNECTION } from "@mpc/db";
 import { createCredentialExpirySweep, DEFAULT_CREDENTIAL_SWEEP_MS } from "./credential-expiry.js";
+import { createAuthPurgeSweep, DEFAULT_AUTH_PURGE_MS } from "./auth-purge.js";
 import { createExpirySweep, DEFAULT_EXPIRY_SWEEP_MS } from "./document-expiry.js";
 import { createHeartbeat } from "@mpc/db";
 import { deliverOnce, deliveryBacklog } from "./notification-delivery.js";
+import { loadEmailWorkerConfig, type EmailWorkerConfig } from "./email/config.js";
+import { deliverEmailOnce } from "./email/delivery.js";
+import { createEmailTransport } from "./email/transport.js";
 import { buildOutboxHandlers } from "./outbox-handlers.js";
 import {
   DEFAULT_OUTBOX_MAX_ATTEMPTS,
@@ -28,6 +32,19 @@ import {
 let databaseUrl: string;
 try {
   databaseUrl = resolveSecret("DATABASE_URL", process.env["DATABASE_URL"]);
+} catch (error) {
+  process.stderr.write(`${(error as Error).message}\n`);
+  process.exit(1);
+}
+
+/**
+ * Account email (`email/`). Checked before anything connects: a production worker with a test
+ * transport, or Resend without a key or sender, would drop every sign-in code, so it does not
+ * start at all.
+ */
+let emailConfig: EmailWorkerConfig;
+try {
+  emailConfig = loadEmailWorkerConfig(process.env);
 } catch (error) {
   process.stderr.write(`${(error as Error).message}\n`);
   process.exit(1);
@@ -64,6 +81,9 @@ const CREDENTIAL_SWEEP_MS = Number(
   process.env["CREDENTIAL_EXPIRY_SWEEP_MS"] ?? String(DEFAULT_CREDENTIAL_SWEEP_MS),
 );
 
+/** Expired session and nonce purge interval (`auth-purge.ts`). */
+const AUTH_PURGE_MS = Number(process.env["AUTH_PURGE_MS"] ?? String(DEFAULT_AUTH_PURGE_MS));
+
 const sql = postgres(databaseUrl, { onnotice: () => {}, connection: SESSION_CONNECTION });
 
 function emit(record: Record<string, unknown>): void {
@@ -71,6 +91,7 @@ function emit(record: Record<string, unknown>): void {
 }
 
 const dispatcher = createDispatcher(sql, buildOutboxHandlers(sql, emit));
+const emailTransport = createEmailTransport(sql, emailConfig);
 
 let running = true;
 
@@ -82,7 +103,12 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-emit({ level: "info", msg: "outbox.worker.started", pollIntervalMs: POLL_INTERVAL_MS });
+emit({
+  level: "info",
+  msg: "outbox.worker.started",
+  pollIntervalMs: POLL_INTERVAL_MS,
+  emailTransport: emailConfig.transport,
+});
 
 const heartbeat = createHeartbeat(sql, "outbox", 15_000, process.env["WORKER_HEALTH_FILE"]);
 const sweepExpiry = createExpirySweep(sql, EXPIRY_SWEEP_MS);
@@ -94,6 +120,7 @@ const ledgerRunner = createLedgerSweepRunner(createLedgerSweep(ledgerSql), (ledg
   emit({ level: "error", msg: "evidence_ledger.sweep_failed", error: String(error) });
 });
 const sweepCredentials = createCredentialExpirySweep(sql, CREDENTIAL_SWEEP_MS);
+const purgeAuth = createAuthPurgeSweep(sql, AUTH_PURGE_MS);
 
 while (running) {
   try {
@@ -138,6 +165,30 @@ while (running) {
       emit({ level: "error", msg: "credential.expiry.sweep_failed", error: String(error) });
     }
 
+    // Same isolation again: ended sessions waiting a little longer for deletion harms nothing.
+    try {
+      const purged = await purgeAuth();
+      const total =
+        purged.purgedSessions +
+        purged.purgedEmailChallenges +
+        purged.purgedEmailMail +
+        purged.purgedRateEvents +
+        purged.purgedOidcTransactions;
+      if (purged.ran && total > 0) {
+        emit({
+          level: "info",
+          msg: "auth.records.purged",
+          sessions: purged.purgedSessions,
+          emailChallenges: purged.purgedEmailChallenges,
+          emailMail: purged.purgedEmailMail,
+          rateEvents: purged.purgedRateEvents,
+          oidcTransactions: purged.purgedOidcTransactions,
+        });
+      }
+    } catch (error) {
+      emit({ level: "error", msg: "auth.purge.failed", error: String(error) });
+    }
+
     ledgerRunner.kick();
 
     // Notification delivery also handles one item per cycle.
@@ -151,6 +202,20 @@ while (running) {
       },
       emit,
     );
+
+    // Account email: one message per cycle, like notification delivery. A sign-in waits on it,
+    // so a failure here is reported and the loop goes on.
+    let email = { handled: false, sent: 0, failed: 0 };
+    try {
+      email = await deliverEmailOnce(
+        sql,
+        emailTransport,
+        { from: emailConfig.from, maxAttempts: emailConfig.maxAttempts, backoffMs: emailConfig.backoffMs },
+        emit,
+      );
+    } catch (error) {
+      emit({ level: "error", msg: "email.delivery.failed", error: String(error) });
+    }
 
     // Emit the signal even when there is nothing to publish.
     await heartbeat({ published: result.published, delivered: delivery.delivered });
@@ -177,7 +242,7 @@ while (running) {
 
     // Sleep only when both are idle. If either handled something, more may be queued, and
     // sleeping then delays delivery by a polling interval each time.
-    if (result.published === 0 && !delivery.handled) {
+    if (result.published === 0 && !delivery.handled && !email.handled) {
       await sleep(POLL_INTERVAL_MS);
     }
   } catch (error) {

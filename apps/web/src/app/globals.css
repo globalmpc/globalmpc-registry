@@ -315,6 +315,33 @@ button.primary:hover:not(:disabled) {
   border-color: var(--copper-glow);
 }
 
+/* An action that reads as a link: a secondary choice beside a primary one ("use a recovery
+   code instead"). A real button, so it is reachable and announced as an action. */
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--copper);
+  text-decoration: underline;
+}
+
+/* The second-factor prompt raised over a screen for a step-up. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 16px;
+}
+
+.dialog-backdrop .panel {
+  max-width: 480px;
+  width: 100%;
+}
+
 /* Account connection entry point. A link (`<a>`) that must read as a button — styled like body
    links, the login path would be invisible on public screens. `.sm` in the header. */
 .btn-connect {

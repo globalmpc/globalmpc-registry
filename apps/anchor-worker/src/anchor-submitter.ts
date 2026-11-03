@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import {
   checkSubmitAllowed,
+  confirmationsOf,
   eoaSubmissionAllowed,
   trackTransaction,
   type Observation,
   type TransactionState,
 } from "./anchor-state.js";
-import { redactUrls } from "./redact-urls.js";
+import { isSupportedChainId, sameChainEnvironment } from "@mpc/domain";
+import { createRedactor } from "./redact-urls.js";
 import type { FinalityTag } from "./chain-profile.js";
 
 /**
@@ -78,6 +80,13 @@ export interface ChainClient {
   encodeSubmitRoot(input: SubmitRootInput): { calldata: string; calldataHash: string };
   /** Receipt lookup. `unknown` if absent, `pending` if still in the mempool. */
   observe(txHash: string): Promise<Observation>;
+  /**
+   * Whether the signer has transactions the node holds but has not mined: its `pending` nonce is
+   * above its `latest`. A failed read throws.
+   */
+  signerHasPendingTransactions(): Promise<boolean>;
+  /** Whether `address` holds contract code at the latest block. A failed read throws. */
+  hasCode(address: string): Promise<boolean>;
 }
 
 export interface SubmitRootInput {
@@ -155,7 +164,11 @@ export interface SubmitterConfig {
   readonly eoaAllowedChainIds: readonly number[];
   /** Safe multisig address. Receives proposals on chains where EOA submission is blocked. */
   readonly safeAddress: string | null;
-  /** How long to watch for reorgs after confirmation. Past it, the row leaves the watch set. */
+  /**
+   * How long to watch for reorgs after confirmation. Stored with each confirmation as its deadline
+   * (`reorg_watch_until`); past the deadline the row leaves the watch set. A raise also extends
+   * rows still inside their watch (`extendReorgWatch`); a cut never shortens one.
+   */
   readonly reorgWatchMs: number;
   /** Minimum interval before rechecking the same transaction. */
   readonly recheckIntervalMs: number;
@@ -182,6 +195,16 @@ export interface SubmitterConfig {
    * key in the URL, and stored errors are served by the API.
    */
   readonly rpcUrl?: string;
+  /**
+   * The Safe Transaction Service endpoint, for the same reason: a hosted one can carry its API key
+   * in the URL, hostname included, and Safe errors quote it.
+   */
+  readonly safeServiceUrl?: string | null;
+  /**
+   * Masks `rpcUrl` and `safeServiceUrl` out of error text: the process's one redactor for them,
+   * built once from the configuration (`createRedactor`). Without it one is built per error.
+   */
+  readonly redact?: (text: string) => string;
 }
 
 /**
@@ -189,7 +212,8 @@ export interface SubmitterConfig {
  * Masking comes first so the cap cannot cut a URL into a piece the pattern no longer matches.
  */
 function errorText(config: SubmitterConfig, prefix: string | null, error: unknown): string {
-  const text = redactUrls(String(error), [config.rpcUrl]);
+  const redact = config.redact ?? createRedactor([config.rpcUrl, config.safeServiceUrl]);
+  const text = redact(String(error));
   return (prefix ? `${prefix}: ${text}` : text).slice(0, 500);
 }
 
@@ -253,6 +277,101 @@ function trackedContractOf(row: PendingRow, config: SubmitterConfig): string {
 }
 
 /**
+ * Whether a confirmed row `t` is still rechecked for reorgs, or has a chain search still to retry
+ * — the two readers of that set differ only in which watch they assume.
+ *
+ * The stored deadline (`reorg_watch_until`, 0103) is what every worker can read: set on
+ * confirmation, lengthened when a worker with a longer watch runs `extendReorgWatch`, never
+ * shortened.
+ *
+ * - `claim`, for this chain's own worker: the stored deadline, or its own `ANCHOR_REORG_WATCH_MS`
+ *   from confirmation if that is later — `GREATEST(reorg_watch_until, confirmed_at + watch)`. A
+ *   raised watch takes effect for this worker at once, even before (or without) the extension
+ *   catching the stored deadlines up; a lowered one never cuts a stored deadline short. Rows with
+ *   no stored deadline (confirmed before 0103) get the watch alone.
+ * - `report`, for a worker on another chain (`otherChainsInFlight`): that chain's worker's watch is
+ *   unknown here, so only the stored deadline counts, and rows without one get `watchMs` — a
+ *   conservative floor the caller picks.
+ *
+ * An unresolved chain search outlasts the watch either way: its persisted retry/give-up schedule
+ * must finish, even if the watch elapsed while the RPC was unavailable.
+ *
+ * Written as an OR of plain ranges, not with `GREATEST`, so each arm matches a partial index
+ * (0104) and neither caller scans every confirmed row ever kept.
+ */
+function stillRechecked(
+  sql: postgres.Sql | postgres.TransactionSql,
+  watchMs: number,
+  reader: "claim" | "report",
+): postgres.PendingQuery<postgres.Row[]> {
+  const since = sql`now() - ${`${watchMs} milliseconds`}::interval`;
+  return sql`(
+    t.reorg_watch_until > now()
+    OR ${reader === "claim" ? sql`t.confirmed_at > ${since}` : sql`(t.reorg_watch_until IS NULL AND t.confirmed_at > ${since})`}
+    OR t.chain_search_failed_since IS NOT NULL
+    OR t.retry_after IS NOT NULL
+  )`;
+}
+
+/**
+ * Bounds on one `extendReorgWatch` run. It is housekeeping run beside the loop, so it gives up
+ * rather than wait: on a table lock (a migration building an index, say) after `lock_timeout`, and
+ * on anything else after `statement_timeout`. The next run retries.
+ */
+const EXTEND_LOCK_TIMEOUT = "1s";
+const EXTEND_STATEMENT_TIMEOUT = "10s";
+
+/**
+ * Brings this chain's stored reorg-watch deadlines up to `reorgWatchMs` for the rows this worker
+ * rechecks under it — confirmed within the watch — and returns how many it changed. Run before
+ * the worker's first step and then periodically.
+ *
+ * This worker's own claim already rechecks those rows under its own watch (`stillRechecked`), so
+ * the extension is for whoever reads the stored deadline: a worker on another chain counting this
+ * chain's work (`otherChainsInFlight`). During a rolling deploy a replica still on a shorter watch
+ * keeps confirming rows with its shorter deadline, and the next run here lengthens them.
+ *
+ * Only ever lengthened: a lowered setting keeps the longer deadline already promised, since
+ * stopping early could miss a reorg. A row confirmed longer ago than the watch is not revived.
+ * Rows with no stored deadline are left without one; readers apply their own fallback.
+ *
+ * Rows another worker holds — a replica tracking one through slow RPC calls — are skipped, not
+ * waited for (`SKIP LOCKED`); the next run extends them. The outer conditions repeat the inner
+ * ones on the row as locked, so a deadline is still never shortened.
+ *
+ * `confirmed_at` is unchanged, so the 0103 trigger leaves the new deadline in place. The range on
+ * `confirmed_at` reads only recently confirmed rows (0104).
+ */
+export async function extendReorgWatch(
+  sql: postgres.Sql,
+  chainId: number,
+  reorgWatchMs: number,
+): Promise<number> {
+  const watch = `${reorgWatchMs} milliseconds`;
+  return sql.begin(async (tx) => {
+    await tx.unsafe(
+      `SET LOCAL lock_timeout = '${EXTEND_LOCK_TIMEOUT}'; SET LOCAL statement_timeout = '${EXTEND_STATEMENT_TIMEOUT}'`,
+    );
+    const result = await tx`
+      UPDATE chain.transactions t
+      SET reorg_watch_until = t.confirmed_at + ${watch}::interval
+      WHERE t.id IN (
+          SELECT t.id FROM chain.transactions t
+          WHERE t.chain_id = ${chainId}
+            AND t.state = 'confirmed'
+            AND t.confirmed_at > now() - ${watch}::interval
+            AND t.reorg_watch_until < t.confirmed_at + ${watch}::interval
+          FOR NO KEY UPDATE SKIP LOCKED
+        )
+        AND t.state = 'confirmed'
+        AND t.confirmed_at > now() - ${watch}::interval
+        AND t.reorg_watch_until < t.confirmed_at + ${watch}::interval
+    `;
+    return result.count;
+  });
+}
+
+/**
  * Locks one transaction to process.
  *
  * `SKIP LOCKED` skips rows another worker holds. Without locking, two workers submit the same
@@ -265,8 +384,8 @@ function trackedContractOf(row: PendingRow, config: SubmitterConfig): string {
  *
  * Watching is not forever either. Some time after confirmation the chance of a reorg is
  * effectively gone, so the row leaves the set — otherwise the loop slows as confirmed rows pile up.
- * An unresolved chain search is an exception: its persisted retry/give-up schedule must finish,
- * even if the ordinary watch elapsed while the RPC was unavailable.
+ * How long is `stillRechecked`'s, written beside `otherChainsInFlight`'s reading of the same set
+ * so the two differ only where they must.
  */
 async function claimPending(
   tx: postgres.TransactionSql,
@@ -293,11 +412,7 @@ async function claimPending(
         t.state IN ('created', 'submitted', 'included')
         OR (
           t.state = 'confirmed'
-          AND (
-            t.confirmed_at > now() - ${`${Math.round(reorgWatchMs / 1000)} seconds`}::interval
-            OR t.chain_search_failed_since IS NOT NULL
-            OR t.retry_after IS NOT NULL
-          )
+          AND ${stillRechecked(tx, reorgWatchMs, "claim")}
           AND t.updated_at < now() - ${`${Math.round(recheckIntervalMs / 1000)} seconds`}::interval
         )
       )
@@ -439,13 +554,19 @@ async function trackProposal(
         SET state = 'executed', resolved_at = now()
         WHERE id = ${proposal.id}
       `;
+      await tx`
+        INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, tenant_id, chain_id, execution_tx_hash)
+        SELECT id, transaction_id, tenant_id, chain_id, ${status.transactionHash.toLowerCase()}
+        FROM chain.anchor_proposals WHERE id = ${proposal.id}
+        ON CONFLICT DO NOTHING
+      `;
       // From here it follows the regular tracking path. Confirmation depth and reorg watch apply
       // equally — execution via Safe does not exempt it from confirmation.
       // The contract is the proposal's own target, recorded with the hash it produced — not
       // this worker's current configuration, which may have moved to another deployment since.
       await tx`
         UPDATE chain.transactions
-        SET state = 'submitted', tx_hash = ${status.transactionHash},
+        SET state = 'submitted', tx_hash = ${status.transactionHash.toLowerCase()},
             contract_address = ${proposal.contract_address},
             submitted_at = now(), updated_at = now()
         WHERE id = ${proposal.transaction_id}
@@ -1164,7 +1285,7 @@ async function followAnchoringTransaction(
     SET state = 'submitted', tx_hash = ${anchored.txHash},
         contract_address = ${contract},
         block_number = NULL, block_hash = NULL, confirmations = 0, confirmed_at = NULL,
-        last_error = ${reason}, updated_at = now()
+        reorg_watch_until = NULL, last_error = ${reason}, updated_at = now()
     WHERE id = ${row.id}
   `;
   await clearFailedSearch(tx, row);
@@ -1459,6 +1580,13 @@ async function trackPending(
         block_hash = ${result.blockHash},
         confirmations = ${result.confirmations},
         confirmed_at = ${result.nextState === "confirmed" ? tx`now()` : null},
+        -- Stored so a worker on another chain can tell when this one stops watching (0103).
+        -- A re-confirmation at a new block lands here too and restarts the watch.
+        reorg_watch_until = ${
+          result.nextState === "confirmed"
+            ? tx`now() + ${`${config.reorgWatchMs} milliseconds`}::interval`
+            : null
+        },
         updated_at = now()
     WHERE id = ${row.id}
   `;
@@ -1534,6 +1662,74 @@ async function fail(
   `;
 }
 
+/**
+ * The least reorg watch assumed for another chain's confirmed rows that carry no stored deadline
+ * (`reorg_watch_until`, 0103): rows confirmed by a worker from before it was stored. That worker's
+ * `ANCHOR_REORG_WATCH_MS` is unknown here, so count conservatively: over-warning only delays the
+ * drain, while under-warning could stop that chain's worker inside its watch.
+ */
+export const OTHER_CHAIN_MIN_REORG_WATCH_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Unsettled work on chains other than `chainId`, per chain. For observability only.
+ *
+ * A worker picks only its own chain's rows, so after `CHAIN_ID` changes nothing watches the old
+ * chain's created, proposed, submitted or included rows, or recheck its recently confirmed ones:
+ * their proofs stay unconfirmed or unwatched for reorgs. Nor does anything settle that chain's open
+ * sends (`chain.anchor_sends`), whatever their transaction's state — a `failed` transaction can
+ * still have a send that gets mined — so their gas never reaches the ledger. A chain is listed
+ * when either count is above zero; this is what tells the operator to keep (or restart) a worker
+ * on the old chain until both reach zero.
+ */
+export async function otherChainsInFlight(
+  sql: postgres.Sql,
+  chainId: number,
+  reorgWatchMs: number,
+): Promise<
+  readonly { readonly chainId: number; readonly inFlight: number; readonly openSends: number }[]
+> {
+  // A row with a chain move requested counts until that chain's worker has carried it out or
+  // refused it (`processChainMoves`): only it can check its chain for the batch. Only while the
+  // row is in a state a move is made from: a request left on a row that went on (sent again on
+  // its chain, or mined after all) is not one that worker carries out — it drops it — and must
+  // not keep the old chain listed meanwhile.
+  // Confirmed rows that worker still rechecks count too: stopping it early would miss a reorg
+  // that removes the root. Its own watch is unknown here, so the stored deadline it keeps up to
+  // date (`extendReorgWatch`) counts, and rows without one count for at least
+  // `OTHER_CHAIN_MIN_REORG_WATCH_MS` (`stillRechecked`). Sends count by their own chain, as
+  // `settleSends` picks them.
+  const fallbackWatchMs = Math.max(reorgWatchMs, OTHER_CHAIN_MIN_REORG_WATCH_MS);
+  const rows = await sql<{ chain_id: number; in_flight: string; open_sends: string }[]>`
+    WITH transactions AS (
+      SELECT t.chain_id, count(*) AS in_flight
+      FROM chain.transactions t
+      WHERE t.chain_id <> ${chainId}
+        AND (
+          -- Two arms, not one IN list: each matches its own partial index (0012, 0104).
+          t.state IN ('created', 'submitted', 'included')
+          OR t.state = 'proposed'
+          OR (t.state = 'confirmed' AND ${stillRechecked(sql, fallbackWatchMs, "report")})
+          -- A move requested off that chain is carried out by that chain's worker (0105).
+          OR (t.move_to_chain_id IS NOT NULL AND t.state IN ${sql([...MOVABLE_STATES])})
+        )
+      GROUP BY t.chain_id
+    ), sends AS (
+      SELECT chain_id, count(*) AS open_sends
+      FROM chain.anchor_sends
+      WHERE chain_id <> ${chainId} AND settled_at IS NULL
+      GROUP BY chain_id
+    )
+    SELECT chain_id, coalesce(t.in_flight, 0) AS in_flight, coalesce(s.open_sends, 0) AS open_sends
+    FROM transactions t FULL JOIN sends s USING (chain_id)
+    ORDER BY chain_id
+  `;
+  return rows.map((row) => ({
+    chainId: Number(row.chain_id),
+    inFlight: Number(row.in_flight),
+    openSends: Number(row.open_sends),
+  }));
+}
+
 /** Stats on in-flight transactions. For observability only; never used for decisions. */
 export async function chainBacklog(
   sql: postgres.Sql,
@@ -1573,4 +1769,698 @@ export async function chainBacklog(
     confirmed: Number(row?.confirmed ?? 0),
     needsAttention: Number(row?.needs_attention ?? 0),
   };
+}
+
+/**
+ * Chain moves (0105).
+ *
+ * A resubmit asked for on a deployment whose `CHAIN_ID` differs from the row's only records the
+ * request (`move_to_chain_id`). Once the row leaves this chain no worker looks for its batch here
+ * again, so the move is safe only if this chain does not hold the batch and nothing of ours can
+ * still put it there — and only this chain's worker can ask its chain. The database alone cannot
+ * say: another submitter (the Safe, a person) may have stored the batch without any row of ours
+ * recording it.
+ *
+ * So this worker, each run, first drops requests left on rows that went on without them
+ * (`dropStaleMoveRequests`): only a row in a state a move is made from (`MOVABLE_STATES`) carries a
+ * live request. Then, for each live request on its chain:
+ *
+ * 0. Refuses a target the API would not have accepted: a chain outside the supported list, or one
+ *    of another environment (`sameChainEnvironment`). The row stays as it is.
+ * 1. Waits while anything of ours may still land the root here: an unsettled send of the row on
+ *    this chain, a receipt below the configured confirmation depth/finality tag, an open Safe
+ *    proposal for it, or any transaction of the signer still unmined (its `pending` nonce above
+ *    its `latest`). Each wait is stamped on the row
+ *    (`move_checked_at`, `move_wait_reason`), and requests are taken least recently checked
+ *    first, so a waiting one does not hold back the rest.
+ * 2. Refuses, for a person, a row with a send whose outcome it cannot read back: settled by an
+ *    operator, or settled by its receipt while the node no longer returns it. A send that landed
+ *    may have stored the batch on a contract no row records any more — a resubmission clears the
+ *    contract, and the send ledger keeps none.
+ * 3. Asks every contract the batch could be on: the configured one, the one the row recorded,
+ *    every contract a row or proposal on this chain recorded, and every contract a landed send's
+ *    receipt shows a `RootSubmitted` for this batch on. A failed read is no answer: the request
+ *    waits for the next run. Nor is a node that shows no code at the configured or the recorded
+ *    contract, or one that leaves no contract with code to ask: "absent" from it means nothing.
+ * 4. Absent everywhere: resets the row as the API's resubmit does and moves it to the requested
+ *    chain, whose worker then claims it like any new row. Present: the move is refused, and the
+ *    row follows what the chain holds, as reconciliation before a send does.
+ *
+ * The RPC checks run with no row locked; the change is then made in a short transaction that
+ * locks the row (skipping it if another holds it) and checks again that the request and the row
+ * are exactly as they were read — `updated_at` included — and that no send or proposal appeared.
+ * Nothing of ours sends for a row in these states, so what was checked on chain still holds for
+ * us.
+ *
+ * Not covered, and not coverable off chain: another submitter storing the batch after the check.
+ * The move then posts the root on a second chain. Operators must not submit anchors by hand, or
+ * through the Safe, while a move is requested.
+ */
+
+/** The states a move can be requested in: the API's resubmittable ones. */
+const MOVABLE_STATES = ["failed", "dropped", "reverted", "reconciliation_required"] as const;
+/** Requests looked at per run. The rest wait for the next. */
+const MOVES_PER_RUN = 10;
+const MOVE_LOCK_TIMEOUT = "1s";
+const MOVE_STATEMENT_TIMEOUT = "10s";
+
+export type ChainMoveWaitReason = "open_send" | "open_proposal" | "signer_pending" | "check_failed";
+
+/**
+ * Why a request was refused without changing the row's state (the refusal is its audit event,
+ * which the API lists as `moveRefusal`):
+ * - `other_transaction`: another row already holds this intent on the requested chain;
+ * - `target_not_allowed`: the requested chain is not one a move may go to from here (not a
+ *   supported chain, or of another environment) — the API refuses such a request, so only a row
+ *   written another way (an older release, by hand) carries one;
+ * - `not_movable`: the row left the states a move is made from while the request stood (sent
+ *   again on this chain, or mined after all), so the request is dropped.
+ */
+export type ChainMoveRefusalReason =
+  | "other_transaction"
+  | "target_not_allowed"
+  | "not_movable"
+  | "send_outcome_unknown";
+
+export type ChainMoveOutcome =
+  | {
+      readonly kind: "moved";
+      readonly transactionId: string;
+      readonly toChainId: number;
+      readonly contractsChecked: readonly string[];
+    }
+  | {
+      readonly kind: "refused_on_chain";
+      readonly transactionId: string;
+      readonly to: "submitted" | "reconciliation_required";
+      readonly contract: string;
+    }
+  | {
+      readonly kind: "refused";
+      readonly transactionId: string;
+      readonly reason: ChainMoveRefusalReason;
+    }
+  | { readonly kind: "waiting"; readonly transactionId: string; readonly reason: ChainMoveWaitReason }
+  /** Locked by another worker, or changed since it was read: looked at again next run. */
+  | { readonly kind: "skipped"; readonly transactionId: string };
+
+interface MoveRequest {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly batch_id: string;
+  readonly state: string;
+  readonly tx_hash: string | null;
+  readonly contract_address: string | null;
+  readonly move_to_chain_id: number;
+  /**
+   * As text, and sent back as text (`::text::timestamptz`): a JS `Date` drops the microseconds the
+   * apply step compares, and postgres.js turns a value sent for a timestamptz parameter into one.
+   */
+  readonly move_requested_at: string;
+  readonly updated_at: string;
+  readonly external_batch_id: string;
+  readonly merkle_root: string;
+  readonly open_send: boolean;
+  readonly open_proposal: boolean;
+  /** Actual outer chain hashes, including Safe history; Safe payload hashes are never receipts. */
+  readonly tracked_hashes: string[];
+  readonly safe_execution_hashes: string[];
+  readonly unmapped_safe_execution: boolean;
+  readonly operator_settled: boolean;
+}
+
+export async function processChainMoves(
+  sql: postgres.Sql,
+  chain: ChainClient,
+  config: SubmitterConfig,
+  log: Log,
+): Promise<ChainMoveOutcome[]> {
+  const outcomes: ChainMoveOutcome[] = [...(await dropStaleMoveRequests(sql, config, log))];
+  // The partial index on requests (0105) keeps this to rows with one. A row without a batch has
+  // nothing to anchor and cannot be resubmitted, so it never carries a request.
+  const requests = await sql<MoveRequest[]>`
+    SELECT t.id, t.tenant_id, t.batch_id, t.state, t.tx_hash, t.contract_address,
+           t.move_to_chain_id, t.move_requested_at::text AS move_requested_at,
+           t.updated_at::text AS updated_at,
+           b.batch_id AS external_batch_id, b.merkle_root,
+           EXISTS (
+             SELECT 1 FROM chain.anchor_sends s
+             WHERE s.transaction_id = t.id AND s.chain_id = t.chain_id AND s.settled_at IS NULL
+           ) AS open_send,
+           EXISTS (
+             SELECT 1 FROM chain.anchor_proposals p
+             WHERE p.transaction_id = t.id AND p.state = 'proposed'
+           ) AS open_proposal,
+           ARRAY(
+             SELECT hash FROM (
+               SELECT s.tx_hash AS hash FROM chain.anchor_sends s
+               WHERE s.transaction_id = t.id AND s.chain_id = t.chain_id AND s.settled_reason = 'receipt'
+               UNION
+               SELECT t.tx_hash WHERE t.tx_hash IS NOT NULL AND NOT EXISTS (
+                 SELECT 1 FROM chain.anchor_sends s WHERE s.transaction_id = t.id AND s.chain_id = t.chain_id
+                   AND s.tx_hash = t.tx_hash AND s.settled_reason = 'nonce_consumed'
+               )
+               UNION
+               SELECT g.tx_hash FROM chain.gas_spend g WHERE g.transaction_id = t.id AND g.chain_id = t.chain_id
+               UNION
+               SELECT h.execution_tx_hash FROM chain.safe_execution_history h
+               WHERE h.transaction_id = t.id AND h.chain_id = t.chain_id
+             ) hashes ORDER BY hash
+           ) AS tracked_hashes,
+           ARRAY(SELECT h.execution_tx_hash FROM chain.safe_execution_history h
+                 WHERE h.transaction_id = t.id AND h.chain_id = t.chain_id ORDER BY h.execution_tx_hash) AS safe_execution_hashes,
+           EXISTS (
+             SELECT 1 FROM chain.anchor_proposals p
+             WHERE p.transaction_id = t.id AND p.chain_id = t.chain_id AND p.state IN ('executed', 'rejected')
+               AND NOT EXISTS (SELECT 1 FROM chain.safe_execution_history h WHERE h.proposal_id = p.id)
+           ) AS unmapped_safe_execution,
+           EXISTS (
+             SELECT 1 FROM chain.anchor_sends s
+             WHERE s.transaction_id = t.id AND s.chain_id = t.chain_id AND s.settled_reason = 'operator'
+           ) AS operator_settled
+    FROM chain.transactions t
+    JOIN chain.anchor_batches b ON b.id = t.batch_id
+    WHERE t.chain_id = ${config.chainId}
+      AND t.move_to_chain_id IS NOT NULL
+      AND t.state IN ${sql([...MOVABLE_STATES])}
+    ORDER BY t.move_checked_at NULLS FIRST, t.move_requested_at, t.id
+    LIMIT ${MOVES_PER_RUN}
+  `;
+  // Each asked once per run, and only for a request that got that far. A failed read is asked
+  // again by the next request, not remembered: one transient RPC or database error would
+  // otherwise leave every request of the run waiting on `check_failed`.
+  const answers = new Map<string, Promise<unknown>>();
+  const once = <T>(key: string, read: () => Promise<T>): Promise<T> => {
+    let known = answers.get(key) as Promise<T> | undefined;
+    if (!known) {
+      known = read();
+      known.catch(() => {
+        if (answers.get(key) === known) answers.delete(key);
+      });
+      answers.set(key, known);
+    }
+    return known;
+  };
+  const context: MoveContext = {
+    signerPending: () => once("signer_pending", () => chain.signerHasPendingTransactions()),
+    knownContracts: () => once("known_contracts", () => contractsOnChain(sql, config.chainId)),
+    hasCode: (contract) => once(`code:${contract}`, () => chain.hasCode(contract)),
+  };
+  for (const request of requests) {
+    try {
+      outcomes.push(await processChainMove(sql, chain, config, log, request, context));
+    } catch (error) {
+      // One request failing must not hold back the others; it is looked at again next run.
+      log({
+        level: "error",
+        msg: "anchor.chain_move.failed",
+        transactionId: request.id,
+        error: errorText(config, null, error),
+      });
+      await recordMoveWait(sql, request, "check_failed").catch(() => {});
+      outcomes.push({ kind: "waiting", transactionId: request.id, reason: "check_failed" });
+    }
+  }
+  return outcomes;
+}
+
+/**
+ * Drops requests left on rows that are no longer in a state a move is made from.
+ *
+ * The API records a request only on a resubmittable row and clears it whenever it resets one, but
+ * a row can leave those states with its request still set: this worker mines a dropped row after
+ * all, or an older API release (during a rolling deploy) resubmits the row on this chain without
+ * knowing the request. Such a request is not live — the row went on here — yet left alone it
+ * would keep this chain in every other worker's drain warning, and would move the row the moment
+ * it came back to `failed`, a decision nobody made for that later failure.
+ *
+ * Each drop is audited as a refusal (`not_movable`), so the batch list says why the request went.
+ * Rows another transaction holds are skipped and looked at next run.
+ */
+async function dropStaleMoveRequests(
+  sql: postgres.Sql,
+  config: SubmitterConfig,
+  log: Log,
+): Promise<ChainMoveOutcome[]> {
+  const dropped = await sql.begin(async (tx) => {
+    await tx.unsafe(
+      `SET LOCAL lock_timeout = '${MOVE_LOCK_TIMEOUT}'; SET LOCAL statement_timeout = '${MOVE_STATEMENT_TIMEOUT}'`,
+    );
+    const rows = await tx<
+      { id: string; tenant_id: string; batch_id: string | null; state: string; move_to_chain_id: number }[]
+    >`
+      WITH stale AS (
+        SELECT t.id, t.move_to_chain_id FROM chain.transactions t
+        WHERE t.chain_id = ${config.chainId}
+          AND t.move_to_chain_id IS NOT NULL
+          AND t.state NOT IN ${tx([...MOVABLE_STATES])}
+        ORDER BY t.id
+        LIMIT ${MOVES_PER_RUN}
+        FOR UPDATE OF t SKIP LOCKED
+      )
+      UPDATE chain.transactions t
+      SET ${clearMove(tx)}, updated_at = now()
+      FROM stale
+      WHERE t.id = stale.id
+      RETURNING t.id, t.tenant_id, t.batch_id, t.state, stale.move_to_chain_id
+    `;
+    for (const row of rows) {
+      if (row.batch_id === null) continue;
+      await tx`
+        INSERT INTO audit.events (
+          tenant_id, command, resource_type, resource_id, reason, correlation_id, detail
+        ) VALUES (
+          ${row.tenant_id}, 'anchor.batch.chain_move_refused', 'anchor_batch', ${row.batch_id},
+          'not_movable', ${`anchor-worker:${row.id}`},
+          ${tx.json({
+            actor: "anchor_worker",
+            transactionId: row.id,
+            fromChainId: config.chainId,
+            toChainId: row.move_to_chain_id,
+            result: row.state,
+          } as never)}
+        )
+      `;
+    }
+    return rows;
+  });
+  return dropped.map((row) => {
+    log({
+      level: "warn",
+      msg: "anchor.chain_move.refused",
+      transactionId: row.id,
+      toChainId: row.move_to_chain_id,
+      reason: "not_movable",
+      state: row.state,
+    });
+    return { kind: "refused", transactionId: row.id, reason: "not_movable" } as const;
+  });
+}
+
+interface MoveContext {
+  readonly signerPending: () => Promise<boolean>;
+  readonly knownContracts: () => Promise<string[]>;
+  readonly hasCode: (contract: string) => Promise<boolean>;
+}
+
+/**
+ * Every contract this deployment used on this chain (0107). A configured contract that was
+ * replaced is no longer configured, and a resubmission or move clears a row's own, so they are
+ * read from the registry: filled by every row that names a contract and by each worker's startup,
+ * and emptied by nothing. Older registry migrations could have missed historical contracts;
+ * only an operator-verified registry (or a verified fresh install) can establish absence before
+ * a move. Ordinary anchoring does not use this check. Read once per run that needs it.
+ */
+async function contractsOnChain(sql: postgres.Sql, chainId: number): Promise<string[]> {
+  const [history] = await sql<{ verified: boolean }[]>`
+    SELECT EXISTS (SELECT 1 FROM chain.anchor_contract_registry_verification) AS verified
+  `;
+  if (!history?.verified) {
+    throw new Error("Anchor contract history is unverified; a migration operator must reconcile the registry before chain moves");
+  }
+  const rows = await sql<{ contract_address: string }[]>`
+    SELECT contract_address FROM chain.anchor_contracts
+    WHERE chain_id = ${chainId}
+    ORDER BY first_seen_at, contract_address
+  `;
+  return rows.map((row) => row.contract_address.toLowerCase());
+}
+
+/**
+ * Registers the configured contract for this chain (0107), before anything is sent to it, so a
+ * later chain move asks it even once no row names it. Idempotent.
+ */
+export async function registerAnchorContract(
+  sql: postgres.Sql,
+  chainId: number,
+  contractAddress: string,
+): Promise<void> {
+  await sql`
+    INSERT INTO chain.anchor_contracts (chain_id, contract_address)
+    VALUES (${chainId}, ${contractAddress.toLowerCase()})
+    ON CONFLICT DO NOTHING
+  `;
+}
+
+/** Stamps a wait on the request, so requests checked longer ago are taken first next run. */
+async function recordMoveWait(sql: postgres.Sql, request: MoveRequest, reason: ChainMoveWaitReason): Promise<void> {
+  await sql`
+    UPDATE chain.transactions
+    SET move_checked_at = now(), move_wait_reason = ${reason}
+    WHERE id = ${request.id}
+      AND move_to_chain_id = ${request.move_to_chain_id}
+      AND move_requested_at = ${request.move_requested_at}::text::timestamptz
+  `;
+}
+
+/** Clearing a request: every move column at once (0105 checks they go together). */
+const clearMove = (sql: postgres.TransactionSql) =>
+  sql`move_to_chain_id = NULL, move_requested_at = NULL, move_checked_at = NULL, move_wait_reason = NULL`;
+
+async function processChainMove(
+  sql: postgres.Sql,
+  chain: ChainClient,
+  config: SubmitterConfig,
+  log: Log,
+  request: MoveRequest,
+  context: MoveContext,
+): Promise<ChainMoveOutcome> {
+  const waiting = async (reason: ChainMoveWaitReason, error?: unknown): Promise<ChainMoveOutcome> => {
+    await recordMoveWait(sql, request, reason);
+    log({
+      level: reason === "check_failed" ? "warn" : "info",
+      msg: "anchor.chain_move.waiting",
+      transactionId: request.id,
+      toChainId: request.move_to_chain_id,
+      reason,
+      ...(error === undefined ? {} : { error: errorText(config, null, error) }),
+    });
+    return { kind: "waiting", transactionId: request.id, reason };
+  };
+  if (request.open_send) return waiting("open_send");
+  if (request.open_proposal) return waiting("open_proposal");
+  // The API checks the target, but the request is a database row: one written by an older
+  // release or by hand is checked here too, before anything is asked of the chain. Refused, the
+  // row stays where it is, as it was.
+  const targetAllowed =
+    isSupportedChainId(request.move_to_chain_id) && sameChainEnvironment(config.chainId, request.move_to_chain_id);
+  if (!targetAllowed) {
+    return applyMove(sql, config, log, request, { contractsChecked: [], contractsWithoutCode: [] }, (apply) =>
+      apply.refuse("target_not_allowed"),
+    );
+  }
+
+  let contracts: string[] = [];
+  const contractsWithoutCode: string[] = [];
+  let found: { contract: string; anchored: AnchoredBatch } | undefined;
+  let unknownOutcome = request.operator_settled || request.unmapped_safe_execution;
+  try {
+    if (await context.signerPending()) return waiting("signer_pending");
+    // Where a landed send of ours stored this batch, if it did: its receipt names the contract.
+    const landedOn: string[] = [];
+    let receiptFinality: { head: number; finalized: number | null } | undefined;
+    for (const hash of request.tracked_hashes) {
+      const observation = await chain.observe(hash);
+      if (observation.kind !== "receipt") {
+        unknownOutcome = true;
+        continue;
+      }
+      // Receipt settlement accounts for gas immediately, including reverts. It does not prove
+      // the nonce is irreversibly spent: a reorg can make the same signed send land successfully
+      // after a move. Recheck every landed receipt against this old chain's live finality policy.
+      receiptFinality ??= {
+        head: await chain.headBlockNumber(),
+        finalized: config.finalityTag === "none" ? null : await chain.finalizedBlockNumber(config.finalityTag),
+      };
+      if (
+        confirmationsOf(observation.blockNumber, receiptFinality.head) < config.confirmationDepth ||
+        (receiptFinality.finalized !== null && observation.blockNumber > receiptFinality.finalized)
+      ) {
+        return waiting("open_send");
+      }
+      // A reverted outer Safe call does not consume the Safe's logical nonce. Even when this
+      // outer EOA hash is final, the signed Safe payload may execute again in a different hash.
+      if (observation.status === "reverted" && request.safe_execution_hashes.includes(hash)) unknownOutcome = true;
+      for (const submission of observation.rootSubmissions) {
+        if (submission.batchId === request.external_batch_id.toLowerCase()) {
+          landedOn.push(submission.contract.toLowerCase());
+        }
+      }
+    }
+    // Recorded contract first: a row that reached the chain did so there.
+    const candidates = [
+      ...new Set(
+        [request.contract_address, config.contractAddress, ...landedOn, ...(await context.knownContracts())]
+          .filter((c): c is string => c !== null)
+          .map((c) => c.toLowerCase()),
+      ),
+    ];
+    // These two must answer: the configured contract was found deployed at startup, and the
+    // row's own was sent to. Without code there, the node is not showing this chain as it is (a
+    // node behind, or one answering "0x" for everything) and its "absent" means nothing.
+    const mustHaveCode = new Set(
+      [request.contract_address, config.contractAddress].filter((c): c is string => c !== null).map((c) => c.toLowerCase()),
+    );
+    for (const contract of candidates) {
+      // Any other address without code (a registered typo, or nothing deployed there) holds no
+      // batch, and reading a batch from it fails: it would hold every move on this chain waiting.
+      // A contract with code whose read fails still makes the move wait (below).
+      if (!(await context.hasCode(contract))) {
+        if (mustHaveCode.has(contract)) {
+          return waiting("check_failed", new Error(`no contract code at ${contract}, which must have some`));
+        }
+        contractsWithoutCode.push(contract);
+        continue;
+      }
+      contracts.push(contract);
+      const anchored = await chain.anchoredBatch(request.external_batch_id, contract);
+      if (anchored) {
+        found = { contract, anchored };
+        break;
+      }
+    }
+    // Nothing was asked, so nothing says the batch is absent.
+    if (!found && contracts.length === 0) {
+      return waiting("check_failed", new Error("no contract with code to ask"));
+    }
+  } catch (error) {
+    return waiting("check_failed", error);
+  }
+
+  return applyMove(sql, config, log, request, { contractsChecked: contracts, contractsWithoutCode }, async (apply) => {
+    if (found) return refuseOnChain(apply.tx, log, request, found, apply.audit);
+    // Nowhere we could ask, yet a send may have stored it: a person looks at the chain.
+    if (unknownOutcome) return apply.refuse("send_outcome_unknown", "reconciliation_required");
+    return apply.move();
+  });
+}
+
+interface MoveApply {
+  readonly tx: postgres.TransactionSql;
+  readonly audit: (command: string, reason: string, detail: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Clears the request and audits the refusal. With `toState`, the row goes there (with a
+   * `last_error` naming the refusal); without, nothing else of the row changes — its failure
+   * reason and retry schedule stay as the person who asked for the move saw them.
+   */
+  readonly refuse: (reason: ChainMoveRefusalReason, toState?: "reconciliation_required") => Promise<ChainMoveOutcome>;
+  /** Resets the row onto the requested chain, as the API's resubmit does on its own. */
+  readonly move: () => Promise<ChainMoveOutcome>;
+}
+
+/**
+ * Makes a decision on a request in a short transaction that locks the row, skipping it if
+ * another holds it, and only if the request and the row are exactly as they were read.
+ */
+async function applyMove(
+  sql: postgres.Sql,
+  config: SubmitterConfig,
+  log: Log,
+  request: MoveRequest,
+  checked: { readonly contractsChecked: readonly string[]; readonly contractsWithoutCode: readonly string[] },
+  decide: (apply: MoveApply) => Promise<ChainMoveOutcome>,
+): Promise<ChainMoveOutcome> {
+  const { contractsChecked: contracts, contractsWithoutCode } = checked;
+  return sql.begin(async (tx) => {
+    await tx.unsafe(
+      `SET LOCAL lock_timeout = '${MOVE_LOCK_TIMEOUT}'; SET LOCAL statement_timeout = '${MOVE_STATEMENT_TIMEOUT}'`,
+    );
+    // The row as it was checked, still requested, and still with nothing of ours in flight.
+    const [locked] = await tx<{ id: string }[]>`
+      SELECT t.id FROM chain.transactions t
+      WHERE t.id = ${request.id}
+        AND t.chain_id = ${config.chainId}
+        AND t.move_to_chain_id = ${request.move_to_chain_id}
+        AND t.move_requested_at = ${request.move_requested_at}::text::timestamptz
+        AND t.updated_at = ${request.updated_at}::text::timestamptz
+        AND t.state = ${request.state}
+        AND t.tx_hash IS NOT DISTINCT FROM ${request.tx_hash}
+        AND t.contract_address IS NOT DISTINCT FROM ${request.contract_address}
+        AND NOT EXISTS (
+          SELECT 1 FROM chain.anchor_sends s
+          WHERE s.transaction_id = t.id AND s.chain_id = t.chain_id
+            AND (s.settled_at IS NULL OR (s.settled_reason = 'receipt' AND NOT s.tx_hash = ANY (${request.tracked_hashes}::text[])))
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM chain.anchor_proposals p WHERE p.transaction_id = t.id AND p.state = 'proposed'
+        )
+      FOR UPDATE OF t SKIP LOCKED
+    `;
+    if (!locked) return { kind: "skipped", transactionId: request.id } as const;
+    // Fresh READ COMMITTED snapshot after the row lock: an execution/receipt writer may have
+    // committed while the locking statement waited for its FK KEY SHARE lock. Further inserts
+    // reference this transaction and cannot pass their FK until our decision commits.
+    const [changed] = await tx`
+      SELECT 1 WHERE
+        EXISTS (SELECT 1 FROM chain.gas_spend g WHERE g.transaction_id = ${request.id} AND g.chain_id = ${config.chainId}
+                AND NOT g.tx_hash = ANY (${request.tracked_hashes}::text[]))
+        OR EXISTS (SELECT 1 FROM chain.safe_execution_history h
+                   WHERE h.transaction_id = ${request.id} AND h.chain_id = ${config.chainId}
+                     AND NOT h.execution_tx_hash = ANY (${request.safe_execution_hashes}::text[]))
+        OR (NOT ${request.unmapped_safe_execution} AND EXISTS (
+          SELECT 1 FROM chain.anchor_proposals p WHERE p.transaction_id = ${request.id}
+            AND p.chain_id = ${config.chainId} AND p.state IN ('executed', 'rejected')
+            AND NOT EXISTS (SELECT 1 FROM chain.safe_execution_history h WHERE h.proposal_id = p.id)
+        ))
+    `;
+    if (changed) return { kind: "skipped", transactionId: request.id } as const;
+
+    const audit = (command: string, reason: string, detail: Record<string, unknown>) => tx`
+      INSERT INTO audit.events (
+        tenant_id, command, resource_type, resource_id, reason, correlation_id, detail
+      ) VALUES (
+        ${request.tenant_id}, ${command}, 'anchor_batch', ${request.batch_id}, ${reason},
+        ${`anchor-worker:${request.id}`},
+        ${tx.json({
+          actor: "anchor_worker",
+          transactionId: request.id,
+          fromChainId: config.chainId,
+          toChainId: request.move_to_chain_id,
+          contractsChecked: contracts,
+          contractsWithoutCode,
+          ...detail,
+        } as never)}
+      )
+    `;
+    const refuse = async (
+      reason: ChainMoveRefusalReason,
+      toState?: "reconciliation_required",
+    ): Promise<ChainMoveOutcome> => {
+      if (toState === undefined) {
+        await tx`
+          UPDATE chain.transactions SET ${clearMove(tx)}, updated_at = now()
+          WHERE id = ${request.id}
+        `;
+      } else {
+        await tx`
+          UPDATE chain.transactions
+          SET state = ${toState}, last_error = ${`chain_move_refused_${reason}`},
+              chain_search_failed_since = NULL, retry_after = NULL,
+              ${clearMove(tx)}, updated_at = now()
+          WHERE id = ${request.id}
+        `;
+      }
+      await audit("anchor.batch.chain_move_refused", reason, {});
+      log({
+        level: "warn",
+        msg: "anchor.chain_move.refused",
+        transactionId: request.id,
+        toChainId: request.move_to_chain_id,
+        reason,
+      });
+      return { kind: "refused", transactionId: request.id, reason };
+    };
+
+    const move = async (): Promise<ChainMoveOutcome> => {
+      try {
+        // As the API's resubmit resets a row on its own chain, and onto the requested one.
+        await tx.savepoint((sp) => sp`
+          UPDATE chain.transactions
+          SET state = 'created', attempts = 0, chain_id = ${request.move_to_chain_id},
+              tx_hash = NULL, contract_address = NULL, block_number = NULL, block_hash = NULL,
+              confirmations = 0, confirmed_at = NULL, submitted_at = NULL,
+              chain_search_failed_since = NULL, retry_after = NULL, reorg_watch_until = NULL,
+              last_error = ${`resubmitted_from_${request.state}`},
+              ${clearMove(sp)},
+              updated_at = now()
+          WHERE id = ${request.id}
+        `);
+      } catch (error) {
+        const { code, constraint_name: constraint } = error as { code?: string; constraint_name?: string };
+        if (code !== "23505" || constraint !== "transactions_intent_key_chain_id_key") throw error;
+        // Another row already holds this intent on the requested chain. A person decides which.
+        return refuse("other_transaction");
+      }
+      await audit("anchor.batch.chain_moved", `from_${request.state}`, {});
+      log({
+        level: "info",
+        msg: "anchor.chain_move.done",
+        transactionId: request.id,
+        fromChainId: config.chainId,
+        toChainId: request.move_to_chain_id,
+        contractsChecked: contracts,
+        contractsWithoutCode,
+      });
+      return {
+        kind: "moved",
+        transactionId: request.id,
+        toChainId: request.move_to_chain_id,
+        contractsChecked: [...contracts],
+      } as const;
+    };
+
+    return decide({ tx, audit, refuse, move });
+  });
+}
+
+/**
+ * The batch is on this chain: the move is refused, and the row follows the anchor as
+ * reconciliation before a send does — `submitted` with the transaction that stored it, tracked
+ * and confirmed here as usual; or, with another root or no transaction found, a person's.
+ */
+async function refuseOnChain(
+  tx: postgres.TransactionSql,
+  log: Log,
+  request: MoveRequest,
+  found: { contract: string; anchored: AnchoredBatch },
+  audit: (command: string, reason: string, detail: Record<string, unknown>) => Promise<unknown>,
+): Promise<ChainMoveOutcome> {
+  const { contract, anchored } = found;
+  const adopted = anchored.root === request.merkle_root && anchored.txHash !== null;
+  const reason = adopted
+    ? "reconciled_from_chain"
+    : anchored.root !== request.merkle_root
+      ? "batch_on_chain_with_different_root"
+      : "batch_on_chain_transaction_unknown";
+  if (adopted) {
+    // The contract goes with the hash. The same hash keeps its recorded contract (0101 freezes it)
+    // — unless none was recorded (a row from before the worker recorded contracts): it then takes
+    // the contract the chain just showed holding this batch from this very transaction, or
+    // tracking would ask the configured one, which may never have held it. 0101's guard rejects
+    // filling the contract of a hash in one UPDATE; clearing the hash first, in this transaction,
+    // is the path it leaves for a writer that means it (see 0101), and no reader sees the gap.
+    if (request.tx_hash !== null && request.tx_hash === anchored.txHash && request.contract_address === null) {
+      await tx`
+        UPDATE chain.transactions SET tx_hash = NULL
+        WHERE id = ${request.id} AND tx_hash = ${request.tx_hash} AND contract_address IS NULL
+      `;
+    }
+    await tx`
+      UPDATE chain.transactions
+      SET state = 'submitted', tx_hash = ${anchored.txHash},
+          contract_address = CASE WHEN tx_hash IS NOT DISTINCT FROM ${anchored.txHash}
+                                  THEN contract_address ELSE ${contract} END,
+          block_number = NULL, block_hash = NULL, confirmations = 0, confirmed_at = NULL,
+          reorg_watch_until = NULL, submitted_at = COALESCE(submitted_at, now()),
+          chain_search_failed_since = NULL, retry_after = NULL,
+          ${clearMove(tx)},
+          last_error = 'reconciled_from_chain', updated_at = now()
+      WHERE id = ${request.id}
+    `;
+  } else {
+    await tx`
+      UPDATE chain.transactions
+      SET state = 'reconciliation_required', last_error = ${reason},
+          chain_search_failed_since = NULL, retry_after = NULL,
+          ${clearMove(tx)}, updated_at = now()
+      WHERE id = ${request.id}
+    `;
+  }
+  await audit("anchor.batch.chain_move_refused", "batch_on_chain", {
+    contract,
+    txHash: anchored.txHash,
+    result: reason,
+  });
+  const to = adopted ? "submitted" : "reconciliation_required";
+  log({
+    level: "warn",
+    msg: "anchor.chain_move.refused_on_chain",
+    transactionId: request.id,
+    toChainId: request.move_to_chain_id,
+    contract,
+    txHash: anchored.txHash,
+    to,
+    reason,
+  });
+  return { kind: "refused_on_chain", transactionId: request.id, to, contract };
 }

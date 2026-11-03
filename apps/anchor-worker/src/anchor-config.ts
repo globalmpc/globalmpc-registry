@@ -167,7 +167,13 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
   // daily cap reserves gas limit × fee for each one in flight. `submitRoot` measured at most
   // 145,926 gas plus 21,000 base (docs/operations/deployment.md); 200,000 leaves room for calldata.
   const gasLimit = BigInt(positiveInteger(env, "ANCHOR_GAS_LIMIT", 200_000));
-  const feeCapWei = BigInt(Math.round(feeCapGwei * 1e9));
+  // A finite gwei value can still overflow to Infinity in wei (1e300) or round to 0 wei; BigInt()
+  // would throw a bare RangeError on the first, and a 0 cap could never send.
+  const feeCapWeiNumber = Math.round(feeCapGwei * 1e9);
+  if (!Number.isFinite(feeCapWeiNumber) || feeCapWeiNumber < 1) {
+    throw new Error("ANCHOR_FEE_CAP_GWEI must be a finite number of at least 1 wei");
+  }
+  const feeCapWei = BigInt(feeCapWeiNumber);
   // Every send is reserved at gas limit × fee cap until settled, and a broadcast that failed is
   // settled only once the next send reuses its nonce. A cap with room for a single send would
   // keep that next send out forever, so it must fit two.
@@ -183,6 +189,7 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
   return {
     databaseUrl: requiredSecret(env, "DATABASE_URL"),
     rpcUrl: required(env, "CHAIN_RPC_URL"),
+    safeServiceUrl: env.SAFE_SERVICE_URL || null,
     chainId,
     contractAddress,
     signerPrivateKey: signerPrivateKey.toLowerCase() as Hex,
