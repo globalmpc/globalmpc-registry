@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { newAccount, type TestAccount, type TestFixture } from "./db.js";
+import { newAccount, type TestAccount, type TestFixture, syncSubjectAssurance } from "./db.js";
 
 /**
  * Adds one tenant A account with a single role binding.
@@ -30,6 +30,7 @@ export async function addGovernanceAccount(
       ${options.assurance ?? "identity_bound"}, now()
     )
   `;
+  await syncSubjectAssurance(fx.sql);
   await fx.sql`
     INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, project_id, role)
     VALUES (

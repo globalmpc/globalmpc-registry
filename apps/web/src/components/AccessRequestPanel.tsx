@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { COPY } from "@/lib/copy";
 import { useSession } from "@/lib/session";
-import { Address } from "@/components/Address";
 
 /**
  * The screen people land on when permission is blocked.
@@ -74,7 +73,7 @@ export function AccessRequestPanel({
               Tenant <span className="mono">{session.tenantId?.slice(0, 8) ?? "—"}</span>
             </div>
             <div>
-              Wallet {session.walletAddress ? <Address value={session.walletAddress} /> : "—"}
+              Account <span className="mono" data-testid="access-subject">{session.subjectId ?? "—"}</span>
             </div>
             <div>
               Assurance level <span className="mono">{session.assuranceLevel ?? "—"}</span>
@@ -102,14 +101,14 @@ export function AccessRequestPanel({
       <div className="panel">
         <h2>What to hand the operator</h2>
         <p className="sub">
-          Pass these values as they are. A different wallet address binds the role to a
-          different person.
+          Pass these values as they are. A different account ID binds the role to a different
+          person. A wallet is not needed for a role; it is only a key you sign with.
         </p>
         <ul>
           <li>
-            Wallet address —{" "}
-            {session?.walletAddress ? (
-              <Address value={session.walletAddress} />
+            Account ID —{" "}
+            {session?.subjectId ? (
+              <span className="mono">{session.subjectId}</span>
             ) : (
               <span className="mono">shown once signed in</span>
             )}

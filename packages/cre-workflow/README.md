@@ -25,8 +25,8 @@ expert reviews or approve a publication.
 1. Validate the configuration (again, in the handler) and the scheduled trigger time.
 2. Derive one idempotency key from the **scheduled trigger time**, the configured record and
    domain, and the complete request body (including TTL). The workflow never reads a clock.
-3. Fetch `REGISTRY_BEARER_TOKEN` in DON mode. A missing or malformed secret stops the run
-   before any HTTP call.
+3. Fetch `REGISTRY_BEARER_TOKEN` (a Registry service token, scope `cre_report`) in DON mode. A
+   missing or malformed secret stops the run before any HTTP call.
 4. In node mode, `POST` the report request with a 10-second timeout and caching off, validate
    the response strictly, and return canonical JSON.
 5. Reach exact (identical) consensus on that canonical JSON, validate it again, ABI-encode it
@@ -106,7 +106,10 @@ Install the [official CRE CLI](https://docs.chain.link/cre/getting-started/cli-i
    approved public key and deployed receiver. Collect the source via
    `POST /api/v1/source-connections/:connectionId/collect` with the ordinary
    `{projectId, queryBasis}` request and wait for its receipt before relaying.
-3. Provide `REGISTRY_BEARER_TOKEN` for an ordinary authorized Registry actor and
+3. Provide `REGISTRY_BEARER_TOKEN` — a Registry **service token** for a `cre_reporter` service
+   subject with scope `cre_report` (`pnpm --filter @mpc/api service-token create-subject` and
+   `issue`, see `docs/operations/deployment.md`). It reaches only the report route and makes no
+   person role effective. Provide it and
    `CRE_ETH_PRIVATE_KEY` for an **isolated local test account** through the environment or
    an ignored `.env`. Never commit real credentials.
 4. The CLI requires a Chainlink account login or `CRE_API_KEY`, even for local simulation.

@@ -14,6 +14,11 @@ export interface LegacyChecksum {
 }
 
 export const LEGACY_CHECKSUMS: Readonly<Record<string, LegacyChecksum>> = {
+  "0107_anchor_contract_registry.sql": {
+    full: [],
+    earlier: ["8a5ee5dd96d621f4eb78395cd77e98642fb36dd4d7433e48aa4d21b812bc696c"],
+    normalized: "6d6fa16dc409a79211836c121338744e450e796add9b256c1cc2d3fecb62bbc7",
+  },
   "0001_schema.sql": {
     full: ["3d92c69673a40c62a00bb4527e208d336126816eb78ba01724e14e2bd3549fdc", "d2e92f7c0cc62535d91b5920245b4e1875ba409df5956178c3d1a385b27ad9a4"],
     normalized: "a70510e5a887d8d9706be3b7e7666c6d2ca14e41041679e1f6d9bfc85d23f290",
@@ -183,5 +188,13 @@ export const LEGACY_CHECKSUMS: Readonly<Record<string, LegacyChecksum>> = {
   "0040_public_hash_lookup.sql": {
     full: ["e63ee16aa95ba4546d13b0599b2f39028a2e5a4ac42a06a6c8a51389a402dfb5", "d0cf5953d22a95e8c7cba0d0a33af7e703cfcec2877b218a40db0292ce787daf"],
     normalized: "583813f87e291313f4cbdd79599c57ec818417beee09e56d58d1e401c80b28f1",
+  },
+  // Edited in place after the final review (F4: the consolidation's keep order; see its header).
+  // `earlier` is the revision of 830c981 / 6d998ac, which only feature-branch and CI databases
+  // applied. Such a database keeps the consolidation it already ran: it runs once.
+  "0130_single_signing_wallet.sql": {
+    full: [],
+    earlier: ["7d74cc9ebbb5fdb8d6b1050ee8a2a8b39f382dcf1fa5289d93d64bbfb529d5a2"],
+    normalized: "6b034b8d5cea3d458030c10a9249c2134ce076dbd3fcbc7aa45b6b3a499ca3c2",
   },
 };

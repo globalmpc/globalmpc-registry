@@ -15,7 +15,7 @@
   "dependencies": {
     "@mpc/config": "workspace:*",
     "@mpc/db": "workspace:*",
-    "postgres": "^3.4.9",
+    "postgres": "^4.0.0",
     "tsx": "4.23.15",
     "@mpc/canonical": "workspace:*"
   }

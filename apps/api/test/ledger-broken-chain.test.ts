@@ -59,7 +59,7 @@ describeDb("broken evidence chains in the published ledger", () => {
     operator = await signIn(app, fx.operatorA);
     publisher = await signIn(app, fx.disclosureApproverA);
     steward = await signIn(app, fx.stewardA);
-    scan = await signIn(app, fx.scanServiceA);
+    scan = fx.scanServiceToken;
     for (const claimType of [typeA, typeB]) {
       const proposal = randomUUID();
       const entry = randomUUID();

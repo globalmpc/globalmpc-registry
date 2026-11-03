@@ -102,10 +102,13 @@ async function readReviewers(tx: Tx, tenantId: string, projectId: string) {
   if (subjectIds.length === 0) return [];
 
   const wallets = await tx<WalletRow[]>`
-    SELECT subject_id, assurance_level
-    FROM core.wallet_identities
-    WHERE tenant_id = ${tenantId} AND subject_id = ANY(${subjectIds}::uuid[])
-      AND disabled_at IS NULL
+    -- Identity assurance is the subject's (0108). A subject still needs an active wallet: an
+    -- attestation is signed with one.
+    SELECT w.subject_id, s.assurance_level
+    FROM core.wallet_identities w
+    JOIN core.subjects s ON s.id = w.subject_id AND s.tenant_id = w.tenant_id
+    WHERE w.tenant_id = ${tenantId} AND w.subject_id = ANY(${subjectIds}::uuid[])
+      AND w.disabled_at IS NULL
   `;
   const credentials = await tx<CredentialRow[]>`
     SELECT id, subject_id, credential_type, issuer_reference, credential_scope,

@@ -3,6 +3,7 @@ import Link from "next/link";
 import "./globals.css";
 import { SessionProvider } from "@/lib/session";
 import { TopBar } from "@/components/TopBar";
+import { StepUpProvider } from "@/components/auth/StepUp";
 
 export const metadata: Metadata = {
   title: "MPC Registry Workspace",
@@ -17,6 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <SessionProvider>
+          <StepUpProvider>
           <div className="shell">
             <TopBar />
             <main className="main">{children}</main>
@@ -29,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/legal">Terms, data handling, and support</Link>
             </footer>
           </div>
+          </StepUpProvider>
         </SessionProvider>
       </body>
     </html>

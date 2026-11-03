@@ -6,7 +6,8 @@ import { keccak256, toBytes } from "viem";
 import { withTenant } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
-import { setupFixture, signIn, testEnv, idempotencyKey, type TestFixture } from "./helpers/db.js";
+import { createServiceSubject } from "../src/service-tokens.js";
+import { issueTestServiceToken, setupFixture, signIn, testEnv, idempotencyKey, type TestFixture } from "./helpers/db.js";
 import { publishProject, projectProjection, projectKeyOf } from "./helpers/registry.js";
 
 /** Delay the actual health function in this isolated test DB; always restore its original OID. */
@@ -307,6 +308,27 @@ describeDb("destination-bound CRE report observations", () => {
     expect([403, 404]).toContain((await report({}, scoped, fx.otherProjectA)).statusCode);
     expect((await report({ publicKey: "not-the-published-key" })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: `/api/v1/projects/${fx.projectA}/cre-reports`, payload: {} })).statusCode).toBe(401);
+  });
+
+  it("accepts the CRE workflow's service token — cre_reporter, scope cre_report — and nothing broader", async () => {
+    // The workflow authenticates with a service token, not a person session (D7).
+    const { subjectId } = await createServiceSubject(fx.sql, { tenantId: fx.tenantA, displayName: "CRE workflow", role: "cre_reporter" });
+    const cre = await issueTestServiceToken(fx.sql, { tenantId: fx.tenantA, subjectId, scopes: ["cre_report"], label: "cre-workflow" });
+    const observed = await report({}, cre);
+    expect(observed.statusCode, observed.body).toBe(200);
+    const [audit] = await fx.sql<{ actor_subject_id: string; effective_role: string }[]>`
+      SELECT actor_subject_id, effective_role FROM audit.events
+      WHERE command='cre_report.observed' AND actor_subject_id=${subjectId}`;
+    expect(audit).toEqual({ actor_subject_id: subjectId, effective_role: "cre_reporter" });
+
+    // The same token reaches no other route.
+    expect((await app.inject({ method: "GET", url: `/api/v1/projects/${fx.projectA}`, headers: { authorization: `Bearer ${cre}` } })).json().code)
+      .toBe("SERVICE_TOKEN_ROUTE_DENIED");
+
+    // A scan token in the same tenant has the wrong scope.
+    const denied = await report({}, fx.scanServiceToken);
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().code).toBe("SERVICE_TOKEN_SCOPE_DENIED");
   });
 
   it("uses a record-local sequence without exposing other project report volume", async () => {

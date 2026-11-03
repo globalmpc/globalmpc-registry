@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Document from "../src/app/w/projects/[id]/documents/[uploadId]/page";
 import { mockHttp } from "./support/http";
 import { documentNode } from "./support/documents";
-const auth = vi.hoisted(() => ({ token: "token" as string | null, loading: false }));
+const auth = vi.hoisted(() => ({
+  token: "token" as string | null,
+  loading: false,
+  session: { authenticated: true, actions: ["source.upload"] as string[] },
+}));
 vi.mock("../src/lib/session", () => ({ useSession: () => auth }));
 const graphUrl = "GET /api/v1/projects/p1/document-graph?focus=doc";
 function routes(): Record<string, unknown> {

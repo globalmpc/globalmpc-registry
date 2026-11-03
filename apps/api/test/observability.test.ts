@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
@@ -146,6 +147,37 @@ describeDb("observability", () => {
     expect(response.body).toContain("mpc_uploads_quarantined");
     // On lookup failure this counter increments instead of failing the scrape.
     expect(response.body).not.toContain("mpc_gauge_scrape_failed_total");
+  });
+
+  /**
+   * Anyone can spend a known address's code requests and hold its owner out of sign-in for 15
+   * minutes (threat model T10, accepted). The gauge makes a crowd of such addresses visible.
+   */
+  it("/metrics counts addresses at their code-request limit", async () => {
+    const limited = () =>
+      app.inject({ method: "GET", url: "/metrics" }).then((response) => {
+        const match = /mpc_email_code_addresses_limited\{state="code_start"\} (\d+)/.exec(response.body);
+        expect(match, response.body).not.toBeNull();
+        return Number(match![1]);
+      });
+    const before = await limited();
+    const bucket = `email:probe-${Date.now()}`;
+    for (let i = 0; i < 5; i += 1) {
+      await fx.sql`INSERT INTO core.auth_rate_events (action, bucket) VALUES ('code_start', ${bucket})`;
+    }
+    expect(await limited()).toBe(before + 1);
+    // Requester buckets (`ip:`) are a different limit and are not counted here.
+    const requester = `ip:probe-${Date.now()}`;
+    for (let i = 0; i < 5; i += 1) {
+      await fx.sql`INSERT INTO core.auth_rate_events (action, bucket) VALUES ('code_start', ${requester})`;
+    }
+    expect(await limited()).toBe(before + 1);
+    await fx.sql`DELETE FROM core.auth_rate_events WHERE bucket LIKE '%probe-%'`;
+  });
+
+  it("an alert rule reads the saturated-address gauge", () => {
+    const rules = readFileSync(new URL("../../../config/observability/alerts.yml", import.meta.url), "utf8");
+    expect(rules).toMatch(/- alert: MpcEmailCodeAddressesLimited\n\s+expr: max\(mpc_email_code_addresses_limited\) > 20/);
   });
 
   it("metrics carry no tenant", async () => {

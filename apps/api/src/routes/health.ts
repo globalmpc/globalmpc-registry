@@ -63,13 +63,27 @@ export async function registerHealthRoutes(
         const rows = await sql<{ metric: string; label: string; value: string }[]>`
           SELECT * FROM core.operational_gauges()
         `;
-        metrics.setGauges(
-          rows.map((row) => ({
+        // A worker the API refuses (its service token revoked, or rotated without a deploy)
+        // stays alive and keeps a fresh heartbeat, so the liveness alerts stay quiet while
+        // nothing is scanned. Its heartbeat says so (`status: "unauthorized"`); 1 while it does,
+        // 0 otherwise, and no series for a worker that never reported.
+        const refused = await sql<{ label: string; value: number }[]>`
+          SELECT worker_kind AS label,
+                 CASE WHEN detail->>'status' = 'unauthorized' THEN 1 ELSE 0 END AS value
+          FROM core.worker_heartbeats WHERE worker_kind = 'scan'
+        `;
+        metrics.setGauges([
+          ...rows.map((row) => ({
             metric: row.metric,
             label: row.label,
             value: Number(row.value),
           })),
-        );
+          ...refused.map((row) => ({
+            metric: "worker_unauthorized",
+            label: row.label,
+            value: Number(row.value),
+          })),
+        ]);
       } catch {
         metrics.incrementCounter("mpc_gauge_scrape_failed_total");
       }

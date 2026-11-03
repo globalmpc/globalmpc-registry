@@ -48,7 +48,7 @@ describeDb("document status", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     steward = await signIn(app, fx.stewardA);
-    scan = await signIn(app, fx.scanServiceA);
+    scan = fx.scanServiceToken;
     reader = await signIn(app, fx.readerA);
     scopedSteward = await signIn(app, fx.scopedStewardA);
   });

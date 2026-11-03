@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Documents from "../src/app/w/projects/[id]/documents/page";
 import { mockHttp } from "./support/http";
 import type { DocumentStatusSummary } from "../src/lib/api";
-const auth = vi.hoisted(() => ({ token: "token" as string | null, loading: false }));
+const auth = vi.hoisted(() => ({
+  token: "token" as string | null,
+  loading: false,
+  session: { authenticated: true, actions: ["source.upload"] as string[] },
+}));
 vi.mock("../src/lib/session", () => ({ useSession: () => auth }));
 const root = "/api/v1/projects/p1";
 const item = (uploadId: string) => ({

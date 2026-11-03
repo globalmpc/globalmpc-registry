@@ -1,17 +1,15 @@
-import { privateKeyToAccount } from "viem/accounts";
-import { createSiweMessage } from "viem/siwe";
-import type { Hex } from "viem";
-import { assertNotDevKey } from "@mpc/config";
-
 /**
  * Worker → API client.
  *
- * The worker **takes the same auth path as a person** — it gets a session via a SIWE signature.
- * A service-only bypass header would itself be an auth bypass, and R1 actually removed such a
- * path.
+ * The worker authenticates with a **service token** (decision D7): a bearer secret issued by an
+ * operator for the scan service subject, limited to the `scan_result` scope. It is not a person
+ * and does not sign in like one — no wallet, no session, no second factor. The API makes only the
+ * `scan_service` role effective for it, and only on the scan-result route; a leaked token reports
+ * scan results and nothing else.
  *
- * Sessions expire, so on a 401 it logs in once more and retries. Logging in on every request
- * would issue nonces needlessly.
+ * There is no login, so there is nothing to refresh: a 401 means the token was revoked or has
+ * expired, and retrying with the same token cannot fix that. It is reported, and the loop keeps
+ * reporting it until an operator rotates the token.
  *
  * Every request has a timeout. The worker calls this client inside its loop, so one hang stalls
  * every later event — it shows up as a stall, not a failure, and a stall triggers neither retry
@@ -21,13 +19,13 @@ import { assertNotDevKey } from "@mpc/config";
 /** Cap for a single request. Same order of magnitude as source lookup (05 §5.12). */
 export const DEFAULT_TIMEOUT_MS = 15_000;
 
+/** Every service token starts with this (`apps/api/src/plugins/session-token.ts`). */
+export const SERVICE_TOKEN_PREFIX = "mpcsvc_";
+
 export interface ApiClientOptions {
   readonly baseUrl: string;
-  readonly privateKey: Hex;
-  readonly chainId: number;
-  /** domain and uri of the SIWE message. Must match the server config to pass verification. */
-  readonly siweDomain: string;
-  readonly siweUri: string;
+  /** The scan service's token. Never logged. */
+  readonly serviceToken: string;
   /** Cap for a single request. Default 15 s. */
   readonly timeoutMs?: number;
 }
@@ -45,103 +43,32 @@ export class ApiRequestError extends Error {
 
 export interface ApiClient {
   post(path: string, body: unknown, headers?: Record<string, string>): Promise<unknown>;
-  /** Current session principal. Public information, safe to log. */
-  readonly walletAddress: string;
 }
 
 export function createApiClient(
   options: ApiClientOptions,
   fetchImpl: typeof fetch = fetch,
 ): ApiClient {
-  const account = privateKeyToAccount(options.privateKey);
-  // This key is a login identity. A public anvil key on a shared chain lets anyone who knows the
-  // mnemonic log in as the scan service and report uploads clean.
-  assertNotDevKey("SCAN_SERVICE_PRIVATE_KEY", account.address, options.chainId);
-  const walletAddress = account.address.toLowerCase();
+  // A person's session token or a wallet key in this variable would fail on the first report;
+  // refusing at startup says which variable is wrong. The message never quotes the value.
+  if (!options.serviceToken.startsWith(SERVICE_TOKEN_PREFIX)) {
+    throw new Error(`SCAN_SERVICE_TOKEN must be a service token (${SERVICE_TOKEN_PREFIX}…)`);
+  }
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  let token: string | null = null;
-
-  /** A fresh signal per request. Reusing one aborts everything immediately after the first timeout. */
-  const deadline = () => AbortSignal.timeout(timeoutMs);
-
-  async function login(): Promise<string> {
-    const nonceResponse = await fetchImpl(`${options.baseUrl}/api/v1/auth/siwe/nonce`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ walletAddress, chainId: options.chainId }),
-      signal: deadline(),
-    });
-    if (!nonceResponse.ok) {
-      throw new ApiRequestError(nonceResponse.status, "SIWE_NONCE_FAILED", "nonce issuance failed");
-    }
-    const challenge = (await nonceResponse.json()) as {
-      nonce: string;
-      statement: string;
-      domain: string;
-    };
-
-    const message = createSiweMessage({
-      address: account.address,
-      chainId: options.chainId,
-      domain: options.siweDomain,
-      nonce: challenge.nonce,
-      statement: challenge.statement,
-      uri: options.siweUri,
-      version: "1",
-      issuedAt: new Date(),
-    });
-
-    const signature = await account.signMessage({ message });
-    const verifyResponse = await fetchImpl(`${options.baseUrl}/api/v1/auth/siwe/verify`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message, signature }),
-      signal: deadline(),
-    });
-    if (!verifyResponse.ok) {
-      const body = (await verifyResponse.json()) as { code?: string; message?: string };
-      throw new ApiRequestError(
-        verifyResponse.status,
-        body.code ?? "SIWE_VERIFY_FAILED",
-        body.message ?? "signature verification failed",
-      );
-    }
-
-    const verified = (await verifyResponse.json()) as { sessionToken: string };
-    return verified.sessionToken;
-  }
-
-  async function send(
-    path: string,
-    body: unknown,
-    headers: Record<string, string>,
-    sessionToken: string,
-  ): Promise<Response> {
-    return fetchImpl(`${options.baseUrl}${path}`, {
-      method: "POST",
-      headers: {
-        ...headers,
-        authorization: `Bearer ${sessionToken}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body ?? {}),
-      signal: deadline(),
-    });
-  }
 
   return {
-    walletAddress,
-
     async post(path, body, headers = {}) {
-      token ??= await login();
-      let response = await send(path, body, headers, token);
-
-      // The session may have expired. Log in again only once — repeating turns an auth failure
-      // into an infinite loop.
-      if (response.status === 401) {
-        token = await login();
-        response = await send(path, body, headers, token);
-      }
+      const response = await fetchImpl(`${options.baseUrl}${path}`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          authorization: `Bearer ${options.serviceToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body ?? {}),
+        // A fresh signal per request. Reusing one aborts everything after the first timeout.
+        signal: AbortSignal.timeout(timeoutMs),
+      });
 
       if (!response.ok) {
         const envelope = (await response.json().catch(() => ({}))) as {

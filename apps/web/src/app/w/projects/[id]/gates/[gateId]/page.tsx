@@ -13,6 +13,8 @@ import {
 import { useSession } from "@/lib/session";
 import { Address } from "@/components/Address";
 import { ErrorNotice } from "@/components/ErrorNotice";
+import { AssuranceNotice } from "@/components/AssuranceNotice";
+import { can } from "@/lib/access";
 import { ReadinessBadge } from "@/components/StatusBadge";
 import type { ReadinessStatus } from "@mpc/domain";
 
@@ -36,7 +38,10 @@ export default function GateDecisionPage({
   params: Promise<{ id: string; gateId: string }>;
 }) {
   const { id, gateId } = use(params);
-  const { token, signTypedData } = useSession();
+  const { token, session, signTypedData } = useSession();
+  // Guidance only — the server refuses either way. Loading readiness recomputes it.
+  const mayRecompute = can(session, "readiness.recompute");
+  const mayDecide = can(session, "gate.decide");
 
   const [assessment, setAssessment] = useState<ReadinessAssessment | null>(null);
   const [decision, setDecision] = useState<GateDecision | null>(null);
@@ -116,7 +121,7 @@ export default function GateDecisionPage({
   const goBlocked = !assessment || blocking.length > 0;
   // §11.3: watch → go needs a rationale and a condition. The server refuses it either way.
   const goNeedsCondition = !goBlocked && watching.length > 0 && !hasConditions;
-  const canDecide = assessment !== null && rationale.trim().length > 0;
+  const canDecide = mayDecide && assessment !== null && rationale.trim().length > 0;
 
   const renderReadiness = () => {
     return (
@@ -126,7 +131,7 @@ export default function GateDecisionPage({
           A decision always takes an assessment as its input. There is no deciding without one.
         </p>
         <div className="row">
-          <button onClick={() => void loadAssessment()} disabled={busy}>
+          <button onClick={() => void loadAssessment()} disabled={busy || !mayRecompute}>
             Load current readiness
           </button>
           {assessment ? (
@@ -298,7 +303,9 @@ export default function GateDecisionPage({
         <Link href={`/w/projects/${id}/readiness`}>← Readiness</Link>
       </div>
 
-      {error ? <ErrorNotice error={error} /> : null}
+      {error ? <ErrorNotice error={error} context="signing" /> : null}
+
+      <AssuranceNotice actions={["gate.decide", "readiness.recompute"]} />
 
       {renderReadiness()}
 

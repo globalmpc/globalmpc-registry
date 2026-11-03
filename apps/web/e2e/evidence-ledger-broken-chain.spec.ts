@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { catalogFixtureKey } from "./catalog-fixtures";
 import { connectAs } from "./connect-as";
+import { reportScan } from "./scan-service";
 import {
   CHAIN_ENABLED,
   command,
@@ -21,7 +22,7 @@ const REASON = "Supporting evidence or its review is no longer current.";
 
 async function disconnect(page: Page) {
   await page.goto("/connect");
-  const button = page.getByRole("button", { name: "Disconnect" });
+  const button = page.getByRole("button", { name: "Sign out" });
   if (await button.isVisible().catch(() => false)) {
     await button.click();
     await expect(button).toBeHidden();
@@ -126,12 +127,9 @@ test.describe("evidence ledger broken chain journey", () => {
       return uploads.items.find((item: { id: string }) => item.id === uploadId).version;
     };
     const promote = async (documents: Upload[]) => {
-      await connectAs(page, "Scan Service");
       const scanned: Upload[] = [];
       for (const document of documents) {
-        scanned.push(
-          await command(page, `/api/v1/uploads/${document.id}/scan-result`, { result: "clean" }, document.version),
-        );
+        scanned.push((await reportScan(page, document.id, document.version)) as Upload);
       }
       await connectAs(page, "Steward A");
       for (const document of scanned) {

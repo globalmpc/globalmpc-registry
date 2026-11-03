@@ -1,10 +1,17 @@
 import { loadConfig } from "./config.js";
 import { createDb } from "./db.js";
 import { buildServer } from "./server.js";
+import { createOidcTestRelayFetch } from "./services/oidc-test-relay.js";
 
 const config = loadConfig(process.env);
 const sql = createDb(config);
-const app = await buildServer(config, sql);
+// E2E only: the relay that stands in for Google and Microsoft. `loadConfig` refuses it in
+// production and on mainnet, so a deployed API always reaches the real providers.
+const app = await buildServer(
+  config,
+  sql,
+  config.oidcTestRelayUrl ? { oidcFetch: createOidcTestRelayFetch(config.oidcTestRelayUrl) } : {},
+);
 
 // Log once at startup which secret was read via which path. Scheme and fingerprint, not the
 // value — when operations asks "which key is in use right now", the answer must be in the

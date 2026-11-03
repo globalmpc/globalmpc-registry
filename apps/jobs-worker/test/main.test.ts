@@ -10,9 +10,12 @@ const s = vi.hoisted(() => ({
   heartbeat: vi.fn(),
   expiry: vi.fn(),
   credentials: vi.fn(),
+  purge: vi.fn(),
   ledger: vi.fn(),
   secret: vi.fn(),
   webhook: vi.fn(),
+  emailConfig: vi.fn(),
+  emailDeliver: vi.fn(),
   signals: new Map<string, () => void>(),
 }));
 vi.mock("../src/evidence-ledger.js", async (importOriginal) => ({
@@ -32,6 +35,10 @@ vi.mock("../src/credential-expiry.js", () => ({
   DEFAULT_CREDENTIAL_SWEEP_MS: 1000,
   createCredentialExpirySweep: () => s.credentials,
 }));
+vi.mock("../src/auth-purge.js", () => ({
+  DEFAULT_AUTH_PURGE_MS: 1000,
+  createAuthPurgeSweep: () => s.purge,
+}));
 vi.mock("../src/document-expiry.js", () => ({
   DEFAULT_EXPIRY_SWEEP_MS: 1000,
   createExpirySweep: () => s.expiry,
@@ -40,6 +47,9 @@ vi.mock("../src/notification-delivery.js", () => ({
   deliverOnce: s.deliver,
   deliveryBacklog: s.deliveryBacklog,
 }));
+vi.mock("../src/email/config.js", () => ({ loadEmailWorkerConfig: s.emailConfig }));
+vi.mock("../src/email/transport.js", () => ({ createEmailTransport: () => ({ kind: "log" }) }));
+vi.mock("../src/email/delivery.js", () => ({ deliverEmailOnce: s.emailDeliver }));
 vi.mock("../src/outbox-handlers.js", () => ({ buildOutboxHandlers: () => [] }));
 vi.mock("../src/outbox-publisher.js", () => ({
   DEFAULT_OUTBOX_MAX_ATTEMPTS: 5,
@@ -57,9 +67,12 @@ beforeEach(() => {
     s.heartbeat,
     s.expiry,
     s.credentials,
+    s.purge,
     s.ledger,
     s.secret,
     s.webhook,
+    s.emailConfig,
+    s.emailDeliver,
     s.backlog,
     s.deliveryBacklog,
   ])
@@ -69,6 +82,16 @@ beforeEach(() => {
   s.expiry.mockResolvedValue({ ran: true, flagged: 1 });
   s.ledger.mockResolvedValue({ ran: true, recorded: 1 });
   s.credentials.mockResolvedValue({ ran: true, flagged: 2 });
+  s.purge.mockResolvedValue({
+    ran: true,
+    purgedSessions: 3,
+    purgedEmailChallenges: 5,
+    purgedEmailMail: 6,
+    purgedRateEvents: 7,
+    purgedOidcTransactions: 8,
+  });
+  s.emailConfig.mockReturnValue({ transport: "log", from: "x@example.test", maxAttempts: 5, backoffMs: 10 });
+  s.emailDeliver.mockResolvedValue({ handled: false, sent: 0, failed: 0 });
   s.deliver.mockResolvedValue({ handled: false, delivered: 0, failed: 0 });
   s.backlog.mockResolvedValue({
     pending: 1,
@@ -105,11 +128,22 @@ it("sweeps expiries, emits a heartbeat when idle, and closes its connection", as
   const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
   expect(log).toContain("document.expiry.flagged");
   expect(log).toContain("credential.expiry.flagged");
+  expect(log).toContain(
+    '"msg":"auth.records.purged","sessions":3,"emailChallenges":5,"emailMail":6,"rateEvents":7,"oidcTransactions":8',
+  );
+  expect(s.emailDeliver).toHaveBeenCalledWith(
+    s.sql,
+    { kind: "log" },
+    { from: "x@example.test", maxAttempts: 5, backoffMs: 10 },
+    expect.any(Function),
+  );
 });
 it("keeps publishing when expiry sweeps or dead-letter settlement fail", async () => {
   s.expiry.mockRejectedValue(new Error("document sweep failed"));
   s.credentials.mockRejectedValue(new Error("credential sweep failed"));
+  s.purge.mockRejectedValue(new Error("purge failed"));
   s.deadLetter.mockRejectedValue(new Error("settle failed"));
+  s.emailDeliver.mockRejectedValue(new Error("mail table locked"));
   s.publish.mockImplementation(async (_sql, _publish, options) => {
     await options.onDeadLetter({ id: "e1", event_type: "export" });
     s.signals.get("SIGINT")!();
@@ -125,6 +159,8 @@ it("keeps publishing when expiry sweeps or dead-letter settlement fail", async (
     "outbox.dead_letter.settle_failed",
     "document.expiry.sweep_failed",
     "credential.expiry.sweep_failed",
+    "auth.purge.failed",
+    "email.delivery.failed",
     "notification.delivery.backlog",
     "outbox.publish.partial_failure",
   ])
@@ -174,4 +210,18 @@ it("delivers and heartbeats while a long ledger sweep runs, then drains before c
   await import("../src/main.js");
   expect(cycles).toBe(2);
   expect(s.sql.end).toHaveBeenCalledTimes(2);
+});
+
+it("refuses a mail configuration that would drop codes before connecting", async () => {
+  s.emailConfig.mockImplementation(() => {
+    throw new Error("EMAIL_TRANSPORT=log cannot be used in production; use resend");
+  });
+  vi.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("exit");
+  });
+  await expect(import("../src/main.js")).rejects.toThrow("exit");
+  expect(process.stderr.write).toHaveBeenCalledWith(
+    "EMAIL_TRANSPORT=log cannot be used in production; use resend\n",
+  );
+  expect(s.publish).not.toHaveBeenCalled();
 });

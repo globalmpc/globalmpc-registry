@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const s = vi.hoisted(() => ({
-  sql: { end: vi.fn() },
+  // Callable for the bootstrap CLI's role check; `privileges` is what that query returns.
+  privileges: { rolsuper: true, rolbypassrls: false },
+  sql: Object.assign(vi.fn(async () => [s.privileges]), { end: vi.fn() }),
   bootstrap: vi.fn(),
   credential: vi.fn(),
   schema: vi.fn(),
@@ -11,6 +13,8 @@ const s = vi.hoisted(() => ({
   info: vi.fn(),
   error: vi.fn(),
   signals: new Map<string, () => void>(),
+  relay: null as string | null,
+  deps: vi.fn(),
 }));
 vi.mock("postgres", () => ({ default: () => s.sql }));
 vi.mock("@mpc/config", () => ({
@@ -34,11 +38,12 @@ vi.mock("../src/config.js", () => ({
   loadConfig: () => ({
     port: 3001,
     secretAudit: [{ name: "key", scheme: "file" }],
+    oidcTestRelayUrl: s.relay,
   }),
 }));
 vi.mock("../src/db.js", () => ({ createDb: () => s.sql }));
 vi.mock("../src/server.js", () => ({
-  buildServer: async () => ({
+  buildServer: async (_config: unknown, _sql: unknown, deps: unknown) => (s.deps(deps), {
     listen: s.listen,
     close: s.close,
     log: { info: s.info, error: s.error },
@@ -47,7 +52,10 @@ vi.mock("../src/server.js", () => ({
 const originalExitCode = process.exitCode;
 beforeEach(() => {
   vi.resetModules();
+  s.privileges = { rolsuper: true, rolbypassrls: false };
+  s.relay = null;
   for (const f of [
+    s.deps,
     s.sql.end,
     s.bootstrap,
     s.credential,
@@ -98,7 +106,7 @@ function bootstrapEnv() {
     BOOTSTRAP_TENANT_NAME: "Tenant",
     BOOTSTRAP_ORG_NAME: "Sponsor",
     BOOTSTRAP_SUBJECT_NAME: "Operator",
-    BOOTSTRAP_WALLET: "0xABCDEF",
+    BOOTSTRAP_EMAIL: "operator@example.test",
   }))
     vi.stubEnv(k, v);
 }
@@ -115,6 +123,16 @@ it("starts the API with the configured port and drains exactly once on repeated 
   await vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(0));
   expect(s.close).toHaveBeenCalledOnce();
 });
+it("reaches the real providers unless the E2E relay is configured", async () => {
+  await import("../src/main.js");
+  expect(s.deps).toHaveBeenLastCalledWith({});
+
+  vi.resetModules();
+  s.relay = "http://127.0.0.1:4555";
+  await import("../src/main.js");
+  const deps = s.deps.mock.lastCall![0] as { oidcFetch?: unknown };
+  expect(deps.oidcFetch).toBeTypeOf("function");
+});
 it("logs a shutdown failure and exits with a failure status", async () => {
   await import("../src/main.js");
   s.close.mockRejectedValue(new Error("Close failed"));
@@ -126,61 +144,67 @@ it("logs a shutdown failure and exits with a failure status", async () => {
     "graceful shutdown failed",
   );
 });
-it("validates bootstrap variables before opening a connection", async () => {
+it("validates bootstrap variables before opening a connection — an email is required", async () => {
+  vi.stubEnv("BOOTSTRAP_EMAIL", "");
   vi.stubEnv("BOOTSTRAP_WALLET", "");
   await expect(import("../src/bootstrap-cli.js")).rejects.toThrow("exit:1");
-  expect(process.stderr.write).toHaveBeenCalledWith(
-    expect.stringContaining("BOOTSTRAP_WALLET"),
-  );
+  expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining("BOOTSTRAP_EMAIL"));
   expect(s.bootstrap).not.toHaveBeenCalled();
 });
-it("bootstraps an operator with explicit defaults and emits only public identifiers", async () => {
+it("refuses a wallet: bootstrap binds none, the holder binds one by proof (WP7)", async () => {
   bootstrapEnv();
-  vi.stubEnv("BOOTSTRAP_CHAIN_ID", "");
-  vi.stubEnv("CHAIN_ID", "");
+  vi.stubEnv("BOOTSTRAP_WALLET", "0xABCDEF");
+  await expect(import("../src/bootstrap-cli.js")).rejects.toThrow("exit:1");
+  expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining("BOOTSTRAP_WALLET is no longer accepted"));
+  expect(s.bootstrap).not.toHaveBeenCalled();
+});
+it("bootstraps an operator with explicit defaults and emits no personal data", async () => {
+  bootstrapEnv();
+  vi.stubEnv("BOOTSTRAP_WALLET", "");
   await import("../src/bootstrap-cli.js");
   expect(s.bootstrap).toHaveBeenCalledWith(
     s.sql,
     expect.objectContaining({
       tenantSlug: "tenant",
+      email: "operator@example.test",
       jurisdiction: "MNG",
-      chainId: 31337,
       role: "mpc_operator",
       assuranceLevel: "high_assurance",
     }),
   );
-  expect(process.stdout.write).toHaveBeenCalledWith(
-    expect.stringContaining('"wallet":"0xabcdef"'),
-  );
+  const [input] = s.bootstrap.mock.lastCall!.slice(1) as [Record<string, unknown>];
+  expect(input).not.toHaveProperty("walletAddress");
+  expect(input).not.toHaveProperty("chainId");
+  const written = String(vi.mocked(process.stdout.write).mock.lastCall![0]);
+  expect(written).toContain('"subjectId":"s1"');
+  expect(written).not.toContain("operator@example.test");
+  expect(written).not.toContain("wallet");
   expect(s.sql.end).toHaveBeenCalledOnce();
 });
-it("binds the first wallet on the API's chain when no bootstrap chain is given", async () => {
-  // A 5611 deployment that bound its operator to 31337 would leave nobody able to log in.
+it("refuses to bootstrap with a role that cannot bypass row-level security", async () => {
+  // Aurora's admin is rds_superuser, not a superuser; without BYPASSRLS the inserts would be
+  // refused, and the cross-tenant wallet check would see no other tenant at all.
   bootstrapEnv();
-  vi.stubEnv("BOOTSTRAP_CHAIN_ID", "");
-  vi.stubEnv("CHAIN_ID", "5611");
+  s.privileges = { rolsuper: false, rolbypassrls: false };
   await import("../src/bootstrap-cli.js");
-  expect(s.bootstrap).toHaveBeenCalledWith(s.sql, expect.objectContaining({ chainId: 5611 }));
+  expect(process.exitCode).toBe(1);
+  expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining("BYPASSRLS"));
+  expect(s.bootstrap).not.toHaveBeenCalled();
+  expect(s.sql.end).toHaveBeenCalledOnce();
 });
-it("prefers an explicit bootstrap chain, and passes a non-digit value on to be refused", async () => {
+it("bootstraps with a role that has BYPASSRLS but is not a superuser", async () => {
   bootstrapEnv();
-  vi.stubEnv("CHAIN_ID", "5611");
-  vi.stubEnv("BOOTSTRAP_CHAIN_ID", "56");
+  s.privileges = { rolsuper: false, rolbypassrls: true };
   await import("../src/bootstrap-cli.js");
-  expect(s.bootstrap).toHaveBeenLastCalledWith(s.sql, expect.objectContaining({ chainId: 56 }));
-
-  vi.resetModules();
-  vi.stubEnv("BOOTSTRAP_CHAIN_ID", "0x15eb");
-  await import("../src/bootstrap-cli.js");
-  expect(s.bootstrap).toHaveBeenLastCalledWith(s.sql, expect.objectContaining({ chainId: Number.NaN }));
+  expect(s.bootstrap).toHaveBeenCalledOnce();
 });
 it("reports bootstrap failure and closes its connection", async () => {
   bootstrapEnv();
-  s.bootstrap.mockRejectedValue(new Error("Invalid wallet"));
+  s.bootstrap.mockRejectedValue(new Error("Invalid tenant"));
   await import("../src/bootstrap-cli.js");
   expect(process.exitCode).toBe(1);
   expect(process.stderr.write).toHaveBeenCalledWith(
-    expect.stringContaining("Invalid wallet"),
+    expect.stringContaining("Invalid tenant"),
   );
   expect(s.sql.end).toHaveBeenCalledOnce();
 });

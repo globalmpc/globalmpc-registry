@@ -82,8 +82,8 @@ async function warnAboutReusedServers(): Promise<void> {
   const reused = (
     await Promise.all(
       [
-        { port: 3001, name: "API" },
-        { port: 3000, name: "web" },
+        { port: Number(process.env["E2E_API_PORT"] ?? 3001), name: "API" },
+        { port: Number(process.env["E2E_WEB_PORT"] ?? 3000), name: "web" },
       ].map(async (server) => ((await isListening(server.port)) ? server : null)),
     )
   ).filter((server) => server !== null);

@@ -1,4 +1,4 @@
-import { ApiError, apiFetch, type ApiErrorEnvelope } from "./api";
+import { ApiError, apiFetch, authHeader, type ApiErrorEnvelope } from "./api";
 
 export interface CatalogField {
   key: string;
@@ -57,7 +57,7 @@ export interface LedgerCurrent {
 }
 async function read<T>(path: string, token: string): Promise<T> {
   const response = await apiFetch(path, {
-    headers: { authorization: `Bearer ${token}` },
+    headers: authHeader(token),
     cache: "no-store",
   });
   if (!response.ok)
@@ -89,7 +89,7 @@ export async function persistEvidenceLedger(
     {
       method: "POST",
       headers: {
-        authorization: `Bearer ${token}`,
+        ...authHeader(token),
         "content-type": "application/json",
         "idempotency-key": idempotencyKey,
       },

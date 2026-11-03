@@ -1,63 +1,101 @@
 import { z } from "zod";
-import { isoDateTime, walletAddress } from "./common.js";
+import { isoDateTime } from "./common.js";
 
 /**
- * SIWE (EIP-4361) login — ADR-T06, OD-04.
+ * Sessions, factors and authentication levels — account authentication.
  *
- * The "challenge signature including nonce, domain, chain ID, and expiry" that
- * OD-04 requires is exactly what EIP-4361 defines. A custom signature scheme
- * would only widen the audit surface and reduce wallet compatibility.
- *
- * Important: a wallet signature alone grants only public read and governance
- * participation. Reviewer, issuer, gate approver, treasury signer, and security
- * operator require a verified identity/organization credential and
- * phishing-resistant MFA.
+ * A person signs in with an account (emailed code, Google or Microsoft) and a second factor.
+ * Wallets are signing keys bound to an account by proof of possession; no wallet signature
+ * signs anyone in (decision D3, WP7).
  */
 
 export const assuranceLevel = z.enum(["wallet_only", "identity_bound", "high_assurance"]);
 export type AssuranceLevel = z.infer<typeof assuranceLevel>;
 
-export const siweNonceRequest = z.object({
-  walletAddress,
-  /**
-   * Accepted but unused.
-   *
-   * Server configuration decides the chain to sign on and returns it as
-   * `chainId` in the response. If the client decided, every login would end in
-   * `SIWE_CHAIN_MISMATCH` whenever web and server disagree (a hardcoded web value
-   * vs. stg/prod 56). Older clients send this value, so it is not rejected.
-   */
-  chainId: z.number().int().positive().optional(),
-});
+/**
+ * What a session proved first — account authentication.
+ *
+ * The database type still holds `siwe_legacy` (PostgreSQL cannot drop an enum value in place),
+ * but 0125 revoked every such session and refuses a live one, so no session the API resolves
+ * carries it.
+ */
+export const firstFactor = z.enum(["email_code", "google", "microsoft"]);
+export type FirstFactor = z.infer<typeof firstFactor>;
 
-export const siweNonceResponse = z.object({
-  nonce: z.string().min(8),
-  expiresAt: isoDateTime,
-  domain: z.string(),
-  /**
-   * The `uri` to sign. **The server sets it and the server verifies it.**
-   *
-   * If the client filled in its own origin, a mismatch between the target the
-   * server accepts and the target the wallet displayed would surface only as a
-   * login failure. Returning the value here makes both sides use the same string.
-   */
-  uri: z.string(),
-  /**
-   * The chain ID to sign on. **The server sets it and the server verifies it** —
-   * for the same reason as `uri`.
-   *
-   * When the web hardcoded this value, zero real-wallet logins succeeded on
-   * stg/prod (56). Returning it here makes both sides use the same number.
-   */
-  chainId: z.number().int().positive(),
-  statement: z.string(),
-});
+/** What a session proved second. A recovery code restores the second factor and counts as one. */
+export const secondFactor = z.enum(["passkey", "totp", "recovery_code"]);
+export type SecondFactor = z.infer<typeof secondFactor>;
 
-export const siweVerifyRequest = z.object({
-  /** Raw EIP-4361 message to sign. The server parses it and re-verifies each field. */
-  message: z.string(),
-  signature: z.string().regex(/^0x[0-9a-f]+$/),
-});
+/**
+ * Authentication level (AAL) — **derived from what the session proved, never declared.**
+ *
+ * - `aal1`: first factor only. Reaches MFA enrolment, MFA challenge, logout and its own session.
+ * - `aal2`: a second factor that is not phishing-resistant (TOTP, recovery code).
+ * - `aal3`: a passkey.
+ *
+ * Separate from identity assurance (`AssuranceLevel`), which an admin sets on the subject. A
+ * role is effective only when the session meets **both** minimums.
+ */
+export const authenticationLevel = z.enum(["aal1", "aal2", "aal3"]);
+export type AuthenticationLevel = z.infer<typeof authenticationLevel>;
+
+const AAL_RANK: Readonly<Record<AuthenticationLevel, number>> = { aal1: 1, aal2: 2, aal3: 3 };
+
+export function satisfiesAuthenticationLevel(
+  actual: AuthenticationLevel,
+  required: AuthenticationLevel,
+): boolean {
+  return AAL_RANK[actual] >= AAL_RANK[required];
+}
+
+/** The AAL a session's factors give it. Every first factor alone is `aal1`. */
+export function deriveAuthenticationLevel(input: {
+  readonly firstFactor: FirstFactor;
+  readonly secondFactor: SecondFactor | null;
+}): AuthenticationLevel {
+  if (input.secondFactor === "passkey") return "aal3";
+  if (input.secondFactor === "totp" || input.secondFactor === "recovery_code") return "aal2";
+  return "aal1";
+}
+
+/**
+ * Roles only a service may hold — decision D7.
+ *
+ * Producing a scan result is the scanner's verdict, not a person's. A person bound to one of these
+ * roles (by mistake or on purpose) never has it in effect, whatever the session proved; and a
+ * service token makes **only** these roles effective, never a person role its subject holds.
+ */
+export const SERVICE_ONLY_ROLES: readonly string[] = ["scan_service", "cre_reporter"];
+
+/**
+ * The AAL a role needs to be effective in a person's session — decision D8.
+ *
+ * Derived from `ROLE_MINIMUM_ASSURANCE`, so there is one table: a role whose identity minimum is
+ * `high_assurance` (the roles the contract marks "phishing-resistant MFA": reviewers, issuer,
+ * gate approver, treasury signer, security operator, disclosure approver, operator, ERSP) needs a
+ * passkey (`aal3`); every other role a person can hold needs `aal2`. A role missing from the
+ * table — `break_glass`, or one added without an entry — is treated as `high_assurance`, the same
+ * fail-closed default the decision formula uses.
+ *
+ * `null`: never effective in a person's session (`SERVICE_ONLY_ROLES`). `public_reader` is not a
+ * binding but the fallback for a session with none, and needs nothing beyond signing in.
+ */
+export function requiredAuthenticationLevel(role: string): AuthenticationLevel | null {
+  if (SERVICE_ONLY_ROLES.includes(role)) return null;
+  if (role === "public_reader") return "aal1";
+  return (ROLE_MINIMUM_ASSURANCE[role] ?? "high_assurance") === "high_assurance" ? "aal3" : "aal2";
+}
+
+/**
+ * Service token scopes — decision D7.
+ *
+ * Each names one service route (`RouteDefinition.serviceScope`). A service token reaches only the
+ * routes its scopes name; a route without a scope is a person route and refuses every service
+ * token. The database checks the same list (migration 0109).
+ */
+export const SERVICE_SCOPES = ["scan_result", "cre_report"] as const;
+export const serviceScope = z.enum(SERVICE_SCOPES);
+export type ServiceScope = z.infer<typeof serviceScope>;
 
 /**
  * Login result.
@@ -68,11 +106,24 @@ export const siweVerifyRequest = z.object({
 export const sessionResponse = z.object({
   sessionToken: z.string(),
   expiresAt: isoDateTime,
-  walletAddress,
-  chainId: z.number().int().positive(),
-  /** Null without an identity binding. A wallet alone does not identify a subject. */
-  subjectId: z.string().nullable(),
+  /** The subject the session belongs to. Every session has one. */
+  subjectId: z.string(),
+  /** Identity assurance of the subject, set by an admin. Not the authentication level. */
   assuranceLevel,
+  firstFactor,
+  secondFactor: secondFactor.nullable(),
+  /** Derived from the factors above. See `authenticationLevel`. */
+  aal: authenticationLevel,
+  /**
+   * Roles the subject holds that are **not effective in this session**, with the AAL each needs
+   * (`null`: never in a person's session).
+   *
+   * Narrowed, never widened: these roles are absent from `roleBindings` and from `actions`. Shown
+   * so a screen can say "sign in with a passkey to act as reviewer" instead of hiding the role.
+   */
+  narrowedRoles: z
+    .array(z.object({ role: z.string(), requiredAal: authenticationLevel.nullable() }))
+    .optional(),
   organizationIds: z.array(z.string()),
   roleBindings: z.array(
     z.object({
@@ -92,7 +143,13 @@ export const sessionResponse = z.object({
       expiresAt: isoDateTime.nullable(),
     }),
   ),
+  /** Whether the session is past the first factor (`aal` above `aal1`). */
   mfaSatisfied: z.boolean(),
+  /**
+   * The session was restored with a recovery code and may only enrol a new passkey or TOTP,
+   * regenerate recovery codes and sign out until it proves one (WP3). Absent: false.
+   */
+  recoveryLimited: z.boolean().optional(),
   /**
    * Actions allowed for this session's roles.
    *
@@ -101,6 +158,41 @@ export const sessionResponse = z.object({
    * re-decides on every request (§2.1).
    */
   actions: z.array(z.string()).optional(),
+});
+
+/**
+ * One of the caller's own live sessions — `GET /api/v1/auth/sessions`. No token and no hash: the
+ * list says where the account is signed in, never how to be.
+ */
+export const accountSession = z.object({
+  id: z.string().guid(),
+  firstFactor,
+  secondFactor: secondFactor.nullable(),
+  createdAt: isoDateTime,
+  /** The last request this session made. Null until it made one after sign-in. */
+  lastSeenAt: isoDateTime.nullable(),
+  expiresAt: isoDateTime,
+  /** The session making this request. */
+  current: z.boolean(),
+});
+export type AccountSession = z.infer<typeof accountSession>;
+
+export const accountSessionsResponse = z.object({
+  items: z.array(accountSession),
+  requestId: z.string(),
+  asOf: isoDateTime,
+});
+
+/**
+ * `POST /api/v1/auth/sessions/{sessionId}/revocation`. `revoked: false`: that session of yours had
+ * already ended, and nothing changed. A session that is not yours answers 404, like one that
+ * does not exist. `current: true`: you ended the session you are using — sign in again.
+ */
+export const revokeAccountSessionResponse = z.object({
+  id: z.string().guid(),
+  revoked: z.boolean(),
+  current: z.boolean(),
+  requestId: z.string(),
 });
 
 /**
@@ -125,6 +217,8 @@ export const ROLE_MINIMUM_ASSURANCE: Readonly<Record<string, AssuranceLevel>> = 
   // The scan service is a system identity, not a person. Its credentials are
   // managed differently from human accounts, so assurance is set high.
   scan_service: "high_assurance",
+  // The CRE workflow's identity (service token, D7). Same reasoning as the scan service.
+  cre_reporter: "high_assurance",
   reviewer_cp_qp: "high_assurance",
   reviewer_lab: "high_assurance",
   reviewer_legal: "high_assurance",

@@ -311,13 +311,17 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
               ? "The scan worker has gone quiet"
               : scanner.state === "unavailable"
                 ? "The malware scanner is unavailable"
-                : "Malware scanner state is unknown"}
+                : scanner.state === "unauthorized"
+                  ? "The scan worker cannot report results"
+                  : "Malware scanner state is unknown"}
         </div>
         {scanner.state === "unknown"
           ? "We cannot confirm scanner availability. Treat quarantined uploads as unverified until this resolves."
           : scanner.state === "unavailable"
             ? "The scan worker is running, but the malware scanner cannot accept files. Scanning is paused; uploads remain in quarantine and cannot be promoted to evidence until the scanner recovers."
-            : "Uploads will stay in quarantine and cannot be promoted to evidence until a scanner runs. This is not a queue you can wait out."}
+            : scanner.state === "unauthorized"
+              ? "The scan worker is running, but its service credential is not accepted. Scanning is paused; uploads remain in quarantine and cannot be promoted to evidence until an operator registers or replaces the credential."
+              : "Uploads will stay in quarantine and cannot be promoted to evidence until a scanner runs. This is not a queue you can wait out."}
         {scanner.secondsSinceHeartbeat !== null ? (
           <div className="meta" style={{ marginTop: 6, color: "inherit" }}>
             Worker last seen {scanner.secondsSinceHeartbeat}s ago.

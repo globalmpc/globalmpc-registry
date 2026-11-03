@@ -49,6 +49,11 @@ export type ReportResult = (input: {
 export type Log = (record: Record<string, unknown>) => void;
 
 export interface ScanOptions {
+  /**
+   * The only tenant this worker scans for: the tenant of its service token. The API refuses a
+   * report for another tenant's upload (404), so leasing one would only burn its attempts.
+   */
+  readonly tenantId: string;
   readonly maxAttempts: number;
   /** Lease duration. Must comfortably exceed scan + report time. */
   readonly leaseMs: number;
@@ -62,6 +67,8 @@ export interface ScanOptions {
 export interface ScanStepResult {
   readonly handled: boolean;
   readonly scannerUnavailable?: true;
+  /** The API refused the service token (401). The caller backs off before leasing again. */
+  readonly unauthorized?: true;
   readonly uploadId?: string;
   readonly verdict?: ScanVerdict["kind"];
   readonly signature?: string;
@@ -93,6 +100,7 @@ async function leaseOne(
       SELECT id, tenant_id, object_key, version, byte_size
       FROM core.object_uploads
       WHERE state = 'quarantined'
+        AND tenant_id = ${options.tenantId}
         AND scan_attempts < ${options.maxAttempts}
         AND (scan_leased_until IS NULL OR scan_leased_until < now())
       ORDER BY uploaded_at
@@ -113,7 +121,7 @@ async function leaseOne(
       UPDATE core.object_uploads
       SET scan_attempts = scan_attempts + 1,
           scan_leased_until = now() + ${`${Math.max(1, Math.ceil(leaseMs / 1000))} seconds`}::interval
-      WHERE id = ${row.id}
+      WHERE id = ${row.id} AND tenant_id = ${options.tenantId}
       RETURNING id, tenant_id, object_key, version, byte_size, scan_attempts,
                 scan_leased_until::text AS lease_token
     `;
@@ -207,9 +215,20 @@ export async function scanOnce(
   } catch (error) {
     // A failed report equals no scan. Leave the state and retry — patching the DB directly here
     // would create a bypass path.
-    await recordFailure(sql, row, `report_error: ${String(error)}`);
-    log({ level: "error", msg: "scan.report_failed", uploadId: row.id, error: String(error) });
-    return { handled: true, uploadId: row.id, verdict: "error" };
+    //
+    // A 401 is the worker's credential, not the file: the token is not registered yet (a worker
+    // that started before the deploy's registration step), or was revoked. The attempt is given
+    // back, so the file is retried once the token works instead of reaching the attempt cap and
+    // needing a person.
+    const unauthorized = (error as { status?: unknown }).status === 401;
+    await recordFailure(sql, row, `report_error: ${String(error)}`, unauthorized);
+    log({
+      level: "error",
+      msg: unauthorized ? "scan.report_unauthorized" : "scan.report_failed",
+      uploadId: row.id,
+      error: String(error),
+    });
+    return { handled: true, uploadId: row.id, verdict: "error", ...(unauthorized ? { unauthorized: true as const } : {}) };
   }
 
   log({
@@ -229,7 +248,7 @@ export async function scanOnce(
 }
 
 /** Scan queue stats. Uploads at the attempt cap need a person to look at them. */
-export async function scanBacklog(sql: postgres.Sql, maxAttempts: number): Promise<{
+export async function scanBacklog(sql: postgres.Sql, maxAttempts: number, tenantId: string): Promise<{
   readonly pending: number;
   readonly stuck: number;
 }> {
@@ -240,7 +259,17 @@ export async function scanBacklog(sql: postgres.Sql, maxAttempts: number): Promi
       count(*) FILTER (WHERE state = 'quarantined' AND scan_attempts >= ${maxAttempts})
         AS stuck
     FROM core.object_uploads
+    WHERE tenant_id = ${tenantId}
   `;
 
   return { pending: Number(row?.pending ?? 0), stuck: Number(row?.stuck ?? 0) };
+}
+
+/**
+ * The tenant id for the scan worker's tenant slug — the tenant its service token was registered
+ * for (`service-token ensure <slug> scan-worker …`). Undefined when no such tenant exists.
+ */
+export async function resolveScanTenant(sql: postgres.Sql, slug: string): Promise<string | undefined> {
+  const [row] = await sql<{ id: string }[]>`SELECT id FROM core.tenants WHERE slug = ${slug}`;
+  return row?.id;
 }

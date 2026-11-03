@@ -171,10 +171,10 @@ describe("Safe client — status", () => {
     });
   });
 
-  it("reports an executed proposal with its transaction hash", async () => {
+  it.each([true, false])("retains the outer hash of an executed proposal (successful: %s)", async (successful) => {
     const executedHash = `0x${"EF".repeat(32)}`;
     const service = fakeService(8, [
-      { ...pendingTx(HASH_A, 7), isExecuted: true, isSuccessful: true, transactionHash: executedHash },
+      { ...pendingTx(HASH_A, 7), isExecuted: true, isSuccessful: successful, transactionHash: executedHash },
     ]);
 
     expect(await clientFor(service).status(HASH_A)).toEqual({

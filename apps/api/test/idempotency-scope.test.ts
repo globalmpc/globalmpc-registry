@@ -9,8 +9,7 @@ import {
   setupFixture,
   signIn,
   testEnv,
-  type TestFixture,
-} from "./helpers/db.js";
+  type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -47,6 +46,7 @@ describeDb("idempotency key scope", () => {
         31337, 'high_assurance', now()
       )
     `;
+    await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
       VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'mpc_operator')
@@ -89,22 +89,17 @@ describeDb("idempotency key scope", () => {
       ),
     );
     const key = idempotencyKey();
-    const body = {
-      walletAddress: newAccount().address,
-      chainId: 31337,
-      assuranceLevel: "identity_bound",
-      justification: "key recovery",
-    };
+    const body = { assuranceLevel: "identity_bound", justification: "ID document checked in person" };
 
     const first = await post(
-      operatorAToken, `/api/v1/admin/subjects/${created[0].id}/wallets`, key, body,
+      operatorAToken, `/api/v1/admin/subjects/${created[0].id}/assurance`, key, body,
     );
     expect(first.statusCode).toBe(200);
 
     const other = await post(
-      operatorAToken, `/api/v1/admin/subjects/${created[1].id}/wallets`, key, body,
+      operatorAToken, `/api/v1/admin/subjects/${created[1].id}/assurance`, key, body,
     );
-    // Replaying here would report the second subject as bound when nothing was written.
+    // Replaying here would report the second subject's level as set when nothing was written.
     expect(other.statusCode).toBe(409);
     expect(other.json().code).toBe("IDEMPOTENCY_KEY_REUSE");
   });

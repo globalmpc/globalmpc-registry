@@ -18,6 +18,7 @@ import {
   type GovernanceProposal,
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { effectiveRoles } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { GovernanceCentralizationPanel } from "@/components/GovernanceCentralization";
@@ -122,7 +123,8 @@ export default function GovernancePage() {
    * neither proposes nor votes. The server decides; these only avoid offering buttons it
    * would refuse.
    */
-  const roles = session?.roleBindings?.map((binding) => binding.role) ?? [];
+  // Roles in effect: one held below its identity-assurance minimum offers nothing here.
+  const roles = effectiveRoles(session);
   const proposableSpaces = (["protocol", "project"] as const).filter((candidate) =>
     roles.includes(`${candidate}_proposer`),
   );

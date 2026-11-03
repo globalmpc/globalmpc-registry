@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Project Registry screens — spec 11 §11.2/§11.3/§11.5, 04 §4.2, 05 §5.10.
@@ -9,19 +10,6 @@ import { expect, test, type Page } from "@playwright/test";
  * Every project here is created with the synthetic label. The seed holds no real-world facts,
  * and nothing in this file records one.
  */
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  // Wait for the sign-in to land in the workspace. The Disconnect button alone can still be the
-  // previous account's, and navigating away mid sign-in leaves no session.
-  await expect(page).toHaveURL(/\/w\/projects$/);
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 async function registerSynthetic(page: Page, projectKey: string): Promise<string> {
   await connectAs(page, "Operator A");

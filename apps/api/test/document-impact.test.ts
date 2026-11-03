@@ -51,7 +51,7 @@ describeDb("document relations", () => {
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     steward = await signIn(app, fx.stewardA);
     operator = await signIn(app, fx.operatorA);
-    scan = await signIn(app, fx.scanServiceA);
+    scan = fx.scanServiceToken;
     reader = await signIn(app, fx.readerA);
     scopedSteward = await signIn(app, fx.scopedStewardA);
   });

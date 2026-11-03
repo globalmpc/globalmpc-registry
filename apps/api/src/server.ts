@@ -6,6 +6,9 @@ import { registerErrorHandler } from "./plugins/error-handler.js";
 import { registerSecurityHeaders } from "./plugins/security-headers.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerEmailAuthRoutes } from "./routes/email-auth.js";
+import { registerInvitationRoutes } from "./routes/invitations.js";
+import { registerEmailChangeRoutes } from "./routes/email-change.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerProjectPartyRoutes } from "./routes/project-parties.js";
 import { registerClaimDetailRoutes } from "./routes/claim-detail.js";
@@ -19,6 +22,11 @@ import { registerRegistryRoutes } from "./routes/registry.js";
 import { registerPublicRoutes } from "./routes/public.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRoleRevocationRoutes } from "./routes/role-revocations.js";
+import { registerMfaRoutes } from "./routes/mfa.js";
+import { registerSubjectSuspensionRoutes } from "./routes/subject-suspensions.js";
+import { registerOidcRoutes } from "./routes/oidc.js";
+import type { OidcFetch } from "./services/oidc.js";
+import { registerWalletRoutes } from "./routes/wallets.js";
 import { registerBreakGlassRoutes } from "./routes/break-glass.js";
 import { registerConnectionReviewRoutes } from "./routes/connection-review.js";
 import { registerReviewRegistryRoutes } from "./routes/review-registry.js";
@@ -44,9 +52,75 @@ import { createMetricsRegistry } from "./metrics.js";
 import { createGovernanceChain } from "./governance-chain.js";
 import { registerUploadRoutes } from "./routes/uploads.js";
 import { createObjectStore } from "./object-store.js";
-import { resolveSession, type Session } from "./plugins/session.js";
-import { extractBearerToken, resolveSessionToken } from "./plugins/session-token.js";
-import { tooManyRequests } from "./errors.js";
+import { OIDC_PROVIDERS, ROUTES, toFastifyPath, type ServiceScope } from "@mpc/api-contract";
+import { resolveServiceSession, resolveSession, type Session } from "./plugins/session.js";
+import {
+  extractBearerToken,
+  isServiceToken,
+  resolveServiceToken,
+  resolveSessionToken,
+} from "./plugins/session-token.js";
+import { badRequest, forbidden, tooManyRequests } from "./errors.js";
+import { isEncodedAuthPath } from "./plugins/path-encoding.js";
+
+/** `METHOD /fastify/path` → the service scope that reaches it (contract `serviceScope`). */
+const SERVICE_SCOPE_BY_ROUTE: ReadonlyMap<string, ServiceScope> = new Map(
+  ROUTES.flatMap((route) =>
+    route.serviceScope === undefined
+      ? []
+      : [[`${route.method.toUpperCase()} ${toFastifyPath(route.path)}`, route.serviceScope] as const],
+  ),
+);
+
+/**
+ * Unauthenticated routes (contract `public`). They never read a session, so a Bearer header on
+ * them is not looked up: an attacker cannot make them cost a session query, and someone holding a
+ * first-factor session can still ask for a new code instead of being told to finish MFA.
+ */
+const SESSIONLESS_ROUTES: ReadonlySet<string> = new Set(
+  ROUTES.filter((route) => route.public).map(
+    (route) => `${route.method.toUpperCase()} ${toFastifyPath(route.path)}`,
+  ),
+);
+
+/** Routes a recovery-limited session may reach (contract `allowsRecoveryLimited`). */
+const RECOVERY_LIMITED_ROUTES: ReadonlySet<string> = new Set(
+  ROUTES.filter((route) => route.allowsRecoveryLimited === true).map(
+    (route) => `${route.method.toUpperCase()} ${toFastifyPath(route.path)}`,
+  ),
+);
+
+/**
+ * Routes that check a first factor, by method, for `mpc_sign_in_failed_total` (alert
+ * `MpcSignInFailureRate`).
+ */
+const SIGN_IN_ROUTES: ReadonlyMap<string, string> = new Map([
+  ["/api/v1/auth/email/verify", "email_code"],
+  ["/api/v1/auth/invitations/accept/verify", "invitation"],
+]);
+
+/**
+ * The identity-provider callback (WP4) is one route for every provider; its method is the
+ * provider. Only the known names become a label — a path segment never does, or any caller could
+ * add series.
+ */
+const OIDC_SIGN_IN_ROUTE = "/api/v1/auth/oidc/:provider/callback";
+const OIDC_SIGN_IN_METHODS: ReadonlySet<string> = new Set(OIDC_PROVIDERS);
+
+function signInMethodOf(route: string, params: unknown): string | undefined {
+  if (route === OIDC_SIGN_IN_ROUTE) {
+    const provider = (params as { provider?: unknown } | undefined)?.provider;
+    return typeof provider === "string" && OIDC_SIGN_IN_METHODS.has(provider) ? provider : "oidc_unknown";
+  }
+  return SIGN_IN_ROUTES.get(route);
+}
+
+/** Routes a first-factor-only session may reach (contract `allowsFirstFactorOnly`). */
+const FIRST_FACTOR_ROUTES: ReadonlySet<string> = new Set(
+  ROUTES.filter((route) => route.allowsFirstFactorOnly === true).map(
+    (route) => `${route.method.toUpperCase()} ${toFastifyPath(route.path)}`,
+  ),
+);
 import {
   createEdgeClientResolver,
   createOpsEndpointGuard,
@@ -95,6 +169,11 @@ export interface ServerDeps {
    * Built from config when not provided.
    */
   readonly governanceChain?: GovernanceChain;
+  /**
+   * How the API reaches Google and Microsoft (discovery, keys, token exchange). Tests run an
+   * in-process provider here; unset, the global `fetch`.
+   */
+  readonly oidcFetch?: OidcFetch;
 }
 
 export async function buildServer(
@@ -163,14 +242,16 @@ export async function buildServer(
      *
      * `status` in `http_requests_total` is bucketed as `4xx`. In that form "hitting the cap" and
      * "many bad requests" are indistinguishable, and they need different responses.
-     * SIWE failures likewise — a rising login failure rate may be credential attempts rather
-     * than typos.
+     * Sign-in failures likewise — a rising failure rate may be credential attempts rather than
+     * typos. Counted per first-factor method (`SIGN_IN_ROUTES`), not only for wallet sign-in.
      */
     if (reply.statusCode === 429) {
       metrics.incrementCounter("mpc_rate_limited_total", { route });
     }
-    if (route === "/api/v1/auth/siwe/verify" && reply.statusCode >= 400) {
-      metrics.incrementCounter("mpc_siwe_verify_failed_total", {
+    const signInMethod = signInMethodOf(route, request.params);
+    if (signInMethod !== undefined && reply.statusCode >= 400) {
+      metrics.incrementCounter("mpc_sign_in_failed_total", {
+        method: signInMethod,
         status: String(reply.statusCode),
       });
     }
@@ -208,9 +289,9 @@ export async function buildServer(
   /**
    * Request cap — 06 §6.9, 07 §7.1.
    *
-   * The contract (`openapi.json`) states a separate cap on unauthenticated paths, but there was
-   * no implementation. `/auth/siwe/nonce` in particular creates rows without auth — without a
-   * cap anyone could fill `core.siwe_nonces`.
+   * The contract (`openapi.json`) states a separate cap on unauthenticated paths. The sign-in
+   * routes create rows without auth (code challenges, login transactions) and carry a narrower
+   * cap of their own (`AUTH_RATE_LIMIT_MAX`) on top of this one.
    *
    * The key is **the requester IP, not an unverified header**. Using the `Authorization` value
    * as the key lets an attacker get a fresh share per request by rotating a fake Bearer value.
@@ -241,6 +322,19 @@ export async function buildServer(
   app.decorateRequest("clientIp", "");
   app.addHook("onRequest", async (request) => {
     request.clientIp = resolveEdgeClient(request.headers, request.ip);
+  });
+
+  /**
+   * Defence in depth for the web BFF (WP6). The web proxy recognises the routes that issue or end
+   * a session by their literal path and turns the token into a cookie; this router decodes
+   * percent-encoding, so `/api/v1/auth/email/%76erify` would reach the same route past that
+   * recognition and hand the token to page script. No auth route takes a value that needs
+   * encoding (ids are UUIDs or base64url), so an encoded auth path is refused outright.
+   */
+  app.addHook("onRequest", async (request) => {
+    if (isEncodedAuthPath(request.raw.url ?? "")) {
+      throw badRequest("PATH_ENCODING_REFUSED", "Percent-encoded authentication paths are not accepted");
+    }
   });
 
   /**
@@ -288,7 +382,7 @@ export async function buildServer(
    * Session resolution.
    *
    * Finds the session from the Bearer token in the Authorization header. Tokens are issued only
-   * after verifying the SIWE signature, and the server does not store raw tokens (hash only).
+   * by the account sign-in flows, and the server does not store raw tokens (hash only).
    *
    * The dev wallet header path was removed in R1. An address in the header is treated as a
    * token, fails lookup, and yields 401 — there is no silent pass-through path.
@@ -298,9 +392,8 @@ export async function buildServer(
     // lookups by attaching meaningless Bearer headers.
     const route = request.routeOptions.url;
     if (
-      route === "/api/v1/auth/siwe/nonce" ||
-      route === "/api/v1/auth/siwe/verify" ||
-      route?.startsWith("/api/v1/public/") === true
+      route?.startsWith("/api/v1/public/") === true ||
+      (route !== undefined && SESSIONLESS_ROUTES.has(`${request.method} ${route}`))
     ) {
       return;
     }
@@ -308,15 +401,63 @@ export async function buildServer(
     const token = extractBearerToken(request.headers.authorization);
     if (!token) return;
 
+    if (isServiceToken(token)) {
+      const service = await resolveServiceToken(sql, token);
+      if (!service) return;
+      /**
+       * A service token reaches only the routes its scopes name — D7. A route without a scope
+       * is a person route and refuses every service token, whatever roles the service subject
+       * holds; checked here, before the route runs, so no route has to remember it.
+       */
+      const scope = route === undefined ? undefined : SERVICE_SCOPE_BY_ROUTE.get(`${request.method} ${route}`);
+      if (scope === undefined) {
+        throw forbidden("SERVICE_TOKEN_ROUTE_DENIED", "A service token cannot call this route");
+      }
+      if (!service.scopes.includes(scope)) {
+        throw forbidden("SERVICE_TOKEN_SCOPE_DENIED", "This service token is not scoped for this route", {
+          requiredScope: scope,
+        });
+      }
+      request.session = await resolveServiceSession(sql, service);
+      return;
+    }
+
     const resolved = await resolveSessionToken(sql, token);
     if (!resolved) return;
 
-    // A token is valid only on the chain its SIWE message was signed for. APIs on different
-    // chains can share a database, so a token issued elsewhere reaches this one; it carries no
-    // session here, and roles and the public-dev-wallet refusal are resolved on this API's chain.
-    if (resolved.chainId !== config.chainId) return;
+    const session = await resolveSession(sql, resolved);
 
-    request.session = await resolveSession(sql, resolved.walletAddress, config.chainId);
+    /**
+     * Priority rule 2: a first-factor-only session reaches MFA enrolment, MFA challenge, logout
+     * and its own session — nothing else, not even reads. The routes that allow it say so in the
+     * contract (`allowsFirstFactorOnly`); every other route refuses it here.
+     */
+    if (
+      session.aal === "aal1" &&
+      (route === undefined || !FIRST_FACTOR_ROUTES.has(`${request.method} ${route}`))
+    ) {
+      throw forbidden("MFA_REQUIRED", "Complete a second factor before using this session", {
+        reason: "AUTHENTICATION_LEVEL_INSUFFICIENT",
+        requiredAal: "aal2",
+      });
+    }
+
+    /**
+     * A session restored by a recovery code may only enrol a new factor, read its own session
+     * and sign out (WP3) — the same allowlist pattern as rule 2.
+     */
+    if (
+      session.recoveryLimited &&
+      (route === undefined || !RECOVERY_LIMITED_ROUTES.has(`${request.method} ${route}`))
+    ) {
+      throw forbidden(
+        "MFA_RECOVERY_REENROLMENT_REQUIRED",
+        "Enrol a new passkey or authenticator app before using this session",
+        { reason: "RECOVERY_CODE_SESSION" },
+      );
+    }
+
+    request.session = session;
   });
 
   /**
@@ -328,7 +469,14 @@ export async function buildServer(
   const objectStore = createObjectStore(config);
 
   await registerHealthRoutes(app, sql, metrics, createOpsEndpointGuard(config.opsEndpointCidrs));
-  await registerAuthRoutes(app, sql, config);
+  await registerAuthRoutes(app, sql);
+  await registerEmailAuthRoutes(app, sql, config);
+  await registerInvitationRoutes(app, sql, config);
+  await registerEmailChangeRoutes(app, sql, config);
+  await registerMfaRoutes(app, sql, config);
+  await registerSubjectSuspensionRoutes(app, sql);
+  await registerOidcRoutes(app, sql, config, deps.oidcFetch);
+  await registerWalletRoutes(app, sql, config);
   await registerProjectRoutes(app, sql);
   await registerProjectPartyRoutes(app, sql);
   await registerClaimDetailRoutes(app, sql);

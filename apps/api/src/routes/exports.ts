@@ -140,7 +140,9 @@ export async function registerExportRoutes(
         query: parsed.data,
         jsonl,
         asOf,
-        generatedBy: session.walletAddress,
+        // The subject is who took the copy; a sign-in wallet no longer identifies anyone. A
+        // tenant-bound session always has one (0108 sessions_subject_and_tenant_together).
+        generatedBy: session.subjectId as string,
       });
 
       // Who took a copy of the trail, and which copy, is part of the trail (07 §7.9). The hash
@@ -205,7 +207,7 @@ export async function registerExportRoutes(
               id, tenant_id, project_id, requested_by_subject_id, requested_by_wallet,
               sensitivity_clearance
             ) VALUES (
-              ${id}, ${tenantId}, ${projectId}, ${subjectId}, ${session.walletAddress},
+              ${id}, ${tenantId}, ${projectId}, ${subjectId}, NULL,
               ${facts.sensitivityClearance as string[]}
             )
             RETURNING id, project_id, requested_by_subject_id, sensitivity_clearance, state,

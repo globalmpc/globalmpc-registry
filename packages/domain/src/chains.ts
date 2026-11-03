@@ -29,6 +29,40 @@ export function isSupportedChainId(value: unknown): value is SupportedChainId {
 }
 
 /**
+ * The standing of a chain's anchors: `mainnet` anchors are the public record; `testnet` ones are
+ * for trying the system out and prove nothing to the public.
+ *
+ * Stated per chain, not derived ("not 56, so a testnet"): a chain added to the list must be
+ * classified on purpose, and the `Record` makes leaving it out a type error. A batch must never
+ * move between environments — its record would then claim an anchor on a network of another
+ * standing (the API's resubmit and the anchor worker's chain move both check this).
+ *
+ * The local chain counts with the test networks: neither has public standing, and a developer
+ * moving a batch between them (local and opBNB testnet) claims nothing.
+ */
+export type ChainEnvironment = "mainnet" | "testnet";
+
+export const CHAIN_ENVIRONMENTS: Readonly<Record<SupportedChainId, ChainEnvironment>> = {
+  [BSC_MAINNET_CHAIN_ID]: "mainnet",
+  [OPBNB_TESTNET_CHAIN_ID]: "testnet",
+  [LOCAL_CHAIN_ID]: "testnet",
+};
+
+/** A supported chain's environment; null for any other chain, which has no standing to share. */
+export function chainEnvironmentOf(chainId: number): ChainEnvironment | null {
+  return isSupportedChainId(chainId) ? CHAIN_ENVIRONMENTS[chainId] : null;
+}
+
+/**
+ * Whether a batch may move from one chain to the other: both supported, in one environment. A
+ * chain outside the list is never the same environment as anything, itself included.
+ */
+export function sameChainEnvironment(a: number, b: number): boolean {
+  const environment = chainEnvironmentOf(a);
+  return environment !== null && environment === chainEnvironmentOf(b);
+}
+
+/**
  * A chain ID read from configuration, or null when it is not a supported chain.
  *
  * Plain decimal digits only: `Number()` would also read "0x15eb", " 56 " or "5.611e3" as a

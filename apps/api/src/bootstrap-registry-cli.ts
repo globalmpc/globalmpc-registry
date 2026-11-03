@@ -81,7 +81,9 @@ try {
   if (kind === "credential") {
     result = await bootstrapCredential(sql, {
       tenantSlug,
-      walletAddress: required("CREDENTIAL_WALLET"),
+      // The holder: the address `bootstrap` created them with, or a wallet they bound.
+      email: process.env["CREDENTIAL_EMAIL"] || null,
+      walletAddress: process.env["CREDENTIAL_WALLET"] || null,
       issuerReference: required("CREDENTIAL_ISSUER_REFERENCE"),
       // Optional: without it the credential exists but cannot be a review basis (AC-16).
       issuerAuthorityId: process.env["CREDENTIAL_ISSUER_AUTHORITY_ID"] || null,

@@ -11,8 +11,7 @@ import {
   signIn,
   testEnv,
   type TestAccount,
-  type TestFixture,
-} from "./helpers/db.js";
+  type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -97,6 +96,7 @@ describeDb("project scope and read authorization", () => {
         ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'identity_bound', now()
       )
     `;
+    await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
       VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'project_sponsor_operator')

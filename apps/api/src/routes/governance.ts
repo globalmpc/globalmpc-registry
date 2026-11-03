@@ -37,6 +37,8 @@ import {
   requireReadContext,
 } from "./shared.js";
 import {
+  GOVERNANCE_WALLET_ALREADY_VOTED,
+  GOVERNANCE_WALLET_REQUIRED,
   resolveVoteWeight,
   snapshotBlockFor,
   type BalanceReader,
@@ -478,6 +480,32 @@ function proposalResource(tenantId: string, projectId: string | null) {
  */
 const PROPOSAL_LIST_LIMIT = 100;
 
+/**
+ * The wallet whose balance is a subject's vote weight on a snapshot proposal — decision D9.
+ *
+ * It is the subject's one active wallet (0130): there is nothing to designate. Without one there
+ * is no weight to read, so the vote is refused rather than counted as zero.
+ */
+async function governanceWallet(tx: postgres.TransactionSql, subjectId: string): Promise<string> {
+  const [row] = await tx<{ wallet_address: string }[]>`
+    SELECT w.wallet_address FROM core.wallet_identities w
+    WHERE w.subject_id = ${subjectId} AND w.disabled_at IS NULL
+  `;
+  if (!row) {
+    throw unprocessable(
+      GOVERNANCE_WALLET_REQUIRED,
+      "Bind a signing wallet before voting on an on-chain snapshot proposal: its balance is your weight",
+    );
+  }
+  return row.wallet_address;
+}
+
+/** The voter's earlier vote on this proposal, if any: a snapshot vote's weight is pinned by it. */
+interface PriorVote {
+  readonly weight: string;
+  readonly weight_wallet_address: string | null;
+}
+
 export async function registerGovernanceRoutes(
   app: FastifyInstance,
   sql: postgres.Sql,
@@ -881,36 +909,85 @@ export async function registerGovernanceRoutes(
             });
           }
 
-          // Weight comes from the snapshot. The request body value is used only for proposals
-          // with no token configured.
-          const resolved = await resolveVoteWeight(
-            tx,
-            {
-              tenantId,
-              proposalId: proposal.id,
-              walletAddress: session.walletAddress,
-              snapshotBlock: proposal.snapshot_block ? Number(proposal.snapshot_block) : null,
-              snapshotTokenAddress: proposal.snapshot_token_address,
-              manualWeight: parsed.data.weight ?? null,
-            },
-            // Weight is never read from a token outside the space. For proposals without a snapshot
-            // this is never called.
-            chainForSpace(chain, proposal.space)?.readBalance ??
-              (async () => {
-                throw new Error("Chain client is not configured");
-              }),
-          );
-
-          await tx`
-            INSERT INTO core.governance_votes (
-              id, tenant_id, proposal_id, voter_subject_id, choice, weight
-            ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${proposal.id}, ${session.subjectId!},
-              ${parsed.data.choice}, ${resolved.weight.toString()}
-            )
-            ON CONFLICT (proposal_id, voter_subject_id) DO UPDATE
-            SET choice = EXCLUDED.choice, weight = EXCLUDED.weight, cast_at = now()
+          /**
+           * Weight comes from the snapshot. The request body value is used only for proposals
+           * with no token configured.
+           *
+           * D9: the balance is read from the subject's active wallet (its one signing wallet),
+           * never from the session — a person signs in with an account, and nothing about the
+           * session says whose tokens count. Looked up only for a snapshot proposal.
+           *
+           * A snapshot vote's weight is pinned by the first vote: a re-vote changes the choice
+           * only. Otherwise replacing the wallet would let the same person vote again with a
+           * second wallet's balance, and the new holder of the old wallet could vote with its
+           * balance a second time (`governance_votes_weight_wallet_key`, 0130).
+           */
+          const snapshot = proposal.snapshot_block !== null && proposal.snapshot_token_address !== null;
+          const [prior] = await tx<PriorVote[]>`
+            SELECT weight::text, weight_wallet_address FROM core.governance_votes
+            WHERE proposal_id = ${proposal.id} AND voter_subject_id = ${session.subjectId!}
+            FOR UPDATE
           `;
+          const resolved: { weight: bigint; source: string; walletAddress: string | null } =
+            snapshot && prior
+              ? { weight: BigInt(prior.weight), source: "onchain_snapshot", walletAddress: prior.weight_wallet_address }
+              : await (async () => {
+                  const walletAddress = snapshot ? await governanceWallet(tx, session.subjectId!) : null;
+                  const weight = await resolveVoteWeight(
+                    tx,
+                    {
+                      tenantId,
+                      proposalId: proposal.id,
+                      walletAddress,
+                      snapshotBlock: proposal.snapshot_block ? Number(proposal.snapshot_block) : null,
+                      snapshotTokenAddress: proposal.snapshot_token_address,
+                      manualWeight: parsed.data.weight ?? null,
+                    },
+                    // Weight is never read from a token outside the space. For proposals without a
+                    // snapshot this is never called.
+                    chainForSpace(chain, proposal.space)?.readBalance ??
+                      (async () => {
+                        throw new Error("Chain client is not configured");
+                      }),
+                  );
+                  return { weight: weight.weight, source: weight.source, walletAddress };
+                })();
+
+          if (snapshot && !prior && resolved.walletAddress !== null) {
+            const [used] = await tx`
+              SELECT 1 FROM core.governance_votes
+              WHERE proposal_id = ${proposal.id} AND weight_wallet_address = ${resolved.walletAddress}
+            `;
+            if (used) {
+              throw conflict(
+                GOVERNANCE_WALLET_ALREADY_VOTED,
+                "This wallet's snapshot balance already counted on this proposal",
+              );
+            }
+          }
+
+          try {
+            await tx`
+              INSERT INTO core.governance_votes (
+                id, tenant_id, proposal_id, voter_subject_id, choice, weight, weight_wallet_address
+              ) VALUES (
+                ${randomUUID()}, ${tenantId}, ${proposal.id}, ${session.subjectId!},
+                ${parsed.data.choice}, ${resolved.weight.toString()}, ${resolved.walletAddress}
+              )
+              ON CONFLICT (proposal_id, voter_subject_id) DO UPDATE
+              SET choice = EXCLUDED.choice, cast_at = now(),
+                  weight = CASE WHEN ${snapshot} THEN core.governance_votes.weight ELSE EXCLUDED.weight END
+            `;
+          } catch (caught) {
+            // Two holders of one wallet voting at the same moment: the index decides.
+            if ((caught as { constraint_name?: string }).constraint_name === "governance_votes_weight_wallet_key") {
+              throw conflict(
+                GOVERNANCE_WALLET_ALREADY_VOTED,
+                "This wallet's snapshot balance already counted on this proposal",
+              );
+            }
+            throw caught;
+          }
 
           await recordAudit(tx, {
             effectiveRole,

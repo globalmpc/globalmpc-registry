@@ -2,17 +2,15 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { withTenant } from "@mpc/db";
-import { isPublicDevAddress } from "@mpc/config";
-import { LOCAL_CHAIN_ID } from "@mpc/domain";
 import {
   ROLE_MINIMUM_ASSURANCE,
-  bindWalletRequest,
   createNotificationSinkRequest,
   updateNotificationSinkRequest,
   createRoleGrantRequest,
   createSubjectRequest,
   decideRoleGrantRequest,
   disableWalletRequest,
+  setSubjectAssuranceRequest,
 } from "@mpc/api-contract";
 import { SECOND_PERSON_ROLES } from "@mpc/api-contract";
 import {
@@ -25,6 +23,7 @@ import { badRequest, conflict, forbidden, notFound, unprocessable } from "../err
 import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
+import { revokeSubjectSessions } from "../plugins/session-token.js";
 import {
   assertVersionMatches,
   etagOf,
@@ -50,6 +49,12 @@ import {
  * requiring two people keeps the key alive while waiting for the second. Instead, the reason
  * code and the actor are recorded (AC-27).
  *
+ * **Admins do not bind wallets (WP5).** A wallet is bound only by its holder, who signs a
+ * challenge from their own account session (`routes/wallets.ts`); the application role cannot
+ * insert one at all (0122). An admin typing an address could attach a key they hold to someone
+ * else's account (plan §5, acceptance 9). What the bind used to carry — the identity assurance
+ * level and its basis — is set on the subject instead (`…/assurance`).
+ *
  * **Tenant creation is not here.** A session is always bound to one tenant, and RLS enforces
  * it. A route that creates another tenant must cross that boundary, so it needs a SECURITY
  * DEFINER function, which creates an **HTTP-reachable tenant creation path**. The blast radius
@@ -64,6 +69,7 @@ interface WalletRow {
   wallet_address: string;
   chain_id: number;
   assurance_level: "wallet_only" | "identity_bound" | "high_assurance";
+  bound_via: "operator" | "proof";
   bound_at: Date | null;
   disabled_at: Date | null;
   version: number;
@@ -82,6 +88,9 @@ interface SubjectRow {
   id: string;
   display_name: string;
   kind: "person" | "service";
+  assurance_level: "wallet_only" | "identity_bound" | "high_assurance";
+  has_email: boolean;
+  suspended_at: Date | null;
 }
 
 interface GrantRow {
@@ -98,6 +107,7 @@ interface GrantRow {
   decided_by_subject_id: string | null;
   decided_at: Date | null;
   decision_reason: string | null;
+  closed_reason: "proposer_suspended" | null;
   version: number;
 }
 
@@ -116,14 +126,48 @@ function toGrant(row: GrantRow, requestId: string, asOf: string) {
     decidedBySubjectId: row.decided_by_subject_id,
     decidedAt: row.decided_at?.toISOString() ?? null,
     decisionReason: row.decision_reason,
+    closedReason: row.closed_reason,
     version: row.version,
     requestId,
     asOf,
   };
 }
 
-/** Levels a bind may carry. Read from the contract so the route and OpenAPI cannot diverge. */
-const ASSURANCE_LEVELS: readonly string[] = bindWalletRequest.shape.assuranceLevel.options;
+/** Levels an admin may set. Read from the contract so the route and OpenAPI cannot diverge. */
+const ASSURANCE_LEVELS: readonly string[] = setSubjectAssuranceRequest.shape.assuranceLevel.options;
+
+/**
+ * Identity assurance is the subject's (0108). Before WP5 it was stated at each admin bind, so the
+ * subject held the level of its strongest **active** wallet — the rule the 0108 backfill applied.
+ * Disabling an operator-bound wallet still recomputes it that way; disabling a proof-bound wallet
+ * (WP5) does not, because a proof never carried a level.
+ */
+async function syncSubjectAssurance(
+  tx: postgres.TransactionSql,
+  tenantId: string,
+  subjectId: string,
+): Promise<{ previous: string | null; current: string | null }> {
+  const [row] = await tx<{ previous: string; current: string }[]>`
+    WITH before AS (
+      SELECT assurance_level FROM core.subjects
+      WHERE tenant_id = ${tenantId} AND id = ${subjectId}
+      FOR UPDATE
+    )
+    UPDATE core.subjects s
+    SET assurance_level = COALESCE(
+          (
+            SELECT max(w.assurance_level) FROM core.wallet_identities w
+            WHERE w.tenant_id = s.tenant_id AND w.subject_id = s.id AND w.disabled_at IS NULL
+          ),
+          'wallet_only'
+        ),
+        version = s.version + 1
+    FROM before
+    WHERE s.tenant_id = ${tenantId} AND s.id = ${subjectId}
+    RETURNING before.assurance_level::text AS previous, s.assurance_level::text AS current
+  `;
+  return { previous: row?.previous ?? null, current: row?.current ?? null };
+}
 
 export async function registerAdminRoutes(
   app: FastifyInstance,
@@ -143,18 +187,20 @@ export async function registerAdminRoutes(
   ): Promise<ReturnType<typeof shapeSubject>[]> {
     const subjects = subjectId
       ? await tx<SubjectRow[]>`
-          SELECT id, display_name, kind FROM core.subjects
+          SELECT id, display_name, kind, assurance_level, email IS NOT NULL AS has_email, suspended_at
+          FROM core.subjects
           WHERE tenant_id = ${tenantId} AND id = ${subjectId}
         `
       : await tx<SubjectRow[]>`
-          SELECT id, display_name, kind FROM core.subjects
+          SELECT id, display_name, kind, assurance_level, email IS NOT NULL AS has_email, suspended_at
+          FROM core.subjects
           WHERE tenant_id = ${tenantId} ORDER BY display_name
         `;
     if (subjects.length === 0) return [];
 
     const ids = subjects.map((subject) => subject.id);
     const wallets = await tx<WalletRow[]>`
-      SELECT id, subject_id, wallet_address, chain_id, assurance_level,
+      SELECT id, subject_id, wallet_address, chain_id, assurance_level, bound_via,
              bound_at, disabled_at, version
       FROM core.wallet_identities
       WHERE tenant_id = ${tenantId} AND subject_id = ANY(${ids})
@@ -166,12 +212,17 @@ export async function registerAdminRoutes(
       WHERE tenant_id = ${tenantId} AND subject_id = ANY(${ids})
       ORDER BY granted_at
     `;
+    // Provider names only (0124): the application role reads no identity row itself.
+    const providers = await tx<{ subject_id: string; provider: "google" | "microsoft" }[]>`
+      SELECT subject_id, provider FROM core.subject_sign_in_providers(${ids}::uuid[])
+    `;
 
     return subjects.map((subject) =>
       shapeSubject(
         subject,
         wallets.filter((wallet) => wallet.subject_id === subject.id),
         roles.filter((role) => role.subject_id === subject.id),
+        providers.filter((row) => row.subject_id === subject.id).map((row) => row.provider),
       ),
     );
   }
@@ -180,16 +231,24 @@ export async function registerAdminRoutes(
     subject: SubjectRow,
     wallets: readonly WalletRow[],
     roles: readonly RoleRow[],
+    providers: readonly ("google" | "microsoft")[],
   ) {
+    /**
+     * How the person can sign in (WP6): the address and live Google / Microsoft identities. A
+     * wallet is a signing key and never a way in (D3; wallet sign-in removed in WP7).
+     */
+    const signInMethods = [...(subject.has_email ? (["email"] as const) : []), ...providers];
     return {
       id: subject.id,
       displayName: subject.display_name,
       kind: subject.kind,
+      assuranceLevel: subject.assurance_level,
       wallets: wallets.map((wallet) => ({
         id: wallet.id,
         walletAddress: wallet.wallet_address,
         chainId: wallet.chain_id,
         assuranceLevel: wallet.assurance_level,
+        boundVia: wallet.bound_via,
         boundAt: wallet.bound_at?.toISOString() ?? null,
         disabledAt: wallet.disabled_at?.toISOString() ?? null,
         version: wallet.version,
@@ -201,9 +260,11 @@ export async function registerAdminRoutes(
         grantedAt: role.granted_at.toISOString(),
         revokedAt: role.revoked_at?.toISOString() ?? null,
       })),
-      // Session resolution only sees wallets with `disabled_at IS NULL` (0005). Without one,
-      // the subject cannot log in whatever its roles.
-      locked: wallets.every((wallet) => wallet.disabled_at !== null),
+      signInMethods,
+      // No way in at all: whatever its roles, the person cannot sign in until an invitation or a
+      // bootstrap re-run gives them an address.
+      locked: signInMethods.length === 0,
+      suspendedAt: subject.suspended_at?.toISOString() ?? null,
     };
   }
 
@@ -271,23 +332,28 @@ export async function registerAdminRoutes(
     );
   });
 
+  /**
+   * Sets a person's identity assurance level — what the admin wallet bind used to carry.
+   *
+   * One person, with the basis stated and kept in the audit record, as the bind was. Never for
+   * oneself: raising one's own level is granting oneself the roles that need it. Lowering is
+   * allowed with the same justification (a check found wanting).
+   */
   app.post<{ Params: { subjectId: string } }>(
-    "/api/v1/admin/subjects/:subjectId/wallets",
+    "/api/v1/admin/subjects/:subjectId/assurance",
     async (request) => {
       const { session, tenantId, idempotencyKey } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
-        "admin.wallet.manage",
+        "admin.subject.manage",
         tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
         sessionFacts(session),
       );
 
-      const parsed = bindWalletRequest.safeParse(request.body);
+      const parsed = setSubjectAssuranceRequest.safeParse(request.body);
       if (!parsed.success) {
-        /**
-         * A level outside the table is a value problem, not a format problem — same as
-         * `ROLE_UNKNOWN`. Answering 400 would send the client to fix the body shape.
-         */
+        // A level outside the table is a value problem, not a format problem — same as
+        // `ROLE_UNKNOWN`. Answering 400 would send the client to fix the body shape.
         if (parsed.error.issues.some((issue) => issue.path[0] === "assuranceLevel")) {
           throw unprocessable("ASSURANCE_LEVEL_INVALID", "Assurance level is not in the assurance table", {
             allowed: ASSURANCE_LEVELS,
@@ -297,109 +363,48 @@ export async function registerAdminRoutes(
           issues: parsed.error.issues,
         });
       }
-
-      const { requestId, asOf, correlationId } = request.context;
-      const address = parsed.data.walletAddress.toLowerCase();
-
-      /**
-       * Anyone can sign as a public development address (anvil/hardhat or a committed fixture).
-       * Bound on a shared chain, its role would belong to whoever tries the key first. A value
-       * problem, like an assurance level outside the table.
-       */
-      if (parsed.data.chainId !== LOCAL_CHAIN_ID && isPublicDevAddress(address)) {
-        throw unprocessable(
-          "WALLET_PUBLIC_DEV_ADDRESS",
-          "This is a public development address. Bind a freshly generated wallet on this chain.",
-          { chainId: parsed.data.chainId },
-        );
+      if (request.params.subjectId === session.subjectId) {
+        throw unprocessable("ASSURANCE_SELF", "You cannot set your own assurance level", {
+          hint: "Another admin checks and records it",
+        });
       }
 
+      const { requestId, asOf, correlationId } = request.context;
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          /**
-           * Holds the subject row until commit. The role check below and the grant decision's
-           * UI-bound-key check each read what the other writes; without a shared lock both pass
-           * under READ COMMITTED and the subject ends up with an operator's key and an approval
-           * role. `NO KEY UPDATE` leaves FK inserts that reference the subject unblocked.
-           */
-          const [subject] = await tx<{ id: string }[]>`
-            SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${request.params.subjectId}
+          const [before] = await tx<{ assurance_level: string; kind: string; version: number }[]>`
+            SELECT assurance_level::text, kind, version FROM core.subjects
+            WHERE tenant_id = ${tenantId} AND id = ${request.params.subjectId}
             FOR NO KEY UPDATE
           `;
-          if (!subject) throw notFound("Subject not found");
-
-          /**
-           * Wallets are not bound from the UI to subjects that can be a second person.
-           *
-           * Binding a wallet is a one-person act. If operator A binds their wallet to operator B,
-           * A logs in as B and approves their own proposal — the two-person rule for role grants
-           * collapses into one person. The same holds for every other two-person rule: bound to
-           * a disclosure approver, A publishes their own draft (see `SECOND_PERSON_ROLES`).
-           * A key rotation for such a subject creates a new subject through bootstrap
-           * (infrastructure access) and disables the old wallet.
-           * Recovery for people without these roles (AC-27) still works.
-           */
-          const [adminBinding] = await tx<{ role: string }[]>`
-            SELECT role FROM core.role_bindings
-            WHERE tenant_id = ${tenantId} AND subject_id = ${request.params.subjectId}
-              AND revoked_at IS NULL AND role = ANY(${[...SECOND_PERSON_ROLES]})
-            ORDER BY role
-            LIMIT 1
-          `;
-          if (adminBinding) {
-            throw forbidden(
-              "WALLET_BIND_ADMIN_SUBJECT",
-              "A wallet cannot be bound from the UI to a subject with admin or approval authority",
-              {
-                role: adminBinding.role,
-                hint: "Key rotation for this subject creates a new subject via bootstrap and disables the old wallet",
-              },
-            );
+          if (!before) throw notFound("Subject not found");
+          // A service's reach is its token's scopes (D7); identity assurance is a person's.
+          if (before.kind !== "person") {
+            throw unprocessable("ASSURANCE_PERSON_ONLY", "Identity assurance is set for people only");
           }
 
-          /**
-           * An address is bound to only one subject per chain (`UNIQUE (wallet_address,
-           * chain_id)`). If already bound, it is not silently moved — moving it would make the
-           * address's past signatures read as someone else's.
-           */
-          const [existing] = await tx<{ subject_id: string | null; disabled_at: Date | null }[]>`
-            SELECT subject_id, disabled_at FROM core.wallet_identities
-            WHERE wallet_address = ${address} AND chain_id = ${parsed.data.chainId}
-          `;
-          if (existing) {
-            throw conflict(
-              "WALLET_ALREADY_BOUND",
-              "This address is already bound. It is not moved to another subject.",
-              { hint: "To recover with a new key, bind a new address and disable the old one" },
-            );
-          }
-
-          const id = randomUUID();
           await tx`
-            INSERT INTO core.wallet_identities (
-              id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
-            ) VALUES (
-              ${id}, ${tenantId}, ${request.params.subjectId}, ${address},
-              ${parsed.data.chainId}, ${parsed.data.assuranceLevel}, now()
-            )
+            UPDATE core.subjects
+            SET assurance_level = ${parsed.data.assuranceLevel}, version = version + 1
+            WHERE tenant_id = ${tenantId} AND id = ${request.params.subjectId}
           `;
 
           await recordAudit(tx, {
             tenantId,
             session,
             effectiveRole,
-            command: "admin.wallet.bound",
-            resourceType: "wallet_identity",
-            resourceId: id,
-            afterVersion: 1,
+            command: "admin.subject.assurance_set",
+            resourceType: "subject",
+            resourceId: request.params.subjectId,
+            beforeVersion: before.version,
+            afterVersion: before.version + 1,
             correlationId,
             requestIp: request.clientIp,
-            // The level decides which roles this wallet can exercise. Without the stated basis
-            // the record shows who granted it but not why.
+            // The level decides which roles the person can exercise. Without the stated basis
+            // the record shows who set it but not why.
             detail: {
-              subjectId: request.params.subjectId,
-              chainId: parsed.data.chainId,
               assuranceLevel: parsed.data.assuranceLevel,
+              previousAssuranceLevel: before.assurance_level,
               justification: parsed.data.justification,
             },
           });
@@ -440,8 +445,19 @@ export async function registerAdminRoutes(
       const { requestId, asOf, correlationId } = request.context;
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+          /**
+           * Subject first, then its sessions — the order every account function keeps
+           * (`core.mfa_lock_session`). Locking the wallet and the sessions before the subject
+           * would deadlock against the holder disabling or binding a key at the same moment.
+           */
+          await tx`
+            SELECT s.id FROM core.subjects s
+            JOIN core.wallet_identities w ON w.subject_id = s.id
+            WHERE w.tenant_id = ${tenantId} AND w.id = ${request.params.walletId}
+            FOR NO KEY UPDATE OF s
+          `;
           const [wallet] = await tx<WalletRow[]>`
-            SELECT id, subject_id, wallet_address, chain_id, assurance_level,
+            SELECT id, subject_id, wallet_address, chain_id, assurance_level, bound_via,
                    bound_at, disabled_at, version
             FROM core.wallet_identities
             WHERE tenant_id = ${tenantId} AND id = ${request.params.walletId}
@@ -492,6 +508,21 @@ export async function registerAdminRoutes(
             )
           `;
 
+          /**
+           * A cut key must not keep a session alive for the rest of its TTL (AC-27). Every
+           * session of the subject ends, not only those signed with this wallet: the subject's
+           * key was lost or compromised, and which session it reached is not knowable here.
+           */
+          const revokedSessions = wallet.subject_id
+            ? await revokeSubjectSessions(tx, wallet.subject_id, "wallet_disabled")
+            : 0;
+          // An operator-bound wallet's level no longer counts toward the subject's. A proof-bound
+          // one never counted (0122), so disabling it leaves the subject's level alone.
+          const assurance =
+            wallet.subject_id && wallet.bound_via === "operator"
+              ? await syncSubjectAssurance(tx, tenantId, wallet.subject_id)
+              : null;
+
           await recordAudit(tx, {
             tenantId,
             session,
@@ -503,6 +534,15 @@ export async function registerAdminRoutes(
             afterVersion: wallet.version + 1,
             correlationId,
             requestIp: request.clientIp,
+            detail: {
+              revokedSessions,
+              ...(assurance
+                ? {
+                    subjectAssuranceLevel: assurance.current,
+                    previousSubjectAssuranceLevel: assurance.previous,
+                  }
+                : {}),
+            },
           });
 
           reply.header("etag", etagOf(wallet.version + 1));
@@ -682,14 +722,13 @@ export async function registerAdminRoutes(
 
           /**
            * A second-person role is not granted to a subject whose active key was bound from
-           * the UI.
+           * the admin UI.
            *
-           * The bind route refuses subjects that already hold these roles, so the order can be
-           * reversed: bind an operator's own key to a subject with no roles, then grant it one.
-           * Who bound the key is only in the audit record, and refusing just the binder would
-           * still leave the key with an operator nobody on this grant can vouch for. Refusing
-           * any UI-bound key is simpler and holds either way — such a subject gets a fresh key
-           * through bootstrap, as an operator key rotation does.
+           * The admin bind (removed in WP5) refused subjects that already held these roles, so
+           * the order could be reversed: bind an operator's own key to a subject with no roles,
+           * then grant it one. Such keys still exist (`admin.wallet.bound` in the audit trail),
+           * and refusing them holds whoever bound them. A key the holder bound by proof
+           * (`account.wallet.bound`) is theirs, and does not block a grant.
            */
           if (parsed.data.decision === "approve" && SECOND_PERSON_ROLES.includes(grant.role)) {
             // Same subject-row lock as the bind route, so a concurrent bind is seen, not missed.

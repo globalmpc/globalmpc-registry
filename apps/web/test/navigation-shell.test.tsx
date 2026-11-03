@@ -28,33 +28,30 @@ const s = vi.hoisted(() => ({
   path: "/w/projects",
   token: "token" as string | null,
   loading: false,
-  signingIn: false,
-  error: null as string | null,
-  walletAvailable: true,
   wallets: [] as { id: string; name: string; icon: string | null }[],
-  connectionLog: [] as { at: string; step: string; detail: string }[],
   session: {
     authenticated: true,
     tenantId: "tenant1" as string | null,
-    walletAddress: "0xabc",
     assuranceLevel: "high_assurance",
     roleBindings: [] as { role: string }[],
     actions: [] as string[],
   },
   signOut: vi.fn(),
-  signIn: vi.fn(),
-  signInWithWallet: vi.fn(),
+  refresh: vi.fn(),
   push: vi.fn(),
-  demo: [] as { label: string; description: string }[],
+  replace: vi.fn(),
 }));
-vi.mock("../src/lib/session", () => ({
-  useSession: () => s,
-  DEMO_ACCOUNTS: s.demo,
-  demoAddress: () => "0xdemo",
-}));
+vi.mock("../src/lib/session", async (original) => {
+  const actual = await original<typeof import("../src/lib/session")>();
+  return {
+    useSession: () => s,
+    needsSecondFactor: actual.needsSecondFactor,
+    isAccountSession: actual.isAccountSession,
+  };
+});
 vi.mock("next/navigation", () => ({
   usePathname: () => s.path,
-  useRouter: () => ({ push: s.push }),
+  useRouter: () => ({ push: s.push, replace: s.replace }),
 }));
 beforeEach(() => {
   s.path = "/w/projects";
@@ -64,12 +61,9 @@ beforeEach(() => {
   s.session.tenantId = "tenant1";
   s.session.roleBindings = [];
   s.wallets = [];
-  s.demo.length = 0;
-  s.error = null;
-  s.connectionLog = [];
-  s.walletAvailable = true;
-  for (const f of [s.signOut, s.signIn, s.signInWithWallet, s.push])
+  for (const f of [s.signOut, s.push, s.replace, s.refresh])
     f.mockReset();
+  s.refresh.mockImplementation(async () => s.session);
 });
 afterEach(() => {
   cleanup();
@@ -77,7 +71,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-it("gates loading, signed-out and unenrolled sessions while always allowing access guidance", () => {
+it("gates loading, signed-out and tenantless sessions while always allowing access guidance", () => {
   s.loading = true;
   const view = render(
     <WorkspaceGate>
@@ -101,9 +95,8 @@ it("gates loading, signed-out and unenrolled sessions while always allowing acce
       <p>Private records</p>
     </WorkspaceGate>,
   );
-  expect(screen.getByTestId("enrollment-wallet").textContent).toContain(
-    "0xabc",
-  );
+  expect(screen.getByTestId("workspace-no-tenant")).toBeTruthy();
+  expect(screen.queryByText("Private records")).toBeNull();
   for (const path of [
     "/w/access-requests",
     "/w/identity/upgrade",
@@ -119,6 +112,7 @@ it("gates loading, signed-out and unenrolled sessions while always allowing acce
   }
   s.path = "/w/projects";
   s.session.tenantId = "tenant1";
+  s.session.roleBindings = [{ role: "data_steward" }];
   view.rerender(
     <WorkspaceGate>
       <p>Private records</p>
@@ -136,12 +130,12 @@ it("keeps public navigation available after sign-in and closes its expanded menu
   expect(menu.open).toBe(false);
   const disconnect = screen
     .getAllByRole("button")
-    .find((b) => b.textContent?.includes("Disconnect"))!;
+    .find((b) => b.textContent?.includes("Sign out"))!;
   fireEvent.click(disconnect);
   expect(s.signOut).toHaveBeenCalledOnce();
   s.session.authenticated = false;
   view.rerender(<TopBar />);
-  expect(screen.getByRole("link", { name: "Connect account →" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Sign in →" })).toBeTruthy();
 });
 it("copies the full address and provides a manual-copy fallback", async () => {
   const write = vi.fn().mockResolvedValue(undefined);
@@ -164,40 +158,33 @@ it("copies the full address and provides a manual-copy fallback", async () => {
   await act(async () => {});
   expect(screen.getByText("Select to copy")).toBeTruthy();
 });
-it("navigates only after successful wallet or demo sign-in and copies diagnostics", async () => {
-  s.signInWithWallet.mockResolvedValueOnce(false).mockResolvedValue(true);
-  s.signIn.mockResolvedValue(true);
-  s.demo.push({ label: "Demo operator", description: "Synthetic" });
-  s.error = "Rejected";
-  s.connectionLog = [
-    { at: "2026-10-20T10:00:00", step: "connect", detail: "rejected" },
-  ];
-  const write = vi.fn().mockResolvedValue(undefined);
-  Object.defineProperty(navigator, "clipboard", {
-    configurable: true,
-    value: { writeText: write },
+it("offers no wallet sign-in, whatever an older server still reports (WP7)", async () => {
+  // A server from before WP7 still sends the switch; the screen no longer has anything to draw for it.
+  mockHttp({
+    "GET /api/v1/auth/methods": {
+      emailCode: true,
+      google: false,
+      microsoft: false,
+      legacyWalletLogin: true,
+      emailCodeDigits: 8,
+      emailCodeTtlMinutes: 10,
+      requestId: "r",
+    },
   });
-  const view = render(<Connect />);
-  fireEvent.click(screen.getByTestId("connect-wallet"));
-  await act(async () => {});
-  expect(s.push).not.toHaveBeenCalled();
-  s.wallets = [
-    { id: "wallet1", name: "Wallet One", icon: "data:image/png;base64,AA" },
-  ];
-  view.rerender(<Connect />);
-  fireEvent.click(screen.getByTestId("connect-wallet-wallet1"));
-  await waitFor(() => expect(s.push).toHaveBeenCalledWith("/w/projects"));
-  fireEvent.click(screen.getByText("Demo operator"));
-  await waitFor(() => expect(s.signIn).toHaveBeenCalledOnce());
-  fireEvent.click(screen.getByText("Copy details"));
-  expect(write).toHaveBeenCalledWith("2026-10-20T10:00:00 connect rejected");
+  s.session.authenticated = false;
+  s.wallets = [{ id: "wallet1", name: "Wallet One", icon: "data:image/png;base64,AA" }];
+  render(<Connect />);
+  expect(await screen.findByTestId("email-sign-in")).toBeTruthy();
+  expect(screen.queryByTestId("legacy-wallet-sign-in")).toBeNull();
+  expect(screen.queryByTestId("connect-wallet")).toBeNull();
+  expect(screen.queryByTestId("connect-wallet-wallet1")).toBeNull();
 });
 it("keeps product boundaries and inactive asset gates visible on public informational pages", () => {
   render(<Landing />);
   expect(screen.getByTestId("landing-boundaries").textContent).toContain("not");
   expect(
     screen
-      .getByRole("link", { name: "Connect account →" })
+      .getByRole("link", { name: "Sign in →" })
       .getAttribute("href"),
   ).toBe("/connect");
   cleanup();

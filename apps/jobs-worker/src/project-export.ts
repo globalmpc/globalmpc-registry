@@ -38,7 +38,8 @@ export interface ExportJob {
   readonly tenant_id: string;
   readonly project_id: string;
   readonly requested_by_subject_id: string;
-  readonly requested_by_wallet: string;
+  /** The wallet a pre-0110 requester signed in with. Null for every job since: the requester is the subject. */
+  readonly requested_by_wallet: string | null;
   readonly sensitivity_clearance: readonly string[];
   readonly state: "queued" | "succeeded" | "failed";
   readonly requested_at: Date;

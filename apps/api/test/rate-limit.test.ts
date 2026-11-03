@@ -58,26 +58,27 @@ describe("pre-validation request cap", () => {
     expect(sqlCalls).toBe(2);
   });
 
-  it("SIWE ignores the Bearer header and applies a narrow per-IP cap", async () => {
+  it("a sign-in route ignores the Bearer header and applies a narrow per-IP cap", async () => {
     const callsBefore = sqlCalls;
     const statuses: number[] = [];
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const response = await app.inject({
         method: "POST",
-        url: "/api/v1/auth/siwe/nonce",
+        url: "/api/v1/auth/email/start",
         headers: {
           authorization: `Bearer different-invalid-token-${attempt}`,
           "x-forwarded-for": "203.0.113.21",
         },
-        payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 31337 },
+        // Malformed on purpose: the cap must count a request the route itself would refuse.
+        payload: { email: "not-an-address" },
       });
       statuses.push(response.statusCode);
     }
 
-    expect(statuses).toEqual([200, 200, 429, 429]);
-    // SIWE routes skip session lookup and run only the allowed nonce INSERTs.
-    expect(sqlCalls - callsBefore).toBe(2);
+    expect(statuses).toEqual([400, 400, 429, 429]);
+    // A sign-in route is sessionless: no Bearer is looked up, and a refused body reaches no SQL.
+    expect(sqlCalls - callsBefore).toBe(0);
   });
 });
 
@@ -148,28 +149,30 @@ describeDb("request cap", () => {
     await fx.close();
   });
 
-  function nonce() {
+  function startSignIn() {
     return app.inject({
       method: "POST",
-      url: "/api/v1/auth/siwe/nonce",
-      payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 31337 },
+      url: "/api/v1/auth/email/start",
+      // Malformed on purpose: the route cap counts before the body is read, and a refused body
+      // leaves no per-address or per-IP record in the database throttle other tests share.
+      payload: { email: "not-an-address" },
     });
   }
 
   it("sign-in paths have a narrow cap", async () => {
     const statuses: number[] = [];
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      statuses.push((await nonce()).statusCode);
+      statuses.push((await startSignIn()).statusCode);
     }
 
-    expect(statuses.slice(0, 3)).toEqual([200, 200, 200]);
+    expect(statuses.slice(0, 3)).toEqual([400, 400, 400]);
     expect(statuses.slice(3)).toEqual([429, 429]);
   });
 
   it("keeps the envelope format when capped — the UI knows what to do next", async () => {
-    for (let attempt = 0; attempt < 4; attempt += 1) await nonce();
+    for (let attempt = 0; attempt < 4; attempt += 1) await startSignIn();
 
-    const response = await nonce();
+    const response = await startSignIn();
     expect(response.statusCode).toBe(429);
 
     const body = response.json() as {
@@ -200,7 +203,7 @@ describeDb("request cap", () => {
  *
  * In deployment the API is reached only through the `web` `/api/*` proxy (`apps/web/src/proxy.ts`).
  * So the socket address the API sees is **the one web container for every request**. If the
- * cap key falls to that address, the unauthenticated-path cap (SIWE nonce/verify) becomes
+ * cap key falls to that address, the unauthenticated-path cap (emailed-code start/verify) becomes
  * site-wide, and one person using 10 requests blocks everyone's sign-in for that minute.
  *
  * So the requester is found by **counting trusted hops from the right of `x-forwarded-for`**.
@@ -223,34 +226,34 @@ describeDb("request cap behind a proxy", () => {
     await fx.close();
   });
 
-  function nonce(forwardedFor: string | undefined) {
+  function startSignIn(forwardedFor: string | undefined) {
     return app.inject({
       method: "POST",
-      url: "/api/v1/auth/siwe/nonce",
+      url: "/api/v1/auth/email/start",
       headers: forwardedFor ? { "x-forwarded-for": forwardedFor } : {},
-      payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 31337 },
+      payload: { email: "not-an-address" },
     });
   }
 
   it("counts the cap per requester — one person cannot block all sign-ins", async () => {
     const first: number[] = [];
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      first.push((await nonce("203.0.113.10")).statusCode);
+      first.push((await startSignIn("203.0.113.10")).statusCode);
     }
-    expect(first).toEqual([200, 200, 429]);
+    expect(first).toEqual([400, 400, 429]);
 
     // Even after the first requester uses up their quota, others still get theirs.
-    expect((await nonce("203.0.113.11")).statusCode).toBe(200);
+    expect((await startSignIn("203.0.113.11")).statusCode).toBe(400);
   });
 
   it("prepending values to the header gets no new quota — the cap cannot be bypassed", async () => {
-    expect((await nonce("198.51.100.7")).statusCode).toBe(200);
-    expect((await nonce("198.51.100.7")).statusCode).toBe(200);
-    expect((await nonce("198.51.100.7")).statusCode).toBe(429);
+    expect((await startSignIn("198.51.100.7")).statusCode).toBe(400);
+    expect((await startSignIn("198.51.100.7")).statusCode).toBe(400);
+    expect((await startSignIn("198.51.100.7")).statusCode).toBe(429);
 
     // If the untrusted left entries change but the right side is the same, the quota is the same.
-    expect((await nonce("9.9.9.9, 198.51.100.7")).statusCode).toBe(429);
-    expect((await nonce("1.1.1.1, 2.2.2.2, 198.51.100.7")).statusCode).toBe(429);
+    expect((await startSignIn("9.9.9.9, 198.51.100.7")).statusCode).toBe(429);
+    expect((await startSignIn("1.1.1.1, 2.2.2.2, 198.51.100.7")).statusCode).toBe(429);
   });
 });
 
@@ -282,9 +285,9 @@ describeDb("requester address warning", () => {
 
     await app.inject({
       method: "POST",
-      url: "/api/v1/auth/siwe/nonce",
+      url: "/api/v1/auth/email/start",
       headers: forwardedFor ? { "x-forwarded-for": forwardedFor } : {},
-      payload: { walletAddress: `0x${"ab".repeat(20)}`, chainId: 31337 },
+      payload: { email: "not-an-address" },
     });
     await app.close();
 

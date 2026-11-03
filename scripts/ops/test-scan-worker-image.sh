@@ -27,7 +27,7 @@ cleanup() {
 trap cleanup EXIT
 # Only deliberately fake credentials enter this drill. They are mounted solely in the worker.
 chmod 755 "$mock_secrets"
-for secret in worker_database_url object_secret_key scan_service_key; do
+for secret in worker_database_url object_secret_key scan_service_token; do
   printf 'isolated-smoke-%s\n' "$secret" > "$mock_secrets/$secret"
   chmod 444 "$mock_secrets/$secret"
 done
@@ -106,7 +106,7 @@ docker run -d --name "$worker" --init --read-only --network "$scan_network" \
   --mount "type=bind,source=$mock_secrets,target=/run/secrets,readonly" \
   --env DATABASE_URL=file:/run/secrets/worker_database_url \
   --env OBJECT_SECRET_ACCESS_KEY=file:/run/secrets/object_secret_key \
-  --env SCAN_SERVICE_PRIVATE_KEY=file:/run/secrets/scan_service_key \
+  --env SCAN_SERVICE_TOKEN=file:/run/secrets/scan_service_token \
   --cap-drop ALL --security-opt no-new-privileges:true \
   "$worker_image" node -e 'setInterval(()=>{},1000)' >/dev/null
 docker network connect "$app_network" "$worker"
@@ -147,7 +147,7 @@ assert.equal(reached,false,"scanner can reach the worker-only app network");
 docker exec "$worker" node --input-type=module -e '
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-for(const [variable,file] of [["DATABASE_URL","worker_database_url"],["OBJECT_SECRET_ACCESS_KEY","object_secret_key"],["SCAN_SERVICE_PRIVATE_KEY","scan_service_key"]]) {
+for(const [variable,file] of [["DATABASE_URL","worker_database_url"],["OBJECT_SECRET_ACCESS_KEY","object_secret_key"],["SCAN_SERVICE_TOKEN","scan_service_token"]]) {
   assert.equal(process.env[variable],`file:/run/secrets/${file}`);
   assert.equal(readFileSync(`/run/secrets/${file}`,"utf8"),`isolated-smoke-${file}\n`);
 }
@@ -156,8 +156,8 @@ docker exec --env WORKER_HOST_PID="$(docker inspect --format '{{.State.Pid}}' "$
 import assert from "node:assert/strict";
 import {existsSync,readdirSync,readFileSync} from "node:fs";
 assert.equal(existsSync(`/proc/${process.env.WORKER_HOST_PID}`),false,"worker host PID is visible in scanner namespace");
-for(const variable of ["DATABASE_URL","OBJECT_SECRET_ACCESS_KEY","SCAN_SERVICE_PRIVATE_KEY"]) assert.equal(process.env[variable],undefined);
-for(const file of ["worker_database_url","object_secret_key","scan_service_key"]) assert.equal(existsSync(`/run/secrets/${file}`),false);
+for(const variable of ["DATABASE_URL","OBJECT_SECRET_ACCESS_KEY","SCAN_SERVICE_TOKEN"]) assert.equal(process.env[variable],undefined);
+for(const file of ["worker_database_url","object_secret_key","scan_service_token"]) assert.equal(existsSync(`/run/secrets/${file}`),false);
 for(const pid of readdirSync("/proc").filter(value=>/^\d+$/.test(value))) {
   let environment;
   try { environment=readFileSync(`/proc/${pid}/environ`,"utf8"); } catch { continue; }
