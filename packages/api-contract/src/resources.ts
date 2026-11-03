@@ -137,6 +137,44 @@ export const correctClaimRequest = z.object({
   reason: z.string().min(1, "The reason for the correction cannot be empty"),
 });
 
+/** The chain a stuck anchor transaction was asked to move to, and when (08 §8.9). */
+export const anchorChainMoveRequest = z.object({
+  toChainId: z.number().int().positive(),
+  requestedAt: isoDateTime,
+  /** When the old chain's worker last looked at the request. Null: it has not yet. */
+  lastCheckedAt: isoDateTime.nullable(),
+  /**
+   * Why that worker is still waiting, e.g. `open_send`, `open_proposal`, `signer_pending`,
+   * `check_failed`. Null before its first look.
+   */
+  waitReason: z.string().nullable(),
+});
+
+/**
+ * The old chain's worker refused the batch's last requested move (08 §8.9).
+ *
+ * `reason` is one of:
+ * - `batch_on_chain`: the old contract holds the batch; `result` says how the row was reconciled;
+ * - `other_transaction`: another transaction already holds the batch on the requested chain;
+ * - `send_outcome_unknown`: what an earlier send on the old chain did cannot be read back, so the
+ *   batch may be there already; the row is left `reconciliation_required` for a person to check
+ *   every contract registered for that chain (a resubmit there asks only the configured one).
+ *   Asked again, the move is refused the same way — always, if an operator settled that send;
+ * - `target_not_allowed`: the requested chain is not supported, or not in the old chain's
+ *   environment (mainnet/testnet);
+ * - `not_movable`: the request was dropped because the transaction left the resubmittable states
+ *   on its chain before it was moved; `result` is the state it was in.
+ *
+ * Only `batch_on_chain` and `send_outcome_unknown` change the row's state. It stays until a person
+ * resubmits again.
+ */
+export const anchorChainMoveRefusal = z.object({
+  toChainId: z.number().int().positive().nullable(),
+  reason: z.string(),
+  result: z.string().nullable(),
+  refusedAt: isoDateTime,
+});
+
 /**
  * Anchor batch status — 08 §8.9.
  *
@@ -179,6 +217,31 @@ export const anchorBatchStatus = z.object({
       createdAt: isoDateTime,
     })
     .nullable(),
+  /**
+   * A pending request to move this batch's transaction to another chain, or null.
+   *
+   * **A request is not a move.** The row stays on `chainId` until that chain's worker has read
+   * the old contract and found the batch absent; if it finds the batch there, the request is
+   * dropped and the batch reconciled instead.
+   */
+  moveRequest: anchorChainMoveRequest.nullable(),
+  /** The last move the old chain's worker refused, until a person resubmits again. */
+  moveRefusal: anchorChainMoveRefusal.nullable(),
+});
+
+/**
+ * Result of a resubmit request — 08 §8.9.
+ *
+ * On this deployment's chain the transaction is reset to `created` at once. For a transaction
+ * recorded on another chain only a move is requested (`moveRequest`), and `confirmationState`
+ * and `attempts` are still the row's current ones.
+ */
+export const anchorBatchResubmission = z.object({
+  id: z.string(),
+  confirmationState: z.string(),
+  previousState: z.string(),
+  attempts: z.number().int(),
+  moveRequest: anchorChainMoveRequest.nullable(),
 });
 
 /**

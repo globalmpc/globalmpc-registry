@@ -846,6 +846,309 @@ describeDb("Registry publication and public lookup", () => {
       expect(after).toEqual(before);
     });
 
+    // The fixture DB is shared across runs, and hashes are unique per chain.
+    const randomHash = () => `0x${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "")}`;
+
+    /** A batch whose transaction ended `state` on 5611 before this deployment moved to 31337. */
+    async function stuckOnOldChain(state = "failed", txHash: string | null = null) {
+      const batchId = await makeBatch();
+      await fx.sql`
+        UPDATE chain.transactions
+        SET state = ${state}, attempts = 2, tx_hash = ${txHash}, chain_id = 5611,
+            contract_address = ${txHash ? `0x${"5b".repeat(20)}` : null}, last_error = 'submit_failed'
+        WHERE batch_id = ${batchId}
+      `;
+      const [row] = await fx.sql<{ id: string }[]>`
+        SELECT id FROM chain.transactions WHERE batch_id = ${batchId}
+      `;
+      return { batchId, transactionId: row!.id };
+    }
+
+    async function transactionRow(transactionId: string) {
+      const [row] = await fx.sql<Record<string, unknown>[]>`
+        SELECT * FROM chain.transactions WHERE id = ${transactionId}
+      `;
+      return row!;
+    }
+
+    async function resubmitAudits(batchId: string) {
+      return fx.sql<{ reason: string; detail: unknown }[]>`
+        SELECT reason, detail FROM audit.events
+        WHERE command = 'anchor.batch.resubmit_requested' AND resource_id = ${batchId}
+        ORDER BY occurred_at, id
+      `;
+    }
+
+    it.each([
+      ["failed", false],
+      ["dropped", true],
+      ["reverted", true],
+      ["reconciliation_required", false],
+    ] as const)(
+      "only requests a move for a %s transaction recorded on another chain",
+      async (state, hashed) => {
+        const txHash = hashed ? randomHash() : null;
+        const { batchId, transactionId } = await stuckOnOldChain(state, txHash);
+        const before = await transactionRow(transactionId);
+
+        const response = await resubmit(batchId);
+        expect(response.statusCode).toBe(200);
+        // Nothing was reset: the old chain's worker decides once it has asked the old contract.
+        expect(response.json()).toMatchObject({
+          confirmationState: state,
+          previousState: state,
+          attempts: 2,
+          moveRequest: { toChainId: 31337, lastCheckedAt: null, waitReason: null },
+        });
+
+        const after = await transactionRow(transactionId);
+        expect(after).toEqual({
+          ...before,
+          move_to_chain_id: 31337,
+          move_requested_at: expect.any(Date),
+          updated_at: expect.any(Date),
+        });
+        expect(response.json().moveRequest.requestedAt).toBe(
+          (after["move_requested_at"] as Date).toISOString(),
+        );
+        // The row stays on 5611, so only that chain's worker claims it.
+        expect(after).toMatchObject({ chain_id: 5611, state, tx_hash: txHash });
+
+        expect(await resubmitAudits(batchId)).toEqual([
+          { reason: "chain_move_requested", detail: { fromChainId: 5611, toChainId: 31337, state } },
+        ]);
+        expect(await fx.sql`
+          SELECT 1 FROM chain.anchor_sends WHERE transaction_id = ${transactionId}
+        `).toEqual([]);
+      },
+    );
+
+    it("shows a pending move in the batch list without moving the batch", async () => {
+      const { batchId } = await stuckOnOldChain();
+      const requested = (await resubmit(batchId)).json().moveRequest;
+
+      const list = await app.inject({
+        method: "GET",
+        url: "/api/v1/anchor-batches",
+        headers: { authorization: `Bearer ${tokens.operatorA}` },
+      });
+      const item = list.json().items.find((entry: { id: string }) => entry.id === batchId);
+      expect(item).toMatchObject({ chainId: 5611, confirmationState: "failed", needsAttention: true });
+      expect(item.moveRequest).toEqual(requested);
+    });
+
+    it("asking again for the same chain leaves the request and the row untouched", async () => {
+      const { batchId, transactionId } = await stuckOnOldChain();
+      const first = (await resubmit(batchId)).json().moveRequest;
+      // The old chain's worker looked at it once and is waiting.
+      const checkedAt = new Date("2026-01-01T00:00:00.000Z");
+      await fx.sql`
+        UPDATE chain.transactions SET move_checked_at = ${checkedAt}, move_wait_reason = 'open_send'
+        WHERE id = ${transactionId}
+      `;
+      // That worker may be part way through a check: it moves the row only if `updated_at` is
+      // still what it read.
+      const before = await transactionRow(transactionId);
+
+      const again = await resubmit(batchId);
+      expect(again.statusCode).toBe(200);
+      expect(again.json().moveRequest).toEqual({
+        ...first,
+        lastCheckedAt: checkedAt.toISOString(),
+        waitReason: "open_send",
+      });
+      expect(await transactionRow(transactionId)).toMatchObject({
+        chain_id: 5611,
+        move_to_chain_id: 31337,
+        move_requested_at: new Date(first.requestedAt),
+      });
+      expect(await transactionRow(transactionId)).toEqual(before);
+      // A repeated click is not a new decision: the first request's audit stands alone.
+      expect(await resubmitAudits(batchId)).toHaveLength(1);
+    });
+
+    it("replaces a request for a different chain and records the target it replaced", async () => {
+      const { batchId, transactionId } = await stuckOnOldChain();
+      await fx.sql`
+        UPDATE chain.transactions
+        SET move_to_chain_id = 56, move_requested_at = now() - interval '1 day',
+            move_checked_at = now(), move_wait_reason = 'signer_pending'
+        WHERE id = ${transactionId}
+      `;
+
+      const response = await resubmit(batchId);
+      expect(response.statusCode).toBe(200);
+      // The new request starts its wait afresh: nothing has looked at it yet.
+      expect(response.json().moveRequest).toMatchObject({ lastCheckedAt: null, waitReason: null });
+      const row = await transactionRow(transactionId);
+      expect(row).toMatchObject({
+        chain_id: 5611, move_to_chain_id: 31337, move_checked_at: null, move_wait_reason: null,
+      });
+      expect((row["move_requested_at"] as Date).getTime()).toBeGreaterThan(Date.now() - 60_000);
+      expect(await resubmitAudits(batchId)).toEqual([
+        {
+          reason: "chain_move_requested",
+          detail: { fromChainId: 5611, toChainId: 31337, state: "failed", replacedToChainId: 56 },
+        },
+      ]);
+    });
+
+    it("does not request a move for a transaction still in flight on its chain", async () => {
+      const { batchId, transactionId } = await stuckOnOldChain("submitted", randomHash());
+      const before = await transactionRow(transactionId);
+
+      const response = await resubmit(batchId);
+      expect(response.statusCode).toBe(409);
+      expect(response.json().code).toBe("ANCHOR_NOT_RESUBMITTABLE");
+      expect(await transactionRow(transactionId)).toEqual(before);
+      expect(await resubmitAudits(batchId)).toEqual([]);
+    });
+
+    it("does not request a move for a batch that has another transaction", async () => {
+      const { batchId, transactionId } = await stuckOnOldChain();
+      // The same batch already has a transaction on this chain: the move could only collide
+      // with it, and that transaction may anchor the root on its own.
+      await fx.sql`
+        INSERT INTO chain.transactions (
+          id, tenant_id, batch_id, intent_key, chain_id, state, created_at
+        )
+        SELECT ${randomUUID()}, tenant_id, batch_id, intent_key, 31337, 'failed',
+               created_at - interval '1 day'
+        FROM chain.transactions WHERE id = ${transactionId}
+      `;
+      const before = await transactionRow(transactionId);
+
+      const response = await resubmit(batchId);
+      expect(response.statusCode).toBe(409);
+      expect(response.json().code).toBe("ANCHOR_CHAIN_MOVE_BLOCKED");
+      expect(response.json().retryable).toBe(false);
+      expect(response.json().details).toEqual({
+        reason: "other_transaction",
+        transactionChainId: 5611,
+        currentChainId: 31337,
+      });
+      expect(await transactionRow(transactionId)).toEqual(before);
+      expect(await resubmitAudits(batchId)).toEqual([]);
+    });
+
+    it.each([
+      [56, "mainnet batch on a testnet deployment"],
+      [97, "batch on a chain outside the supported list"],
+    ])("does not request a move across environments (%s: %s)", async (fromChainId) => {
+      const { batchId, transactionId } = await stuckOnOldChain();
+      await fx.sql`UPDATE chain.transactions SET chain_id = ${fromChainId} WHERE id = ${transactionId}`;
+      const before = await transactionRow(transactionId);
+
+      const response = await resubmit(batchId);
+      expect(response.statusCode).toBe(409);
+      expect(response.json().code).toBe("ANCHOR_CHAIN_MOVE_BLOCKED");
+      expect(response.json().details).toEqual({
+        reason: "cross_environment",
+        transactionChainId: fromChainId,
+        currentChainId: 31337,
+      });
+      expect(await transactionRow(transactionId)).toEqual(before);
+      expect(await resubmitAudits(batchId)).toEqual([]);
+    });
+
+    it("shows a move the old chain's worker refused until a person resubmits again", async () => {
+      const { batchId, transactionId } = await stuckOnOldChain();
+      await resubmit(batchId);
+      // What the 5611 worker does on finding the batch there: drop the request, reconcile, audit.
+      await fx.sql`
+        UPDATE chain.transactions
+        SET move_to_chain_id = NULL, move_requested_at = NULL, state = 'reconciliation_required',
+            last_error = 'batch_on_chain_transaction_unknown'
+        WHERE id = ${transactionId}
+      `;
+      await fx.sql`
+        INSERT INTO audit.events (tenant_id, command, resource_type, resource_id, reason, correlation_id, detail)
+        VALUES (${fx.tenantA}, 'anchor.batch.chain_move_refused', 'anchor_batch', ${batchId}, 'batch_on_chain',
+                ${`anchor-worker:${transactionId}`},
+                ${fx.sql.json({ fromChainId: 5611, toChainId: 31337, result: "batch_on_chain_transaction_unknown" })})
+      `;
+      const listItem = async () =>
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/v1/anchor-batches",
+            headers: { authorization: `Bearer ${tokens.operatorA}` },
+          })
+        ).json().items.find((entry: { id: string }) => entry.id === batchId);
+
+      expect(await listItem()).toMatchObject({
+        chainId: 5611,
+        moveRequest: null,
+        moveRefusal: {
+          toChainId: 31337,
+          reason: "batch_on_chain",
+          result: "batch_on_chain_transaction_unknown",
+          refusedAt: expect.any(String),
+        },
+      });
+
+      // A person asks again: the refusal gives way to the new request.
+      expect((await resubmit(batchId)).statusCode).toBe(200);
+      expect(await listItem()).toMatchObject({ moveRefusal: null, moveRequest: { toChainId: 31337 } });
+    });
+
+    it("another tenant cannot request a move", async () => {
+      const { batchId, transactionId } = await stuckOnOldChain();
+      const before = await transactionRow(transactionId);
+      const response = await app.inject({
+        method: "POST", url: `/api/v1/anchor-batches/${batchId}/resubmit`,
+        headers: { authorization: `Bearer ${await signIn(app, fx.operatorB)}`, "idempotency-key": idempotencyKey() },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(404);
+      expect(await transactionRow(transactionId)).toEqual(before);
+    });
+
+    it("a resubmit on the row's own chain withdraws a pending move", async () => {
+      const batchId = await makeBatch();
+      await fx.sql`
+        UPDATE chain.transactions
+        SET state = 'failed', attempts = 2, chain_id = 31337,
+            move_to_chain_id = 56, move_requested_at = now(),
+            move_checked_at = now(), move_wait_reason = 'open_send'
+        WHERE batch_id = ${batchId}
+      `;
+
+      const response = await resubmit(batchId);
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ confirmationState: "created", moveRequest: null });
+      const [row] = await fx.sql`
+        SELECT state, chain_id, move_to_chain_id, move_requested_at, move_checked_at, move_wait_reason
+        FROM chain.transactions WHERE batch_id = ${batchId}
+      `;
+      expect(row).toEqual({
+        state: "created", chain_id: 31337, move_to_chain_id: null, move_requested_at: null,
+        move_checked_at: null, move_wait_reason: null,
+      });
+      expect(await resubmitAudits(batchId)).toEqual([
+        { reason: "from_failed", detail: { previousAttempts: 2, withdrawnMoveToChainId: 56 } },
+      ]);
+    });
+
+    it("resubmits a stuck transaction recorded on this chain", async () => {
+      const batchId = await makeBatch();
+      // The only difference from the case above: the row is on the configured chain.
+      await fx.sql`
+        UPDATE chain.transactions
+        SET state = 'failed', attempts = 2, tx_hash = ${`0x${"cd".repeat(32)}`}, chain_id = 31337
+        WHERE batch_id = ${batchId}
+      `;
+
+      const response = await resubmit(batchId);
+      expect(response.statusCode).toBe(200);
+      expect(response.json().previousState).toBe("failed");
+
+      const [row] = await fx.sql<{ state: string; tx_hash: string | null; chain_id: number }[]>`
+        SELECT state, tx_hash, chain_id FROM chain.transactions WHERE batch_id = ${batchId}
+      `;
+      expect(row).toEqual({ state: "created", tx_hash: null, chain_id: 31337 });
+    });
+
     it("resubmission also requires anchor.submit", async () => {
       const batchId = await makeBatch();
       const response = await app.inject({

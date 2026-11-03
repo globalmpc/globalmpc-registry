@@ -52,7 +52,7 @@ import {
 } from "./document-status.js";
 import {
   adminSubject,
-  anchorBatchStatus,
+  anchorBatchResubmission,
   attestationDispute,
   bindWalletRequest,
   auditEvent,
@@ -828,7 +828,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: "anchor.submit",
     implemented: true,
-    responseSchema: anchorBatchStatus,
+    responseSchema: anchorBatchResubmission,
   },
 
   {

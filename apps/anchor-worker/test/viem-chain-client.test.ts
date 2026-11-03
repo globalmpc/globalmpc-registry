@@ -13,7 +13,8 @@ import { createViemChainClient } from "../src/viem-chain-client.js";
 
 type Answer = { result: unknown } | { error: { code: number; message: string } };
 
-let answers: Record<string, Answer> = {};
+/** An answer, or one chosen by the call's params. */
+let answers: Record<string, Answer | ((params: unknown[]) => Answer)> = {};
 let server: Server;
 let url: string;
 
@@ -24,8 +25,11 @@ beforeAll(async () => {
       body += chunk;
     });
     request.on("end", () => {
-      const call = JSON.parse(body) as { id: number; method: string };
-      const answer = answers[call.method] ?? { error: { code: -32601, message: "not scripted" } };
+      const call = JSON.parse(body) as { id: number; method: string; params: unknown[] };
+      const scripted = answers[call.method];
+      const answer =
+        (typeof scripted === "function" ? scripted(call.params) : scripted)
+        ?? { error: { code: -32601, message: "not scripted" } };
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ jsonrpc: "2.0", id: call.id, ...answer }));
     });
@@ -130,5 +134,39 @@ describe("observe on opBNB", () => {
   it("throws on a receipt without l1Fee, so the send stays open rather than counted at gas alone", async () => {
     answers = { eth_getTransactionReceipt: { result: raw({}) } };
     await expect(opbnb().observe(HASH)).rejects.toThrow("carries no l1Fee");
+  });
+});
+
+describe("hasCode", () => {
+  const ADDRESS = `0x${"0c".repeat(20)}`;
+
+  it("is true only for an address holding code", async () => {
+    answers = { eth_getCode: { result: "0x6080" } };
+    await expect(client().hasCode(ADDRESS)).resolves.toBe(true);
+    answers = { eth_getCode: { result: "0x" } };
+    await expect(client().hasCode(ADDRESS)).resolves.toBe(false);
+  });
+
+  it("throws when the code cannot be read", async () => {
+    answers = { eth_getCode: failing };
+    await expect(client().hasCode(ADDRESS)).rejects.toThrow();
+  });
+});
+
+describe("signerHasPendingTransactions", () => {
+  const counts = (pending: number, latest: number) => (params: unknown[]): Answer => ({
+    result: `0x${(params[1] === "pending" ? pending : latest).toString(16)}`,
+  });
+
+  it("is true only when the pending nonce is above the latest", async () => {
+    answers = { eth_getTransactionCount: counts(8, 7) };
+    await expect(client().signerHasPendingTransactions()).resolves.toBe(true);
+    answers = { eth_getTransactionCount: counts(7, 7) };
+    await expect(client().signerHasPendingTransactions()).resolves.toBe(false);
+  });
+
+  it("throws when the count cannot be read", async () => {
+    answers = { eth_getTransactionCount: failing };
+    await expect(client().signerHasPendingTransactions()).rejects.toThrow();
   });
 });

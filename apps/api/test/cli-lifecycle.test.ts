@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const s = vi.hoisted(() => ({
-  sql: { end: vi.fn() },
+  // Callable for the bootstrap CLI's role check; `privileges` is what that query returns.
+  privileges: { rolsuper: true, rolbypassrls: false },
+  sql: Object.assign(vi.fn(async () => [s.privileges]), { end: vi.fn() }),
   bootstrap: vi.fn(),
   credential: vi.fn(),
   schema: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock("../src/server.js", () => ({
 const originalExitCode = process.exitCode;
 beforeEach(() => {
   vi.resetModules();
+  s.privileges = { rolsuper: true, rolbypassrls: false };
   for (const f of [
     s.sql.end,
     s.bootstrap,
@@ -173,6 +176,23 @@ it("prefers an explicit bootstrap chain, and passes a non-digit value on to be r
   vi.stubEnv("BOOTSTRAP_CHAIN_ID", "0x15eb");
   await import("../src/bootstrap-cli.js");
   expect(s.bootstrap).toHaveBeenLastCalledWith(s.sql, expect.objectContaining({ chainId: Number.NaN }));
+});
+it("refuses to bootstrap with a role that cannot bypass row-level security", async () => {
+  // Aurora's admin is rds_superuser, not a superuser; without BYPASSRLS the inserts would be
+  // refused, and the cross-tenant wallet check would see no other tenant at all.
+  bootstrapEnv();
+  s.privileges = { rolsuper: false, rolbypassrls: false };
+  await import("../src/bootstrap-cli.js");
+  expect(process.exitCode).toBe(1);
+  expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining("BYPASSRLS"));
+  expect(s.bootstrap).not.toHaveBeenCalled();
+  expect(s.sql.end).toHaveBeenCalledOnce();
+});
+it("bootstraps with a role that has BYPASSRLS but is not a superuser", async () => {
+  bootstrapEnv();
+  s.privileges = { rolsuper: false, rolbypassrls: true };
+  await import("../src/bootstrap-cli.js");
+  expect(s.bootstrap).toHaveBeenCalledOnce();
 });
 it("reports bootstrap failure and closes its connection", async () => {
   bootstrapEnv();

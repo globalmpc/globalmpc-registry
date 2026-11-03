@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { runMigrations } from "@mpc/db";
 import {
   chainBacklog,
+  extendReorgWatch,
+  processChainMoves,
+  registerAnchorContract,
+  otherChainsInFlight,
   inFlightSends,
   shouldBackOff,
   spentTodayWei,
@@ -93,6 +97,17 @@ const receipt = (
   ).map((log) => ({ contract: extra.contract ?? config.contractAddress, ...log })),
 });
 
+interface PlanNode {
+  readonly "Node Type": string;
+  readonly "Relation Name"?: string;
+  readonly "Index Name"?: string;
+  readonly Plans?: readonly PlanNode[];
+}
+
+function flatten(node: PlanNode): PlanNode[] {
+  return [node, ...(node.Plans ?? []).flatMap(flatten)];
+}
+
 class FakeChain implements ChainClient {
   head = 100;
   fee = 1_000_000_000n;
@@ -102,10 +117,27 @@ class FakeChain implements ChainClient {
   encoded: unknown[] = [];
   /** What `getBatch` and the RootSubmitted log say about the batch. null = not on chain. */
   anchored: { root: string; txHash: string | null } | null = null;
+  signerPending = false;
+  signerPendingError: Error | null = null;
+  async signerHasPendingTransactions(): Promise<boolean> {
+    if (this.signerPendingError) throw this.signerPendingError;
+    return this.signerPending;
+  }
+  /** Addresses without code. Every other address has some. */
+  withoutCode = new Set<string>();
+  codeError: Error | null = null;
+  codeAsked: string[] = [];
+  async hasCode(address: string): Promise<boolean> {
+    this.codeAsked.push(address.toLowerCase());
+    if (this.codeError) throw this.codeError;
+    return !this.withoutCode.has(address.toLowerCase());
+  }
   /** When set, only this contract holds `anchored`; every other contract holds nothing. */
   anchoredOn: string | null = null;
   /** The contract each `anchoredBatch` call asked. */
   anchoredAsked: string[] = [];
+  /** This contract's `getBatch` reverts; the others answer. */
+  anchoredFailOn: string | null = null;
   /** Set to make the chain read fail, as a node restart or rate limit would. */
   anchoredError: Error | null = null;
 
@@ -115,6 +147,9 @@ class FakeChain implements ChainClient {
   ): Promise<{ root: string; txHash: string | null } | null> {
     this.anchoredAsked.push(contractAddress.toLowerCase());
     if (this.anchoredError) throw this.anchoredError;
+    // As viem does: `getBatch` on an address without code returns no data, which fails to decode.
+    if (this.withoutCode.has(contractAddress.toLowerCase())) throw new Error('returned no data ("0x")');
+    if (this.anchoredFailOn === contractAddress.toLowerCase()) throw new Error("execution reverted");
     if (this.anchoredOn !== null && this.anchoredOn !== contractAddress.toLowerCase()) return null;
     return this.anchored;
   }
@@ -357,6 +392,36 @@ describeDb("anchor submission and finality", () => {
     expect(row.state).toBe("confirmed");
     expect(row.confirmations).toBe(3);
     expect(row.confirmed_at).not.toBeNull();
+  });
+
+  it("stores when its reorg watch ends on confirmation, and restarts it on re-confirmation", async () => {
+    const watchOf = async () =>
+      (
+        await sql<{ confirmed_at: Date | null; reorg_watch_until: Date | null }[]>`
+          SELECT confirmed_at, reorg_watch_until FROM chain.transactions WHERE id = ${transactionId}
+        `
+      )[0]!;
+    await step();
+    chain.observation = receipt(100, BLOCK_A);
+    chain.head = 102;
+    expect(await step()).toMatchObject({ to: "confirmed" });
+    const first = await watchOf();
+    // Read by a worker on another chain, which does not know this one's ANCHOR_REORG_WATCH_MS.
+    expect(first.reorg_watch_until!.getTime() - first.confirmed_at!.getTime()).toBe(config.reorgWatchMs);
+
+    // A reorg moves it back: no confirmation, no watch deadline.
+    chain.observation = receipt(140, BLOCK_B);
+    chain.head = 141;
+    expect(await step()).toMatchObject({ to: "included" });
+    expect(await watchOf()).toEqual({ confirmed_at: null, reorg_watch_until: null });
+
+    // Confirmed again at the new block: the watch runs from this confirmation.
+    await sql`SELECT pg_sleep(0.01)`;
+    chain.head = 142;
+    expect(await step()).toMatchObject({ to: "confirmed" });
+    const second = await watchOf();
+    expect(second.reorg_watch_until!.getTime() - second.confirmed_at!.getTime()).toBe(config.reorgWatchMs);
+    expect(second.reorg_watch_until!.getTime()).toBeGreaterThan(first.reorg_watch_until!.getTime());
   });
 
   it("reverts finality and records an incident when a reorg is observed", async () => {
@@ -790,6 +855,22 @@ describeDb("anchor submission and finality", () => {
     expect(proposals).toHaveLength(0);
   });
 
+  it("masks the Safe service URL, hostname included, in the stored error and the logs", async () => {
+    const safeServiceUrl = "https://SAFEHOSTKEY.safe.example/api";
+    const safe = fakeSafe({
+      async propose() {
+        throw new Error("POST https://SAFEHOSTKEY.safe.example/v1/safes/0xsafe/ failed: 503");
+      },
+    });
+
+    await stepOnce(sql, chain, { ...safeConfigOf(), safeServiceUrl }, log, safe);
+
+    const row = await stateOf();
+    expect(row.last_error).toContain("safe_propose_failed");
+    expect(row.last_error).not.toContain("SAFEHOSTKEY");
+    for (const record of logs) expect(JSON.stringify(record)).not.toContain("SAFEHOSTKEY");
+  });
+
   it("does not change state while signatures are being collected", async () => {
     const safe = fakeSafe();
     await stepOnce(sql, chain, safeConfigOf(), log, safe);
@@ -1036,6 +1117,966 @@ describeDb("anchor submission and finality", () => {
     await sql`UPDATE chain.transactions SET chain_id = 56 WHERE id = ${transactionId}`;
     const result = await step();
     expect(result.handled).toBe(false);
+  });
+
+  it("reports another chain's unsettled transactions, never this chain's", async () => {
+    await sql`UPDATE chain.transactions SET chain_id = 5611 WHERE id = ${transactionId}`;
+    try {
+      expect(await otherChainsInFlight(sql, CHAIN_ID, 60_000)).toContainEqual(
+        expect.objectContaining({ chainId: 5611 }),
+      );
+      expect((await otherChainsInFlight(sql, 5611, 60_000)).map((c) => c.chainId)).not.toContain(5611);
+    } finally {
+      await sql`UPDATE chain.transactions SET chain_id = ${CHAIN_ID} WHERE id = ${transactionId}`;
+    }
+  });
+
+  it("counts another chain's confirmed rows only while that chain still rechecks them", async () => {
+    await step();
+    chain.observation = receipt(100, BLOCK_A);
+    chain.head = 102;
+    expect(await step()).toMatchObject({ to: "confirmed" });
+    await sql`UPDATE chain.transactions SET chain_id = 5611 WHERE id = ${transactionId}`;
+    try {
+      // Inside the reorg watch: the old chain's worker must keep running.
+      expect(await otherChainsInFlight(sql, CHAIN_ID, 60_000)).toContainEqual(
+        expect.objectContaining({ chainId: 5611 }),
+      );
+      // Past this worker's watch but not the conservative bound: the old chain's worker may have
+      // watched longer, so it still counts.
+      await sql`UPDATE chain.transactions SET confirmed_at = now() - interval '2 hours' WHERE id = ${transactionId}`;
+      expect(await otherChainsInFlight(sql, CHAIN_ID, 60_000)).toContainEqual(
+        expect.objectContaining({ chainId: 5611, inFlight: 1 }),
+      );
+      // Past the bound, with no search to retry: settled.
+      await sql`UPDATE chain.transactions SET confirmed_at = now() - interval '25 hours' WHERE id = ${transactionId}`;
+      expect((await otherChainsInFlight(sql, CHAIN_ID, 60_000)).map((c) => c.chainId)).not.toContain(5611);
+      // A watch longer than the bound is used as is.
+      expect(await otherChainsInFlight(sql, CHAIN_ID, 48 * 60 * 60 * 1000)).toContainEqual(
+        expect.objectContaining({ chainId: 5611, inFlight: 1 }),
+      );
+    } finally {
+      await sql`UPDATE chain.transactions SET chain_id = ${CHAIN_ID} WHERE id = ${transactionId}`;
+    }
+  });
+
+  it("counts another chain's confirmed row until the deadline its worker stored", async () => {
+    await step();
+    chain.observation = receipt(100, BLOCK_A);
+    chain.head = 102;
+    expect(await step()).toMatchObject({ to: "confirmed" });
+    await sql`UPDATE chain.transactions SET chain_id = 5611 WHERE id = ${transactionId}`;
+    const counted = async () =>
+      (await otherChainsInFlight(sql, CHAIN_ID, 60_000)).find((c) => c.chainId === 5611)?.inFlight ?? 0;
+    try {
+      // Confirmed past the 24 h floor, but that worker watches 48 h: still in flight.
+      await sql`
+        UPDATE chain.transactions
+        SET confirmed_at = now() - interval '25 hours', reorg_watch_until = now() + interval '23 hours'
+        WHERE id = ${transactionId}
+      `;
+      expect(await counted()).toBe(1);
+
+      // Confirmed minutes ago, but that worker watches only briefly and is done: settled, with no
+      // 24 h wait.
+      await sql`
+        UPDATE chain.transactions
+        SET confirmed_at = now() - interval '10 minutes', reorg_watch_until = now() - interval '1 minute'
+        WHERE id = ${transactionId}
+      `;
+      expect(await counted()).toBe(0);
+
+      // No stored deadline (confirmed before it was stored): the conservative floor applies.
+      await sql`UPDATE chain.transactions SET reorg_watch_until = NULL WHERE id = ${transactionId}`;
+      expect(await counted()).toBe(1);
+      await sql`UPDATE chain.transactions SET confirmed_at = now() - interval '25 hours' WHERE id = ${transactionId}`;
+      expect(await counted()).toBe(0);
+    } finally {
+      await sql`UPDATE chain.transactions SET chain_id = ${CHAIN_ID} WHERE id = ${transactionId}`;
+    }
+  });
+
+  describe("the reorg watch of a confirmed row", () => {
+    async function confirm() {
+      await step();
+      chain.observation = receipt(100, BLOCK_A);
+      chain.head = 102;
+      expect(await step()).toMatchObject({ to: "confirmed" });
+    }
+    /** Sets the confirmation and its stored deadline together, as the worker writes them. */
+    const watch = (confirmedAgo: string, deadline: string | null) => sql`
+      UPDATE chain.transactions
+      SET confirmed_at = now() - ${confirmedAgo}::interval,
+          reorg_watch_until = ${deadline === null ? null : sql`now() + ${deadline}::interval`}
+      WHERE id = ${transactionId}
+    `;
+    const claimed = async (watchMs = config.reorgWatchMs) =>
+      (await stepOnce(sql, chain, { ...config, reorgWatchMs: watchMs }, log)).transactionId === transactionId;
+    const counted = async (watchMs: number) =>
+      ((await otherChainsInFlight(sql, 5611, watchMs)).find((c) => c.chainId === CHAIN_ID)?.inFlight ?? 0) > 0;
+
+    it("is rechecked until the later of its stored deadline and this worker's own watch", async () => {
+      await confirm();
+      // Confirmed two hours ago under a three-hour watch; this worker now watches one hour: a
+      // lowered watch never cuts the stored deadline short.
+      await watch("2 hours", "1 hour");
+      expect(await claimed()).toBe(true);
+      // Confirmed a minute ago under a watch that has already run out; this one watches an hour:
+      // a raised watch applies at once, before any extension caught the stored deadline up.
+      await watch("1 minute", "-1 second");
+      expect(await claimed()).toBe(true);
+      // Past both.
+      await watch("61 minutes", "-1 second");
+      expect(await claimed()).toBe(false);
+    });
+
+    it("falls back to this worker's watch, to the millisecond, when it stored none", async () => {
+      await confirm();
+      await watch("30 minutes", null);
+      expect(await claimed()).toBe(true);
+      await watch("61 minutes", null);
+      expect(await claimed()).toBe(false);
+      // 1.2 s ago under a 1.4 s watch: still inside it. Rounded to whole seconds it would not be.
+      await watch("1200 milliseconds", null);
+      expect(await claimed(1_400)).toBe(true);
+      await watch("1600 milliseconds", null);
+      expect(await claimed(1_400)).toBe(false);
+    });
+
+    it.each([
+      ["an old confirmation with a later deadline", "50 hours", "1 hour", true, true],
+      // Only its own worker knows its watch; the report follows the stored deadline, which that
+      // worker's periodic extension brings up to it.
+      ["a recent confirmation whose deadline has passed", "1 minute", "-1 second", false, true],
+      ["no deadline and a confirmation inside the watch", "47 hours", null, true, true],
+      ["no deadline and a confirmation past the watch", "49 hours", null, false, false],
+      ["an old confirmation whose deadline has passed", "49 hours", "-1 second", false, false],
+    ] as const)("is reported from another chain and claimed by its own, for %s", async (_case, ago, deadline, reported, claimedHere) => {
+      // A watch above the report's 24 h floor, so both use the same fallback.
+      const watchMs = 48 * 60 * 60 * 1000;
+      await confirm();
+      await watch(ago, deadline);
+      expect(await counted(watchMs)).toBe(reported);
+      expect(await claimed(watchMs)).toBe(claimedHere);
+    });
+
+    it("is reported again once its own worker's extension catches the stored deadline up", async () => {
+      // Its stored deadline passed — the extension failed, or had not run yet — but its own worker,
+      // now on 48 h, still rechecks it; the next extension brings the report back in line.
+      const watchMs = 48 * 60 * 60 * 1000;
+      await confirm();
+      await watch("1 minute", "-1 second");
+      expect(await counted(watchMs)).toBe(false);
+      expect(await claimed(watchMs)).toBe(true);
+      expect(await extendReorgWatch(sql, CHAIN_ID, watchMs)).toBe(1);
+      expect(await counted(watchMs)).toBe(true);
+    });
+  });
+
+  describe("a raised reorg watch", () => {
+    const HOUR = 60 * 60 * 1000;
+    async function confirmedRow(chainId: number, confirmedAgo: string, deadline: string) {
+      const id = randomUUID();
+      await sql`
+        INSERT INTO chain.transactions (
+          id, tenant_id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
+          confirmations, confirmed_at, reorg_watch_until
+        ) VALUES (
+          ${id}, ${tenantId}, ${`watch:${id}`}, ${chainId}, 'confirmed', ${TX_HASH}, 100, ${BLOCK_A}, 3,
+          now() - ${confirmedAgo}::interval, now() + ${deadline}::interval
+        )
+      `;
+      return id;
+    }
+    const watchOf = async (id: string) => {
+      const [row] = await sql<{ confirmed_at: Date; reorg_watch_until: Date; updated_at: Date }[]>`
+        SELECT confirmed_at, reorg_watch_until, updated_at FROM chain.transactions WHERE id = ${id}
+      `;
+      return row!;
+    };
+    /** As the worker connects: its grants, through the 0103 trigger. */
+    let worker: postgres.Sql;
+    beforeAll(() => {
+      worker = postgres(process.env["DATABASE_URL"]!, {
+        onnotice: () => {},
+        prepare: false,
+        connection: { role: "mpc_worker" },
+      });
+    });
+    afterAll(async () => {
+      await worker.end();
+    });
+    const extendAsWorker = (chainId: number, watchMs: number) => extendReorgWatch(worker, chainId, watchMs);
+    /** Holds `statement` open on its own connection until the returned release is called. */
+    async function holding(statement: (held: postgres.ReservedSql) => Promise<unknown>) {
+      const held = await sql.reserve();
+      await held`BEGIN`;
+      await statement(held);
+      return async () => {
+        await held`ROLLBACK`;
+        held.release();
+      };
+    }
+
+    it("runs as the worker", async () => {
+      const [who] = await worker<{ current_user: string }[]>`SELECT current_user`;
+      expect(who!.current_user).toBe("mpc_worker");
+    });
+
+    it("extends on a later run a row another replica confirmed with a shorter watch", async () => {
+      // This replica starts with 24 hours: nothing to extend yet.
+      expect(await extendAsWorker(CHAIN_ID, 24 * HOUR)).toBe(0);
+      // A replica still on 30 minutes confirms a row afterwards, mid rolling deploy.
+      const id = await confirmedRow(CHAIN_ID, "1 minute", "29 minutes");
+      expect(await extendAsWorker(CHAIN_ID, 24 * HOUR)).toBe(1);
+      const after = await watchOf(id);
+      expect(after.reorg_watch_until.getTime() - after.confirmed_at.getTime()).toBe(24 * HOUR);
+    });
+
+    it("skips a row another worker holds, and extends it on the next run", async () => {
+      const id = await confirmedRow(CHAIN_ID, "20 minutes", "10 minutes");
+      const before = await watchOf(id);
+      const release = await holding((held) => held`SELECT 1 FROM chain.transactions WHERE id = ${id} FOR NO KEY UPDATE`);
+      try {
+        const started = Date.now();
+        expect(await extendAsWorker(CHAIN_ID, 24 * HOUR)).toBe(0);
+        expect(Date.now() - started).toBeLessThan(1_000);
+        expect(await watchOf(id)).toEqual(before);
+      } finally {
+        await release();
+      }
+      expect(await extendAsWorker(CHAIN_ID, 24 * HOUR)).toBe(1);
+    });
+
+    it("gives up on a table lock instead of waiting for it", async () => {
+      await confirmedRow(CHAIN_ID, "20 minutes", "10 minutes");
+      // As a non-concurrent index build holds it.
+      const release = await holding((held) => held`LOCK TABLE chain.transactions IN SHARE MODE`);
+      try {
+        const started = Date.now();
+        await expect(extendAsWorker(CHAIN_ID, 24 * HOUR)).rejects.toMatchObject({ code: "55P03" });
+        expect(Date.now() - started).toBeLessThan(5_000);
+      } finally {
+        await release();
+      }
+    });
+
+    it("extends a row still inside its watch to confirmation plus the new watch", async () => {
+      // Confirmed 20 minutes ago under a 30-minute watch; the worker restarts with 24 hours.
+      const id = await confirmedRow(CHAIN_ID, "20 minutes", "10 minutes");
+      const before = await watchOf(id);
+      expect(await extendAsWorker(CHAIN_ID, 24 * HOUR)).toBe(1);
+      const after = await watchOf(id);
+      expect(after.reorg_watch_until.getTime() - after.confirmed_at.getTime()).toBe(24 * HOUR);
+      // Nothing else of the confirmation moves, so the trigger keeps the new deadline.
+      expect(after.confirmed_at).toEqual(before.confirmed_at);
+      expect(after.updated_at).toEqual(before.updated_at);
+      // An hour later, past where the 30-minute watch ended, it is still rechecked.
+      await sql`UPDATE chain.transactions SET state = 'failed' WHERE id = ${transactionId}`;
+      await sql`
+        UPDATE chain.transactions
+        SET confirmed_at = confirmed_at - interval '1 hour', reorg_watch_until = reorg_watch_until - interval '1 hour'
+        WHERE id = ${id}
+      `;
+      chain.observation = receipt(100, BLOCK_A);
+      chain.head = 102;
+      expect(await stepOnce(sql, chain, { ...config, reorgWatchMs: 24 * HOUR }, log)).toMatchObject({ transactionId: id });
+    });
+
+    it("never shortens a deadline when the watch is lowered", async () => {
+      const id = await confirmedRow(CHAIN_ID, "20 minutes", "23 hours");
+      const before = await watchOf(id);
+      expect(await extendAsWorker(CHAIN_ID, 30 * 60 * 1000)).toBe(0);
+      expect(await watchOf(id)).toEqual(before);
+    });
+
+    it("does not revive a row confirmed longer ago than the watch", async () => {
+      const id = await confirmedRow(CHAIN_ID, "25 hours", "-10 minutes");
+      const before = await watchOf(id);
+      expect(await extendAsWorker(CHAIN_ID, 24 * HOUR)).toBe(0);
+      expect(await watchOf(id)).toEqual(before);
+    });
+
+    it("leaves another chain's rows to that chain's worker", async () => {
+      const id = await confirmedRow(5611, "20 minutes", "10 minutes");
+      try {
+        const before = await watchOf(id);
+        expect(await extendAsWorker(CHAIN_ID, 24 * HOUR)).toBe(0);
+        expect(await watchOf(id)).toEqual(before);
+      } finally {
+        await sql`DELETE FROM chain.transactions WHERE id = ${id}`;
+      }
+    });
+  });
+
+  it("reads the watch set through indexes, not every confirmed row ever kept", async () => {
+    // Enough settled history that a scan costs more than the indexes (0104), as in production.
+    const HISTORY_CHAIN = 424242;
+    await sql`
+      INSERT INTO chain.transactions (
+        id, tenant_id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
+        confirmations, confirmed_at, reorg_watch_until, created_at, updated_at
+      )
+      SELECT gen_random_uuid(), ${tenantId}, 'history:' || g, ${HISTORY_CHAIN}, 'confirmed',
+             '0x' || lpad(to_hex(g), 64, '0'), g, ${BLOCK_A}, 3,
+             now() - g * interval '1 minute', now() - g * interval '1 minute' + interval '30 minutes',
+             now() - g * interval '1 minute', now() - g * interval '1 minute'
+      FROM generate_series(60, 60059) g
+    `;
+    await sql`ANALYZE chain.transactions`;
+    const queries: { text: string; parameters: unknown[] }[] = [];
+    const traced = postgres(process.env["DATABASE_URL"]!, {
+      onnotice: () => {},
+      prepare: false,
+      debug: (_connection, text, parameters) => {
+        if (text.includes("t.reorg_watch_until > now()") || text.includes("t.confirmed_at > now()")) {
+          queries.push({ text, parameters });
+        }
+      },
+    });
+    try {
+      await otherChainsInFlight(traced, CHAIN_ID, config.reorgWatchMs);
+      expect(await stepOnce(traced, chain, { ...config, chainId: HISTORY_CHAIN }, log)).toMatchObject({ handled: false });
+      // No history row is inside a 30-minute watch, so this changes nothing; its plan is read below.
+      expect(await extendReorgWatch(traced, HISTORY_CHAIN, 30 * 60 * 1000)).toBe(0);
+      // The other-chain report, the claim and the watch extension.
+      expect(queries).toHaveLength(3);
+      for (const { text, parameters } of queries) {
+        const [explained] = await sql.unsafe<{ "QUERY PLAN": { Plan: PlanNode }[] }[]>(
+          `EXPLAIN (FORMAT JSON) ${text}`,
+          parameters as postgres.ParameterOrJSON<never>[],
+        );
+        const nodes = flatten(explained!["QUERY PLAN"][0]!.Plan);
+        expect(nodes.filter((n) => n["Node Type"] === "Seq Scan" && n["Relation Name"] === "transactions")).toEqual([]);
+        const used = nodes.map((n) => n["Index Name"]);
+        // The report ranges over the stored deadline (and, without one, the confirmation time);
+        // the claim also over the confirmation time, for its own-watch floor; the extension over
+        // the confirmation time alone.
+        if (text.includes("WITH transactions AS")) expect(used).toContain("transactions_reorg_watch_idx");
+        else if (text.includes("LIMIT 1")) expect(used).toEqual(expect.arrayContaining(["transactions_reorg_watch_idx", "transactions_confirmed_at_idx"]));
+        else expect(used).toContain("transactions_confirmed_at_idx");
+      }
+    } finally {
+      await traced.end();
+      // Nothing references these rows. Without skipping the foreign-key triggers, each delete
+      // scans this tenant's rows for one naming it as its replacement: no index leads with
+      // `replaced_by_id`, and all 60,000 share the tenant.
+      await sql.begin(async (tx) => {
+        await tx`SET LOCAL session_replication_role = replica`;
+        await tx`DELETE FROM chain.transactions WHERE chain_id = ${HISTORY_CHAIN}`;
+      });
+      await sql`ANALYZE chain.transactions`;
+      const [left] = await sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM chain.transactions WHERE chain_id = ${HISTORY_CHAIN}
+      `;
+      expect(left!.n).toBe(0);
+    }
+  }, 30_000);
+
+  describe("a requested chain move", () => {
+    const NEW_CHAIN = 5611;
+    const OLD_CONTRACT = `0x${"0d".repeat(20)}`;
+    const moves = () => processChainMoves(sql, chain, config, log);
+    /** The case's row, sent once to `contract` and left `state`, with a move requested. */
+    async function requested(state: string, contract: string | null = OLD_CONTRACT) {
+      await sql`
+        UPDATE chain.transactions
+        SET state = ${state}, tx_hash = ${TX_HASH}, contract_address = ${contract}, attempts = 3,
+            submitted_at = now() - interval '1 hour', last_error = 'boom',
+            move_to_chain_id = ${NEW_CHAIN}, move_requested_at = now()
+        WHERE id = ${transactionId}
+      `;
+    }
+    const rowOf = async () =>
+      (await sql`SELECT * FROM chain.transactions WHERE id = ${transactionId}`)[0]!;
+    const audits = async () =>
+      sql<{ command: string; reason: string; detail: Record<string, unknown> }[]>`
+        SELECT command, reason, detail FROM audit.events
+        WHERE resource_type = 'anchor_batch' AND resource_id = ${batchRowId} ORDER BY id
+      `;
+    const unchangedRequest = async () =>
+      expect(await rowOf()).toMatchObject({ chain_id: CHAIN_ID, move_to_chain_id: NEW_CHAIN, state: "failed" });
+
+    afterEach(async () => {
+      // Back on this chain, where the next case's setup clears it with its sends and gas.
+      await sql`
+        UPDATE chain.transactions
+        SET chain_id = ${CHAIN_ID}, move_to_chain_id = NULL, move_requested_at = NULL,
+            move_checked_at = NULL, move_wait_reason = NULL
+        WHERE id = ${transactionId}
+      `;
+    });
+
+    it("moves and resets the row when no contract on this chain holds the batch", async () => {
+      await requested("failed");
+      // The recorded contract, the configured one, then every other this chain's registry holds
+      // (append-only: earlier cases' contracts stay in it).
+      const registered = await sql<{ contract_address: string }[]>`
+        SELECT contract_address FROM chain.anchor_contracts
+        WHERE chain_id = ${CHAIN_ID} ORDER BY first_seen_at, contract_address
+      `;
+      expect(registered.map((r) => r.contract_address)).toContain(OLD_CONTRACT);
+      const checked = [...new Set([OLD_CONTRACT, config.contractAddress, ...registered.map((r) => r.contract_address)])];
+      expect(await moves()).toEqual([
+        {
+          kind: "moved",
+          transactionId,
+          toChainId: NEW_CHAIN,
+          contractsChecked: checked,
+        },
+      ]);
+      expect(chain.anchoredAsked).toEqual(checked);
+      expect(await rowOf()).toMatchObject({
+        chain_id: NEW_CHAIN, state: "created", attempts: 0, tx_hash: null, contract_address: null,
+        block_number: null, block_hash: null, confirmations: 0, confirmed_at: null,
+        submitted_at: null, chain_search_failed_since: null, retry_after: null,
+        reorg_watch_until: null, last_error: "resubmitted_from_failed",
+        move_to_chain_id: null, move_requested_at: null, move_checked_at: null, move_wait_reason: null,
+      });
+      expect(await audits()).toEqual([
+        expect.objectContaining({
+          command: "anchor.batch.chain_moved",
+          reason: "from_failed",
+          detail: expect.objectContaining({
+            actor: "anchor_worker", fromChainId: CHAIN_ID, toChainId: NEW_CHAIN,
+            contractsChecked: checked,
+          }),
+        }),
+      ]);
+      expect(logs).toContainEqual(expect.objectContaining({ msg: "anchor.chain_move.done", toChainId: NEW_CHAIN }));
+
+      // The new chain's worker claims it like any new row; the old one no longer sees it.
+      expect(await moves()).toEqual([]);
+      expect(await step()).toMatchObject({ handled: false });
+      const fresh = new FakeChain();
+      expect(await stepOnce(sql, fresh, { ...config, chainId: NEW_CHAIN, eoaAllowedChainIds: [NEW_CHAIN] }, log))
+        .toMatchObject({ transactionId, to: "submitted" });
+    });
+
+    it.each([
+      ["the stored root, with its transaction", { root: ROOT, txHash: TX_HASH_2 }, "submitted", "reconciled_from_chain"],
+      ["another root", { root: `0x${"99".repeat(32)}`, txHash: TX_HASH_2 }, "reconciliation_required", "batch_on_chain_with_different_root"],
+      ["no transaction found", { root: ROOT, txHash: null }, "reconciliation_required", "batch_on_chain_transaction_unknown"],
+    ] as const)("refuses the move when this chain holds the batch with %s", async (_case, anchored, to, reason) => {
+      await requested("dropped");
+      chain.anchored = anchored;
+      chain.anchoredOn = OLD_CONTRACT;
+      expect(await moves()).toEqual([{ kind: "refused_on_chain", transactionId, to, contract: OLD_CONTRACT }]);
+      const row = await rowOf();
+      expect(row).toMatchObject({ chain_id: CHAIN_ID, state: to, last_error: reason, move_to_chain_id: null, move_requested_at: null });
+      if (to === "submitted") expect(row).toMatchObject({ tx_hash: TX_HASH_2, contract_address: OLD_CONTRACT });
+      expect((await audits()).map((a) => a.command)).toEqual(["anchor.batch.chain_move_refused"]);
+      expect(logs).toContainEqual(expect.objectContaining({ msg: "anchor.chain_move.refused_on_chain", reason }));
+      // Adopted, the old chain's worker tracks it on as any submitted row.
+      if (to === "submitted") {
+        chain.observation = receipt(100, BLOCK_A);
+        expect(await step()).toMatchObject({ transactionId, from: "submitted" });
+      }
+    });
+
+    it("finds the batch on the configured contract when the row recorded none", async () => {
+      await requested("reconciliation_required", null);
+      chain.anchored = { root: ROOT, txHash: TX_HASH_2 };
+      chain.anchoredOn = config.contractAddress;
+      expect(await moves()).toEqual([
+        { kind: "refused_on_chain", transactionId, to: "submitted", contract: config.contractAddress },
+      ]);
+    });
+
+    it.each([
+      ["an unsettled send of the row on this chain", "open_send"],
+      ["an open Safe proposal", "open_proposal"],
+      ["a signer transaction not yet mined", "signer_pending"],
+      ["a failed chain read", "check_failed"],
+    ] as const)("waits, and leaves the request, while there is %s", async (_case, reason) => {
+      await requested("failed");
+      if (reason === "open_send") {
+        await sql`
+          INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id, tenant_id)
+          VALUES (${CHAIN_ID}, ${TX_HASH}, ${transactionId}, ${tenantId})
+        `;
+      } else if (reason === "open_proposal") {
+        await sql`
+          INSERT INTO chain.anchor_proposals (
+            id, tenant_id, transaction_id, chain_id, safe_address, contract_address, calldata, calldata_hash
+          ) VALUES (
+            ${randomUUID()}, ${tenantId}, ${transactionId}, ${CHAIN_ID}, ${`0x${"5a".repeat(20)}`},
+            ${OLD_CONTRACT}, '0x00', ${`0x${"ab".repeat(32)}`}
+          )
+        `;
+      } else if (reason === "signer_pending") {
+        chain.signerPending = true;
+      } else {
+        chain.anchoredError = new Error("HTTP request failed. URL: https://rpc.test/v2/SECRETKEY99");
+      }
+      expect(await moves()).toEqual([{ kind: "waiting", transactionId, reason }]);
+      await unchangedRequest();
+      // Stamped, so requests checked longer ago come first next run.
+      expect(await rowOf()).toMatchObject({ move_wait_reason: reason, move_checked_at: expect.any(Date) });
+      expect(await audits()).toEqual([]);
+      const logged = logs.find((l) => l["msg"] === "anchor.chain_move.waiting");
+      expect(logged).toMatchObject({ reason });
+      expect(JSON.stringify(logs)).not.toContain("SECRETKEY99");
+      // Nothing is asked of the chain before what is ours has settled.
+      if (reason === "open_send" || reason === "open_proposal" || reason === "signer_pending") {
+        expect(chain.anchoredAsked).toEqual([]);
+      }
+    });
+
+    /** A send of this row on this chain, settled as `reason`. */
+    const settledSend = (hash: string, reason: "receipt" | "operator") => sql`
+      INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id, tenant_id, settled_at, settled_reason)
+      VALUES (${CHAIN_ID}, ${hash}, ${transactionId}, ${tenantId}, now(), ${reason})
+    `;
+    const CONTRACT_A = `0x${"0a".repeat(20)}`;
+
+    it("asks the contract a landed send stored the batch on, though no row records it any more", async () => {
+      // Sent to A, dropped, resubmitted (contract cleared), mined into A after all; the contract
+      // was then changed, and the next attempt failed before it was broadcast.
+      await requested("failed", null);
+      await settledSend(TX_HASH_2, "receipt");
+      chain.observation = {
+        ...receipt(100, BLOCK_A),
+        rootSubmissions: [{ contract: CONTRACT_A, batchId: batchExternalId.toLowerCase(), root: ROOT }],
+      } as Observation;
+      chain.anchored = { root: ROOT, txHash: TX_HASH_2 };
+      chain.anchoredOn = CONTRACT_A;
+      expect(await moves()).toEqual([{ kind: "refused_on_chain", transactionId, to: "submitted", contract: CONTRACT_A }]);
+      expect(chain.anchoredAsked).toContain(CONTRACT_A);
+      expect(await rowOf()).toMatchObject({ chain_id: CHAIN_ID, tx_hash: TX_HASH_2, contract_address: CONTRACT_A });
+    });
+
+    it("asks a contract no row names any more, from the registry", async () => {
+      // Another row was sent to A on this chain, then moved away: its contract was cleared and
+      // its chain changed, so no row on this chain names A. The batch is on A all the same.
+      await requested("failed", null);
+      const other = randomUUID();
+      await sql`
+        INSERT INTO chain.transactions (id, tenant_id, intent_key, chain_id, state, tx_hash, contract_address)
+        VALUES (${other}, ${tenantId}, ${`other:${randomUUID()}`}, ${CHAIN_ID}, 'failed', ${TX_HASH_2}, ${CONTRACT_A})
+      `;
+      await sql`
+        UPDATE chain.transactions
+        SET chain_id = ${NEW_CHAIN}, state = 'failed', tx_hash = NULL, contract_address = NULL
+        WHERE id = ${other}
+      `;
+      expect(
+        await sql`SELECT 1 FROM chain.transactions WHERE chain_id = ${CHAIN_ID} AND contract_address = ${CONTRACT_A}`,
+      ).toHaveLength(0);
+      chain.anchored = { root: ROOT, txHash: TX_HASH_2 };
+      chain.anchoredOn = CONTRACT_A;
+      expect(await moves()).toEqual([{ kind: "refused_on_chain", transactionId, to: "submitted", contract: CONTRACT_A }]);
+      expect(chain.anchoredAsked).toContain(CONTRACT_A);
+      expect(await rowOf()).toMatchObject({ chain_id: CHAIN_ID, move_to_chain_id: null });
+    });
+
+    it("skips a registered address without code, and says so", async () => {
+      const typo = `0x${"0e".repeat(19)}0f`;
+      await registerAnchorContract(sql, CHAIN_ID, typo);
+      chain.withoutCode.add(typo);
+      await requested("failed", null);
+      expect(await moves()).toMatchObject([{ kind: "moved", transactionId }]);
+      expect(chain.codeAsked).toContain(typo);
+      expect(chain.anchoredAsked).not.toContain(typo);
+      const [moved] = await audits();
+      expect(moved).toMatchObject({
+        command: "anchor.batch.chain_moved",
+        detail: { contractsWithoutCode: [typo], contractsChecked: expect.not.arrayContaining([typo]) },
+      });
+      expect(logs).toContainEqual(
+        expect.objectContaining({ msg: "anchor.chain_move.done", contractsWithoutCode: [typo] }),
+      );
+    });
+
+    it("waits when a contract with code cannot be read, whatever else has no code", async () => {
+      const typo = `0x${"0e".repeat(19)}0f`;
+      const reverting = `0x${"0e".repeat(19)}10`;
+      await registerAnchorContract(sql, CHAIN_ID, typo);
+      await registerAnchorContract(sql, CHAIN_ID, reverting);
+      chain.withoutCode.add(typo);
+      chain.anchoredFailOn = reverting;
+      await requested("failed", null);
+      expect(await moves()).toEqual([{ kind: "waiting", transactionId, reason: "check_failed" }]);
+      await unchangedRequest();
+      expect(await audits()).toEqual([]);
+    });
+
+    it("waits when whether an address has code cannot be read", async () => {
+      await requested("failed", null);
+      chain.codeError = new Error("rpc down");
+      expect(await moves()).toEqual([{ kind: "waiting", transactionId, reason: "check_failed" }]);
+      expect(chain.anchoredAsked).toEqual([]);
+      await unchangedRequest();
+    });
+
+    it("asks a contract only a worker's startup registered", async () => {
+      const startupOnly = `0x${"0c".repeat(20)}`;
+      await registerAnchorContract(sql, CHAIN_ID, startupOnly.toUpperCase().replace("0X", "0x"));
+      await registerAnchorContract(sql, CHAIN_ID, startupOnly);
+      expect(
+        await sql`SELECT contract_address FROM chain.anchor_contracts WHERE chain_id = ${CHAIN_ID} AND contract_address = ${startupOnly}`,
+      ).toHaveLength(1);
+      await requested("failed", null);
+      chain.anchored = { root: ROOT, txHash: TX_HASH_2 };
+      chain.anchoredOn = startupOnly;
+      expect(await moves()).toEqual([{ kind: "refused_on_chain", transactionId, to: "submitted", contract: startupOnly }]);
+    });
+
+    it("records where it was found for a row of the same hash that recorded no contract", async () => {
+      // A row from before contracts were recorded (0101 left it NULL): its own transaction stored
+      // the batch on A, which is no longer configured. Tracking it on must ask A.
+      await requested("dropped", null);
+      chain.anchored = { root: ROOT, txHash: TX_HASH };
+      chain.anchoredOn = CONTRACT_A;
+      expect(await moves()).toEqual([{ kind: "refused_on_chain", transactionId, to: "submitted", contract: CONTRACT_A }]);
+      expect(await rowOf()).toMatchObject({
+        chain_id: CHAIN_ID, state: "submitted", tx_hash: TX_HASH, contract_address: CONTRACT_A,
+        last_error: "reconciled_from_chain", move_to_chain_id: null,
+      });
+      // The recorded pair is frozen again (0101).
+      await expect(
+        sql`UPDATE chain.transactions SET contract_address = ${config.contractAddress} WHERE id = ${transactionId}`,
+      ).rejects.toMatchObject({ code: "23514" });
+    });
+
+    it("keeps the recorded contract of the same hash", async () => {
+      await requested("dropped", OLD_CONTRACT);
+      chain.anchored = { root: ROOT, txHash: TX_HASH };
+      chain.anchoredOn = OLD_CONTRACT;
+      expect(await moves()).toEqual([{ kind: "refused_on_chain", transactionId, to: "submitted", contract: OLD_CONTRACT }]);
+      expect(await rowOf()).toMatchObject({ tx_hash: TX_HASH, contract_address: OLD_CONTRACT });
+    });
+
+    it("asks every contract a row on this chain recorded", async () => {
+      await requested("failed", null);
+      await sql`
+        INSERT INTO chain.transactions (id, tenant_id, intent_key, chain_id, state, tx_hash, contract_address)
+        VALUES (${randomUUID()}, ${tenantId}, ${`other:${randomUUID()}`}, ${CHAIN_ID}, 'failed', ${TX_HASH_2}, ${CONTRACT_A})
+      `;
+      chain.anchored = { root: ROOT, txHash: TX_HASH_2 };
+      chain.anchoredOn = CONTRACT_A;
+      expect(await moves()).toEqual([{ kind: "refused_on_chain", transactionId, to: "submitted", contract: CONTRACT_A }]);
+    });
+
+    it.each([
+      ["settled by an operator", "operator"],
+      ["settled by a receipt the node no longer returns", "receipt"],
+    ] as const)("refuses, for a person, a row with a send %s", async (_case, reason) => {
+      await requested("failed", null);
+      await settledSend(TX_HASH_2, reason);
+      chain.observation = { kind: "unknown" };
+      expect(await moves()).toEqual([{ kind: "refused", transactionId, reason: "send_outcome_unknown" }]);
+      expect(await rowOf()).toMatchObject({
+        chain_id: CHAIN_ID, state: "reconciliation_required",
+        last_error: "chain_move_refused_send_outcome_unknown", move_to_chain_id: null, move_checked_at: null,
+      });
+      expect((await audits()).map((a) => [a.command, a.reason])).toEqual([["anchor.batch.chain_move_refused", "send_outcome_unknown"]]);
+    });
+
+    it("moves a row whose landed send stored nothing", async () => {
+      // A reverted send was mined and settled by its receipt; its receipt shows no RootSubmitted.
+      await requested("reverted", null);
+      await settledSend(TX_HASH_2, "receipt");
+      chain.observation = receipt(100, BLOCK_A, "reverted");
+      expect(await moves()).toMatchObject([{ kind: "moved", transactionId }]);
+    });
+
+    it("takes a request never checked before one that waited", async () => {
+      await requested("failed");
+      chain.signerPending = true;
+      expect(await moves()).toMatchObject([{ kind: "waiting", transactionId }]);
+      // A second request, made later but never checked.
+      const laterBatch = randomUUID();
+      const laterTransaction = randomUUID();
+      await sql`
+        INSERT INTO chain.anchor_batches (id, tenant_id, batch_id, merkle_root, manifest_hash, manifest_object_key, schema_version, record_count)
+        VALUES (${laterBatch}, ${tenantId}, ${`0x${laterBatch.replace(/-/g, "").repeat(2)}`}, ${ROOT}, ${MANIFEST}, 'manifests/later.json', '1', 1)
+      `;
+      await sql`
+        INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state, move_to_chain_id, move_requested_at)
+        VALUES (${laterTransaction}, ${tenantId}, ${laterBatch}, ${`anchor:later:${laterBatch}`}, ${CHAIN_ID}, 'failed', ${NEW_CHAIN}, now())
+      `;
+      expect((await moves()).map((o) => o.transactionId)).toEqual([laterTransaction, transactionId]);
+    });
+
+    it("goes on to the next request when one fails", async () => {
+      await requested("failed");
+      // What the chain answers for this batch cannot be stored: the row's own update fails.
+      chain.anchoredBatch = async (batchId: string) =>
+        batchId === batchExternalId ? { root: ROOT, txHash: "0xnot-a-hash" } : null;
+      const otherBatch = randomUUID();
+      const otherTransaction = randomUUID();
+      await sql`
+        INSERT INTO chain.anchor_batches (id, tenant_id, batch_id, merkle_root, manifest_hash, manifest_object_key, schema_version, record_count)
+        VALUES (${otherBatch}, ${tenantId}, ${`0x${otherBatch.replace(/-/g, "").repeat(2)}`}, ${ROOT}, ${MANIFEST}, 'manifests/other.json', '1', 1)
+      `;
+      await sql`
+        INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state, move_to_chain_id, move_requested_at)
+        VALUES (${otherTransaction}, ${tenantId}, ${otherBatch}, ${`anchor:other:${otherBatch}`}, ${CHAIN_ID}, 'failed', ${NEW_CHAIN}, now())
+      `;
+      expect(await moves()).toEqual([
+        { kind: "waiting", transactionId, reason: "check_failed" },
+        expect.objectContaining({ kind: "moved", transactionId: otherTransaction }),
+      ]);
+      expect(logs).toContainEqual(expect.objectContaining({ msg: "anchor.chain_move.failed", transactionId }));
+      expect(await rowOf()).toMatchObject({ chain_id: CHAIN_ID, move_wait_reason: "check_failed" });
+      await sql`UPDATE chain.transactions SET chain_id = ${CHAIN_ID} WHERE id = ${otherTransaction}`;
+    });
+
+    it("leaves a row that changed between its check and the move", async () => {
+      await requested("failed");
+      // Touched while the chain was being asked, as a person or another process might.
+      chain.anchoredBatch = async () => {
+        await sql`UPDATE chain.transactions SET last_error = 'touched', updated_at = now() WHERE id = ${transactionId}`;
+        return null;
+      };
+      expect(await moves()).toEqual([{ kind: "skipped", transactionId }]);
+      expect(await rowOf()).toMatchObject({ chain_id: CHAIN_ID, move_to_chain_id: NEW_CHAIN, last_error: "touched" });
+    });
+
+    it("waits when the signer's pending count cannot be read", async () => {
+      await requested("failed");
+      chain.signerPendingError = new Error("rpc down");
+      expect(await moves()).toEqual([{ kind: "waiting", transactionId, reason: "check_failed" }]);
+      await unchangedRequest();
+    });
+
+    it("refuses, leaving the row for a person, when the intent is already on the requested chain", async () => {
+      await requested("failed");
+      await sql`
+        INSERT INTO chain.transactions (id, tenant_id, intent_key, chain_id, state)
+        VALUES (${randomUUID()}, ${tenantId}, ${`anchor:${batchExternalId}`}, ${NEW_CHAIN}, 'created')
+      `;
+      // The row's own failure and retry schedule, which the refusal must not overwrite.
+      await sql`
+        UPDATE chain.transactions
+        SET chain_search_failed_since = '2026-01-01T00:00:00Z', retry_after = '2026-01-01T01:00:00Z'
+        WHERE id = ${transactionId}
+      `;
+      try {
+        expect(await moves()).toEqual([{ kind: "refused", transactionId, reason: "other_transaction" }]);
+        expect(await rowOf()).toMatchObject({
+          chain_id: CHAIN_ID, state: "failed", move_to_chain_id: null, move_requested_at: null,
+          last_error: "boom",
+          chain_search_failed_since: new Date("2026-01-01T00:00:00Z"),
+          retry_after: new Date("2026-01-01T01:00:00Z"),
+        });
+        // The refusal is the audit event the batch list shows (`moveRefusal`).
+        expect((await audits()).map((a) => [a.command, a.reason])).toEqual([
+          ["anchor.batch.chain_move_refused", "other_transaction"],
+        ]);
+      } finally {
+        await sql`DELETE FROM chain.transactions WHERE intent_key = ${`anchor:${batchExternalId}`} AND chain_id = ${NEW_CHAIN}`;
+      }
+    });
+
+    it("skips a row another worker holds, and moves it on the next run", async () => {
+      await requested("failed");
+      const held = await sql.reserve();
+      try {
+        await held`BEGIN`;
+        await held`SELECT 1 FROM chain.transactions WHERE id = ${transactionId} FOR UPDATE`;
+        expect(await moves()).toEqual([{ kind: "skipped", transactionId }]);
+      } finally {
+        await held`ROLLBACK`;
+        held.release();
+      }
+      expect(await moves()).toMatchObject([{ kind: "moved", transactionId }]);
+    });
+
+    it("leaves another chain's requests to that chain's worker", async () => {
+      await requested("failed");
+      await sql`UPDATE chain.transactions SET chain_id = 97 WHERE id = ${transactionId}`;
+      try {
+        expect(await moves()).toEqual([]);
+        expect(await rowOf()).toMatchObject({ chain_id: 97, move_to_chain_id: NEW_CHAIN });
+      } finally {
+        await sql`UPDATE chain.transactions SET chain_id = ${CHAIN_ID} WHERE id = ${transactionId}`;
+      }
+    });
+
+    it.each([
+      ["the configured contract", () => config.contractAddress],
+      ["the contract the row recorded", () => OLD_CONTRACT],
+    ])("waits, and does not move, when the node shows no code at %s", async (_case, contract) => {
+      await requested("failed");
+      chain.withoutCode.add(contract());
+      expect(await moves()).toEqual([{ kind: "waiting", transactionId, reason: "check_failed" }]);
+      await unchangedRequest();
+      expect(await audits()).toEqual([]);
+      expect(logs).toContainEqual(
+        expect.objectContaining({ msg: "anchor.chain_move.waiting", reason: "check_failed", error: expect.stringContaining(contract()) }),
+      );
+    });
+
+    it("does not move on a node that answers no code for every address", async () => {
+      // An RPC node answering "0x" for everything: nothing is asked, so nothing says "absent".
+      await requested("failed", null);
+      chain.hasCode = async (address: string) => {
+        chain.codeAsked.push(address.toLowerCase());
+        return false;
+      };
+      expect(await moves()).toEqual([{ kind: "waiting", transactionId, reason: "check_failed" }]);
+      expect(chain.anchoredAsked).toEqual([]);
+      await unchangedRequest();
+      expect(await audits()).toEqual([]);
+    });
+
+    /** A second batch and its row on this chain, failed with a move requested to `toChainId`. */
+    async function anotherRequest(toChainId = NEW_CHAIN) {
+      const otherBatch = randomUUID();
+      const otherTransaction = randomUUID();
+      await sql`
+        INSERT INTO chain.anchor_batches (id, tenant_id, batch_id, merkle_root, manifest_hash, manifest_object_key, schema_version, record_count)
+        VALUES (${otherBatch}, ${tenantId}, ${`0x${otherBatch.replace(/-/g, "").repeat(2)}`}, ${ROOT}, ${MANIFEST}, 'manifests/other.json', '1', 1)
+      `;
+      await sql`
+        INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state, move_to_chain_id, move_requested_at)
+        VALUES (${otherTransaction}, ${tenantId}, ${otherBatch}, ${`anchor:other:${otherBatch}`}, ${CHAIN_ID}, 'failed', ${toChainId}, now() + interval '1 second')
+      `;
+      return otherTransaction;
+    }
+
+    it.each([
+      ["the signer's pending count", "signer"],
+      ["whether an address has code", "code"],
+    ] as const)("asks %s again for the next request after a failed read", async (_case, read) => {
+      await requested("failed");
+      const otherTransaction = await anotherRequest();
+      // One transient failure, then the node answers.
+      if (read === "signer") {
+        let calls = 0;
+        chain.signerHasPendingTransactions = async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("rpc hiccup");
+          return false;
+        };
+      } else {
+        const failOnce = new Set([config.contractAddress]);
+        const hasCode = chain.hasCode.bind(chain);
+        chain.hasCode = async (address: string) => {
+          if (failOnce.delete(address.toLowerCase())) throw new Error("rpc hiccup");
+          return hasCode(address);
+        };
+      }
+      try {
+        expect(await moves()).toEqual([
+          { kind: "waiting", transactionId, reason: "check_failed" },
+          expect.objectContaining({ kind: "moved", transactionId: otherTransaction }),
+        ]);
+      } finally {
+        await sql`UPDATE chain.transactions SET chain_id = ${CHAIN_ID} WHERE id = ${otherTransaction}`;
+      }
+    });
+
+    it.each([
+      ["a chain outside the supported list", 97],
+      ["a chain of another environment", 56],
+    ])("refuses a request to %s without asking the chain, and leaves the row as it was", async (_case, toChainId) => {
+      // The API refuses such a request; this one was written another way (an older release, by hand).
+      await requested("failed");
+      await sql`
+        UPDATE chain.transactions
+        SET move_to_chain_id = ${toChainId},
+            chain_search_failed_since = '2026-01-01T00:00:00Z', retry_after = '2026-01-01T01:00:00Z'
+        WHERE id = ${transactionId}
+      `;
+      const before = await rowOf();
+      expect(await moves()).toEqual([{ kind: "refused", transactionId, reason: "target_not_allowed" }]);
+      expect(chain.anchoredAsked).toEqual([]);
+      expect(chain.codeAsked).toEqual([]);
+      const after = await rowOf();
+      expect(after).toEqual({
+        ...before,
+        move_to_chain_id: null, move_requested_at: null, move_checked_at: null, move_wait_reason: null,
+        updated_at: expect.any(Date),
+      });
+      expect(await audits()).toEqual([
+        expect.objectContaining({
+          command: "anchor.batch.chain_move_refused",
+          reason: "target_not_allowed",
+          detail: expect.objectContaining({ fromChainId: CHAIN_ID, toChainId }),
+        }),
+      ]);
+      expect(logs).toContainEqual(
+        expect.objectContaining({ msg: "anchor.chain_move.refused", reason: "target_not_allowed", toChainId }),
+      );
+    });
+
+    it("drops a request left on a row that went on, so a later failure does not move it", async () => {
+      // An older API release resubmitted the row on this chain without knowing the request.
+      await requested("failed");
+      await sql`UPDATE chain.transactions SET state = 'created' WHERE id = ${transactionId}`;
+      expect(await moves()).toEqual([{ kind: "refused", transactionId, reason: "not_movable" }]);
+      expect(await rowOf()).toMatchObject({
+        chain_id: CHAIN_ID, state: "created", move_to_chain_id: null, move_requested_at: null,
+      });
+      expect(await audits()).toEqual([
+        expect.objectContaining({
+          command: "anchor.batch.chain_move_refused",
+          reason: "not_movable",
+          detail: expect.objectContaining({ toChainId: NEW_CHAIN, result: "created" }),
+        }),
+      ]);
+      expect(logs).toContainEqual(expect.objectContaining({ msg: "anchor.chain_move.refused", reason: "not_movable" }));
+      // It fails again here: nobody asked to move that failure.
+      await sql`UPDATE chain.transactions SET state = 'failed' WHERE id = ${transactionId}`;
+      expect(await moves()).toEqual([]);
+      expect(await rowOf()).toMatchObject({ chain_id: CHAIN_ID, state: "failed" });
+    });
+
+    it("does not keep the old chain in the drain warning for a request on a row that went on", async () => {
+      // Mined after all and long past its watch: settled here, its request stale.
+      await requested("dropped");
+      await sql`
+        UPDATE chain.transactions
+        SET state = 'confirmed', block_number = 90, block_hash = ${BLOCK_A}, confirmations = 3,
+            confirmed_at = now() - interval '3 days', reorg_watch_until = now() - interval '2 days'
+        WHERE id = ${transactionId}
+      `;
+      const counted = async () =>
+        (await otherChainsInFlight(sql, NEW_CHAIN, config.reorgWatchMs)).find((c) => c.chainId === CHAIN_ID)?.inFlight ?? 0;
+      expect(await counted()).toBe(0);
+      expect(await moves()).toEqual([{ kind: "refused", transactionId, reason: "not_movable" }]);
+      expect(await rowOf()).toMatchObject({ state: "confirmed", move_to_chain_id: null });
+    });
+
+    it("keeps the old chain in the drain warning until its worker has carried the request out", async () => {
+      await requested("failed");
+      const counted = async () =>
+        (await otherChainsInFlight(sql, NEW_CHAIN, config.reorgWatchMs)).find((c) => c.chainId === CHAIN_ID)?.inFlight ?? 0;
+      // A failed row alone is settled; its request is not.
+      expect(await counted()).toBe(1);
+      await moves();
+      expect(await counted()).toBe(0);
+    });
+  });
+
+  it("reports another chain's open sends whatever their transaction's state", async () => {
+    // A failed transaction is settled for proofs, but its send can still be mined: only a worker on
+    // that chain settles the send and records the gas.
+    await sql`UPDATE chain.transactions SET chain_id = 5611, state = 'failed' WHERE id = ${transactionId}`;
+    await sql`
+      INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id, tenant_id)
+      VALUES (5611, ${TX_HASH}, ${transactionId}, ${tenantId})
+    `;
+    try {
+      expect(await otherChainsInFlight(sql, CHAIN_ID, 60_000)).toContainEqual({
+        chainId: 5611,
+        inFlight: 0,
+        openSends: 1,
+      });
+
+      // Settled: nothing left for that chain's worker.
+      await sql`
+        UPDATE chain.anchor_sends SET settled_at = now(), settled_reason = 'receipt'
+        WHERE chain_id = 5611 AND tx_hash = ${TX_HASH}
+      `;
+      expect((await otherChainsInFlight(sql, CHAIN_ID, 60_000)).map((c) => c.chainId)).not.toContain(5611);
+    } finally {
+      await sql`DELETE FROM chain.anchor_sends WHERE transaction_id = ${transactionId}`;
+      await sql`UPDATE chain.transactions SET chain_id = ${CHAIN_ID} WHERE id = ${transactionId}`;
+    }
   });
 
   it("backlog counts items needing human attention separately", async () => {

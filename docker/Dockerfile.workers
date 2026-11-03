@@ -41,6 +41,11 @@ RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
     && addgroup -S -g 10001 mpc \
     && adduser -S -D -H -u 10001 -G mpc -h /app -s /sbin/nologin mpc
 COPY --from=dependencies /worker /app
+# The only writable path under a read-only root filesystem (tsx's IPC directory, the heartbeat).
+# Compose mounts it as a mode-1777 tmpfs. An ECS task volume is created root-owned 0755, so `mpc`
+# could not write to it, unless the image declares the path as a VOLUME: ECS then copies the
+# image's `/tmp` (1777) onto it, contents and permissions included.
+VOLUME ["/tmp"]
 USER mpc
 CMD ["node", "node_modules/tsx/dist/cli.mjs", "src/main.ts"]
 

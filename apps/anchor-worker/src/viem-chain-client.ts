@@ -435,6 +435,19 @@ export function createViemChainClient(options: ViemChainClientOptions): ChainCli
       });
     },
 
+    async hasCode(address: string): Promise<boolean> {
+      const code = await publicClient.getCode({ address: address as Hex });
+      return code !== undefined && code !== "0x";
+    },
+
+    async signerHasPendingTransactions(): Promise<boolean> {
+      const [pending, latest] = await Promise.all([
+        publicClient.getTransactionCount({ address: account.address, blockTag: "pending" }),
+        publicClient.getTransactionCount({ address: account.address, blockTag: "latest" }),
+      ]);
+      return pending > latest;
+    },
+
     async blockGasLimit(): Promise<bigint> {
       return (await publicClient.getBlock()).gasLimit;
     },

@@ -11,7 +11,7 @@ Run the commands in this guide from the repository root.
 | [`docker/Dockerfile.workers`](../../docker/Dockerfile.workers) | Independent worker images |
 | [`docker/Dockerfile.clamav`](../../docker/Dockerfile.clamav) | Antivirus image without application credentials |
 | [`docker/clamav/`](../../docker/clamav/) | Isolated ClamAV configuration and daemon/updater supervision |
-| [`packages/db/sql/login-roles.sql`](../../packages/db/sql/login-roles.sql) | Login roles subject to RLS, so the app never runs as superuser |
+| [`packages/db/sql/login-roles.sql`](../../packages/db/sql/login-roles.sql) | Login roles subject to RLS, so the app never runs as superuser — local only (public passwords `app`/`worker`); shared clusters use `pnpm --filter @mpc/db login-roles` with generated `APP_DB_PASSWORD`/`WORKER_DB_PASSWORD` (at least 32 characters, e.g. `openssl rand -hex 32`) |
 | [`config/local-secrets/`](../../config/local-secrets/) | Optional public fixtures for file-reference configuration; not mounted by Compose |
 | [`config/observability/`](../../config/observability/) | Prometheus scrape configuration, alert rules and Alertmanager configuration |
 | [Backup and restore](backup-restore.md) | What the backup, restore and drill scripts capture, refuse and verify |
@@ -62,6 +62,58 @@ subdirectories). The API refuses any other reference when a sink is registered, 
 worker refuses it again before reading — so a sink cannot point the worker at its database
 URL or the signer key. Provision each tenant's signing secret under one of those names
 (for Docker secrets, name the secret `webhook_<name>`).
+
+## Database roles for the operator CLIs
+
+`pnpm --filter @mpc/db login-roles` and `pnpm --filter @mpc/api bootstrap` run over the
+migration connection. Both check the connecting role before changing anything and name what
+is missing:
+
+- **bootstrap** needs superuser or `BYPASSRLS`: it writes across tenants and checks wallets
+  against every tenant.
+- **login-roles** needs superuser, or on PostgreSQL 16 or later a role with `CREATEROLE` and
+  `BYPASSRLS`, `ADMIN OPTION` on `mpc_app_login`/`mpc_worker_login` (or, for one not created yet,
+  on `mpc_app`/`mpc_worker`), and `USAGE WITH GRANT OPTION` on schemas `core`, `chain` and
+  `audit`. Before 16 only a superuser can give `mpc_worker_login` `BYPASSRLS`.
+
+login-roles requires each password to be at least 32 characters. That checks length only, not
+randomness — a 32-character phrase passes and is still guessable — so generate each one with
+`openssl rand -hex 32`, never type or reuse one. It sends SCRAM verifiers, never passwords. A verifier cannot be used to
+log in, and one of a random password that long cannot be guessed offline, so that is what a
+leaked verifier rests on. As defence in depth the run turns statement logging off for its own
+transaction. A role that may not do that (not superuser, and no `GRANT SET ON PARAMETER`) is
+refused before any change when the server would log every run's statements (`log_statement`
+`ddl`, `mod` or `all`, any `log_min_duration_statement` of 0 or more, `log_min_duration_sample`
+of 0 or more with a nonzero `log_statement_sample_rate`, or `pgaudit.log` covering `role`).
+Change those settings for the run, or use a role that may set them. A nonzero
+`log_transaction_sample_rate` refuses every role, superuser included: it is decided when the
+transaction starts. Otherwise the run goes ahead and prints a `Login roles warning` line naming
+the settings it could not change. On a default configuration that includes
+`log_min_error_statement = error`, which logs only a statement that fails: the password
+statements run last, after everything else succeeded and with lock and statement timeouts off.
+It also warns when `pg_stat_statements.track_utility` is on.
+These rules were checked on PostgreSQL 17; Aurora's `rds_superuser` was not tested.
+
+**Before running migrations,** check for long-open transactions. A `-- migrate:no-transaction`
+migration (0104, 0106) runs `CREATE INDEX CONCURRENTLY`, which waits for every transaction in the
+database that is older than the build — on any table, not only the one indexed — so one
+connection left `idle in transaction` stalls `migrate` (holding the migration lock) until it
+ends. 0107 creates triggers on `chain.transactions` and `chain.anchor_proposals`, so it waits for
+open transactions that wrote to them, and every later writer queues behind it; run by a role that
+is neither superuser nor `BYPASSRLS`, its backfill also holds both tables exclusively, readers
+included, for one pass over each. That backfill gives up after waiting 5 seconds for its lock
+(`lock_timeout`) and fails with nothing of it applied; rerun `migrate` once the open
+transactions are gone. Look first, and end or wait out what you find:
+
+```sql
+SELECT pid, usename, application_name, state, now() - xact_start AS open_for
+FROM pg_stat_activity
+WHERE datname = current_database() AND xact_start IS NOT NULL AND pid <> pg_backend_pid()
+ORDER BY xact_start;
+```
+
+Run `migrate` before starting workers of a new release: from 0107 the anchor worker registers its
+configured contract in `chain.anchor_contracts` at startup and exits if that table is missing.
 
 ## Loss cap for the anchor wallet
 
@@ -233,12 +285,67 @@ explorer and offers the chain to wallets that lack it.
 
 - **First operator.** `pnpm --filter @mpc/api bootstrap` binds the wallet on `BOOTSTRAP_CHAIN_ID`,
   which defaults to `CHAIN_ID`; set either to 5611, or the wallet lands on 31337 and cannot log in.
+- **Scan service identity.** Bind `SCAN_SERVICE_ADDRESS` the same way, in the same tenant, with
+  `BOOTSTRAP_ROLE=scan_service`. Without it the scan worker's results are rejected and uploads
+  stay quarantined.
 - **Earlier anchors keep their chain and contract.** Public proofs and hash search report the
   chain and the anchor contract each transaction was stored with (`chainId`, `contractAddress`),
   so anchors made before a chain change or a new contract version still point at the contract
   that holds their root. The worker records the contract with the hash; an anchor recorded
   before it did reports `contractAddress: null`, never the currently configured contract. Both
   are null until the transaction has a hash.
+- **Moving chains drains the old one first.** A worker picks only its own `CHAIN_ID`'s rows, so
+  after a change nothing settles the old chain's created, proposed, submitted or included
+  transactions, and their proofs stay unconfirmed. Nor does anything settle its open sends —
+  even those of a failed transaction — so a later receipt never reaches the gas ledger. The new
+  worker logs `anchor.other_chain_in_flight` with both counts per chain (`inFlight`,
+  `openSends`) at startup and then at most once a minute, busy or idle; keep (or start) a worker
+  with the old `CHAIN_ID` until both reach zero. A worker stores each confirmed row's reorg-watch
+  deadline (`reorg_watch_until`, its confirmation time plus its `ANCHOR_REORG_WATCH_MS`), rechecks
+  the row until then, and the warning counts it until then too. A worker also rechecks rows for
+  at least its own `ANCHOR_REORG_WATCH_MS` after confirmation, so raising it applies to that worker
+  at once; within a minute (and on every replica, also during a rolling deploy) it extends the
+  stored deadlines of rows still inside its watch (`anchor.reorg_watch.extended` logs how many),
+  so the warning follows. A failed extension is logged (`anchor.reorg_watch.extend_failed`) and
+  retried a minute later without stopping anchoring. Lowering it never shortens a stored
+  deadline: it applies to rows confirmed afterwards.
+  Rows confirmed before stored deadlines existed have none: their worker watches them for its
+  current `ANCHOR_REORG_WATCH_MS` after confirmation, and the warning counts them for at least
+  24 hours after confirmation (longer if this worker's `ANCHOR_REORG_WATCH_MS` is), so it may last
+  longer than needed, never too short.
+  To move a stuck old-chain batch, resubmit it from the new deployment. That only *requests* the
+  move (migration 0105, `move_to_chain_id`; audit reason `chain_move_requested` with
+  `fromChainId`/`toChainId`; the anchors screen shows "Move to chain … requested"): the row keeps
+  its old `chain_id`, state and hash until **the old chain's worker** carries it out, because only
+  the old contract can say whether the batch is already there — any holder of its submitter role
+  (the Safe, another signer) could have stored it without a trace in the database. So keep a
+  worker with the old `CHAIN_ID` running until the request is gone. That worker waits while any
+  send or Safe proposal of the row, or any transaction of its signer, is still open on the old
+  chain, then reads the batch from the old contract: absent, it resets the row onto the new chain
+  (audit `anchor.batch.chain_moved`), whose worker sends it like a new batch; present, it drops
+  the request and reconciles the row with what the chain holds (audit
+  `anchor.batch.chain_move_refused`; the anchors screen shows "Move … refused" until someone
+  resubmits again). While it waits, the screen shows what for (`moveRequest.waitReason`: an open
+  send or Safe proposal, an unmined signer transaction, or a failed read), or that the old
+  chain's worker has not looked yet (`lastCheckedAt` null — check that it is running). Do not
+  submit anchors by hand or through the Safe on the old chain while a move is requested: a
+  submission after the worker's check would anchor the root on both chains. Grant the submitter
+  role on each contract only to that chain's worker signer (`ANCHOR_SUBMITTER`), or to the Safe on
+  Safe-path chains, so no other party can submit at all. The worker checks every contract in
+  `chain.anchor_contracts` (0107: every contract a row, a proposal or a worker's configuration
+  has used on that chain). Before requesting a move, make sure every contract ever configured
+  for the old chain is there — rows from before contracts were recorded, or reset since, may have
+  left none behind — and add any missing one by hand (`INSERT INTO chain.anchor_contracts
+  (chain_id, contract_address)`, lowercase; the deployment records in `testnet-contract.md` /
+  `mainnet-contract.md` list them). An address without code is skipped; a contract whose
+  `getBatch` fails keeps every move on that chain waiting (`check_failed`). The table is
+  append-only: removing a wrong entry needs the table owner to disable
+  `anchor_contracts_no_delete` for that statement. A resubmit on the row's own chain
+  withdraws a pending request, and a request for a third chain replaces it (the audit records the
+  replaced target). The request is refused with `ANCHOR_CHAIN_MOVE_BLOCKED` when the batch already
+  has another transaction (`reason: other_transaction`), or when the two chains are not of the
+  same environment (`reason: cross_environment`: BSC mainnet 56 against a test chain, or a chain
+  outside the supported list).
 - **EOA submission is opt-in.** Set `ANCHOR_EOA_CHAIN_IDS=5611` for the worker to sign alone;
   without it the default (`31337`) leaves 5611 on the Safe proposal path, or blocked when no Safe
   is configured. Listing 56 refuses startup — mainnet stays Safe-only whatever is set.

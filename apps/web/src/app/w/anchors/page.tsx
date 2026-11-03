@@ -12,6 +12,7 @@ import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { Address } from "@/components/Address";
+import { moveRefusalText, moveWaitText } from "./move-text";
 
 /**
  * Anchor state — spec 08 §8.9, 06 §6.8.
@@ -164,6 +165,22 @@ export default function AnchorsPage() {
                       {item.confirmationState === "included" ? (
                         // Keep included from reading as success (06 §6.8).
                         <div className="meta">Not confirmed yet</div>
+                      ) : null}
+                      {item.moveRequest ? (
+                        // A request is not a move: the old chain's worker first checks that the
+                        // old contract lacks this batch.
+                        <div className="meta" data-testid={`anchor-move-${item.batchId.slice(2, 10)}`}>
+                          Move to chain {item.moveRequest.toChainId} requested ·{" "}
+                          {moveWaitText(item.moveRequest, item.chainId)}
+                        </div>
+                      ) : item.moveRefusal ? (
+                        <div
+                          className="meta"
+                          style={{ color: "var(--destructive-text)" }}
+                          data-testid={`anchor-move-refused-${item.batchId.slice(2, 10)}`}
+                        >
+                          {moveRefusalText(item.moveRefusal, item.chainId)}
+                        </div>
                       ) : null}
                       {item.proposal ? (
                         // A proposal existing does not mean it was submitted. Collecting signatures

@@ -11,6 +11,10 @@ contracts/out
 contracts/cache
 contracts/lib
 
+# The CDK app deploys these images; it is never part of one. Keeping it out of the context also
+# stops `cdk.out` — which holds a copy of the context — from growing on every build.
+cdk
+
 # Local secrets are not put into the image. compose mounts them at runtime.
 deploy/local-secrets
 config/local-secrets

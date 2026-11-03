@@ -1,5 +1,6 @@
 import postgres from "postgres";
 import { resolveSecret } from "@mpc/config";
+import { readConnectingRole, rlsBypassProblem } from "@mpc/db";
 import { bootstrapOperator, BootstrapError } from "./bootstrap.js";
 import type { BootstrapInput } from "./bootstrap.js";
 
@@ -80,6 +81,12 @@ const input: BootstrapInput = {
 const sql = postgres(databaseUrl, { onnotice: () => {} });
 
 try {
+  // The wallet check below must see other tenants' rows too. A role that cannot bypass RLS
+  // (Aurora's `rds_superuser` admin, for one) would fail on the first insert, or worse, pass the
+  // cross-tenant check by seeing nothing.
+  const problem = rlsBypassProblem(await readConnectingRole(sql));
+  if (problem) throw new BootstrapError(problem);
+
   const result = await bootstrapOperator(sql, input);
   // Wallet addresses are public. No other value here is secret.
   process.stdout.write(

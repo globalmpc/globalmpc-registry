@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHAIN_ENVIRONMENTS,
+  chainEnvironmentOf,
+  sameChainEnvironment,
   describeChains,
   EOA_ANCHOR_ELIGIBLE_CHAIN_IDS,
   isEoaAnchorEligibleChainId,
@@ -59,4 +62,30 @@ it("names each chain in messages", () => {
   expect(describeChains(SUPPORTED_CHAIN_IDS)).toBe(
     "56 (BSC mainnet), 5611 (opBNB testnet), 31337 (local chain)",
   );
+});
+
+describe("the environment of a chain", () => {
+  it("classifies every supported chain explicitly", () => {
+    expect(Object.keys(CHAIN_ENVIRONMENTS).map(Number).sort()).toEqual([...SUPPORTED_CHAIN_IDS].sort());
+    expect(chainEnvironmentOf(56)).toBe("mainnet");
+    expect(chainEnvironmentOf(5611)).toBe("testnet");
+    expect(chainEnvironmentOf(31337)).toBe("testnet");
+  });
+
+  it("gives no environment to a chain outside the list, testnet-looking or not", () => {
+    // 97 is BSC testnet: "not mainnet" must not make it a testnet of ours.
+    for (const id of [97, 204, 1, 0]) expect(chainEnvironmentOf(id), String(id)).toBeNull();
+  });
+
+  it("lets a batch move only between supported chains of one environment", () => {
+    expect(sameChainEnvironment(5611, 31337)).toBe(true);
+    expect(sameChainEnvironment(31337, 5611)).toBe(true);
+    expect(sameChainEnvironment(56, 5611)).toBe(false);
+    expect(sameChainEnvironment(5611, 56)).toBe(false);
+    // Unknown chains share nothing, not even with each other or themselves.
+    expect(sameChainEnvironment(97, 5611)).toBe(false);
+    expect(sameChainEnvironment(5611, 97)).toBe(false);
+    expect(sameChainEnvironment(97, 97)).toBe(false);
+    expect(sameChainEnvironment(97, 204)).toBe(false);
+  });
 });

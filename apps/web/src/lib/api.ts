@@ -1489,13 +1489,41 @@ export async function resubmitAnchorBatch(
   token: string,
   batchId: string,
   key: string,
-): Promise<{ confirmationState: string; previousState: string }> {
+): Promise<AnchorBatchResubmission> {
   const response = await apiFetch(`/api/v1/anchor-batches/${batchId}/resubmit`, {
     method: "POST",
     headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
     body: JSON.stringify({}),
   });
-  return parse<{ confirmationState: string; previousState: string }>(response);
+  return parse<AnchorBatchResubmission>(response);
+}
+
+/**
+ * A pending move of a stuck transaction to another chain. Not a move yet: the row stays on its
+ * chain until that chain's worker confirms the old contract lacks the batch.
+ */
+export interface AnchorChainMoveRequest {
+  toChainId: number;
+  requestedAt: string;
+  /** When the old chain's worker last looked at it; null before its first look. */
+  lastCheckedAt: string | null;
+  waitReason: string | null;
+}
+
+/** The old chain's worker refused the last requested move. Shown until a person resubmits. */
+export interface AnchorChainMoveRefusal {
+  toChainId: number | null;
+  reason: string;
+  result: string | null;
+  refusedAt: string;
+}
+
+export interface AnchorBatchResubmission {
+  id: string;
+  confirmationState: string;
+  previousState: string;
+  attempts: number;
+  moveRequest: AnchorChainMoveRequest | null;
 }
 
 export interface AnchorProposal {
@@ -1518,6 +1546,8 @@ export interface AnchorBatchStatus extends AnchorBatch {
   reorgCount: number;
   needsAttention: boolean;
   proposal: AnchorProposal | null;
+  moveRequest: AnchorChainMoveRequest | null;
+  moveRefusal: AnchorChainMoveRefusal | null;
 }
 
 /**

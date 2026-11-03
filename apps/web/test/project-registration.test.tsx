@@ -289,6 +289,22 @@ it("renders chain states distinctly, resubmits manually, and refreshes the batch
       i === 3
         ? { safeAddress: "0xsafe", calldataHash: "0xdata123456789abc" }
         : null,
+    chainId: 5611,
+    moveRequest:
+      i === 4
+        ? {
+            toChainId: 56,
+            requestedAt: "2026-01-01T00:00:00.000Z",
+            lastCheckedAt: "2026-01-01T00:01:00.000Z",
+            waitReason: "open_send",
+          }
+        : i === 5
+          ? { toChainId: 56, requestedAt: "2026-01-01T00:00:00.000Z", lastCheckedAt: null, waitReason: null }
+          : null,
+    moveRefusal:
+      i === 2
+        ? { toChainId: 56, reason: "batch_on_chain", result: "reconciled_from_chain", refusedAt: "2026-01-01T00:00:00.000Z" }
+        : null,
   }));
   let fail = false;
   const calls = mockHttp({
@@ -302,6 +318,19 @@ it("renders chain states distinctly, resubmits manually, and refreshes the batch
   await screen.findByTestId("anchor-table");
   expect(screen.getByText("Not confirmed yet")).toBeTruthy();
   expect(screen.getByTestId("safe-proposal")).toBeTruthy();
+  // A requested move reads as pending on the old chain, not as moved.
+  expect(screen.getByTestId("anchor-move-41234567").textContent).toContain(
+    "Move to chain 56 requested",
+  );
+  expect(screen.getByTestId("anchor-move-41234567").textContent).toContain(
+    "waiting: a send is still open on chain 5611",
+  );
+  expect(screen.getByTestId("anchor-move-51234567").textContent).toContain(
+    "the chain 5611 worker has not checked it yet",
+  );
+  expect(screen.getByTestId("anchor-move-refused-21234567").textContent).toBe(
+    "Move to chain 56 refused: the batch is already on chain 5611",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Resubmit" }));
   await waitFor(() =>
     expect(calls.filter((c) => c.method === "GET")).toHaveLength(2),
