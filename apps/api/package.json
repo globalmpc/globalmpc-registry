@@ -27,7 +27,7 @@
     "@mpc/ui": "workspace:*",
     "fastify": "5.12.7",
     "postgres": "^3.4.9",
-    "viem": "2.57.11",
+    "viem": "2.57.13",
     "zod": "4.6.7"
   }
 }
