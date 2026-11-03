@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { connectAs } from "./connect-as";
+import { connectAs, sessionToken } from "./connect-as";
+import { reportScan } from "./scan-service";
 
 /**
  * Golden path E2E — R1 Task 10.
@@ -66,9 +67,7 @@ test.describe("golden path", () => {
     // Scanning is done by a separate worker. The absence of that button on screen is the
     // control, so E2E calls the API **with the scan service's session**. A steward session
     // is rejected — the person who uploads a file cannot pass their own file.
-    const stewardToken = await page.evaluate(() =>
-      window.localStorage.getItem("mpc.session.token"),
-    );
+    const stewardToken = await sessionToken(page);
     const denied = await page.request.post(`/api/v1/uploads/${uploadId}/scan-result`, {
       headers: {
         authorization: `Bearer ${stewardToken}`,
@@ -79,19 +78,7 @@ test.describe("golden path", () => {
     });
     expect(denied.status()).toBe(403);
 
-    await connectAs(page, "Scan Service");
-    const scanToken = await page.evaluate(() =>
-      window.localStorage.getItem("mpc.session.token"),
-    );
-    const scanned = await page.request.post(`/api/v1/uploads/${uploadId}/scan-result`, {
-      headers: {
-        authorization: `Bearer ${scanToken}`,
-        "idempotency-key": `e2e-scan-${uploadId}`,
-        "if-match": '"1"',
-      },
-      data: { result: "clean" },
-    });
-    expect(scanned.ok()).toBe(true);
+    await reportScan(page, uploadId, 1);
 
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/data-room`);
@@ -263,7 +250,7 @@ test.describe("golden path", () => {
 
     // --- 8. Lookup without sign-in ---------------------------------------
     await page.goto("/connect");
-    await page.getByRole("button", { name: "Disconnect" }).click();
+    await page.getByRole("button", { name: "Sign out" }).click();
 
     // Arriving via a link, the screen looks up on its own. Pressing once more also checks
     // that the direct lookup path works — it is a different button from list search.

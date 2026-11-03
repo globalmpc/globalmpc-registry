@@ -52,9 +52,8 @@ import {
 } from "./document-status.js";
 import {
   adminSubject,
-  anchorBatchStatus,
+  anchorBatchResubmission,
   attestationDispute,
-  bindWalletRequest,
   auditEvent,
   authorityEntry,
   jurisdictionProfileView,
@@ -157,13 +156,18 @@ import {
 import {
   gateDecisionSignatureRequestResponse,
   sessionResponse,
+  accountSessionsResponse,
+  revokeAccountSessionResponse,
   signatureRequestResponse,
-  siweNonceRequest,
-  siweNonceResponse,
-  siweVerifyRequest,
   submitSignatureRequest,
+  type ServiceScope,
 } from "./auth.js";
 import { PROJECT_REGISTRY_ROUTES, projectListQuery } from "./project-registry.js";
+import { ACCOUNT_ROUTES } from "./accounts.js";
+import { MFA_ROUTES } from "./mfa.js";
+import { SUSPENSION_ROUTES } from "./suspensions.js";
+import { OIDC_ROUTES } from "./oidc.js";
+import { ADMIN_ASSURANCE_ROUTE, WALLET_ROUTES } from "./wallets.js";
 
 /**
  * Route definitions — spec 07 §7.2.
@@ -216,36 +220,36 @@ export interface RouteDefinition {
    */
   readonly paramsSchema?: z.ZodTypeAny;
   readonly responseSchema: z.ZodTypeAny;
+  /**
+   * The service token scope that reaches this route — decision D7.
+   *
+   * Absent: a person route, refused to every service token. Present: a service token reaches it
+   * only when its scopes include this one. Person sessions are unaffected; their roles decide.
+   */
+  readonly serviceScope?: ServiceScope;
+  /**
+   * Reachable by a first-factor-only (`aal1`) session — plan priority rule 2.
+   *
+   * Such a session may only finish MFA, sign out and read its own session. Every other route
+   * refuses it with `MFA_REQUIRED` before the route runs. MFA routes set this when they land.
+   */
+  readonly allowsFirstFactorOnly?: true;
+  /**
+   * Reachable by a session restored with a recovery code (WP3). Such a session may only enrol a
+   * new passkey or TOTP, regenerate recovery codes, read its own session and sign out until it
+   * proves a real factor; every other route refuses it with `MFA_RECOVERY_REENROLMENT_REQUIRED`.
+   */
+  readonly allowsRecoveryLimited?: true;
+  /**
+   * Domain refusal codes this route may answer beyond the generic statuses, as
+   * `x-mpc-refusals`. Listed where a client must tell one rule from another to say what to do
+   * next (ask other admins, invite instead); not an exhaustive list of every error.
+   */
+  readonly refusals?: readonly string[];
 }
 
 export const ROUTES: readonly RouteDefinition[] = [
   // --- Auth ---------------------------------------------------------------
-  {
-    method: "post",
-    path: "/api/v1/auth/siwe/nonce",
-    summary: "Issue a SIWE login challenge nonce",
-    operationId: "createSiweNonce",
-    public: true,
-    mutation: false,
-    requiresIfMatch: false,
-    action: null,
-    implemented: true,
-    requestSchema: siweNonceRequest,
-    responseSchema: siweNonceResponse,
-  },
-  {
-    method: "post",
-    path: "/api/v1/auth/siwe/verify",
-    summary: "Verify a SIWE signature and issue a session",
-    operationId: "verifySiweSignature",
-    public: true,
-    mutation: false,
-    requiresIfMatch: false,
-    action: null,
-    implemented: true,
-    requestSchema: siweVerifyRequest,
-    responseSchema: sessionResponse,
-  },
   {
     method: "post",
     path: "/api/v1/auth/logout",
@@ -256,6 +260,8 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: null,
     implemented: true,
+    allowsFirstFactorOnly: true,
+    allowsRecoveryLimited: true,
     responseSchema: sessionResponse,
   },
   {
@@ -268,8 +274,45 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: null,
     implemented: true,
+    allowsFirstFactorOnly: true,
+    allowsRecoveryLimited: true,
     responseSchema: sessionResponse,
   },
+  // The caller's own sessions. Self-service like the wallet and MFA routes: no role, no
+  // Idempotency-Key; a second factor is required (not first-factor-only, not recovery-limited).
+  {
+    method: "get",
+    path: "/api/v1/auth/sessions",
+    summary: "Your live sessions — where this account is signed in (no tokens)",
+    operationId: "listAccountSessions",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: null,
+    implemented: true,
+    responseSchema: accountSessionsResponse,
+  },
+  {
+    method: "post",
+    path: "/api/v1/auth/sessions/{sessionId}/revocation",
+    summary: "End one of your own sessions — another device, or this one (sign-out)",
+    operationId: "revokeAccountSession",
+    public: false,
+    mutation: false,
+    requiresIfMatch: false,
+    action: null,
+    implemented: true,
+    responseSchema: revokeAccountSessionResponse,
+  },
+  // Invitations, emailed sign-in codes and email change (WP2).
+  ...ACCOUNT_ROUTES,
+  ...MFA_ROUTES,
+  // Suspending and reinstating a person (AUTH-06, 0127).
+  ...SUSPENSION_ROUTES,
+  // Google / Microsoft sign-in, linking and unlinking (WP4).
+  ...OIDC_ROUTES,
+  // Signing wallets bound by proof of possession (WP5).
+  ...WALLET_ROUTES,
 
   // --- Project ------------------------------------------------------------
   {
@@ -457,6 +500,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     // Uses a separate action so uploaders cannot pass their own files.
     action: "upload.scan_result",
     implemented: true,
+    serviceScope: "scan_result",
     responseSchema: objectUpload,
   },
   {
@@ -828,7 +872,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: "anchor.submit",
     implemented: true,
-    responseSchema: anchorBatchStatus,
+    responseSchema: anchorBatchResubmission,
   },
 
   {
@@ -1285,8 +1329,9 @@ export const ROUTES: readonly RouteDefinition[] = [
     public: false,
     mutation: true,
     requiresIfMatch: false,
-    action: "source.collect",
+    action: "cre.report",
     implemented: true,
+    serviceScope: "cre_report",
     requestSchema: createCreReportRequest,
     responseSchema: creReport,
   },
@@ -1462,19 +1507,8 @@ export const ROUTES: readonly RouteDefinition[] = [
     requestSchema: createSubjectRequest,
     responseSchema: adminSubject,
   },
-  {
-    method: "post",
-    path: "/api/v1/admin/subjects/{subjectId}/wallets",
-    summary: "Bind a wallet — also the path for attaching a new key after cutting off a lost one",
-    operationId: "bindAdminWallet",
-    public: false,
-    mutation: true,
-    requiresIfMatch: false,
-    action: "admin.wallet.manage",
-    implemented: true,
-    requestSchema: bindWalletRequest,
-    responseSchema: adminSubject,
-  },
+  // The admin wallet bind is gone (WP5): only the holder binds, by proof (`WALLET_ROUTES`).
+  ADMIN_ASSURANCE_ROUTE,
   {
     method: "post",
     path: "/api/v1/admin/wallets/{walletId}/disable",

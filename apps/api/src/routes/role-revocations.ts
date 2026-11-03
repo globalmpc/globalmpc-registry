@@ -57,6 +57,7 @@ interface RevocationRow {
   decided_by_subject_id: string | null;
   decided_at: Date | null;
   decision_reason: string | null;
+  closed_reason: "proposer_suspended" | null;
   version: number;
 }
 
@@ -94,6 +95,7 @@ function toRevocation(row: RevocationRow, requestId: string, asOf: string) {
     decidedBySubjectId: row.decided_by_subject_id,
     decidedAt: row.decided_at?.toISOString() ?? null,
     decisionReason: row.decision_reason,
+    closedReason: row.closed_reason,
     version: row.version,
     requestId,
     asOf,
@@ -112,7 +114,7 @@ function readRevocations(tx: Tx, tenantId: string, revocationId?: string) {
   return tx<RevocationRow[]>`
     SELECT r.id, r.role_binding_id, b.subject_id, s.display_name AS subject_name, b.role,
            b.project_id, r.reason_code, r.reason, r.requested_by_subject_id, r.requested_at,
-           r.state, r.decided_by_subject_id, r.decided_at, r.decision_reason, r.version
+           r.state, r.decided_by_subject_id, r.decided_at, r.decision_reason, r.closed_reason, r.version
     FROM core.role_revocation_requests r
     JOIN core.role_bindings b ON b.id = r.role_binding_id
     JOIN core.subjects s ON s.id = b.subject_id
@@ -152,10 +154,9 @@ async function lockBinding(tx: Tx, tenantId: string, bindingId: string): Promise
  * Refuses a revocation that would leave no one able to approve role changes.
  *
  * Counts **people**, not bindings — someone holding two approving roles is one approver. Only
- * people with a usable wallet count: a holder whose every wallet is disabled cannot sign in, so
- * cannot approve anything, and wallets of approving holders are not rebound from the UI. The
- * wallet must also meet the role's assurance: a weaker wallet signs in, but every approval it
- * attempts is refused with ASSURANCE_LEVEL_INSUFFICIENT.
+ * non-suspended people who can sign in to an account and prove the approving role’s MFA level
+ * count. Wallets are optional signing keys, not account login methods. The subject must also
+ * meet the role’s assurance: a weaker subject can sign in but cannot exercise that role.
  */
 async function assertApproverRemains(tx: Tx, tenantId: string, binding: BindingRow): Promise<void> {
   if (!APPROVER_ROLES.includes(binding.role)) return;
@@ -169,13 +170,30 @@ async function assertApproverRemains(tx: Tx, tenantId: string, binding: BindingR
       AND b.role = ANY(${[...APPROVER_ROLES]})
       AND EXISTS (
         SELECT 1
-        FROM core.wallet_identities w
+        FROM core.subjects s
         JOIN unnest(
           ${[...APPROVER_ROLES]}::text[],
           ${[...APPROVER_MINIMUM_ASSURANCE]}::core.assurance_level[]
         ) AS need(role, minimum) ON need.role = b.role
-        WHERE w.tenant_id = b.tenant_id AND w.subject_id = b.subject_id AND w.disabled_at IS NULL
-          AND w.assurance_level >= need.minimum
+        WHERE s.tenant_id = b.tenant_id AND s.id = b.subject_id
+          AND s.kind = 'person' AND s.suspended_at IS NULL
+          AND s.assurance_level >= need.minimum
+          AND (
+            s.email IS NOT NULL OR EXISTS (
+              SELECT 1 FROM core.subject_sign_in_providers(ARRAY[s.id])
+            )
+          )
+          AND (
+            EXISTS (
+              SELECT 1 FROM core.webauthn_credentials c
+              WHERE c.tenant_id = s.tenant_id AND c.subject_id = s.id AND c.revoked_at IS NULL
+            )
+            OR (need.minimum <> 'high_assurance' AND EXISTS (
+              SELECT 1 FROM core.totp_authenticators t
+              WHERE t.tenant_id = s.tenant_id AND t.subject_id = s.id
+                AND t.confirmed_at IS NOT NULL AND t.revoked_at IS NULL
+            ))
+          )
       )
   `;
 

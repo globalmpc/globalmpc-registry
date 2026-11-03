@@ -11,8 +11,8 @@ const session = vi.hoisted(() => ({
   session: {
     authenticated: true,
     subjectId: "admin",
-    chainId: 56,
-    walletAddress: "0x1111111111111111111111111111111111111111",
+    // What the server lists for an administrator; the screen offers controls by these.
+    actions: ["admin.read", "admin.subject.manage", "admin.wallet.manage", "admin.role.propose", "admin.role.approve", "document.rule.manage", "admin.notification.manage", "admin.invitation.manage", "admin.email_change.propose", "admin.email_change.approve", "admin.mfa_reset.propose", "admin.mfa_reset.approve", "admin.subject_suspension.propose", "admin.subject_suspension.approve"] as string[],
   },
 }));
 vi.mock("../src/lib/session", () => ({ useSession: () => session }));
@@ -32,16 +32,26 @@ function routes(): Record<string, unknown> {
       "/admin/role-revocations",
       "/admin/notification-sinks",
       "/document-link-rules",
-    ].map((path) => [`GET /api/v1${path}`, { items: [] }]),
+      // Account administration (WP6): invitations, email changes, second-factor resets, suspensions.
+      "/admin/invitations",
+      "/admin/email-changes",
+      "/organizations",
+    ]
+      .map((path): [string, unknown] => [`GET /api/v1${path}`, { items: [] }])
+      .concat([
+        ["GET /api/v1/admin/mfa-resets", { items: [] }],
+        ["GET /api/v1/admin/subject-suspensions", { items: [] }],
+      ]),
   );
 }
+const READS = 10;
 async function mount(data = routes()) {
   const calls = mockHttp(data);
   render(<Admin />);
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "Add person" }).hasAttribute("disabled")).toBe(true),
   );
-  await waitFor(() => expect(calls.filter((call) => call.method === "GET")).toHaveLength(5));
+  await waitFor(() => expect(calls.filter((call) => call.method === "GET")).toHaveLength(READS));
   return calls;
 }
 const change = (label: string, value: string) =>
@@ -65,6 +75,23 @@ describe("administration safety workflows", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("offers an auditor the records but none of the changes", async () => {
+    const saved = session.session.actions;
+    session.session.actions = ["admin.read", "audit.read"];
+    try {
+      const data = routes();
+      data["GET /api/v1/admin/subjects"] = { items: [{ ...person, roles: [{ id: "b1", role: "data_steward", revokedAt: null }] }] };
+      await mount(data);
+      await screen.findByText("data_steward", { exact: false });
+      for (const name of ["Set assurance", "Propose role", "Propose revocation", "Disable"]) {
+        expect(screen.queryByRole("button", { name })).toBeNull();
+      }
+      expect(screen.getByRole("button", { name: "Send invitation" }).hasAttribute("disabled")).toBe(true);
+    } finally {
+      session.session.actions = saved;
+    }
+  });
+
   it("creates a person without silently assigning wallets or roles", async () => {
     const data = routes();
     data["POST /api/v1/admin/subjects"] = person;
@@ -79,27 +106,38 @@ describe("administration safety workflows", () => {
     expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
   });
 
-  it("shows locked accounts and binds recovery wallets to the server's chain", async () => {
+  it("shows locked accounts and sets assurance with a stated basis, never attaching a wallet", async () => {
     const data = routes();
     data["GET /api/v1/admin/subjects"] = { items: [{ ...person, locked: true }] };
-    data["POST /api/v1/admin/subjects/person/wallets"] = person;
+    data["POST /api/v1/admin/subjects/person/assurance"] = person;
     const calls = await mount(data);
     await screen.findByTestId("admin-locked");
-    fireEvent.click(screen.getByRole("button", { name: "Bind wallet" }));
-    const bind = screen.getByRole("button", { name: /^Bind$/ });
-    expect(bind.hasAttribute("disabled")).toBe(true);
-    change("Wallet address", " 0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCDEF ");
+    expect(screen.queryByRole("button", { name: "Bind wallet" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Set assurance" }));
+    const set = screen.getByRole("button", { name: "Set level" });
+    expect(set.hasAttribute("disabled")).toBe(true);
     change("Assurance level", "high_assurance");
     change("What you checked (required)", " checked ID ");
-    fireEvent.click(bind);
+    fireEvent.click(set);
     await waitFor(() =>
-      expect(calls.find((call) => call.method === "POST")?.body).toEqual({
-        walletAddress: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcdef",
-        chainId: 56,
-        assuranceLevel: "high_assurance",
-        justification: "checked ID",
+      expect(calls.find((call) => call.method === "POST")).toMatchObject({
+        url: expect.stringContaining("/api/v1/admin/subjects/person/assurance"),
+        body: { assuranceLevel: "high_assurance", justification: "checked ID" },
       }),
     );
+  });
+
+  it("offers no assurance change for oneself or a service", async () => {
+    const data = routes();
+    data["GET /api/v1/admin/subjects"] = {
+      items: [
+        { ...person, id: "admin", displayName: "Me" },
+        { ...person, id: "svc", displayName: "Scanner", kind: "service" },
+      ],
+    };
+    await mount(data);
+    await screen.findByText("Scanner");
+    expect(screen.queryByRole("button", { name: "Set assurance" })).toBeNull();
   });
 
   it("records role proposals as proposals rather than approving them", async () => {
@@ -142,6 +180,33 @@ describe("administration safety workflows", () => {
     expect(within(table).getByText(/someone else decides/)).toBeDefined();
   });
 
+  it("lists no grant or revocation a suspension closed as waiting on a decision", async () => {
+    const data = routes();
+    const closed = {
+      subjectName: "Reviewer",
+      role: "reviewer_cp_qp",
+      state: "pending",
+      requestedBySubjectId: "other",
+      reason: "Independent review",
+      closedReason: "proposer_suspended",
+      version: 2,
+    };
+    data["GET /api/v1/admin/role-grants"] = {
+      items: [
+        { ...closed, id: "closed-grant" },
+        { ...closed, id: "open-grant", role: "reviewer_lab", closedReason: null },
+      ],
+    };
+    data["GET /api/v1/admin/role-revocations"] = {
+      items: [{ ...closed, id: "closed-revocation", roleBindingId: "b1", reasonCode: "other" }],
+    };
+    await mount(data);
+    const grants = await screen.findByTestId("admin-role-grants");
+    expect(grants.textContent).toContain("reviewer_lab");
+    expect(grants.textContent).not.toContain("reviewer_cp_qp");
+    expect(screen.queryByTestId("admin-role-revocations")?.textContent ?? "").not.toContain("reviewer_cp_qp");
+  });
+
   it.each(["Approve", "Reject"])(
     "sends a version-checked %s decision for another proposer's request",
     async (decision) => {
@@ -175,11 +240,13 @@ describe("administration safety workflows", () => {
     data["GET /api/v1/admin/subjects"] = {
       items: [
         {
+          // The administrator's own account: "own" is the signed-in subject, not a wallet match.
           ...person,
+          id: session.session.subjectId,
           wallets: [
             {
               id: "own",
-              walletAddress: session.session.walletAddress,
+              walletAddress: "0x1111111111111111111111111111111111111111",
               assuranceLevel: "high_assurance",
               disabledAt: null,
               version: 1,

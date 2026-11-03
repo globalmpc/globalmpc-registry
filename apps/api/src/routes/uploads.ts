@@ -4,8 +4,8 @@ import type postgres from "postgres";
 import { z } from "zod";
 import { withTenant } from "@mpc/db";
 import { SENSITIVITY_LEVELS, admitToStorage } from "@mpc/domain";
-import { uploadListQuery } from "@mpc/api-contract";
-import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
+import { STREAM_UPLOAD_MAX_BYTES, uploadListQuery } from "@mpc/api-contract";
+import { badRequest, conflict, notFound, unprocessable, unsupportedMediaType } from "../errors.js";
 import {
   assertAuthorized,
   projectResource,
@@ -58,8 +58,8 @@ import {
  */
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
-/** Multipart cap. It streams to storage, so it can accept more. */
-export const MAX_STREAM_BYTES = 2000 * 1024 * 1024;
+/** Multipart cap. It streams to storage, so it can accept more. Shared with the web pass-through. */
+export const MAX_STREAM_BYTES = STREAM_UPLOAD_MAX_BYTES;
 
 /**
  * The streaming path is always restricted. Accepting the sensitive tier needs a secured route
@@ -271,17 +271,18 @@ export async function uploadProjectId(
  */
 const SCAN_STALE_SECONDS = 180;
 
-type ScannerState = "running" | "unavailable" | "stale" | "never_seen" | "unknown";
+type ScannerState = "running" | "unavailable" | "unauthorized" | "stale" | "never_seen" | "unknown";
 
 async function scannerStatus(
   sql: postgres.Sql,
 ): Promise<{ state: ScannerState; secondsSinceHeartbeat: number | null; detail: string }> {
   try {
-    const [row] = await sql<{ seconds: string | null; available: boolean | null }[]>`
+    const [row] = await sql<{ seconds: string | null; available: boolean | null; status: string | null }[]>`
       SELECT core.seconds_since_worker_heartbeat('scan') AS seconds,
         (SELECT CASE WHEN jsonb_typeof(detail->'scannerAvailable') = 'boolean'
           THEN (detail->>'scannerAvailable')::boolean ELSE NULL END
-         FROM core.worker_heartbeats WHERE worker_kind='scan') AS available
+         FROM core.worker_heartbeats WHERE worker_kind='scan') AS available,
+        (SELECT detail->>'status' FROM core.worker_heartbeats WHERE worker_kind='scan') AS status
     `;
     const seconds = row?.seconds === null || row?.seconds === undefined ? null : Number(row.seconds);
 
@@ -300,6 +301,13 @@ async function scannerStatus(
         detail: `The scan worker has not been seen for ${seconds} seconds. Uploads stay in quarantine meanwhile.`,
       };
     }
+    // The worker is alive but the API refuses its service token: it has paused leasing and
+    // nothing is scanned until the token is registered or replaced. Ahead of scanner
+    // availability, which says nothing while no report can land.
+    if (row?.status === "unauthorized") return {
+      state: "unauthorized", secondsSinceHeartbeat: seconds,
+      detail: "The scan worker is running but the API refuses its service token. Uploads stay in quarantine until the token is registered or replaced.",
+    };
     if (row?.available === false) return {
       state: "unavailable", secondsSinceHeartbeat: seconds,
       detail: "The worker is running but the malware scanner is unavailable. Uploads stay in quarantine until it recovers.",
@@ -550,6 +558,11 @@ export async function registerUploadRoutes(
         sessionFacts(session),
       );
 
+      // Without this check `request.file()` throws the multipart plugin's own error, which the
+      // error handler does not know and answers as a 500.
+      if (!request.isMultipart()) {
+        throw unsupportedMediaType("UPLOAD_NOT_MULTIPART", "The streaming upload must be multipart/form-data");
+      }
       const file = await request.file({ limits: { fileSize: MAX_STREAM_BYTES } });
       if (!file) throw badRequest("UPLOAD_MISSING_FILE", "Multipart file part is missing");
 

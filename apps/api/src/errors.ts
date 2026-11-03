@@ -69,6 +69,10 @@ export const preconditionRequired = (
 export const payloadTooLarge = (code: string, message: string, details?: Record<string, unknown>) =>
   new AppError(code, message, 413, false, details);
 
+/** The body is not in a media type the route reads (e.g. a streaming upload that is not multipart). */
+export const unsupportedMediaType = (code: string, message: string) =>
+  new AppError(code, message, 415, false);
+
 export const unprocessable = (code: string, message: string, details?: Record<string, unknown>) =>
   new AppError(code, message, 422, false, details);
 

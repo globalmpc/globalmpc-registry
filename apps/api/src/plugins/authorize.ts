@@ -1,5 +1,7 @@
 import {
   ACTION_POLICIES,
+  ROLE_MINIMUM_ASSURANCE,
+  satisfiesAssurance,
   authorize,
   TENANT_WIDE_ROLES,
   type AuthorizationContext,
@@ -92,11 +94,24 @@ function withinJurisdiction(session: Session, binding: Binding, scope: ProjectSc
   return scope === "all" ? Object.keys(hosts).filter(inScope) : scope.filter(inScope);
 }
 
-/** Bindings of the roles permitted for this action. */
+/**
+ * Bindings of the roles permitted for this action that are effective in this session.
+ *
+ * `session.roleBindings` is already narrowed to the session's AAL (session.ts). Identity
+ * assurance below the role's minimum narrows it here too (plan priority rule 4), so lists and the
+ * action menu never offer what every single decision would refuse.
+ */
 function usableBindings(session: Session, action: string): readonly Binding[] {
   const policy = ACTION_POLICIES[action];
   if (!policy) return [];
-  return session.roleBindings.filter((binding) => policy.allowedRoles.includes(binding.role));
+  return session.roleBindings.filter(
+    (binding) =>
+      policy.allowedRoles.includes(binding.role) &&
+      satisfiesAssurance(
+        session.assuranceLevel,
+        ROLE_MINIMUM_ASSURANCE[binding.role] ?? "high_assurance",
+      ),
+  );
 }
 
 /** Whether the session holds any role for this action. Decides whether lists carry decision targets. */
@@ -270,6 +285,21 @@ export function assertAuthorized(
     );
     if (decision.allow) return binding.role;
     lastDenial = decision;
+  }
+
+  /**
+   * The role exists but this session's authentication level does not make it effective — say so,
+   * so the person knows to step up (a passkey for a phishing-resistant role) rather than to ask
+   * for a role they already hold. Only when no effective binding allowed the action: narrowing
+   * never widens.
+   */
+  const narrowed = session.narrowedRoles.find((entry) => policy.allowedRoles.includes(entry.role));
+  if (narrowed) {
+    throw forbidden("AUTHORIZATION_DENIED", "This session's sign-in level does not allow this role", {
+      reason: "AUTHENTICATION_LEVEL_INSUFFICIENT",
+      role: narrowed.role,
+      requiredAal: narrowed.requiredAal,
+    });
   }
 
   if (lastDenial && !lastDenial.allow) {

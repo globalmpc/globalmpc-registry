@@ -1,5 +1,5 @@
 import { expect, type Page } from "@playwright/test";
-import { connectAs } from "./connect-as";
+import { connectAs, sessionToken } from "./connect-as";
 
 /**
  * Steps shared by the evidence ledger journeys. Each step goes through the same screens and
@@ -9,9 +9,7 @@ import { connectAs } from "./connect-as";
 // CI runs these journeys both before the worker (pending proof) and with the real chain.
 export const CHAIN_ENABLED = process.env["E2E_CHAIN"] === "1";
 
-export async function sessionToken(page: Page): Promise<string | null> {
-  return page.evaluate(() => localStorage.getItem("mpc.session.token"));
-}
+export { sessionToken };
 
 export async function command(
   page: Page,

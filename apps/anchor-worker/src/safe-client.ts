@@ -266,10 +266,9 @@ export function createSafeClient(options: SafeServiceOptions): SafeClient {
         )) as ServiceMultisigTransaction;
 
         if (tx.isExecuted && tx.transactionHash) {
-          // Executed does not mean succeeded. A failed execution is also executed.
-          return tx.isSuccessful === false
-            ? { kind: "rejected" }
-            : { kind: "executed", transactionHash: tx.transactionHash.toLowerCase() };
+          // Execution failure still consumed an outer chain transaction. Keep its hash so the
+          // worker records it and checks receipt finality instead of treating it as unexecuted.
+          return { kind: "executed", transactionHash: tx.transactionHash.toLowerCase() };
         }
 
         const winner = await executedAtNonce(tx.safe, Number(tx.nonce));

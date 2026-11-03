@@ -38,14 +38,26 @@ groups:
         annotations:
           summary: "5% or more of requests are hitting the rate limit"
 
-      # A rising login failure rate may be credential attempts rather than typos.
-      # SIWE is signature verification, so normal use produces almost no failures.
-      - alert: MpcSiweFailureRate
-        expr: sum(rate(mpc_siwe_verify_failed_total[5m])) > 0.2
+      # A rising sign-in failure rate may be credential attempts rather than typos. Counted
+      # across first-factor methods (`method`: email_code, invitation, google, microsoft); a typed code
+      # fails now and then, a sustained 12 per minute is someone trying codes or signatures.
+      # The per-address and per-IP code limits hold either way; this says that someone is trying.
+      - alert: MpcSignInFailureRate
+        expr: sum(rate(mpc_sign_in_failed_total[5m])) > 0.2
         for: 10m
         labels: { severity: ticket }
         annotations:
-          summary: "SIWE verification failures exceed 12 per minute"
+          summary: "Sign-in failures exceed 12 per minute — check mpc_sign_in_failed_total by method"
+
+      # Addresses that used all 5 code requests of the current 15 minutes. Anyone who knows an
+      # address can do that and hold its owner out of sign-in for 15 minutes — accepted (threat
+      # model T10). A few are people retrying; a sustained crowd is someone doing it on purpose.
+      - alert: MpcEmailCodeAddressesLimited
+        expr: max(mpc_email_code_addresses_limited) > 20
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "More than 20 addresses are at their sign-in code limit — possible targeted sign-in denial"
 
   - name: mpc-workers
     rules:
@@ -69,6 +81,19 @@ groups:
         labels: { severity: page }
         annotations:
           summary: "Scan worker has never reported — uploads get stuck in quarantine"
+
+      # Alive but refused. After a 401 the scan worker backs off and keeps beating with
+      # `status: "unauthorized"`, so the liveness rules above stay quiet — and a quiet tenant
+      # never reaches the quarantine-count rule below. Nothing is scanned until its service
+      # token is registered or replaced: check `service-token list`, then store a current value
+      # and redeploy (docs/operations/deployment.md, "Service tokens"). 10 minutes rides out the
+      # window between a deploy's registration step and the workers rolling.
+      - alert: MpcScanWorkerUnauthorized
+        expr: max(mpc_worker_unauthorized{state="scan"}) == 1
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "The API refuses the scan worker's service token — uploads are not being scanned"
 
   - name: mpc-anchor
     rules:

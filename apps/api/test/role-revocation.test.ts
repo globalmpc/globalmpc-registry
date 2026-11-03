@@ -6,13 +6,13 @@ import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import {
   idempotencyKey,
+  issueTestSession,
   newAccount,
   setupFixture,
   signIn,
   testEnv,
   type TestAccount,
-  type TestFixture,
-} from "./helpers/db.js";
+  type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -93,6 +93,7 @@ describeDb("role revocation", () => {
         ${walletId}, ${tenantId}, ${subjectId}, ${account.address}, 31337, ${assurance}, now()
       )
     `;
+    await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
       VALUES (${bindingId}, ${tenantId}, ${subjectId}, ${orgId}, ${role})
@@ -291,11 +292,12 @@ describeDb("role revocation", () => {
       expect(response.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
     });
 
-    it("does not count an approver whose wallets fall short of the role's assurance", async () => {
+    it("does not count an approver whose subject falls short of the role's assurance", async () => {
       const { tenantId, orgId } = await seedTenant("Weak");
       const strong = await seedPerson(tenantId, orgId, "Weak Strong", "mpc_operator");
       // Holds the role, but mpc_operator needs high_assurance: every request would be refused.
-      await seedPerson(tenantId, orgId, "Weak Bound", "mpc_operator", "identity_bound");
+      const weak = await seedPerson(tenantId, orgId, "Weak Bound", "mpc_operator", "identity_bound");
+      await signIn(app, weak.account);
       const strongToken = await signIn(app, strong.account);
 
       const response = await propose(strongToken, strong.bindingId);
@@ -304,7 +306,7 @@ describeDb("role revocation", () => {
       expect(response.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
     });
 
-    it("refuses at decision time when the only other approver can no longer sign in", async () => {
+    it("keeps counting an account approver after their last wallet is disabled", async () => {
       const { tenantId, orgId } = await seedTenant("Pair");
       const proposer = await seedPerson(tenantId, orgId, "Pair Proposer", "mpc_operator");
       const decider = await seedPerson(tenantId, orgId, "Pair Decider", "mpc_operator");
@@ -314,8 +316,9 @@ describeDb("role revocation", () => {
       // Allowed when proposed: the proposer remains.
       const revocation = await proposed(proposerToken, decider.bindingId);
 
-      // Then the decider cuts the proposer's only wallet (a one-person action). A binding
-      // without a usable wallet cannot approve anything.
+      // A holder-proven signing key does not supply identity assurance. Disabling it
+      // must preserve the independently assigned subject assurance and account login.
+      await fx.sql`UPDATE core.wallet_identities SET bound_via = 'proof' WHERE id = ${proposer.walletId}`;
       const cut = await post(
         deciderToken,
         `/api/v1/admin/wallets/${proposer.walletId}/disable`,
@@ -326,8 +329,88 @@ describeDb("role revocation", () => {
 
       const decided = await decide(deciderToken, revocation, "approve");
 
-      expect(decided.statusCode).toBe(422);
-      expect(decided.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
+      expect(decided.statusCode).toBe(200);
+      expect(await revokedAt(decider.bindingId)).not.toBeNull();
+    });
+
+    it("walletless email and passkey administrators can revoke another administrator", async () => {
+      const { tenantId, orgId } = await seedTenant("Walletless");
+      const people = await Promise.all(["Proposer", "Decider", "Target"].map(
+        (label) => seedPerson(tenantId, orgId, label, "mpc_operator"),
+      ));
+      const tokens: string[] = [];
+      for (const person of people) {
+        tokens.push(await issueTestSession(fx.appSql, tenantId, person.subjectId, {
+          firstFactor: "email_code", secondFactor: "passkey",
+        }));
+        await fx.sql`DELETE FROM core.wallet_identities WHERE id = ${person.walletId}`;
+      }
+      const revocation = await proposed(tokens[0]!, people[2]!.bindingId);
+      const result = await decide(tokens[1]!, revocation, "approve");
+      expect(result.statusCode).toBe(200);
+      expect(await revokedAt(people[2]!.bindingId)).not.toBeNull();
+    });
+
+    it.each([false, true])("counts only live OIDC sign-in methods (revoked: %s)", async (revoked) => {
+      const { tenantId, orgId } = await seedTenant("OIDC only");
+      const target = await seedPerson(tenantId, orgId, "Target", "mpc_operator");
+      const other = await seedPerson(tenantId, orgId, "OIDC holder", "mpc_operator");
+      const targetToken = await signIn(app, target.account);
+      await issueTestSession(fx.appSql, tenantId, other.subjectId, {
+        firstFactor: "google", secondFactor: "passkey",
+      });
+      await fx.sql`UPDATE core.subjects SET email = NULL WHERE id = ${other.subjectId}`;
+      await fx.sql`DELETE FROM core.wallet_identities WHERE id = ${other.walletId}`;
+      if (revoked) {
+        await fx.sql`UPDATE core.external_identities SET revoked_at = now(), revoked_reason = 'unlinked_by_holder' WHERE subject_id = ${other.subjectId}`;
+      }
+      const response = await propose(targetToken, target.bindingId);
+      expect(response.statusCode).toBe(revoked ? 422 : 200);
+      if (revoked) expect(response.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
+    });
+
+    it.each(["no_login", "no_passkey", "suspended", "revoked_passkey"])("does not count a holder with %s", async (missing) => {
+      const { tenantId, orgId } = await seedTenant(missing);
+      const target = await seedPerson(tenantId, orgId, "Target", "mpc_operator");
+      const other = await seedPerson(tenantId, orgId, "Unavailable", "mpc_operator");
+      const token = await signIn(app, target.account);
+      if (missing === "no_login") {
+        await fx.sql`
+          INSERT INTO core.webauthn_credentials (
+            id, tenant_id, subject_id, credential_id, public_key, aaguid,
+            user_verified, device_type, backed_up, name
+          ) VALUES (
+            ${randomUUID()}, ${tenantId}, ${other.subjectId}, ${randomUUID().replaceAll("-", "")},
+            ${Buffer.alloc(32)}, ${randomUUID()}, true, 'singleDevice', false, 'Unused passkey'
+          )
+        `;
+      } else {
+        await issueTestSession(fx.appSql, tenantId, other.subjectId, {
+          firstFactor: "email_code", secondFactor: missing === "no_passkey" ? "totp" : "passkey",
+        });
+        if (missing === "suspended") {
+          // A synthetic inconsistent row isolates suspension from factor revocation.
+          await fx.sql`UPDATE core.subjects SET suspended_at = now() WHERE id = ${other.subjectId}`;
+        } else if (missing === "revoked_passkey") {
+          await fx.sql`UPDATE core.webauthn_credentials SET revoked_at = now(), revoked_reason = 'holder_removed' WHERE subject_id = ${other.subjectId}`;
+        }
+      }
+      const response = await propose(token, target.bindingId);
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
+    });
+
+    it("rechecks the remaining holder's passkey at decision time", async () => {
+      const { tenantId, orgId } = await seedTenant("Lost factor");
+      const proposer = await seedPerson(tenantId, orgId, "Proposer", "mpc_operator");
+      const decider = await seedPerson(tenantId, orgId, "Decider", "mpc_operator");
+      const proposerToken = await signIn(app, proposer.account);
+      const deciderToken = await signIn(app, decider.account);
+      const revocation = await proposed(proposerToken, decider.bindingId);
+      await fx.sql`UPDATE core.webauthn_credentials SET revoked_at = now(), revoked_reason = 'holder_removed' WHERE subject_id = ${proposer.subjectId}`;
+      const result = await decide(deciderToken, revocation, "approve");
+      expect(result.statusCode).toBe(422);
+      expect(result.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
       expect(await revokedAt(decider.bindingId)).toBeNull();
     });
 

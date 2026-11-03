@@ -4,7 +4,6 @@ import {
   rpcErrorCode,
   selectWallet,
   switchChain,
-  walletFlags,
   WalletError,
   type Eip1193Provider,
 } from "../src/lib/wallet.js";
@@ -206,68 +205,24 @@ describe("ensureChain", () => {
   });
 });
 
-describe("walletFlags", () => {
-  it("collects only the flags the wallet sets — for logging", () => {
-    const provider = { request: async () => null, isMetaMask: true, isBraveWallet: true, isTrust: false };
-    expect(walletFlags(provider as unknown as Eip1193Provider)).toEqual(["isMetaMask", "isBraveWallet"]);
-    expect(walletFlags(null)).toEqual([]);
-  });
-});
-
 describe("connection and signatures", () => {
   it("normalizes approved accounts and sends signature parameters in wallet order", async () => {
-    const {
-      connectWallet,
-      personalSign,
-      signTypedDataWithWallet,
-      subscribeProviderEvents,
-    } = await import("../src/lib/wallet.js");
-    const listeners = new Map<string, (...args: unknown[]) => void>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(["0xABC"])
-      .mockResolvedValueOnce("0xpersonal")
-      .mockResolvedValueOnce("0xtyped");
-    const removeListener = vi.fn();
-    use({
-      request,
-      on: (event, listener) => {
-        listeners.set(event, listener);
-      },
-      removeListener,
-    });
+    const { connectWallet, signTypedDataWithWallet } = await import("../src/lib/wallet.js");
+    const request = vi.fn().mockResolvedValueOnce(["0xABC"]).mockResolvedValueOnce("0xtyped");
+    use({ request });
     expect(await connectWallet()).toBe("0xabc");
-    expect(await personalSign("message", "0xabc")).toBe("0xpersonal");
     expect(
       await signTypedDataWithWallet({ domain: { name: "MPC" } }, "0xabc"),
     ).toBe("0xtyped");
     expect(request).toHaveBeenNthCalledWith(2, {
-      method: "personal_sign",
-      params: ["message", "0xabc"],
-    });
-    expect(request).toHaveBeenNthCalledWith(3, {
       method: "eth_signTypedData_v4",
       params: ["0xabc", '{"domain":{"name":"MPC"}}'],
     });
-    const onAccounts = vi.fn(),
-      onChain = vi.fn();
-    const stop = subscribeProviderEvents({ onAccounts, onChain });
-    listeners.get("accountsChanged")!(["0xABC"]);
-    listeners.get("accountsChanged")!();
-    listeners.get("chainChanged")!("0x38");
-    expect(onAccounts.mock.calls).toEqual([[["0xabc"]], [[]]]);
-    expect(onChain).toHaveBeenCalledWith(56);
-    stop();
-    expect(removeListener).toHaveBeenCalledTimes(2);
   });
   it("distinguishes empty accounts, explicit rejection and provider failure", async () => {
-    const {
-      connectWallet,
-      personalSign,
-      signTypedDataWithWallet,
-      currentChainId,
-      subscribeProviderEvents,
-    } = await import("../src/lib/wallet.js");
+    const { connectWallet, signTypedDataWithWallet, currentChainId } = await import(
+      "../src/lib/wallet.js"
+    );
     const request = vi
       .fn()
       .mockResolvedValueOnce([])
@@ -280,16 +235,12 @@ describe("connection and signatures", () => {
       rejectedByUser: true,
       code: 4001,
     });
-    await expect(personalSign("m", "a")).rejects.toThrow("offline");
+    await expect(signTypedDataWithWallet({}, "a")).rejects.toThrow("offline");
     await expect(signTypedDataWithWallet({}, "a")).rejects.toThrow("failed");
-    expect(() =>
-      subscribeProviderEvents({ onAccounts: vi.fn(), onChain: vi.fn() })(),
-    ).not.toThrow();
     selectWallet(null);
     for (const operation of [
       () => connectWallet(),
       () => currentChainId(),
-      () => personalSign("m", "a"),
       () => signTypedDataWithWallet({}, "a"),
       () => switchChain(56),
     ])

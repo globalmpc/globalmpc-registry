@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { connectAs } from "./connect-as";
 
 /**
  * Authority Registry E2E — 05 §5.11, OD-42·OD-43.
@@ -8,9 +9,7 @@ import { expect, test } from "@playwright/test";
  */
 test.describe("Authority Registry", () => {
   test("shows integration state without overstating it, together with the limitations", async ({ page }) => {
-    await page.goto("/connect");
-    await page.getByRole("button", { name: /Operator A/ }).click();
-    await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
+    await connectAs(page, "Operator A");
 
     await page.goto("/w/authorities");
     await expect(page.getByTestId("authority-table")).toBeVisible();

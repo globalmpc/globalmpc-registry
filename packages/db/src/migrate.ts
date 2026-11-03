@@ -8,8 +8,9 @@ import { LEGACY_CHECKSUMS, type LegacyChecksum } from "./legacy-checksums.js";
 /**
  * Migration runner.
  *
- * Each file runs in one transaction and is recorded in `core.schema_migrations`. Files that
- * were already applied are skipped. Files are applied in ascending file-name order.
+ * Each file runs in one transaction (unless it opts out, below) and is recorded in
+ * `core.schema_migrations`. Files that were already applied are skipped. Files are applied in
+ * ascending file-name order.
  *
  * Skipping **does not look at the name alone.** Comparing names only would let an applied file
  * be edited later without anyone noticing, and schemas would drift per environment. So the
@@ -18,6 +19,25 @@ import { LEGACY_CHECKSUMS, type LegacyChecksum } from "./legacy-checksums.js";
  * The checksum covers what the migration does, not how it is commented: it hashes the SQL with
  * comments removed and whitespace collapsed. Rewording a comment therefore does
  * not stop a database that already applied the file; changing code or a string literal does.
+ *
+ * **Outside a transaction, by opt-in.** A file whose first line is exactly
+ * `-- migrate:no-transaction` runs statement by statement with no transaction around it — for
+ * `CREATE INDEX CONCURRENTLY`, which PostgreSQL refuses inside one, so building an index on a large
+ * live table does not block its writers. Such a file is not atomic: a failure leaves the
+ * statements before it applied and the file unrecorded, so the next run executes it again from
+ * the top. It must therefore be safe to rerun from any point — for an index, drop it if it
+ * exists (a failed concurrent build leaves an INVALID one) and build it again. It is recorded
+ * only after its last statement succeeds. A concurrent build also waits for every transaction in
+ * the database that is older than it, so a long-running one elsewhere delays the build, not the
+ * other way round. The marker is a comment, so it is not part of the checksum.
+ *
+ * **One runner at a time.** A whole run — creating the bookkeeping table, reading what is applied,
+ * and every file — holds one session-level advisory lock on one reserved connection, so two
+ * runners started together (two replicas deploying at once) never apply a file twice, never build
+ * an index at once or drop each other's, and never race to create `core.schema_migrations`. The
+ * one that waited reads what is applied only once it holds the lock, so it skips what the other
+ * applied. The lock is per database. A runner of a release before this one took it only around
+ * its no-transaction files, under the same key; it still waits for this one there.
  */
 
 export interface Migration {
@@ -183,6 +203,55 @@ export function judgeChecksum(input: {
   return "mismatch";
 }
 
+/** First line of a migration that runs outside a transaction (see the runner header). */
+export const NO_TRANSACTION_MARKER = "-- migrate:no-transaction";
+
+export function runsOutsideTransaction(migration: Migration): boolean {
+  return migration.sql.split("\n", 1)[0]?.trim() === NO_TRANSACTION_MARKER;
+}
+
+/**
+ * The statements of a migration, split at top-level semicolons — not inside quoted text, dollar
+ * quotes or comments — each as written. Statements that are only comments are dropped.
+ */
+export function splitStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let start = 0;
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i] ?? "";
+    const next = sql[i + 1];
+    const tag = ch === "$" ? dollarTagAt(sql, i) : null;
+    if (tag !== null) {
+      const close = sql.indexOf(tag, i + tag.length);
+      i = close === -1 ? sql.length : close + tag.length;
+    } else if (ch === "'" || ch === '"') {
+      i = endOfQuoted(sql, i);
+    } else if (ch === "-" && next === "-") {
+      const eol = sql.indexOf("\n", i);
+      i = eol === -1 ? sql.length : eol;
+    } else if (ch === "/" && next === "*") {
+      i = endOfBlockComment(sql, i);
+    } else if (ch === ";") {
+      statements.push(sql.slice(start, i + 1));
+      i += 1;
+      start = i;
+    } else {
+      i += 1;
+    }
+  }
+  statements.push(sql.slice(start));
+  return statements.map((statement) => statement.trim()).filter((statement) => normalizeMigrationSql(statement) !== "");
+}
+
+/**
+ * Serializes runs (see the header). An arbitrary constant: the name of the lock, not data. Kept
+ * from when it guarded only no-transaction files, so a runner of that release and this one still
+ * exclude each other there.
+ */
+const MIGRATION_LOCK = 7_104_000_001;
+const MIGRATION_LOCK_POLL_MS = 250;
+
 export const MIGRATIONS_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -203,7 +272,113 @@ export async function runMigrations(
   sql: postgres.Sql,
   migrations: readonly Migration[] = listMigrations(),
 ): Promise<string[]> {
-  await sql.unsafe(`
+  // Everything on one reserved connection: the lock is held by a session, a no-transaction file's
+  // statements must each reach the server on their own, and a one-connection pool (the CLI's, the
+  // tests') is not starved by the reservation.
+  const session = new RunSession(await sql.reserve());
+  try {
+    // Polled, not `pg_advisory_lock`: a runner blocked in that statement holds a snapshot, and a
+    // concurrent index build in the runner holding the lock waits for every older snapshot in the
+    // database — including the blocked runner's, which waits for the lock. Between tries this
+    // session holds none.
+    while (true) {
+      const [lock] = await session.sql<{ locked: boolean }[]>`
+        SELECT pg_try_advisory_lock(${MIGRATION_LOCK}) AS locked
+      `;
+      if (lock?.locked) break;
+      await new Promise((resolve) => setTimeout(resolve, MIGRATION_LOCK_POLL_MS));
+    }
+    try {
+      return await applyMigrations(session, migrations);
+    } catch (error) {
+      session.saw(error); // before the unlock below, which must not be sent on a dead connection
+      throw error;
+    } finally {
+      await session.unlock();
+    }
+  } catch (error) {
+    session.saw(error);
+    throw error;
+  } finally {
+    session.release();
+  }
+}
+
+/**
+ * The run's reserved connection, and whether it is known to be dead.
+ *
+ * Cleanup — ROLLBACK, the unlock — never replaces the error that ended the run: its own failure is
+ * swallowed. And once any statement failed because the connection is gone, nothing more is sent:
+ * postgres.js never settles a query sent on a reserved connection after it closed, and `release`
+ * would put the closed connection among the open ones. Left alone, the pool reconnects it on its
+ * next use; the session's lock ended with the session.
+ */
+class RunSession {
+  private lost = false;
+
+  constructor(readonly sql: postgres.ReservedSql) {}
+
+  /** Notes an error; true when it says the connection is gone. */
+  saw(error: unknown): boolean {
+    if (connectionLost(error)) this.lost = true;
+    return this.lost;
+  }
+
+  /** Sends `statement` unless the connection is dead; true if it succeeded. Never throws. */
+  async quietly(statement: () => Promise<unknown>): Promise<boolean> {
+    if (this.lost) return false;
+    try {
+      await statement();
+      return true;
+    } catch (error) {
+      this.saw(error);
+      return false;
+    }
+  }
+
+  /**
+   * Releases the run's lock. A live session that refuses it is in a failed transaction — a
+   * no-transaction file that opened one — so that is ended and the unlock tried once more. If that
+   * fails too on a live connection, it goes back to the pool still holding the lock (postgres.js
+   * cannot close one reserved connection), which holds off other runners until the pool ends; a
+   * later run from the same pool takes it again.
+   */
+  async unlock(): Promise<void> {
+    const unlock = () => this.sql`SELECT pg_advisory_unlock(${MIGRATION_LOCK})`;
+    if (await this.quietly(unlock)) return;
+    await this.quietly(() => this.sql.unsafe("ROLLBACK"));
+    await this.quietly(unlock);
+  }
+
+  release(): void {
+    if (!this.lost) this.sql.release();
+  }
+}
+
+/**
+ * The error says the connection is gone: the server ended the session (FATAL, e.g. it was
+ * terminated) or postgres.js lost the socket (`CONNECTION_CLOSED`, `ECONNRESET`, …).
+ */
+function connectionLost(error: unknown): boolean {
+  const { severity, code } = (error ?? {}) as { severity?: string; code?: string };
+  if (severity === "FATAL" || severity === "PANIC") return true;
+  return typeof code === "string" && (code.startsWith("CONNECTION_") || /^E[A-Z]+$/.test(code));
+}
+
+async function record(session: postgres.ReservedSql, name: string, checksum: string): Promise<void> {
+  await session`
+    INSERT INTO core.schema_migrations (name, checksum)
+    VALUES (${name}, ${checksum})
+  `;
+}
+
+/** The run itself, under the lock `runMigrations` holds on `session`. */
+async function applyMigrations(
+  run: RunSession,
+  migrations: readonly Migration[],
+): Promise<string[]> {
+  const session = run.sql;
+  await session.unsafe(`
     CREATE SCHEMA IF NOT EXISTS core;
     CREATE TABLE IF NOT EXISTS core.schema_migrations (
       name       TEXT PRIMARY KEY,
@@ -212,7 +387,7 @@ export async function runMigrations(
     ALTER TABLE core.schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT;
   `);
 
-  const applied = await sql<{ name: string; checksum: string | null }[]>`
+  const applied = await session<{ name: string; checksum: string | null }[]>`
     SELECT name, checksum FROM core.schema_migrations
   `;
   const appliedChecksums = new Map(applied.map((row) => [row.name, row.checksum]));
@@ -227,7 +402,7 @@ export async function runMigrations(
       // Applied before the checksum column existed. The text at that time is unknown, so the
       // current one becomes the reference — rejecting here would stop every existing database.
       if (recorded === null) {
-        await sql`
+        await session`
           UPDATE core.schema_migrations SET checksum = ${checksum} WHERE name = ${migration.name}
         `;
         continue;
@@ -247,20 +422,33 @@ export async function runMigrations(
         );
       }
       if (verdict === "upgrade") {
-        await sql`
+        await session`
           UPDATE core.schema_migrations SET checksum = ${checksum} WHERE name = ${migration.name}
         `;
       }
       continue;
     }
 
-    await sql.begin(async (tx) => {
-      await tx.unsafe(migration.sql);
-      await tx`
-        INSERT INTO core.schema_migrations (name, checksum)
-        VALUES (${migration.name}, ${checksum})
-      `;
-    });
+    if (runsOutsideTransaction(migration)) {
+      // Not atomic (see the header): recorded only after its last statement succeeds.
+      for (const statement of splitStatements(migration.sql)) {
+        await session.unsafe(statement);
+      }
+      await record(session, migration.name, checksum);
+    } else {
+      // A reserved connection has no `begin`; the transaction is spelled out on it instead.
+      await session.unsafe("BEGIN");
+      try {
+        await session.unsafe(migration.sql);
+        await record(session, migration.name, checksum);
+        await session.unsafe("COMMIT");
+      } catch (error) {
+        // Ends the failed transaction; after a failed COMMIT there is none, and this only warns.
+        run.saw(error);
+        await run.quietly(() => session.unsafe("ROLLBACK"));
+        throw error;
+      }
+    }
     executed.push(migration.name);
   }
 

@@ -58,6 +58,12 @@ export interface AuditEntry {
   readonly correlationId: string;
   readonly requestIp?: string;
   readonly detail?: Record<string, unknown>;
+  /**
+   * The wallet that signed, for an action whose substance is a signature (an attestation or a
+   * gate decision). Recorded as `actor_wallet`. Every other row leaves it empty: the actor is
+   * the subject, and the wallet a person happened to sign in with says nothing about the action.
+   */
+  readonly signingWallet?: string;
 }
 
 export async function recordAudit(
@@ -73,7 +79,7 @@ export async function recordAudit(
       ${entry.tenantId},
       ${entry.projectId ?? null},
       ${entry.session.subjectId},
-      ${entry.session.walletAddress},
+      ${entry.signingWallet ?? null},
       ${entry.effectiveRole},
       ${entry.command},
       ${entry.resourceType},

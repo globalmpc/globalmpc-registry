@@ -10,8 +10,13 @@ import {
 import type { Session } from "../src/plugins/session.js";
 
 const WALLET_ONLY: Session = {
-  walletAddress: `0x${"ab".repeat(20)}`,
-  chainId: 31337,
+  principal: "person",
+  sessionId: "session-1",
+  firstFactor: "email_code",
+  secondFactor: "passkey",
+  recoveryLimited: false,
+  aal: "aal3",
+  narrowedRoles: [],
   subjectId: "subject-reader",
   tenantId: "tenant-a",
   assuranceLevel: "wallet_only",

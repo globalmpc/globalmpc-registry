@@ -3,7 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
-import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from "./helpers/db.js";
+import { idempotencyKey, issueTestSession, newAccount, setupFixture, testEnv, type TestFixture, signIn } from "./helpers/db.js";
+import { bindWalletByProof } from "./helpers/wallets.js";
 import {
   decideSigned,
   requestGateDecisionSignature,
@@ -24,7 +25,7 @@ describeDb("Readiness and Gate Decision", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
-    // From R1, auth is SIWE signature → session token. Tests take the same path.
+    // Tests hold an account session (`signIn` issues one for the person holding the key).
     tokens = {
       approverA: await signIn(app, fx.approverA),
       operatorA: await signIn(app, fx.operatorA),
@@ -381,6 +382,70 @@ describeDb("Readiness and Gate Decision", () => {
       const response = await decide(tokens.approverA, await holdContent(), fx.stewardA);
       expect(response.statusCode).toBe(400);
       expect(response.json().code).toBe("SIGNATURE_SIGNER_MISMATCH");
+    });
+
+    /**
+     * The approver holds one signing wallet at a time (0130): only the active one signs, and the
+     * one that did is recorded — never the wallet the session signed in with. After a replace the
+     * old key is refused, and what it signed before stays attributed to it.
+     */
+    it("signs only with the active wallet across a replace, and keeps earlier decisions attributed", async () => {
+      const [approver] = await fx.sql<{ subject_id: string }[]>`
+        SELECT subject_id FROM core.wallet_identities
+        WHERE wallet_address = ${fx.approverA.address} AND disabled_at IS NULL
+      `;
+      const before = await decide(tokens.approverA, await holdContent());
+      expect(before.statusCode, before.body).toBe(200);
+
+      // Passkey: the approver holds one (`signIn` sessions prove it), and binding needs the
+      // strongest factor held (WP5).
+      const account = await issueTestSession(fx.appSql, fx.tenantA, approver!.subject_id, {
+        firstFactor: "email_code",
+        secondFactor: "passkey",
+      });
+      const second = newAccount();
+      const replaced = await bindWalletByProof(app, account, second.account);
+      expect(replaced.statusCode, replaced.body).toBe(200);
+      expect(replaced.json().replaced).toMatchObject({ walletAddress: fx.approverA.address });
+
+      // The replaced wallet was operator-verified: the approver's assurance fell to the floor, so
+      // they cannot decide — with any key — until an admin verifies them again.
+      expect((await decide(tokens.approverA, await holdContent(), second)).statusCode).toBe(403);
+      const verified = await app.inject({
+        method: "POST",
+        url: `/api/v1/admin/subjects/${approver!.subject_id}/assurance`,
+        headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
+        payload: { assuranceLevel: "high_assurance", justification: "re-verified after the wallet replace" },
+      });
+      expect(verified.statusCode, verified.body).toBe(200);
+
+      // The old key no longer signs; the session that signed with it is still the approver's.
+      const old = await decide(tokens.approverA, await holdContent());
+      expect(old.statusCode).toBe(400);
+      expect(old.json().code).toBe("SIGNATURE_SIGNER_MISMATCH");
+
+      const response = await decide(tokens.approverA, await holdContent(), second);
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().signerWalletAddress).toBe(second.address);
+      const [event] = await fx.sql<{ actor_wallet: string | null }[]>`
+        SELECT actor_wallet FROM audit.events WHERE resource_id = ${response.json().id} AND actor_wallet IS NOT NULL
+      `;
+      expect(event!.actor_wallet).toBe(second.address);
+
+      // History: the decision signed before the replace still names the old key and the approver.
+      const [earlier] = await fx.sql<{ signer_wallet_address: string; decision_maker_subject_id: string }[]>`
+        SELECT signer_wallet_address, decision_maker_subject_id FROM core.gate_decisions WHERE id = ${before.json().id}
+      `;
+      expect(earlier).toEqual({ signer_wallet_address: fx.approverA.address, decision_maker_subject_id: approver!.subject_id });
+
+      // Bound again by proof (a disabled address re-binds), the original key signs again; the
+      // second key is now the history.
+      const back = await bindWalletByProof(app, account, fx.approverA.account);
+      expect(back.statusCode, back.body).toBe(200);
+      const cut = await decide(tokens.approverA, await holdContent(), second);
+      expect(cut.statusCode).toBe(400);
+      expect(cut.json().code).toBe("SIGNATURE_SIGNER_MISMATCH");
+      expect((await decide(tokens.approverA, await holdContent())).statusCode).toBe(200);
     });
 
     it("refuses a signed decision whose content changed after the request", async () => {

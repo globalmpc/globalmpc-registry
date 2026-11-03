@@ -132,6 +132,34 @@ describeDb("metrics endpoint", () => {
     expect(output).not.toContain(fx.tenantA);
   });
 
+  /**
+   * `MpcSignInFailureRate` watches every first-factor method, not only wallet sign-in (WP5):
+   * once accounts sign in with a code, a SIWE-only counter would stay flat through a guessing run.
+   */
+  it("counts sign-in failures per first-factor method", async () => {
+    await app.inject({ method: "POST", url: "/api/v1/auth/email/verify", payload: {} });
+    await app.inject({ method: "POST", url: "/api/v1/auth/siwe/verify", payload: {} });
+
+    const output = (await app.inject({ method: "GET", url: "/metrics" })).body;
+    expect(output).toMatch(/mpc_sign_in_failed_total\{method="email_code",status="400"\} [1-9]/);
+    // The removed SIWE route is an unmatched path now (404): it is no sign-in method, and no
+    // `siwe_legacy` series exists to alert on (WP7).
+    expect(output).not.toContain('method="siwe_legacy"');
+    expect(output).not.toContain("mpc_siwe_verify_failed_total");
+  });
+
+  it("counts identity-provider callback failures by provider, never by a raw path segment", async () => {
+    await app.inject({ method: "POST", url: "/api/v1/auth/oidc/google/callback", payload: {} });
+    await app.inject({ method: "POST", url: "/api/v1/auth/oidc/microsoft/callback", payload: {} });
+    await app.inject({ method: "POST", url: "/api/v1/auth/oidc/attacker-chosen/callback", payload: {} });
+
+    const output = (await app.inject({ method: "GET", url: "/metrics" })).body;
+    expect(output).toMatch(/mpc_sign_in_failed_total\{method="google",status="4\d\d"\} [1-9]/);
+    expect(output).toMatch(/mpc_sign_in_failed_total\{method="microsoft",status="4\d\d"\} [1-9]/);
+    expect(output).toMatch(/mpc_sign_in_failed_total\{method="oidc_unknown",status="4\d\d"\} [1-9]/);
+    expect(output).not.toContain("attacker-chosen");
+  });
+
   it("does not count itself", async () => {
     await app.inject({ method: "GET", url: "/metrics" });
     await app.inject({ method: "GET", url: "/health/ready" });

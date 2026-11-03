@@ -104,6 +104,19 @@ describe("export package assembly", () => {
     }
     expect(manifestHash).toBe(sha(pkg.manifest));
   });
+
+  it("names the requester by subject, and no wallet when an account requested it (0110)", () => {
+    // An account session has no wallet; the export records who asked, not a key nobody used.
+    const request = { ...job(["public"]), requested_by_wallet: null };
+    const { pkg, manifestHash } = assembleExportPackage(request, records, new Date());
+    expect(pkg.manifest).toMatchObject({
+      requestedBySubjectId: request.requested_by_subject_id,
+      requestedByWallet: null,
+    });
+    expect(manifestHash).toBe(
+      createHash("sha256").update(canonicalize(pkg.manifest as never), "utf8").digest("hex"),
+    );
+  });
 });
 
 describeDb("export build", () => {

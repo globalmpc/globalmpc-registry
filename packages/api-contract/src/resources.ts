@@ -5,7 +5,6 @@ import {
   ATTESTATION_TYPES,
   GATE_DECISIONS,
   GRADES,
-  isSupportedChainId,
   READINESS_STATUSES,
   SOURCE_RESULTS,
 } from "@mpc/domain";
@@ -137,6 +136,44 @@ export const correctClaimRequest = z.object({
   reason: z.string().min(1, "The reason for the correction cannot be empty"),
 });
 
+/** The chain a stuck anchor transaction was asked to move to, and when (08 §8.9). */
+export const anchorChainMoveRequest = z.object({
+  toChainId: z.number().int().positive(),
+  requestedAt: isoDateTime,
+  /** When the old chain's worker last looked at the request. Null: it has not yet. */
+  lastCheckedAt: isoDateTime.nullable(),
+  /**
+   * Why that worker is still waiting, e.g. `open_send`, `open_proposal`, `signer_pending`,
+   * `check_failed`. Null before its first look.
+   */
+  waitReason: z.string().nullable(),
+});
+
+/**
+ * The old chain's worker refused the batch's last requested move (08 §8.9).
+ *
+ * `reason` is one of:
+ * - `batch_on_chain`: the old contract holds the batch; `result` says how the row was reconciled;
+ * - `other_transaction`: another transaction already holds the batch on the requested chain;
+ * - `send_outcome_unknown`: what an earlier send on the old chain did cannot be read back, so the
+ *   batch may be there already; the row is left `reconciliation_required` for a person to check
+ *   every contract registered for that chain (a resubmit there asks only the configured one).
+ *   Asked again, the move is refused the same way — always, if an operator settled that send;
+ * - `target_not_allowed`: the requested chain is not supported, or not in the old chain's
+ *   environment (mainnet/testnet);
+ * - `not_movable`: the request was dropped because the transaction left the resubmittable states
+ *   on its chain before it was moved; `result` is the state it was in.
+ *
+ * Only `batch_on_chain` and `send_outcome_unknown` change the row's state. It stays until a person
+ * resubmits again.
+ */
+export const anchorChainMoveRefusal = z.object({
+  toChainId: z.number().int().positive().nullable(),
+  reason: z.string(),
+  result: z.string().nullable(),
+  refusedAt: isoDateTime,
+});
+
 /**
  * Anchor batch status — 08 §8.9.
  *
@@ -179,7 +216,40 @@ export const anchorBatchStatus = z.object({
       createdAt: isoDateTime,
     })
     .nullable(),
+  /**
+   * A pending request to move this batch's transaction to another chain, or null.
+   *
+   * **A request is not a move.** The row stays on `chainId` until that chain's worker has read
+   * the old contract and found the batch absent; if it finds the batch there, the request is
+   * dropped and the batch reconciled instead.
+   */
+  moveRequest: anchorChainMoveRequest.nullable(),
+  /** The last move the old chain's worker refused, until a person resubmits again. */
+  moveRefusal: anchorChainMoveRefusal.nullable(),
 });
+
+/**
+ * Result of a resubmit request — 08 §8.9.
+ *
+ * On this deployment's chain the transaction is reset to `created` at once. For a transaction
+ * recorded on another chain only a move is requested (`moveRequest`), and `confirmationState`
+ * and `attempts` are still the row's current ones.
+ */
+export const anchorBatchResubmission = z.object({
+  id: z.string(),
+  confirmationState: z.string(),
+  previousState: z.string(),
+  attempts: z.number().int(),
+  moveRequest: anchorChainMoveRequest.nullable(),
+});
+
+/**
+ * Largest file the streaming upload (`POST /api/v1/projects/:projectId/uploads/stream`) accepts.
+ *
+ * One number for both sides: the API refuses a larger file part, and the web origin's streaming
+ * pass-through refuses a request whose declared length cannot fit before sending a byte on.
+ */
+export const STREAM_UPLOAD_MAX_BYTES = 2000 * 1024 * 1024;
 
 /**
  * Upload — 05 §5.2, 06 §6.7.
@@ -239,7 +309,7 @@ export const objectUpload = z.object({
  * difference itself.
  */
 export const scannerStatus = z.object({
-  state: z.enum(["running", "unavailable", "stale", "never_seen", "unknown"]),
+  state: z.enum(["running", "unavailable", "unauthorized", "stale", "never_seen", "unknown"]),
   secondsSinceHeartbeat: z.number().int().nonnegative().nullable(),
   detail: z.string(),
 });
@@ -1596,12 +1666,17 @@ export const adminSubject = z.object({
   displayName: z.string(),
   /** Person or system identity. Credentials are managed differently. */
   kind: z.enum(["person", "service"]),
+  /** The person's identity assurance (0108) — what roles' minimums are checked against. */
+  assuranceLevel: z.enum(["wallet_only", "identity_bound", "high_assurance"]),
   wallets: z.array(
     z.object({
       id: z.string(),
       walletAddress: walletAddress,
       chainId: z.number().int(),
+      /** The level recorded when the wallet was bound. A proof binding records `wallet_only`. */
       assuranceLevel: z.enum(["wallet_only", "identity_bound", "high_assurance"]),
+      /** `proof`: bound by the holder's signature (WP5). `operator`: bound before WP5 or by bootstrap. */
+      boundVia: z.enum(["operator", "proof"]),
       boundAt: isoDateTime.nullable(),
       disabledAt: isoDateTime.nullable(),
       version: z.number().int().positive(),
@@ -1616,28 +1691,21 @@ export const adminSubject = z.object({
       revokedAt: isoDateTime.nullable(),
     }),
   ),
-  /** Whether no wallet can log in. The UI must say so first. */
+  /**
+   * How the person can sign in (WP6): their account address and each live Google / Microsoft
+   * identity. A wallet is a signing key, never a way in (D3, WP7).
+   */
+  signInMethods: z.array(z.enum(["email", "google", "microsoft"])),
+  /** No way to sign in at all (`signInMethods` is empty). The UI must say so first. */
   locked: z.boolean(),
+  /** When two admins suspended the person (0127); null while the account is in use. */
+  suspendedAt: isoDateTime.nullable(),
 });
 
 export const createSubjectRequest = z.object({
   displayName: z.string().min(1).max(200),
   /** Defaults to a person. `service` is only for system identities such as the scan worker. */
   kind: z.enum(["person", "service"]).default("person"),
-});
-
-/**
- * Wallet bind.
- *
- * The operator chooses the assurance level, and must say why. The level decides which roles
- * the wallet can exercise (`ROLE_MINIMUM_ASSURANCE`), so a level without a stated basis is a
- * grant nobody can later explain. The justification is kept in the audit record.
- */
-export const bindWalletRequest = z.object({
-  walletAddress: walletAddress,
-  chainId: z.number().int().refine((value) => isSupportedChainId(value)),
-  assuranceLevel: z.enum(["wallet_only", "identity_bound", "high_assurance"]),
-  justification: z.string().trim().min(1).max(1000),
 });
 
 /**
@@ -1667,6 +1735,8 @@ export const roleGrantRequest = z.object({
   decidedBySubjectId: z.string().nullable(),
   decidedAt: isoDateTime.nullable(),
   decisionReason: z.string().nullable(),
+  /** `proposer_suspended` when the proposer's suspension closed it (`withdrawn`). */
+  closedReason: z.enum(["proposer_suspended"]).nullable(),
   version: z.number().int().positive(),
 });
 
@@ -1722,6 +1792,8 @@ export const roleRevocationRequest = z.object({
   decidedBySubjectId: z.string().nullable(),
   decidedAt: isoDateTime.nullable(),
   decisionReason: z.string().nullable(),
+  /** `proposer_suspended` when the proposer's suspension closed it (`withdrawn`). */
+  closedReason: z.enum(["proposer_suspended"]).nullable(),
   version: z.number().int().positive(),
 });
 

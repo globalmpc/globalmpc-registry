@@ -4,7 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { OFFERING_PRECONDITIONS } from "@mpc/domain";
-import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
+import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
 import { projectProjection, publishProject } from "./helpers/registry.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
@@ -64,6 +64,7 @@ describeDb("project lifecycle", () => {
         ${account.address.toLowerCase()}, 31337, 'high_assurance', now()
       )
     `;
+    await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
       VALUES (${randomUUID()}, ${fx.tenantA}, ${subject.id}, ${fx.orgA}, 'issuer_officer')

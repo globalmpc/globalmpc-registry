@@ -11,6 +11,10 @@ contracts/out
 contracts/cache
 contracts/lib
 
+# The CDK app deploys these images; it is never part of one. Keeping it out of the context also
+# stops `cdk.out` — which holds a copy of the context — from growing on every build.
+cdk
+
 # Local secrets are not put into the image. compose mounts them at runtime.
 deploy/local-secrets
 config/local-secrets
@@ -26,6 +30,13 @@ config/secrets
 **/*.pem
 **/*.p12
 **/*.pfx
+
+# Browser tests run against a dev server outside any image. The specs, their mock provider
+# (`oidc-relay.ts`), seed and demo keys are test code, not part of a deployed service. The config
+# goes with them: `tsconfig.json` includes every `.ts` file, and the config imports `./e2e/*`, so
+# leaving it in would fail the web build's type check.
+apps/*/e2e
+apps/web/playwright.config.ts
 
 # design-system/dist is **not excluded.** It is a committed artifact and the exports of
 # `@mpc/design` point to it; excluding it leaves the web build unable to find the CSS.

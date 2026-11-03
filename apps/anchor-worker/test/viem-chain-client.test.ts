@@ -13,7 +13,24 @@ import { createViemChainClient } from "../src/viem-chain-client.js";
 
 type Answer = { result: unknown } | { error: { code: number; message: string } };
 
-let answers: Record<string, Answer> = {};
+/** An answer, or one chosen by the call's params. */
+type RpcMethod = "eth_getTransactionReceipt" | "eth_getTransactionByHash" | "eth_getCode" | "eth_getTransactionCount";
+type ScriptedAnswer = Answer | ((params: unknown[]) => Answer);
+let answers: Partial<Record<RpcMethod, ScriptedAnswer>> = {};
+const notScripted: Answer = { error: { code: -32601, message: "not scripted" } };
+const evaluate = (script: ScriptedAnswer | undefined, params: unknown[]): Answer =>
+  (typeof script === "function" ? script(params) : script) ?? notScripted;
+
+/** Remote method names never index a callable; each supported method has a fixed dispatch site. */
+function answerFor(method: string, params: unknown[]): Answer {
+  switch (method) {
+    case "eth_getTransactionReceipt": return evaluate(answers.eth_getTransactionReceipt, params);
+    case "eth_getTransactionByHash": return evaluate(answers.eth_getTransactionByHash, params);
+    case "eth_getCode": return evaluate(answers.eth_getCode, params);
+    case "eth_getTransactionCount": return evaluate(answers.eth_getTransactionCount, params);
+    default: return notScripted;
+  }
+}
 let server: Server;
 let url: string;
 
@@ -24,8 +41,8 @@ beforeAll(async () => {
       body += chunk;
     });
     request.on("end", () => {
-      const call = JSON.parse(body) as { id: number; method: string };
-      const answer = answers[call.method] ?? { error: { code: -32601, message: "not scripted" } };
+      const call = JSON.parse(body) as { id: number; method: string; params: unknown[] };
+      const answer = answerFor(call.method, call.params);
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ jsonrpc: "2.0", id: call.id, ...answer }));
     });
@@ -48,6 +65,34 @@ const client = () =>
   });
 
 const failing: Answer = { error: { code: -32000, message: "upstream unavailable" } };
+
+describe("scripted RPC dispatch", () => {
+  it.each(["constructor", "__proto__", "toString", "unknownRpc"])("rejects unrecognized method %s", async (method) => {
+    answers = {};
+    const response = await fetch(url, {
+      method: "POST",
+      body: JSON.stringify({ jsonrpc: "2.0", id: 7, method, params: [] }),
+    });
+    expect(await response.json()).toEqual({
+      jsonrpc: "2.0", id: 7, error: { code: -32601, message: "not scripted" },
+    });
+  });
+
+  it("passes params to a test-owned callback for an allowed RPC method", async () => {
+    let calls = 0;
+    answers = { eth_getTransactionCount: (params) => {
+      calls += 1;
+      expect(params).toEqual(["0x1234", "pending"]);
+      return { result: "0x9" };
+    } };
+    const response = await fetch(url, {
+      method: "POST",
+      body: JSON.stringify({ jsonrpc: "2.0", id: 8, method: "eth_getTransactionCount", params: ["0x1234", "pending"] }),
+    });
+    expect(await response.json()).toEqual({ jsonrpc: "2.0", id: 8, result: "0x9" });
+    expect(calls).toBe(1);
+  });
+});
 
 describe("observe", () => {
   it("is unknown only when the node answers that it has neither receipt nor transaction", async () => {
@@ -130,5 +175,39 @@ describe("observe on opBNB", () => {
   it("throws on a receipt without l1Fee, so the send stays open rather than counted at gas alone", async () => {
     answers = { eth_getTransactionReceipt: { result: raw({}) } };
     await expect(opbnb().observe(HASH)).rejects.toThrow("carries no l1Fee");
+  });
+});
+
+describe("hasCode", () => {
+  const ADDRESS = `0x${"0c".repeat(20)}`;
+
+  it("is true only for an address holding code", async () => {
+    answers = { eth_getCode: { result: "0x6080" } };
+    await expect(client().hasCode(ADDRESS)).resolves.toBe(true);
+    answers = { eth_getCode: { result: "0x" } };
+    await expect(client().hasCode(ADDRESS)).resolves.toBe(false);
+  });
+
+  it("throws when the code cannot be read", async () => {
+    answers = { eth_getCode: failing };
+    await expect(client().hasCode(ADDRESS)).rejects.toThrow();
+  });
+});
+
+describe("signerHasPendingTransactions", () => {
+  const counts = (pending: number, latest: number) => (params: unknown[]): Answer => ({
+    result: `0x${(params[1] === "pending" ? pending : latest).toString(16)}`,
+  });
+
+  it("is true only when the pending nonce is above the latest", async () => {
+    answers = { eth_getTransactionCount: counts(8, 7) };
+    await expect(client().signerHasPendingTransactions()).resolves.toBe(true);
+    answers = { eth_getTransactionCount: counts(7, 7) };
+    await expect(client().signerHasPendingTransactions()).resolves.toBe(false);
+  });
+
+  it("throws when the count cannot be read", async () => {
+    answers = { eth_getTransactionCount: failing };
+    await expect(client().signerHasPendingTransactions()).rejects.toThrow();
   });
 });

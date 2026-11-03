@@ -14,7 +14,7 @@ test.describe("public entry point", () => {
     await page.goto("/");
 
     // This used to be the sign-in screen. Guards against that regression.
-    await expect(page.getByRole("heading", { name: "Connect account" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toHaveCount(0);
     await expect(
       page.getByRole("heading", { name: /Mining Compliance Evidence/ }),
     ).toBeVisible();
@@ -41,15 +41,15 @@ test.describe("public entry point", () => {
 
   test("account connection remains available as a link", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("main").getByRole("link", { name: /Connect account/ }).click();
+    await page.getByRole("main").getByRole("link", { name: /Sign in/ }).click();
 
     await expect(page).toHaveURL(/\/connect$/);
-    await expect(page.getByRole("heading", { name: "Connect account" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   });
 
   test("the header also leads to account connection", async ({ page }) => {
     await page.goto("/explorer");
-    await page.getByRole("banner").getByRole("link", { name: /Connect account/ }).click();
+    await page.getByRole("banner").getByRole("link", { name: /Sign in/ }).click();
 
     await expect(page).toHaveURL(/\/connect$/);
   });

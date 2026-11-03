@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
@@ -169,17 +170,26 @@ describeDb("throughput measurement", () => {
     if (MAX_P95_MS !== null) expect(measurement.p95).toBeLessThanOrEqual(MAX_P95_MS);
   });
 
-  it("auth — SIWE nonce issuance", async () => {
+  it("auth — sign-in code issuance", async () => {
     // If the login path is blocked, everything else is blocked.
-    const measurement = await measure("POST /auth/siwe/nonce", 30, () =>
-      app.inject({
+    // Each request is its own requester and address, so the per-IP and per-address throttles do
+    // not answer early and the measurement covers the real issue path.
+    let requester = 0;
+    const statuses: number[] = [];
+    const measurement = await measure("POST /auth/email/start", 30, async () => {
+      requester += 1;
+      const response = await app.inject({
         method: "POST",
-        url: "/api/v1/auth/siwe/nonce",
-        payload: { walletAddress: fx.operatorA.address, chainId: 31337 },
-      }),
-    );
+        url: "/api/v1/auth/email/start",
+        headers: { "x-forwarded-for": `198.18.${Math.floor(requester / 250)}.${requester % 250}` },
+        payload: { email: `throughput-${randomUUID().slice(0, 8)}@example.test` },
+      });
+      statuses.push(response.statusCode);
+      return response;
+    });
 
     expect(measurement.errors).toBe(0);
+    expect(statuses.every((status) => status === 202), String(statuses)).toBe(true);
   });
 
   it("reflects measurement traffic in metrics", async () => {

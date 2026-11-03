@@ -36,6 +36,12 @@ export interface SnapshotConfig {
   readonly chainId: number;
 }
 
+/** A snapshot proposal reads weight from the voter's active wallet, and there is none. */
+export const GOVERNANCE_WALLET_REQUIRED = "GOVERNANCE_WALLET_REQUIRED";
+
+/** The wallet's snapshot balance already counted on this proposal, for whoever held it then. */
+export const GOVERNANCE_WALLET_ALREADY_VOTED = "GOVERNANCE_WALLET_ALREADY_VOTED";
+
 export interface WeightResult {
   readonly weight: bigint;
   /** Where the weight came from. The screen must disclose this. */
@@ -57,7 +63,8 @@ export async function resolveVoteWeight(
   input: {
     readonly tenantId: string;
     readonly proposalId: string;
-    readonly walletAddress: string;
+    /** The subject's active wallet — its governance wallet (D9). Needed only for a snapshot proposal. */
+    readonly walletAddress: string | null;
     readonly snapshotBlock: number | null;
     readonly snapshotTokenAddress: string | null;
     readonly manualWeight: string | null;
@@ -75,9 +82,17 @@ export async function resolveVoteWeight(
     return { weight: BigInt(input.manualWeight), source: "manual", blockNumber: null };
   }
 
+  if (input.walletAddress === null) {
+    throw unprocessable(
+      GOVERNANCE_WALLET_REQUIRED,
+      "A snapshot proposal reads weight from the voter's active signing wallet",
+    );
+  }
+  const walletAddress = input.walletAddress;
+
   const [existing] = await tx<{ weight: string; block_number: string }[]>`
     SELECT weight::text, block_number::text FROM core.governance_vote_weights
-    WHERE proposal_id = ${input.proposalId} AND wallet_address = ${input.walletAddress}
+    WHERE proposal_id = ${input.proposalId} AND wallet_address = ${walletAddress}
   `;
 
   if (existing) {
@@ -92,7 +107,7 @@ export async function resolveVoteWeight(
   try {
     weight = await readBalance({
       tokenAddress: input.snapshotTokenAddress,
-      walletAddress: input.walletAddress,
+      walletAddress,
       blockNumber: input.snapshotBlock,
     });
   } catch (error) {
@@ -108,7 +123,7 @@ export async function resolveVoteWeight(
     INSERT INTO core.governance_vote_weights (
       id, tenant_id, proposal_id, wallet_address, weight, block_number
     ) VALUES (
-      ${randomUUID()}, ${input.tenantId}, ${input.proposalId}, ${input.walletAddress},
+      ${randomUUID()}, ${input.tenantId}, ${input.proposalId}, ${walletAddress},
       ${weight.toString()}, ${input.snapshotBlock}
     )
     ON CONFLICT (proposal_id, wallet_address) DO NOTHING

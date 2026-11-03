@@ -114,7 +114,8 @@ describe("Data Room evidence and source workflows", () => {
     await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true));
     const call = calls.find((item) => item.method === "POST")!;
     expect(call.headers.get("if-match")).toBe('"3"');
-    expect(call.headers.get("authorization")).toBe("Bearer session-token");
+    // The session rides on the HttpOnly cookie (WP6): page script holds no credential to send.
+    expect(call.headers.get("authorization")).toBeNull();
     expect(call.headers.get("idempotency-key")).toBeTruthy();
   });
 
@@ -221,6 +222,24 @@ describe("Data Room evidence and source workflows", () => {
     expect(notice.textContent).toContain("uploads remain in quarantine");
     expect(notice.textContent).toContain("cannot be promoted to evidence");
     expect(notice.textContent).not.toMatch(/never reported|gone quiet|until a scanner runs/);
+  });
+
+  it("says the worker's credential is refused, not that the scanner is down", async () => {
+    const data: Record<string, unknown> = routes();
+    data[`GET ${root}/uploads`] = {
+      items: [], nextCursor: null, total: 0,
+      scanner: { state: "unauthorized", secondsSinceHeartbeat: 2 },
+    };
+    mockHttp(data);
+    await mount();
+    const notice = screen.getByTestId("scanner-status");
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(within(notice).getByText("The scan worker cannot report results")).toBeTruthy();
+    expect(notice.textContent).toContain("service credential is not accepted");
+    expect(notice.textContent).toContain("uploads remain in quarantine");
+    expect(notice.textContent).toContain("cannot be promoted to evidence");
+    expect(notice.textContent).toContain("Worker last seen 2s ago.");
+    expect(notice.textContent).not.toMatch(/malware scanner is unavailable|never reported|gone quiet|unknown/);
   });
 
   it("shows no scanner outage notice when availability is confirmed", async () => {

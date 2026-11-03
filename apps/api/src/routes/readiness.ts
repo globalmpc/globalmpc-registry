@@ -17,6 +17,7 @@ import {
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import type { AppConfig } from "../config.js";
 import { newSignatureNonce } from "../services/attestation-signing.js";
+import { assertSubjectSigner } from "../services/signing-wallets.js";
 import {
   buildGateDecisionTypedData,
   gateDecisionMessage,
@@ -50,8 +51,8 @@ import {
  * - `hold`/`rework`/`stop` can be recorded regardless of readiness. If bad news cannot be
  *   recorded, state goes silently stale.
  * - A decision is signed (§11.3). The approver's wallet signs the decision content through a
- *   single-use request, and the server records it only if the recovered signer is that
- *   approver's current wallet.
+ *   single-use request, and the server records it only if the recovered signer is one of that
+ *   approver's active wallets on this chain.
  * - watch → go needs a rationale and at least one condition (§11.3).
  */
 
@@ -751,17 +752,14 @@ export async function registerReadinessRoutes(
           }
 
           // Signature validity and authority are separate facts (invariant 13): the signer must
-          // be a current wallet of the subject recording the decision.
-          const wallets = await tx<{ wallet_address: string }[]>`
-            SELECT wallet_address FROM core.wallet_identities
-            WHERE subject_id = ${session.subjectId!} AND disabled_at IS NULL
-          `;
-          if (!wallets.some((wallet) => wallet.wallet_address.toLowerCase() === signer)) {
-            throw badRequest(
-              "SIGNATURE_SIGNER_MISMATCH",
-              "The signer is not a current wallet of the person recording this decision",
-            );
-          }
+          // be an active wallet of the subject recording the decision, on this chain — any of
+          // them, never "the session's" (WP5).
+          await assertSubjectSigner(tx, {
+            subjectId: session.subjectId!,
+            chainId: config.chainId,
+            signer,
+            message: "The signer is not a current wallet of the person recording this decision",
+          });
 
           const id = randomUUID();
           const [recorded] = await tx<{ signed_at: Date }[]>`
@@ -791,6 +789,7 @@ export async function registerReadinessRoutes(
             reason: data.rationale,
             correlationId,
             requestIp: request.clientIp,
+            signingWallet: signer,
             detail: { decision: data.decision, assessmentStatus: basis.status, signer },
           });
 

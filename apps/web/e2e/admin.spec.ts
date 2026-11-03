@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { connectAs } from "./connect-as";
 
@@ -51,11 +50,10 @@ test.describe("Administration", () => {
     ).toHaveCount(0);
   });
 
-  test("binds a wallet at the level the operator chose, only with what was checked", async ({ page }) => {
-    // A fixed level left reviewer and approver roles below their minimum on any
-    // wallet bound here. The level is now a choice, and the choice needs a stated basis.
-    const name = `Wallet target ${Date.now()}`;
-    const address = `0x${randomBytes(20).toString("hex")}`;
+  test("sets a person's assurance level only with what was checked, and attaches no wallet", async ({ page }) => {
+    // The level is the person's (WP5): an admin no longer attaches a key to someone else's
+    // account. Setting it is a choice, and the choice needs a stated basis.
+    const name = `Assurance target ${Date.now()}`;
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
@@ -63,22 +61,21 @@ test.describe("Administration", () => {
     await page.getByRole("button", { name: "Add person" }).click();
     const row = page.getByTestId("admin-subjects").locator("tr", { hasText: name });
     await expect(row).toBeVisible();
+    await expect(row.getByRole("button", { name: "Bind wallet" })).toHaveCount(0);
 
-    await row.getByRole("button", { name: "Bind wallet" }).click();
-    await page.getByRole("textbox", { name: "Wallet address" }).fill(address);
+    await row.getByRole("button", { name: "Set assurance" }).click();
     await page.getByRole("combobox", { name: "Assurance level" }).selectOption("high_assurance");
 
-    // No stated basis, no bind.
-    const bind = page.getByRole("button", { name: "Bind", exact: true });
-    await expect(bind).toBeDisabled();
+    // No stated basis, no change.
+    const set = page.getByRole("button", { name: "Set level", exact: true });
+    await expect(set).toBeDisabled();
     await page
       .getByRole("textbox", { name: "What you checked (required)" })
       .fill("ID document checked in person");
-    await expect(bind).toBeEnabled();
-    await bind.click();
+    await expect(set).toBeEnabled();
+    await set.click();
 
-    await expect(row.getByTestId("wallet-address")).toHaveText(address);
-    await expect(row.getByTestId("wallet-assurance")).toHaveText("high_assurance");
+    await expect(row.getByTestId("subject-assurance")).toHaveText("high_assurance");
   });
 
   test("the proposer of a revocation has no decision button", async ({ page }) => {

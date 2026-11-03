@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  bindAdminWallet,
   createNotificationSink,
   listNotificationSinks,
   NOTIFICATION_DELIVERY_ERROR_TEXT,
@@ -21,6 +20,7 @@ import {
   createDocumentLinkRule,
   listDocumentLinkRules,
   retireDocumentLinkRule,
+  setSubjectAssurance,
   type AdminSubject,
   type DocumentLinkKind,
   type DocumentLinkRule,
@@ -30,8 +30,11 @@ import {
 } from "@/lib/api";
 import { KIND_EXPLANATION } from "@/lib/documents";
 import { useSession } from "@/lib/session";
+import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { Address } from "@/components/Address";
+import { AccountAdmin } from "@/components/admin/AccountAdmin";
+import { AUTH_COPY } from "@/lib/copy";
 
 /**
  * Administration — spec 11 §11.2.
@@ -63,14 +66,11 @@ const REVOCATION_REASONS: readonly { value: RoleRevocationReasonCode; label: str
   { value: "granted_in_error", label: "Granted in error" },
 ];
 
-/** Roles that can approve a role grant. Same list as the server's `admin.role.approve`. */
-const ADMIN_ROLES: readonly string[] = ["mpc_operator", "security_operator"];
-
 /**
- * Assurance levels a bind may carry. Same values as the server's `bindWalletRequest`.
+ * Identity assurance levels. Same values as the server's `setSubjectAssuranceRequest`.
  *
- * No default is preselected. The level decides which roles the wallet can exercise, so it is a
- * deliberate choice with a stated basis, not a value that rides along with the address.
+ * No default is preselected. The level decides which roles the person can exercise, so it is a
+ * deliberate choice with a stated basis.
  */
 const ASSURANCE_OPTIONS = [
   { value: "wallet_only", label: "Wallet only — public read and voting" },
@@ -87,6 +87,14 @@ interface RevokeTarget {
 
 export default function AdminPage() {
   const { token, session, loading: sessionLoading } = useSession();
+  // `admin.read` reaches this screen (an auditor holds it); each change needs its own action.
+  // Controls the session's roles cannot use are not offered. The server decides either way.
+  const mayManageSubjects = can(session, "admin.subject.manage");
+  const mayManageWallets = can(session, "admin.wallet.manage");
+  const mayProposeRoles = can(session, "admin.role.propose");
+  const mayApproveRoles = can(session, "admin.role.approve");
+  const mayManageRules = can(session, "document.rule.manage");
+  const mayManageSinks = can(session, "admin.notification.manage");
   const [subjects, setSubjects] = useState<AdminSubject[]>([]);
   const [grants, setGrants] = useState<RoleGrant[]>([]);
   const [revocations, setRevocations] = useState<RoleRevocation[]>([]);
@@ -97,10 +105,9 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(true);
 
   const [newName, setNewName] = useState("");
-  const [walletFor, setWalletFor] = useState<string | null>(null);
-  const [walletAddress, setWalletAddress] = useState("");
-  const [walletLevel, setWalletLevel] = useState("");
-  const [walletJustification, setWalletJustification] = useState("");
+  const [assuranceFor, setAssuranceFor] = useState<string | null>(null);
+  const [assuranceLevel, setAssuranceLevel] = useState("");
+  const [assuranceJustification, setAssuranceJustification] = useState("");
   const [disableFor, setDisableFor] = useState<{ id: string; version: number } | null>(null);
   const [reasonCode, setReasonCode] = useState<string>("key_lost");
   const [detail, setDetail] = useState("");
@@ -159,8 +166,11 @@ export default function AdminPage() {
   }
 
   const locked = subjects.filter((subject) => subject.locked);
-  const pending = grants.filter((grant) => grant.state === "pending");
-  const pendingRevocations = revocations.filter((revocation) => revocation.state === "pending");
+  // A request a suspension closed is not waiting on anyone, whatever its state says.
+  const pending = grants.filter((grant) => grant.state === "pending" && !grant.closedReason);
+  const pendingRevocations = revocations.filter(
+    (revocation) => revocation.state === "pending" && !revocation.closedReason,
+  );
   // A binding with an open proposal gets no second button — the server would refuse it (409).
   const bindingsUnderRevocation = new Set(pendingRevocations.map((item) => item.roleBindingId));
 
@@ -171,63 +181,45 @@ export default function AdminPage() {
   const renderNotice = () => {
     return locked.length > 0 ? (
       <div className="notice" style={{ color: "var(--alert)" }} data-testid="admin-locked">
-        <div className="title">
-          {locked.length} account{locked.length === 1 ? "" : "s"} cannot sign in
-        </div>
-        Every wallet bound to {locked.map((subject) => subject.displayName).join(", ")} is disabled.
-        Roles remain recorded, but the person has no way in until a new key is bound.
+        <div className="title">{AUTH_COPY.admin.lockedTitle(locked.length)}</div>
+        {AUTH_COPY.admin.lockedBody(locked.map((subject) => subject.displayName).join(", "))}
       </div>
     ) : null;
   };
 
-  const renderBindAWallet = () => {
-    return walletFor ? (
+  const renderSetAssurance = () => {
+    return assuranceFor ? (
       <div className="panel">
-        <h2>Bind a wallet</h2>
+        <h2>Set identity assurance</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          This is also the recovery path: disable the lost key, then bind a new address here. An
-          address already bound elsewhere is refused rather than moved — moving it would make that
-          address&rsquo;s past signatures read as someone else&rsquo;s.
+          The assurance level decides which roles this person can exercise. Choose it from what you
+          checked about the person, and say what that was — it is kept in the audit record. You
+          cannot set your own.
         </p>
         <p className="sub" style={{ marginTop: 0 }}>
-          The assurance level decides which roles this wallet can exercise. Choose it from what you
-          checked about the person, and say what that was — it is kept in the audit record.
+          Wallets are not attached here. The person binds a key to their own account by signing
+          for it; after a loss, disable the lost key and they bind a new one.
         </p>
         <form
           onSubmit={(event) => {
             event.preventDefault();
             void run(async () => {
-              // Use the server session's chain. A hardcoded number breaks on stg/prod (56).
-              if (!session?.chainId) throw new Error("No session chain. Connect again.");
-              await bindAdminWallet(token!, newIdempotencyKey(), walletFor, {
-                walletAddress: walletAddress.trim().toLowerCase(),
-                chainId: session.chainId,
-                assuranceLevel: walletLevel,
-                justification: walletJustification.trim(),
+              await setSubjectAssurance(token!, newIdempotencyKey(), assuranceFor, {
+                assuranceLevel,
+                justification: assuranceJustification.trim(),
               });
-              setWalletFor(null);
-              setWalletAddress("");
-              setWalletLevel("");
-              setWalletJustification("");
+              setAssuranceFor(null);
+              setAssuranceLevel("");
+              setAssuranceJustification("");
             });
           }}
         >
           <div className="field">
-            <label htmlFor="wallet-address">Wallet address</label>
-            <input
-              id="wallet-address"
-              className="mono"
-              value={walletAddress}
-              onChange={(event) => setWalletAddress(event.target.value)}
-              placeholder="0x…"
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="wallet-assurance">Assurance level</label>
+            <label htmlFor="subject-assurance">Assurance level</label>
             <select
-              id="wallet-assurance"
-              value={walletLevel}
-              onChange={(event) => setWalletLevel(event.target.value)}
+              id="subject-assurance"
+              value={assuranceLevel}
+              onChange={(event) => setAssuranceLevel(event.target.value)}
             >
               <option value="">Choose a level</option>
               {ASSURANCE_OPTIONS.map((option) => (
@@ -238,24 +230,22 @@ export default function AdminPage() {
             </select>
           </div>
           <div className="field">
-            <label htmlFor="wallet-justification">What you checked (required)</label>
+            <label htmlFor="assurance-justification">What you checked (required)</label>
             <input
-              id="wallet-justification"
-              value={walletJustification}
-              onChange={(event) => setWalletJustification(event.target.value)}
+              id="assurance-justification"
+              value={assuranceJustification}
+              onChange={(event) => setAssuranceJustification(event.target.value)}
               placeholder="e.g. ID document checked in person"
             />
           </div>
           <button
             className="primary"
             type="submit"
-            disabled={
-              walletAddress.trim() === "" || walletLevel === "" || walletJustification.trim() === ""
-            }
+            disabled={assuranceLevel === "" || assuranceJustification.trim() === ""}
           >
-            Bind
+            Set level
           </button>{" "}
-          <button type="button" onClick={() => setWalletFor(null)}>
+          <button type="button" onClick={() => setAssuranceFor(null)}>
             Cancel
           </button>
         </form>
@@ -398,7 +388,7 @@ export default function AdminPage() {
           <button
             className="primary"
             type="submit"
-            disabled={busy || ruleUpstream.trim() === "" || ruleDownstream.trim() === ""}
+            disabled={busy || !mayManageRules || ruleUpstream.trim() === "" || ruleDownstream.trim() === ""}
           >
             Add rule
           </button>
@@ -444,7 +434,7 @@ export default function AdminPage() {
                       )}
                     </td>
                     <td>
-                      {rule.retiredAt ? null : (
+                      {rule.retiredAt || !mayManageRules ? null : (
                         <button onClick={() => setRetireFor(rule.id)}>Retire</button>
                       )}
                     </td>
@@ -546,7 +536,7 @@ export default function AdminPage() {
           <button
             className="primary"
             type="submit"
-            disabled={sinkUrl.trim() === "" || sinkSecret.trim() === ""}
+            disabled={!mayManageSinks || sinkUrl.trim() === "" || sinkSecret.trim() === ""}
           >
             Add sink
           </button>
@@ -599,6 +589,7 @@ export default function AdminPage() {
                     <td>
                       {/* Pause, do not delete. Deleting loses why it was cut off. */}
                       <button
+                        disabled={!mayManageSinks}
                         onClick={() =>
                           void run(() =>
                             updateNotificationSinkState(
@@ -665,7 +656,7 @@ export default function AdminPage() {
               onChange={(event) => setNewName(event.target.value)}
             />
           </div>
-          <button className="primary" type="submit" disabled={busy || newName.trim() === ""}>
+          <button className="primary" type="submit" disabled={busy || !mayManageSubjects || newName.trim() === ""}>
             Add person
           </button>
         </form>
@@ -678,6 +669,7 @@ export default function AdminPage() {
             <thead>
               <tr>
                 <th>Name</th>
+                <th>{AUTH_COPY.admin.signInMethods}</th>
                 <th>Wallets</th>
                 <th>Roles</th>
                 <th>Actions</th>
@@ -688,11 +680,35 @@ export default function AdminPage() {
                 <tr key={subject.id}>
                   <td>
                     {subject.displayName}
+                    {subject.assuranceLevel ? (
+                      <div className="meta" data-testid="subject-assurance">
+                        {subject.assuranceLevel}
+                      </div>
+                    ) : null}
+                    {subject.id === session?.subjectId ? (
+                      <div className="meta" data-testid="subject-you">
+                        {AUTH_COPY.admin.you}
+                      </div>
+                    ) : null}
                     {subject.locked ? (
                       <div className="meta" style={{ color: "var(--destructive-text)" }}>
                         cannot sign in
                       </div>
                     ) : null}
+                    {subject.suspendedAt ? (
+                      <div className="meta" style={{ color: "var(--destructive-text)" }} data-testid="subject-suspended">
+                        {AUTH_COPY.admin.suspended} {subject.suspendedAt.slice(0, 10)}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="meta" data-testid="subject-sign-in-methods">
+                    {subject.signInMethods === undefined
+                      ? "—"
+                      : subject.signInMethods.length === 0
+                        ? AUTH_COPY.admin.noMethod
+                        : subject.signInMethods
+                            .map((method) => AUTH_COPY.admin.methodLabels[method] ?? method)
+                            .join(", ")}
                   </td>
                   <td className="mono meta">
                     {subject.wallets.length === 0 ? "none" : null}
@@ -702,7 +718,7 @@ export default function AdminPage() {
                         <span data-testid="wallet-assurance">{wallet.assuranceLevel}</span>{" "}
                         {wallet.disabledAt ? (
                           <span style={{ color: "var(--destructive-text)" }}>disabled</span>
-                        ) : wallet.walletAddress === session?.walletAddress?.toLowerCase() ? (
+                        ) : !mayManageWallets ? null : subject.id === session?.subjectId ? (
                           // You cannot deactivate your own wallet. A button here would show the rejection only after the click.
                           <span>you</span>
                         ) : (
@@ -725,7 +741,7 @@ export default function AdminPage() {
                           <span style={{ color: "var(--destructive-text)" }}>revoked</span>
                         ) : bindingsUnderRevocation.has(role.id) ? (
                           <span>revocation pending</span>
-                        ) : (
+                        ) : !mayProposeRoles ? null : (
                           <button
                             onClick={() =>
                               setRevokeFor({
@@ -742,15 +758,11 @@ export default function AdminPage() {
                     ))}
                   </td>
                   <td>
-                    {/* Operator-level holders do not get wallets attached from the screen. Key rotation goes through bootstrap. */}
-                    {subject.roles.some(
-                      (role) => role.revokedAt === null && ADMIN_ROLES.includes(role.role),
-                    ) ? (
-                      <span className="meta">Wallet changes via bootstrap</span>
-                    ) : (
-                      <button onClick={() => setWalletFor(subject.id)}>Bind wallet</button>
-                    )}{" "}
-                    <button onClick={() => setGrantFor(subject.id)}>Propose role</button>
+                    {/* The server refuses setting one's own level and a service's; no button for either. */}
+                    {mayManageSubjects && subject.kind === "person" && subject.id !== session?.subjectId ? (
+                      <button onClick={() => setAssuranceFor(subject.id)}>Set assurance</button>
+                    ) : null}{" "}
+                    {mayProposeRoles ? <button onClick={() => setGrantFor(subject.id)}>Propose role</button> : null}
                   </td>
                 </tr>
               ))}
@@ -759,7 +771,7 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {renderBindAWallet()}
+      {renderSetAssurance()}
 
       {disableFor ? (
         <div className="panel">
@@ -921,7 +933,7 @@ export default function AdminPage() {
                           same thing, but a clickable button that is always rejected makes
                           the screen look broken.
                         */}
-                        {mine ? (
+                        {!mayApproveRoles ? null : mine ? (
                           <span className="meta">You proposed this — someone else decides.</span>
                         ) : (
                           <>
@@ -998,7 +1010,7 @@ export default function AdminPage() {
                     <td style={{ color: "var(--muted-foreground)" }}>{revocation.reason}</td>
                     <td>
                       {/* Same as grants: the proposer gets no decision buttons. The server blocks it too. */}
-                      {revocation.requestedBySubjectId === session?.subjectId ? (
+                      {!mayApproveRoles ? null : revocation.requestedBySubjectId === session?.subjectId ? (
                         <span className="meta">You proposed this — someone else decides.</span>
                       ) : (
                         <>
@@ -1043,6 +1055,7 @@ export default function AdminPage() {
           </div>
         )}
       </div>
+      <AccountAdmin subjects={subjects} onChanged={reload} />
     </>
   );
 }

@@ -63,55 +63,26 @@ export class ApiError extends Error {
 }
 
 /**
- * Session token header.
+ * What page script sends to authenticate — nothing (WP6).
  *
- * A token is issued only after the SIWE signature is verified. The server stores only
- * the hash, never the raw token, and logout invalidates it immediately.
+ * The session token lives in an HttpOnly cookie that the web server turns into the API's
+ * `Authorization: Bearer` (`proxy.ts`, `lib/bff.ts`), so script can neither read it nor send it.
+ * Every request here is same-origin, and the browser attaches the cookie by itself.
+ *
+ * The `session` argument stays on every call. It is `SESSION_MARKER` while a session exists
+ * (`lib/session.tsx`), never a credential, and keeps each call site saying "this request is made
+ * as the signed-in person" — a screen that called these without a session would still be wrong.
  */
-function authHeader(token: string | null): Record<string, string> {
-  return token ? { authorization: `Bearer ${token}` } : {};
+export function authHeader(_session: string | null): Record<string, string> {
+  return {};
 }
 
-export interface SiweChallenge {
-  nonce: string;
-  statement: string;
-  domain: string;
-  /** URI to sign. The server decides it and the server verifies it — do not guess here. */
-  uri: string;
-  /**
-   * Chain to sign on. **The server decides it and the server verifies it**.
-   *
-   * When a chain was hardcoded here, real-wallet login on stg/prod (56) succeeded zero times.
-   */
-  chainId: number;
-  expiresAt: string;
-}
+/** Stands in for the token in page script: "a session exists". It authenticates nothing. */
+export const SESSION_MARKER = "cookie-session";
 
-export async function requestSiweNonce(walletAddress: string): Promise<SiweChallenge> {
-  const response = await apiFetch("/api/v1/auth/siwe/nonce", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ walletAddress: walletAddress.toLowerCase() }),
-  });
-  return parse<SiweChallenge>(response);
-}
-
-export async function verifySiwe(
-  message: string,
-  signature: string,
-): Promise<{ sessionToken: string; verifiedWalletAddress: string; expiresAt: string }> {
-  const response = await apiFetch("/api/v1/auth/siwe/verify", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ message, signature }),
-  });
-  return parse<{ sessionToken: string; verifiedWalletAddress: string; expiresAt: string }>(
-    response,
-  );
-}
-
-export async function logout(token: string): Promise<void> {
-  await apiFetch("/api/v1/auth/logout", { method: "POST", headers: authHeader(token) });
+/** Ends the session at the API; the web server clears the cookie whatever the API answers. */
+export async function logout(): Promise<void> {
+  await apiFetch("/api/v1/auth/logout", { method: "POST" });
 }
 
 async function parse<T>(response: Response): Promise<T> {
@@ -137,10 +108,20 @@ export interface ProjectSummary {
   asOf: string;
 }
 
+export type AuthenticationLevel = "aal1" | "aal2" | "aal3";
+
 export interface SessionInfo {
   authenticated: boolean;
-  walletAddress?: string;
-  chainId?: number;
+  /** What the session proved first: `email_code`, `google` or `microsoft`. */
+  firstFactor?: "email_code" | "google" | "microsoft" | null;
+  secondFactor?: "passkey" | "totp" | "recovery_code" | null;
+  /** Derived by the server from what the session proved. `aal1`: first factor only. */
+  aal?: AuthenticationLevel;
+  mfaSatisfied?: boolean;
+  /** Restored with a recovery code: only re-enrolment and sign-out until a factor is proved. */
+  recoveryLimited?: boolean;
+  /** Roles held but not effective at this session's level, with the level each needs. */
+  narrowedRoles?: { role: string; requiredAal: AuthenticationLevel | null }[];
   subjectId?: string | null;
   tenantId?: string | null;
   assuranceLevel?: string;
@@ -392,7 +373,7 @@ export interface ObjectUpload {
 }
 
 export interface ScannerStatus {
-  state: "running" | "unavailable" | "stale" | "never_seen" | "unknown";
+  state: "running" | "unavailable" | "unauthorized" | "stale" | "never_seen" | "unknown";
   secondsSinceHeartbeat: number | null;
   detail: string;
 }
@@ -466,8 +447,14 @@ export async function createUpload(
     form.append("file", file, file.name);
 
     // Do not set content-type directly. The browser must attach the boundary.
+    /**
+     * Same-origin since WP6. The session is an HttpOnly cookie on the web origin, so a request
+     * straight to the API host would carry no credential at all, and `NEXT_PUBLIC_API_DIRECT_ORIGIN`
+     * is no longer used. The web origin streams this route past its proxy without buffering
+     * (`lib/stream-upload.ts`), so the file size is bounded by the API's cap, not the proxy's.
+     */
     const response = await apiFetch(
-      streamUploadUrl(projectId, process.env.NEXT_PUBLIC_API_DIRECT_ORIGIN),
+      streamUploadUrl(projectId, undefined),
       {
       method: "POST",
       headers: { ...authHeader(token), "idempotency-key": key },
@@ -1489,13 +1476,41 @@ export async function resubmitAnchorBatch(
   token: string,
   batchId: string,
   key: string,
-): Promise<{ confirmationState: string; previousState: string }> {
+): Promise<AnchorBatchResubmission> {
   const response = await apiFetch(`/api/v1/anchor-batches/${batchId}/resubmit`, {
     method: "POST",
     headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
     body: JSON.stringify({}),
   });
-  return parse<{ confirmationState: string; previousState: string }>(response);
+  return parse<AnchorBatchResubmission>(response);
+}
+
+/**
+ * A pending move of a stuck transaction to another chain. Not a move yet: the row stays on its
+ * chain until that chain's worker confirms the old contract lacks the batch.
+ */
+export interface AnchorChainMoveRequest {
+  toChainId: number;
+  requestedAt: string;
+  /** When the old chain's worker last looked at it; null before its first look. */
+  lastCheckedAt: string | null;
+  waitReason: string | null;
+}
+
+/** The old chain's worker refused the last requested move. Shown until a person resubmits. */
+export interface AnchorChainMoveRefusal {
+  toChainId: number | null;
+  reason: string;
+  result: string | null;
+  refusedAt: string;
+}
+
+export interface AnchorBatchResubmission {
+  id: string;
+  confirmationState: string;
+  previousState: string;
+  attempts: number;
+  moveRequest: AnchorChainMoveRequest | null;
 }
 
 export interface AnchorProposal {
@@ -1518,6 +1533,8 @@ export interface AnchorBatchStatus extends AnchorBatch {
   reorgCount: number;
   needsAttention: boolean;
   proposal: AnchorProposal | null;
+  moveRequest: AnchorChainMoveRequest | null;
+  moveRefusal: AnchorChainMoveRefusal | null;
 }
 
 /**
@@ -2033,6 +2050,8 @@ export interface AdminWallet {
   walletAddress: string;
   chainId: number;
   assuranceLevel: string;
+  /** `proof`: the holder bound it by signing (WP5). `operator`: bound before WP5 or by bootstrap. */
+  boundVia?: "operator" | "proof";
   boundAt: string | null;
   disabledAt: string | null;
   version: number;
@@ -2042,10 +2061,19 @@ export interface AdminSubject {
   id: string;
   displayName: string;
   kind: "person" | "service";
+  /** The person's identity assurance, set by another admin with a stated basis (WP5). */
+  assuranceLevel?: string;
   wallets: AdminWallet[];
   roles: { id: string; role: string; projectId: string | null; grantedAt: string; revokedAt: string | null }[];
-  /** No wallet can log in. This is the first state the screen must report. */
+  /**
+   * How the person can sign in: the account address and linked Google / Microsoft identities
+   * (WP6). A wallet is never one (WP7).
+   */
+  signInMethods?: ("email" | "google" | "microsoft")[];
+  /** No way to sign in at all. This is the first state the screen must report. */
   locked: boolean;
+  /** When two admins suspended the person (AUTH-06); null or absent while the account is in use. */
+  suspendedAt?: string | null;
 }
 
 export interface RoleGrant {
@@ -2061,6 +2089,8 @@ export interface RoleGrant {
   decidedBySubjectId: string | null;
   decidedAt: string | null;
   decisionReason: string | null;
+  /** `proposer_suspended`: the proposer's suspension closed it (`rejected`). */
+  closedReason: "proposer_suspended" | null;
   version: number;
 }
 
@@ -2085,13 +2115,17 @@ export async function createAdminSubject(
   return parse<AdminSubject>(response);
 }
 
-export async function bindAdminWallet(
+/**
+ * Sets a person's identity assurance with what was checked (WP5). Admins no longer attach wallets:
+ * the holder binds a key to their own account by signing for it.
+ */
+export async function setSubjectAssurance(
   token: string,
   key: string,
   subjectId: string,
-  input: { walletAddress: string; chainId: number; assuranceLevel: string; justification: string },
+  input: { assuranceLevel: string; justification: string },
 ): Promise<AdminSubject> {
-  const response = await apiFetch(`/api/v1/admin/subjects/${subjectId}/wallets`, {
+  const response = await apiFetch(`/api/v1/admin/subjects/${subjectId}/assurance`, {
     method: "POST",
     headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
     body: JSON.stringify(input),
@@ -2266,6 +2300,8 @@ export interface RoleRevocation {
   decidedBySubjectId: string | null;
   decidedAt: string | null;
   decisionReason: string | null;
+  /** `proposer_suspended`: the proposer's suspension closed it (`rejected`). */
+  closedReason: "proposer_suspended" | null;
   version: number;
 }
 

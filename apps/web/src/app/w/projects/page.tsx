@@ -8,6 +8,7 @@ import {
   type ProjectListItem,
 } from "@/lib/projects-api";
 import { useSession } from "@/lib/session";
+import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { GradeBadge, LifecycleBadge, ReadinessBadge } from "@/components/StatusBadge";
@@ -308,9 +309,12 @@ export default function ProjectListPage() {
             Only projects in the current tenant are listed. Isolation is decided by the server.
           </p>
         </div>
-        <Link href="/w/projects/new">
-          <button className="primary">New project</button>
-        </Link>
+        {/* Offered only to a session whose roles can create a project; the server decides. */}
+        {can(session, "project.create") ? (
+          <Link href="/w/projects/new">
+            <button className="primary">New project</button>
+          </Link>
+        ) : null}
       </div>
 
       {renderProjectFilters()}

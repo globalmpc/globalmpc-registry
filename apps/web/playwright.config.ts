@@ -1,39 +1,29 @@
 import { defineConfig, devices } from "@playwright/test";
 import { generatePrivateKey } from "viem/accounts";
 import { E2E_MAX_RETRIES } from "./e2e/catalog-fixtures";
+import { DEMO_PEOPLE } from "./e2e/demo-people";
 
 /**
- * Demo account keys are **generated at run time.**
+ * The demo people's keys are **generated at run time** (`e2e/demo-people.ts`).
  *
- * A key in the repository lets anyone who knows it log in with that role at the deployed address.
- * It stays in past commits even after deletion, so it is never committed in the first place.
+ * Each person signs in as an account — an emailed code, then a passkey — and holds a wallet that
+ * only signs. Both keys are made here: a key in the repository would let anyone who knows it act
+ * as that role wherever the seed ran, and it would stay in past commits after deletion.
  *
- * The same value goes to three places — the web (account cards and signing), seed (addresses that
- * role_bindings attach to), and worker processes. Workers re-read this config file, so generating
- * new keys here would diverge from the runner. If keys already exist, they are reused.
+ * The same value goes to the seed (the addresses role bindings attach to, and the passkeys'
+ * public keys, derived from these keys) and to the specs (the wallet that signs, the virtual
+ * authenticator that answers). Workers re-read this config file, so generating new keys here
+ * would diverge from the runner; a value already in the environment is reused. The web gets none.
  */
-const DEMO_ACCOUNT_LABELS = [
-  "Operator A",
-  "Operator B",
-  "Operator C",
-  "Reader A",
-  "Steward A",
-  "Approver A",
-  "Reviewer A",
-  "Proposer A",
-  "Voter A",
-  "Scan Service",
-  "Publisher A",
-] as const;
-
 const DEMO_ACCOUNT_KEYS =
   process.env["E2E_DEMO_ACCOUNT_KEYS"] ??
-  JSON.stringify(
-    Object.fromEntries(DEMO_ACCOUNT_LABELS.map((label) => [label, generatePrivateKey()])),
-  );
+  JSON.stringify(Object.fromEntries(DEMO_PEOPLE.map((label) => [label, generatePrivateKey()])));
 
 // globalSetup and seed-cli are child processes. Pass values down through the environment.
 process.env["E2E_DEMO_ACCOUNT_KEYS"] = DEMO_ACCOUNT_KEYS;
+
+// The scan service's token is derived from these keys (`e2e/scan-service-token.ts`), so the seed
+// step and every shard agree on it without another variable to pass between CI steps.
 
 /**
  * E2E configuration.
@@ -81,6 +71,41 @@ process.env["E2E_DATABASE_URL"] = SUPERUSER_URL;
  */
 process.env["E2E_APP_DATABASE_URL"] = APP_URL;
 
+/**
+ * Ports — 3000 (web) and 3001 (API) unless `E2E_WEB_PORT` / `E2E_API_PORT` say otherwise.
+ *
+ * A second checkout can then run the suite beside a development stack that already holds the
+ * default ports, instead of being handed that stack's servers by `reuseExistingServer` (which
+ * applies none of the env below). CI sets neither, so it runs exactly as before.
+ *
+ * The web origin is also the WebAuthn origin (its host is the relying party) and the base of
+ * invitation links, so everything that names it derives from the one port.
+ */
+const WEB_PORT = Number(process.env["E2E_WEB_PORT"] ?? 3000);
+const API_PORT = Number(process.env["E2E_API_PORT"] ?? 3001);
+const WEB_ORIGIN = `http://localhost:${WEB_PORT}`;
+/** The mock Google / Microsoft (`e2e/oidc-relay.ts`); 3102 unless `E2E_OIDC_PORT` says otherwise. */
+const OIDC_PORT = Number(process.env["E2E_OIDC_PORT"] ?? 3102);
+process.env["E2E_WEB_PORT"] = String(WEB_PORT);
+process.env["E2E_API_PORT"] = String(API_PORT);
+process.env["E2E_OIDC_PORT"] = String(OIDC_PORT);
+
+/**
+ * The OIDC clients the mock provider serves — the values of `TEST_GOOGLE_CLIENT` and
+ * `TEST_MICROSOFT_CLIENT` in `apps/api/test/helpers/mock-oidc.ts`, which the relay runs. Test
+ * values for a provider that exists only in this process tree; written out because that module
+ * is ESM-only and this config is loaded as CommonJS.
+ */
+const MOCK_OIDC_ENV = {
+  OIDC_TEST_RELAY_URL: `http://127.0.0.1:${OIDC_PORT}`,
+  GOOGLE_CLIENT_ID: "test-google-client.apps.example",
+  GOOGLE_CLIENT_SECRET: "test-google-client-secret",
+  MICROSOFT_CLIENT_ID: "5b4f3a2c-0000-4000-8000-00000000c1d1",
+  MICROSOFT_CLIENT_SECRET: "test-microsoft-client-secret",
+  // The directory the mock's Microsoft tokens name (`e2e/oidc.ts` MOCK_MICROSOFT_TENANT).
+  MICROSOFT_ALLOWED_TENANTS: "11111111-1111-4111-8111-111111111111",
+};
+
 export default defineConfig({
   testDir: "./e2e",
   testMatch: /.*\.spec\.ts/,
@@ -106,7 +131,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
 
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: WEB_ORIGIN,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -132,18 +157,34 @@ export default defineConfig({
 
   webServer: [
     {
+      // Google and Microsoft for the account specs: the provider's back channel for the API and
+      // the person's approval for the specs. Loopback only; never built or deployed.
+      command: "pnpm exec tsx e2e/oidc-relay.ts",
+      stdout: "pipe",
+      stderr: "pipe",
+      url: `http://127.0.0.1:${OIDC_PORT}/__e2e/health`,
+      reuseExistingServer: !process.env["CI"],
+      timeout: 30_000,
+      env: { E2E_OIDC_PORT: String(OIDC_PORT) },
+    },
+    {
       command: "pnpm --filter @mpc/api start",
       stdout: "pipe",
       stderr: "pipe",
       cwd: "../..",
-      port: 3001,
+      port: API_PORT,
       reuseExistingServer: !process.env["CI"],
       timeout: 60_000,
       env: {
         DATABASE_URL: APP_URL,
-        PORT: "3001",
-        SIWE_DOMAIN: "localhost:3000",
-        SIWE_URI: "http://localhost:3000",
+        PORT: String(API_PORT),
+        // Invitation links and the passkey origin and relying party (`localhost`).
+        WEB_ORIGIN,
+        // Sign-in codes go to `core.email_outbox`, which the account specs read (`e2e/mailbox.ts`).
+        EMAIL_TRANSPORT: "log",
+        // Google and Microsoft through the mock provider (`e2e/oidc-relay.ts`). The relay URL is
+        // refused in production by the API's own config check.
+        ...MOCK_OIDC_ENV,
         CHAIN_ID: "31337",
         SESSION_SECRET: "e2e-session-secret-at-least-32-chars",
         NODE_ENV: "development",
@@ -151,8 +192,8 @@ export default defineConfig({
         /**
          * Raise the login limit only during E2E.
          *
-         * The default is 10 per minute (`AUTH_RATE_LIMIT_MAX`). A single spec logs in switching between
-         * several roles, so one run easily exceeds that, and once exceeded a 429 shows up as
+         * The default is 10 per minute (`AUTH_RATE_LIMIT_MAX`). A single spec switches between several
+         * people, and a person's first switch is a real sign-in, so one run easily exceeds that, and once exceeded a 429 shows up as
          * a login failure and **breaks tests unrelated to the cause.** The goal is to keep the limit
          * itself low, so the default is left unchanged.
          */
@@ -178,20 +219,25 @@ export default defineConfig({
     {
       // The `--webpack` flag lives in the dev script of `package.json`. Calling next directly
       // here would split the flag across two places.
-      command: "pnpm dev",
+      // Another port is appended to the script's own `--port 3000`; the last one given wins.
+      command: WEB_PORT === 3000 ? "pnpm dev" : `pnpm dev --port ${WEB_PORT}`,
       stdout: "pipe",
       stderr: "pipe",
-      port: 3000,
+      port: WEB_PORT,
       reuseExistingServer: !process.env["CI"],
       timeout: 120_000,
       env: {
         // Webpack's dev server retains compiled routes throughout the browser suite.
         // Bound its heap so it collects before starving Chromium/API on shared CI hosts.
-        NODE_OPTIONS: `${process.env["NODE_OPTIONS"] ?? ""} --max-old-space-size=1536`.trim(),
-        // E2E logs in with demo accounts. Without this value the login screen has no
-        // accounts and every spec stops at the first step. Deployment builds do not provide this value,
-        // so no demo accounts exist there.
-        NEXT_PUBLIC_DEMO_ACCOUNT_KEYS: DEMO_ACCOUNT_KEYS,
+        // Next's dev server restarts itself as the heap nears this bound, and the requests in
+        // flight then fail with ERR_CONNECTION_REFUSED (CI run 41522263991, public-surface.spec
+        // :78, "approaching the used memory threshold, restarting"). With the WP6/WP7 routes,
+        // 1536 MB was reached late in the suite; that runner's cgroup peaked at 4.8 of 16 GB
+        // with no OOM event, so 3072 MB keeps a bound without the restart.
+        NODE_OPTIONS: `${process.env["NODE_OPTIONS"] ?? ""} --max-old-space-size=3072`.trim(),
+        // Where the proxy sends `/api/*`, and the origin its cross-site check expects (WP6).
+        API_ORIGIN: `http://localhost:${API_PORT}`,
+        WEB_ORIGIN,
       },
     },
   ],

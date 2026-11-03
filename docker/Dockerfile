@@ -17,7 +17,7 @@
 #
 # Alpine (musl) keeps the base small. The lockfile already carries the `*-musl` optional
 # binaries (Next SWC, sharp, rollup, esbuild); a new native dependency must ship one too.
-FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS deps
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS deps
 
 WORKDIR /repo
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
@@ -55,7 +55,7 @@ FROM deps AS web-build
 RUN pnpm --filter @mpc/web build
 
 # --- Runtime --------------------------------------------------------------------
-FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runtime
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS runtime
 
 WORKDIR /repo
 ENV NODE_ENV=production

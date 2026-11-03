@@ -10,18 +10,17 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 describeDb("project routes", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
-  let tokens: { operatorA: string; operatorB: string; readerA: string; unknownWallet: string };
+  let tokens: { operatorA: string; operatorB: string; readerA: string };
 
   beforeAll(async () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
-    // From R1, auth is SIWE signature → session token. Tests take the same path.
+    // Real account sessions (emailed code + passkey) for the fixture people.
     tokens = {
       operatorA: await signIn(app, fx.operatorA),
       operatorB: await signIn(app, fx.operatorB),
       readerA: await signIn(app, fx.readerA),
-      unknownWallet: await signIn(app, fx.unknownWallet),
     };
   });
 
@@ -138,11 +137,13 @@ describeDb("project routes", () => {
       expect(response.json().code).toBe("UNAUTHENTICATED");
     });
 
-    it("an unenrolled wallet gets 403 WALLET_NOT_ENROLLED — signed in, no tenant", async () => {
-      // A 401 reads as "sign in again". The signature already succeeded, so that is false.
-      const response = await create(tokens.unknownWallet, body());
-      expect(response.statusCode).toBe(403);
-      expect(response.json().code).toBe("WALLET_NOT_ENROLLED");
+    it("a key bound to no one has no session to use — no unenrolled wallet session exists (WP7)", async () => {
+      // Before WP7 any wallet signed in and an unbound one got 403 WALLET_NOT_ENROLLED. Wallets
+      // no longer sign anyone in: the key finds no person, and its address is no token.
+      await expect(signIn(app, fx.unknownWallet)).rejects.toThrow(/not an active wallet of any person/);
+      const response = await create(fx.unknownWallet.address, body());
+      expect(response.statusCode).toBe(401);
+      expect(response.json().code).toBe("UNAUTHENTICATED");
     });
 
     it("returns 403 and the required roles for a tenant member without a role", async () => {

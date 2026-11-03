@@ -1,4 +1,5 @@
 import { satisfiesAssurance, ROLE_MINIMUM_ASSURANCE, type AssuranceLevel } from "./auth.js";
+import { ACCOUNT_ACTION_POLICIES } from "./accounts.js";
 
 /**
  * Authorization decision — the access decision formula of spec 02 §2.1 in code.
@@ -63,6 +64,8 @@ export const TENANT_WIDE_ROLES: readonly string[] = [
   "security_operator",
   "auditor",
   "scan_service",
+  // Observes only approved public content, for every project the tenant published.
+  "cre_reporter",
   "treasury_signer",
   "gate_approver",
   "protocol_proposer",
@@ -542,6 +545,17 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     secondPerson: "first ≠ second confirmer (source_receipt_second_reviewer_differs, 0021)",
     allowedRoles: ["data_steward", "mpc_operator"],
   },
+  /**
+   * Relay a destination-bound observation of an approved public Registry version (CRE).
+   *
+   * Was `source.collect`. The CRE workflow is a service; with service tokens (D7) it holds
+   * `cre_reporter`, a service-only role, so the person roles it used to borrow are never in
+   * effect through its token. Stewards and operators may still request an observation.
+   */
+  "cre.report": {
+    action: "cre.report",
+    allowedRoles: ["data_steward", "mpc_operator", "cre_reporter"],
+  },
   "claim.curate": {
     action: "claim.curate",
     allowedRoles: ["data_steward"],
@@ -717,13 +731,13 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     allowedRoles: ["mpc_operator", "security_operator"],
   },
   /**
-   * Wallet disable and rebind — AC-27.
+   * Wallet disable — AC-27.
    *
    * Cutting off a lost key is **urgent**. Requiring two people keeps a
    * compromised key alive while waiting for the second person. So this is
    * single-person, and the reason and actor are recorded instead
-   * (`wallet_disable_events`). Recovery — binding a new key — is the same action
-   * and is immediate for the same reason.
+   * (`wallet_disable_events`). Binding a new key is not an admin action any more
+   * (WP5): only the holder binds, by signing a challenge from their own account.
    */
   "admin.wallet.manage": {
     action: "admin.wallet.manage",
@@ -739,6 +753,36 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     allowedRoles: ["mpc_operator", "security_operator"],
   },
   /**
+   * Admin MFA reset — journey 6 (WP3). Revokes every authenticator and session of a person who
+   * lost all their factors and opens a 24-hour first-enrolment window. It never adds an
+   * authenticator: the person enrols their own. Two people, neither the person reset.
+   */
+  "admin.mfa_reset.propose": {
+    action: "admin.mfa_reset.propose",
+    allowedRoles: ["mpc_operator", "security_operator"],
+  },
+  "admin.mfa_reset.approve": {
+    action: "admin.mfa_reset.approve",
+    secondPerson: "proposer ≠ decider, neither is the subject (mfa_reset_two_person, mfa_reset_not_self_target 0115)",
+    allowedRoles: ["mpc_operator", "security_operator"],
+  },
+  /**
+   * Suspending and reinstating a person — journey 6, AUTH-06 (0127). Suspension ends every way
+   * in at once and keeps the signed history; reinstatement opens a first-enrolment window. Two
+   * people, neither the person.
+   */
+  "admin.subject_suspension.propose": {
+    action: "admin.subject_suspension.propose",
+    secondPerson: "proposer ≠ the person (subject_suspensions_not_self 0127)",
+    allowedRoles: ["mpc_operator", "security_operator"],
+  },
+  "admin.subject_suspension.approve": {
+    action: "admin.subject_suspension.approve",
+    secondPerson:
+      "proposer ≠ decider, neither is the person (subject_suspensions_two_person, subject_suspensions_not_self 0127)",
+    allowedRoles: ["mpc_operator", "security_operator"],
+  },
+  /**
    * Notification sink management.
    *
    * A sink URL belongs to the tenant, not a person, so it is not personal data.
@@ -750,6 +794,8 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     action: "admin.notification.manage",
     allowedRoles: ["mpc_operator", "security_operator"],
   },
+  // Invitations and email change (accounts.ts).
+  ...ACCOUNT_ACTION_POLICIES,
 
   /**
    * Review registries — credentials, attestation schemas, compliance policy sets and jurisdiction

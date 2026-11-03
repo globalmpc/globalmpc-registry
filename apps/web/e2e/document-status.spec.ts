@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { connectAs, sessionToken } from "./connect-as";
+import { reportScan } from "./scan-service";
 
 /**
  * Document status E2E.
@@ -9,22 +11,6 @@ import { expect, test, type Page } from "@playwright/test";
  * What is under test is that the declaration made on this screen and the profile set on the
  * document meet in the same count — the type matches regardless of case.
  */
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
-
-async function sessionToken(page: Page): Promise<string> {
-  const token = await page.evaluate(() => window.localStorage.getItem("mpc.session.token"));
-  expect(token).not.toBeNull();
-  return token as string;
-}
 
 async function api(
   page: Page,
@@ -87,14 +73,7 @@ test.describe("document status", () => {
       contentType: "application/pdf",
       originalFilename: "licence.pdf",
     });
-    await connectAs(page, "Scan Service");
-    const scanned = await api(
-      page,
-      "post",
-      `/api/v1/uploads/${upload.id}/scan-result`,
-      { result: "clean" },
-      { "if-match": `"${upload.version}"` },
-    );
+    const scanned = await reportScan(page, upload.id, upload.version);
     await connectAs(page, "Steward A");
     const promoted = await api(
       page,

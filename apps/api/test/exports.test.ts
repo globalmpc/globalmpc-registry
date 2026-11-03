@@ -37,12 +37,23 @@ describeDb("exports and audit coverage", () => {
     await fx.close();
   });
 
+  /**
+   * Rows recorded for the subject that signs in with `wallet`. The actor is the subject (0108);
+   * `actor_wallet` stays empty on rows that are not signatures, which every caller here checks.
+   */
   async function auditRows(command: string, wallet: string) {
-    return fx.sql<{ effective_role: string; resource_id: string | null; project_id: string | null }[]>`
-      SELECT effective_role, resource_id, project_id FROM audit.events
-      WHERE tenant_id = ${fx.tenantA} AND command = ${command} AND actor_wallet = ${wallet}
+    const rows = await fx.sql<
+      { effective_role: string; resource_id: string | null; project_id: string | null; actor_wallet: string | null }[]
+    >`
+      SELECT effective_role, resource_id, project_id, actor_wallet FROM audit.events
+      WHERE tenant_id = ${fx.tenantA} AND command = ${command}
+        AND actor_subject_id = (
+          SELECT subject_id FROM core.wallet_identities WHERE wallet_address = ${wallet} AND chain_id = 31337
+        )
       ORDER BY id
     `;
+    for (const row of rows) expect(row.actor_wallet).toBeNull();
+    return rows.map(({ actor_wallet: _wallet, ...rest }) => rest);
   }
 
   describe("audit export", () => {
@@ -189,8 +200,32 @@ describeDb("exports and audit coverage", () => {
 
   describe("audit coverage", () => {
     it("sign-in and sign-out are recorded with a self-bound role", async () => {
+      // Through the real sign-in route (emailed code): `signIn` issues its session at the database
+      // and records nothing, as no route ran.
+      const [reader] = await fx.sql<{ email: string }[]>`
+        UPDATE core.subjects s SET email = COALESCE(s.email, ${`reader-${randomUUID().slice(0, 8)}@example.test`})
+        FROM core.wallet_identities w
+        WHERE w.subject_id = s.id AND w.wallet_address = ${fx.readerA.address}
+        RETURNING s.email
+      `;
       const before = (await auditRows("auth.session.created", fx.readerA.address)).length;
-      const token = await signIn(app, fx.readerA);
+      // Isolate this real sign-in from other suites and prior runs' persisted per-IP buckets.
+      const remoteAddress = `100.${64 + Math.floor(Math.random() * 64)}.${Math.floor(Math.random() * 256)}.${1 + Math.floor(Math.random() * 254)}`;
+      const start = await app.inject({ method: "POST", url: "/api/v1/auth/email/start", payload: { email: reader!.email }, remoteAddress });
+      expect(start.statusCode).toBe(202);
+      const [mail] = await fx.sql<{ params: { code: string } }[]>`
+        SELECT params FROM core.email_outbox
+        WHERE recipient = ${reader!.email} AND template = 'sign_in_code' AND state = 'pending'
+        ORDER BY created_at DESC LIMIT 1
+      `;
+      const verified = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/email/verify",
+        payload: { email: reader!.email, code: mail!.params.code },
+        remoteAddress,
+      });
+      expect(verified.statusCode, verified.body).toBe(200);
+      const token = verified.json().sessionToken as string;
       const created = await auditRows("auth.session.created", fx.readerA.address);
       expect(created.length).toBe(before + 1);
       expect(created.at(-1)!.effective_role).toBe("self_bound");

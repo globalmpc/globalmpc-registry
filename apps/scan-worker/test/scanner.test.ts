@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { runMigrations } from "@mpc/db";
 import { MAX_SCAN_BYTES, parseClamResponse } from "../src/scanner.js";
-import { scanBacklog, scanOnce, type ScanStore } from "../src/scan-worker.js";
+import { resolveScanTenant, scanBacklog, scanOnce, type ScanStore } from "../src/scan-worker.js";
 import type { ScanVerdict } from "../src/scanner.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
@@ -80,7 +80,14 @@ describeDb("scan worker", () => {
   /** Scanner double. A real daemon makes timeouts and connection failures hard to reproduce. */
   let verdict: ScanVerdict = { kind: "clean" };
   const scan = async () => verdict;
-  const options = { maxAttempts: 3, leaseMs: 60_000 };
+  // The worker's own tenant is each case's fresh tenant.
+  const options = {
+    maxAttempts: 3,
+    leaseMs: 60_000,
+    get tenantId() {
+      return tenantId;
+    },
+  };
 
   /**
     * Report double.
@@ -243,6 +250,36 @@ describeDb("scan worker", () => {
     expect(after.rejection_reason).toContain("report_error");
   });
 
+  it("gives the attempt back when the API refuses the worker's token, so the file is retried", async () => {
+    // As the API client throws it: the status, and a message that never quotes the token.
+    reportError = Object.assign(new Error("401 SERVICE_TOKEN_INVALID: unknown token"), { status: 401 });
+    for (let i = 0; i < options.maxAttempts + 2; i += 1) {
+      const result = await step();
+      expect(result.verdict).toBe("error");
+      // The loop backs off on this flag instead of leasing again at once.
+      expect(result.unauthorized).toBe(true);
+    }
+    const [row] = await sql<{ scan_attempts: number; state: string }[]>`
+      SELECT scan_attempts, state FROM core.object_uploads WHERE id = ${uploadId}
+    `;
+    expect(row).toEqual({ scan_attempts: 0, state: "quarantined" });
+    expect(logs.some((record) => record["msg"] === "scan.report_unauthorized")).toBe(true);
+
+    // Once the token is registered, the next pass reports it.
+    reportError = null;
+    await step();
+    expect((await stateOf()).state).toBe("scanned_clean");
+  });
+
+  it("still counts the attempt when reporting fails for another reason", async () => {
+    reportError = Object.assign(new Error("500 INTERNAL"), { status: 500 });
+    expect((await step()).unauthorized).toBeUndefined();
+    const [row] = await sql<{ scan_attempts: number }[]>`
+      SELECT scan_attempts FROM core.object_uploads WHERE id = ${uploadId}
+    `;
+    expect(row!.scan_attempts).toBe(1);
+  });
+
   it("does not change state when the object is missing", async () => {
     objects.clear();
     const result = await step();
@@ -262,7 +299,7 @@ describeDb("scan worker", () => {
   it("another worker does not pick it up while the lease is valid", async () => {
     // A second worker reading the same file during a long scan is wasteful, and if the two results
     // disagree there is no telling which is right.
-    const leaseOnly = { maxAttempts: 3, leaseMs: 60_000 };
+    const leaseOnly = { tenantId, maxAttempts: 3, leaseMs: 60_000 };
     const slowScan = () => new Promise<ScanVerdict>(() => {});
 
     void scanOnce(sql, store, slowScan, report, leaseOnly, log);
@@ -291,11 +328,85 @@ describeDb("scan worker", () => {
     await step();
     await step();
 
-    const backlog = await scanBacklog(sql, options.maxAttempts);
-    // Rows left by earlier cases are counted too, so check a minimum. The point here is
-    // "pending and stuck are counted separately", not the absolute number.
-    expect(backlog.pending).toBe(0);
-    expect(backlog.stuck).toBeGreaterThanOrEqual(1);
+    const backlog = await scanBacklog(sql, options.maxAttempts, tenantId);
+    // Only this worker's tenant is counted, so earlier cases' rows are not.
+    expect(backlog).toEqual({ pending: 0, stuck: 1 });
+  });
+
+  it("never leases, scans or counts another tenant's upload", async () => {
+    // The worker's token belongs to one tenant; the API answers 404 for any other tenant's
+    // upload, so leasing one would scan a file that can never be reported and burn its attempts.
+    const otherTenant = randomUUID();
+    await sql`
+      INSERT INTO core.tenants (id, slug, display_name)
+      VALUES (${otherTenant}, ${`other-${otherTenant.slice(0, 8)}`}, 'other tenant')
+    `;
+    const otherOrg = randomUUID();
+    await sql`
+      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
+      VALUES (${otherOrg}, ${otherTenant}, 'other org', 'MNG')
+    `;
+    const otherProject = randomUUID();
+    await sql`
+      INSERT INTO core.projects (
+        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+      ) VALUES (
+        ${otherProject}, ${otherTenant}, ${`OTH-${otherProject.slice(0, 6)}`}, 'other project',
+        'MNG', ARRAY['copper'], ${otherOrg}
+      )
+    `;
+    const otherUpload = randomUUID();
+    const otherKey = `quarantine/${otherTenant}/${otherUpload}`;
+    objects.set(otherKey, new Uint8Array([4, 5, 6]));
+    // Older than this tenant's upload, so it would be first in line without the tenant filter.
+    await sql`
+      INSERT INTO core.object_uploads (
+        id, tenant_id, project_id, object_key, content_hash, byte_size,
+        content_type, sensitivity, state, uploaded_at
+      ) VALUES (
+        ${otherUpload}, ${otherTenant}, ${otherProject}, ${otherKey}, ${`0x${"22".repeat(32)}`},
+        3, 'application/pdf', 'restricted', 'quarantined', now() - interval '1 day'
+      )
+    `;
+    const otherState = () => sql<{ state: string; scan_attempts: number; scan_leased_until: string | null; version: number }[]>`
+      SELECT state, scan_attempts, scan_leased_until::text, version FROM core.object_uploads WHERE id = ${otherUpload}
+    `;
+    const [before] = await otherState();
+    const keys: string[] = [];
+    const watched: ScanStore = { async get(key) { keys.push(key); return objects.get(key) ?? null; } };
+
+    expect((await scanOnce(sql, watched, scan, report, options, log)).uploadId).toBe(uploadId);
+    expect((await scanOnce(sql, watched, scan, report, options, log)).handled).toBe(false);
+    expect(keys).toEqual([`quarantine/${tenantId}/${uploadId}`]);
+    expect(reported.map((entry) => entry.uploadId)).toEqual([uploadId]);
+    const [after] = await otherState();
+    expect(after).toEqual(before);
+    expect(after).toMatchObject({ state: "quarantined", scan_attempts: 0, scan_leased_until: null });
+    // Nor does it show up in this worker's backlog.
+    expect(await scanBacklog(sql, options.maxAttempts, tenantId)).toEqual({ pending: 0, stuck: 0 });
+    expect((await scanBacklog(sql, options.maxAttempts, otherTenant)).pending).toBe(1);
+  });
+
+  it("resolves its tenant from the slug its token was registered for", async () => {
+    expect(await resolveScanTenant(sql, `scan-${tenantId.slice(0, 8)}`)).toBe(tenantId);
+    expect(await resolveScanTenant(sql, "no-such-tenant")).toBeUndefined();
+  });
+
+  it("does all of this as the worker role, which reads a tenant's id and slug and nothing else", async () => {
+    // One connection, so the role holds for every statement.
+    const worker = postgres(process.env["DATABASE_URL"]!, { max: 1, onnotice: () => {}, prepare: false });
+    try {
+      await worker`SET ROLE mpc_worker`;
+      const resolved = await resolveScanTenant(worker, `scan-${tenantId.slice(0, 8)}`);
+      expect(resolved).toBe(tenantId);
+      expect((await scanOnce(worker, store, scan, report, { ...options, tenantId: resolved! }, log)).verdict).toBe("clean");
+      expect(await scanBacklog(worker, options.maxAttempts, tenantId)).toEqual({ pending: 0, stuck: 0 });
+      await expect(worker`SELECT display_name FROM core.tenants WHERE id = ${tenantId}`).rejects.toThrow(
+        /permission denied/,
+      );
+    } finally {
+      await worker.end();
+    }
   });
 
   it("preserves upload attempts across three unavailable polls and scans after recovery", async () => {

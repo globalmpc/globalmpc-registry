@@ -44,6 +44,7 @@ import {
 } from "../services/attestation-basis.js";
 import { reassessClaim, setProvenanceCause } from "../services/claim-state.js";
 import { registerVerificationCorrectionRoutes } from "./verification-corrections.js";
+import { assertSubjectSigner } from "../services/signing-wallets.js";
 import {
   buildTypedData,
   hashAttestationPayload,
@@ -68,6 +69,13 @@ import {
  */
 
 const SIGNATURE_REQUEST_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * The signer column of a draft. Nothing is signed yet, and which of the reviewer's wallets will
+ * sign is known only from the signature (WP5), so the draft names no wallet; signing replaces it
+ * with the recovered address.
+ */
+const UNSIGNED_DRAFT_SIGNER = `0x${"0".repeat(40)}`;
 
 const createCaseSchema = z.object({
   projectId: z.string().guid(),
@@ -989,21 +997,17 @@ export async function registerVerificationRoutes(
               assignment_revoked: Date | null;
               independence_reviewed: boolean;
               credential_status: CredentialCurrentStatus;
-              signer_wallet: string | null;
             }[]
           >`
             SELECT
               vc.state AS case_state, s.state AS schema_state, vc.schema_id,
               vc.project_id, a.subject_id AS assignment_subject, a.credential_id,
               a.conflict_status, a.revoked_at AS assignment_revoked, a.independence_reviewed,
-              c.current_status AS credential_status,
-              w.wallet_address AS signer_wallet
+              c.current_status AS credential_status
             FROM core.verification_cases vc
             JOIN core.attestation_schemas s ON s.id = vc.schema_id
             JOIN core.assignments a ON a.id = ${data.assignmentId} AND a.case_id = vc.id
             JOIN core.credentials c ON c.id = a.credential_id
-            LEFT JOIN core.wallet_identities w
-              ON w.subject_id = a.subject_id AND w.disabled_at IS NULL
             WHERE vc.id = ${request.params.caseId}
           `;
 
@@ -1013,9 +1017,9 @@ export async function registerVerificationRoutes(
            * Only the assignee drafts under their own assignment — 02 §2.9, invariant 13.
            *
            * Without this check anyone with the reviewer role could draft with **someone else's
-           * assignmentId**, and that row would carry the assignee's wallet as signer. Final signing
-           * checks the recovered address against the assignee's wallet, so it stops short of a forged
-           * signature, but until then findings under someone else's name remain.
+           * assignmentId**, and that draft would stand under the assignee's name. Final signing
+           * checks the recovered address against the assignee's wallets, so it stops short of a
+           * forged signature, but until then findings under someone else's name remain.
            *
            * A role check cannot stop this — every reviewer in the same tenant has the same
            * role.
@@ -1141,7 +1145,7 @@ export async function registerVerificationRoutes(
                 validAtAttestationTime: context.credential_status === "valid",
               })},
               ${versions.methodVersion}, ${versions.policyVersion}, ${payloadHash}, '',
-              ${context.signer_wallet ?? "0x" + "0".repeat(40)}, now(), 'draft', ${data.supersedesId}
+              ${UNSIGNED_DRAFT_SIGNER}, now(), 'draft', ${data.supersedesId}
             )
           `;
 
@@ -1375,7 +1379,7 @@ export async function registerVerificationRoutes(
               supersedes_id: string | null;
               current_snapshot: string;
               project_id: string;
-              reviewer_wallet: string | null;
+              reviewer_subject: string;
               assignment_case_id: string;
               assignment_revoked: Date | null;
               credential_status: CredentialCurrentStatus;
@@ -1384,15 +1388,13 @@ export async function registerVerificationRoutes(
             SELECT a.id, a.case_id, a.assignment_id, a.credential_id, a.schema_id,
                    a.state, a.claim_scope, a.supersedes_id,
                    vc.evidence_snapshot_hash AS current_snapshot,
-                   vc.project_id, w.wallet_address AS reviewer_wallet,
+                   vc.project_id, asg.subject_id AS reviewer_subject,
                    asg.case_id AS assignment_case_id, asg.revoked_at AS assignment_revoked,
                    c.current_status AS credential_status
             FROM core.verification_attestations a
             JOIN core.verification_cases vc ON vc.id = a.case_id
             JOIN core.assignments asg ON asg.id = a.assignment_id
             JOIN core.credentials c ON c.id = a.credential_id
-            LEFT JOIN core.wallet_identities w
-              ON w.subject_id = asg.subject_id AND w.disabled_at IS NULL
             WHERE a.id = ${request.params.attestationId}
           `;
 
@@ -1427,16 +1429,16 @@ export async function registerVerificationRoutes(
           );
 
           // Signature validity and authorization are separate facts (invariant 13). Checks
-          // separately that the recovered address is the assignment's reviewer.
-          const signatureValid =
-            attestation.reviewer_wallet !== null &&
-            signer === attestation.reviewer_wallet.toLowerCase();
-          if (!signatureValid) {
-            throw badRequest(
-              "SIGNATURE_SIGNER_MISMATCH",
-              "Signer is not the reviewer assigned to this case",
-            );
-          }
+          // separately that the assignment's reviewer is live and the recovered address is
+          // their active signing wallet on this chain. A relay's session cannot stand in for
+          // reviewer authority. The recovered address is recorded as the signer.
+          await assertSubjectSigner(tx, {
+            subjectId: attestation.reviewer_subject,
+            chainId: config.chainId,
+            signer,
+            message: "Signer is not a wallet of the reviewer assigned to this case",
+          });
+          const signatureValid = true;
 
           /**
            * Canonical acceptance — invariants 13·14, AC-15·AC-16.
@@ -1525,6 +1527,7 @@ export async function registerVerificationRoutes(
             resourceId: attestation.id,
             correlationId,
             requestIp: request.clientIp,
+            signingWallet: signer,
             detail: {
               signer,
               ...versions,

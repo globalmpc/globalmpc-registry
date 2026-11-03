@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { bootstrapOperator } from "../src/bootstrap.js";
 import {
   bootstrapAttestationSchema,
@@ -36,30 +35,33 @@ describeDb("review registry bootstrap", () => {
     await fx.close();
   });
 
-  function newWallet(): `0x${string}` {
-    return privateKeyToAccount(generatePrivateKey()).address.toLowerCase() as `0x${string}`;
-  }
+  const newEmail = () => `reviewer-${randomUUID().slice(0, 8)}@example.test`;
 
-  async function seedPerson(): Promise<`0x${string}`> {
-    const wallet = newWallet();
+  /**
+   * The tenant's reviewer, the way an operator brings in the first one: bootstrap, by email (no
+   * wallet, WP7). Bootstrap creates only the first holder of a role, so every case shares it.
+   */
+  let seeded: string | null = null;
+  async function seedPerson(): Promise<string> {
+    if (seeded !== null) return seeded;
+    const email = newEmail();
     await bootstrapOperator(fx.sql, {
       tenantSlug,
       tenantName: "Bootstrap registry tenant",
       organizationName: "Bootstrap registry org",
       jurisdiction: "MNG",
       subjectName: "Reviewer",
-      walletAddress: wallet,
-      chainId: 31337,
+      email,
       role: "reviewer_cp_qp",
       assuranceLevel: "high_assurance",
     });
-    return wallet;
+    seeded = email;
+    return email;
   }
 
   function credential(overrides: Record<string, unknown> = {}) {
     return {
       tenantSlug,
-      walletAddress: overrides["walletAddress"] as string,
       issuerReference: `CP #${randomUUID().slice(0, 8)}`,
       credentialType: "competent_person",
       credentialScope: ["mining_right_registration"],
@@ -95,8 +97,8 @@ describeDb("review registry bootstrap", () => {
   };
 
   it("creating a credential and rerunning leaves exactly one", async () => {
-    const wallet = await seedPerson();
-    const args = credential({ walletAddress: wallet });
+    const email = await seedPerson();
+    const args = credential({ email });
 
     const first = await bootstrapCredential(fx.sql, args);
     const second = await bootstrapCredential(fx.sql, args);
@@ -108,23 +110,70 @@ describeDb("review registry bootstrap", () => {
   });
 
   it("does not insert an expired credential as valid", async () => {
-    const wallet = await seedPerson();
+    const email = await seedPerson();
     await expect(
-      bootstrapCredential(fx.sql, credential({ walletAddress: wallet, expiresAt: "2020-01-01T00:00:00Z" })),
+      bootstrapCredential(fx.sql, credential({ email, expiresAt: "2020-01-01T00:00:00Z" })),
     ).rejects.toThrow(BootstrapRegistryError);
   });
 
   it("rejects a credential without scope — it could not sign anything", async () => {
-    const wallet = await seedPerson();
+    const email = await seedPerson();
     await expect(
-      bootstrapCredential(fx.sql, credential({ walletAddress: wallet, credentialScope: [] })),
+      bootstrapCredential(fx.sql, credential({ email, credentialScope: [] })),
     ).rejects.toThrow(BootstrapRegistryError);
   });
 
-  it("does not attach a credential to a nonexistent wallet", async () => {
+  it("does not attach a credential to a nonexistent person or wallet", async () => {
+    await expect(bootstrapCredential(fx.sql, credential({ email: newEmail() }))).rejects.toThrow(
+      /No person with this email address/,
+    );
     await expect(
-      bootstrapCredential(fx.sql, credential({ walletAddress: newWallet() })),
-    ).rejects.toThrow(BootstrapRegistryError);
+      bootstrapCredential(fx.sql, credential({ walletAddress: `0x${"9".repeat(40)}` })),
+    ).rejects.toThrow(/is not in this tenant/);
+  });
+
+  it("names the holder by exactly one of email or a wallet they hold, and never echoes the address", async () => {
+    const email = await seedPerson();
+    await expect(bootstrapCredential(fx.sql, credential({}))).rejects.toThrow(/exactly one/);
+    await expect(
+      bootstrapCredential(fx.sql, credential({ email, walletAddress: `0x${"9".repeat(40)}` })),
+    ).rejects.toThrow(/exactly one/);
+    const malformed = bootstrapCredential(fx.sql, credential({ email: "secret-person@@example.com" }));
+    await expect(malformed).rejects.toThrow(/not one email address/);
+    await expect(malformed).rejects.not.toThrow(/secret-person/);
+
+    // A wallet the holder bound still names them (fixture tenant A's reviewer).
+    const created = await bootstrapCredential(fx.sql, {
+      ...credential({ walletAddress: fx.reviewerA.address.toUpperCase().replace("0X", "0x") }),
+      tenantSlug: `t-${fx.tenantA.slice(0, 8)}`,
+    });
+    expect(created).toMatchObject({ created: true, state: "valid" });
+    const [row] = await fx.sql<{ subject_id: string }[]>`SELECT subject_id FROM core.credentials WHERE id = ${created.id}`;
+    expect(row!.subject_id).toBe(fx.reviewerSubjectA);
+  });
+
+  it("refuses a wallet address that changed hands rather than guess which holder is meant", async () => {
+    const address = `0x${randomUUID().replaceAll("-", "").slice(0, 32)}${"a".repeat(8)}`;
+    const [earlier, current] = [randomUUID(), randomUUID()];
+    await fx.sql`
+      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
+      VALUES (${earlier}, ${fx.tenantA}, 'person', 'Earlier holder', 'wallet_only'),
+             (${current}, ${fx.tenantA}, 'person', 'Current holder', 'wallet_only')
+    `;
+    // The earlier holder retired the key; someone else proved it and holds it now.
+    await fx.sql`
+      INSERT INTO core.wallet_identities (
+        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at, bound_via, disabled_at
+      ) VALUES
+        (${randomUUID()}, ${fx.tenantA}, ${earlier}, ${address}, 31337, 'wallet_only', now() - interval '2 days', 'proof', now() - interval '1 day'),
+        (${randomUUID()}, ${fx.tenantA}, ${current}, ${address}, 31337, 'wallet_only', now(), 'proof', NULL)
+    `;
+    const refused = bootstrapCredential(fx.sql, {
+      ...credential({ walletAddress: address }),
+      tenantSlug: `t-${fx.tenantA.slice(0, 8)}`,
+    });
+    await expect(refused).rejects.toThrow(/may have changed hands\. Name the holder by email/);
+    expect(await fx.sql`SELECT 1 FROM core.credentials WHERE subject_id IN (${earlier}, ${current})`).toHaveLength(0);
   });
 
   it("a review spec without an approver is draft", async () => {

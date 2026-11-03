@@ -1,179 +1,149 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { DEMO_ACCOUNTS, demoAddress, useSession } from "@/lib/session";
 import { REQUIRED_BOUNDARY_COPY } from "@mpc/ui";
+import { getAuthMethods, startEmailSignIn, verifyEmailSignIn, type AuthMethods } from "@/lib/account-api";
+import { authErrorMessage } from "@/lib/auth-errors";
+import { AUTH_COPY } from "@/lib/copy";
+import { explicitNextPath, landingPath } from "@/lib/next-path";
+import { needsSecondFactor, useSession } from "@/lib/session";
+import { EmailCodeForm } from "@/components/auth/EmailCodeForm";
+import { ProviderButtons } from "@/components/auth/ProviderButtons";
+
+const C = AUTH_COPY.signIn;
 
 /**
- * Account connect — this screen lives at `/connect`, not `/`.
+ * Sign-in — this screen lives at `/connect`, not `/`.
  *
  * While `/` was the sign-in screen, there was no public entry point explaining the product.
  * Sign-in is one branch of the public surface, not its entrance.
+ *
+ * Account sign-in (WP6): an emailed code, or Google / Microsoft where configured, then the second
+ * factor on `/auth/mfa`. No wallet is needed to sign in, and none can be used to: a wallet is a
+ * signing key, asked for only when something is signed (WP7 removed the transitional wallet
+ * sign-in).
  */
 export default function SignInPage() {
-  const {
-    signIn,
-    signInWithWallet,
-    session,
-    loading,
-    signingIn,
-    error,
-    walletAvailable,
-    wallets,
-    connectionLog,
-  } = useSession();
+  const { session, loading, refresh } = useSession();
   const router = useRouter();
+  const [methods, setMethods] = useState<AuthMethods | null>(null);
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState<{ at: number; count: number; minutes: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Demo accounts come in only via a build flag (`lib/session`). In builds without it, this screen
-  // must show only wallet connect — rendering an empty list leaves an unexplained blank.
-  const demoAvailable = DEMO_ACCOUNTS.length > 0;
+  useEffect(() => {
+    getAuthMethods()
+      .then(setMethods)
+      .catch(() => setMethods(null));
+  }, []);
+
+  /**
+   * Where a fresh session goes: the second factor first, unless it already holds one. Without an
+   * asked-for `next`, the landing follows the session's roles (no role: "access pending").
+   */
+  async function afterSignIn() {
+    const next = explicitNextPath();
+    const fresh = await refresh();
+    if (needsSecondFactor(fresh)) {
+      router.push(next ? `/auth/mfa?next=${encodeURIComponent(next)}` : "/auth/mfa");
+      return;
+    }
+    router.push(landingPath(fresh, next));
+  }
+
+  async function sendCode() {
+    const answer = await startEmailSignIn(email.trim());
+    setSent((previous) => ({
+      at: Date.now(),
+      count: (previous?.count ?? 0) + 1,
+      minutes: answer.expiresInMinutes,
+    }));
+  }
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h1>Connect account</h1>
-          <p className="sub">
-            {demoAvailable
-              ? "Choose an account to connect. The server resolves the identity, roles, and assurance level bound to that wallet."
-              : "Connect with a wallet. The server resolves the identity, roles, and assurance level bound to that wallet."}
-          </p>
+          <h1>{C.heading}</h1>
+          <p className="sub">{C.lead}</p>
         </div>
       </div>
 
-      {demoAvailable ? (
-        <div className="notice" style={{ color: "var(--alert)" }}>
-          <div className="title">Demo accounts · they sign in through real SIWE</div>
-          Choosing an account makes the browser sign an EIP-4361 message, and the server issues a
-          session token only after it verifies that signature. The demo keys hold no assets. In
-          production a wallet extension (EIP-1193) takes this place.
-        </div>
-      ) : null}
-
-      {error ? (
-        <div className="notice" style={{ color: "var(--destructive-text)" }} role="alert">
-          <div className="title">Sign-in failed</div>
-          {error}
-        </div>
-      ) : null}
-
-      <div className="panel" data-testid="wallet-connect">
-        <h2>Connect with a browser wallet</h2>
-        <p className="sub" style={{ marginTop: 0 }}>
-          {/* State before sign-in that private keys never come to us. */}
-          Your wallet signs; we only receive the result. Your private key never reaches this site.
+      {!loading && session?.authenticated && !needsSecondFactor(session) ? (
+        <p className="sub">
+          {C.alreadySignedIn} <a href={landingPath(session)}>{C.goToWorkspace}</a>
         </p>
-        {/*
-          The user picks an installed wallet.
+      ) : null}
 
-          `window.ethereum` has only one slot, so with two or more extensions installed, whichever grabbed it first
-          responds. If a wallet the user did not intend rejects, it only looks like "cannot connect",
-          and which wallet rejected is not revealed.
-        */}
-        {wallets.length > 0 ? (
-          <div className="wallet-choices" data-testid="wallet-choices">
-            {wallets.map((wallet) => (
-              <button
-                key={wallet.id}
-                className="primary"
-                data-testid={`connect-wallet-${wallet.id}`}
-                disabled={signingIn}
-                onClick={async () => {
-                  if (await signInWithWallet(wallet)) router.push("/w/projects");
-                }}
-              >
-                {wallet.icon ? (
-                  // A data URI sent by the wallet. Nothing is fetched externally.
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={wallet.icon} alt="" width={18} height={18} aria-hidden />
-                ) : null}
-                Connect {wallet.name}
-              </button>
-            ))}
-          </div>
-        ) : walletAvailable ? (
-          <button
-            className="primary"
-            data-testid="connect-wallet"
-            disabled={signingIn}
-            onClick={async () => {
-              // Navigate only on success. Navigating on failure removes the screen before the error
-              // notice above is drawn.
-              if (await signInWithWallet()) router.push("/w/projects");
+      <div className="panel" data-testid="email-sign-in">
+        {sent === null ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              setBusy(true);
+              setError(null);
+              sendCode()
+                .catch((caught: unknown) => setError(authErrorMessage(caught)))
+                .finally(() => setBusy(false));
             }}
           >
-            Connect wallet
-          </button>
-        ) : (
-          <p className="meta" style={{ margin: 0 }}>
-            No wallet extension found. The demo accounts below follow the same SIWE flow; the
-            server does not distinguish between the two paths.
-          </p>
-        )}
-      </div>
-
-      {/*
-        Steps of the last connect attempt — 2026-09-11.
-
-        Connecting happens inside this browser and only the result reaches the server. Which wallet
-        responded and which code stopped the chain switch exist only here. On failure
-        it is expanded and can be copied and forwarded. This log is never sent to the server.
-      */}
-      {connectionLog.length > 0 ? (
-        <details className="panel" data-testid="connection-log" open={Boolean(error)}>
-          <summary>Connection details — last attempt</summary>
-          <p className="meta">
-            Recorded in this browser only and never sent to the server. Copy it when a wallet does
-            not connect — it shows which wallet answered and where it stopped.
-          </p>
-          <ol className="mono meta" data-testid="connection-steps">
-            {connectionLog.map((entry, index) => (
-              <li key={`${entry.at}-${index}`}>
-                {entry.at.slice(11, 19)} · {entry.step} · {entry.detail}
-              </li>
-            ))}
-          </ol>
-          <button
-            type="button"
-            onClick={() =>
-              void navigator.clipboard
-                ?.writeText(
-                  connectionLog.map((entry) => `${entry.at} ${entry.step} ${entry.detail}`).join("\n"),
-                )
-                .catch(() => undefined)
-            }
-          >
-            Copy details
-          </button>
-        </details>
-      ) : null}
-
-      {demoAvailable ? (
-        <div className="account-grid">
-          {DEMO_ACCOUNTS.map((account) => (
-            <button
-              key={account.label}
-              className="account-card"
-              disabled={signingIn}
-              onClick={async () => {
-                // Navigate only on success. Same rule as the wallet path — navigating after a failure
-                // removes the screen before the error notice is drawn.
-                if (await signIn(account)) router.push("/w/projects");
-              }}
-            >
-              <div className="name">{account.label}</div>
-              <div className="desc">{account.description}</div>
-              <div className="mono meta">{demoAddress(account)}</div>
+            {error ? (
+              <div className="notice" style={{ color: "var(--destructive-text)" }} role="alert">
+                {error}
+              </div>
+            ) : null}
+            <div className="field">
+              <label htmlFor="sign-in-email">{C.emailLabel}</label>
+              <input
+                id="sign-in-email"
+                type="email"
+                autoComplete="email"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </div>
+            <button className="primary" type="submit" disabled={busy || email.trim() === ""}>
+              {busy ? C.sending : C.sendCode}
             </button>
-          ))}
-        </div>
-      ) : null}
+          </form>
+        ) : (
+          <>
+            <h2>{C.codeHeading}</h2>
+            <p className="sub" style={{ marginTop: 0 }} data-testid="code-sent">
+              {C.codeSent(sent.minutes)}
+            </p>
+            <EmailCodeForm
+              digits={methods?.emailCodeDigits ?? 8}
+              expiresInMinutes={sent.minutes}
+              sentAt={sent.at}
+              sends={sent.count}
+              onResend={sendCode}
+              onSubmit={async (code) => {
+                await verifyEmailSignIn(email.trim(), code);
+                await afterSignIn();
+              }}
+            />
+            <p className="meta">
+              <button type="button" className="link" onClick={() => setSent(null)}>
+                {C.otherAddress}
+              </button>
+            </p>
+          </>
+        )}
 
-      {!loading && session?.authenticated ? (
-        <p className="sub" style={{ marginTop: 18 }}>
-          Already connected. <a href="/w/projects">Go to projects →</a>
+        {methods && (methods.google || methods.microsoft) ? (
+          <>
+            <p className="meta">{C.or}</p>
+            <ProviderButtons methods={methods} start={{ purpose: "sign_in" }} />
+          </>
+        ) : null}
+        <p className="meta" style={{ marginBottom: 0 }}>
+          {C.noInvitation}
         </p>
-      ) : null}
+      </div>
 
       <div className="panel" style={{ marginTop: 24 }}>
         <h2>Boundaries this workspace enforces</h2>

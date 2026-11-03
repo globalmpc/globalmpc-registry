@@ -4,6 +4,7 @@ import Link from "next/link";
 import { use, useState } from "react";
 import { newIdempotencyKey, recomputeReadiness, type ReadinessAssessment } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { ReadinessBadge } from "@/components/StatusBadge";
 import type { ReadinessStatus } from "@mpc/domain";
@@ -21,7 +22,9 @@ import type { ReadinessStatus } from "@mpc/domain";
  */
 export default function ReadinessPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { token } = useSession();
+  const { token, session } = useSession();
+  // Recomputing is `readiness.recompute` (guidance; the server decides).
+  const mayRecompute = can(session, "readiness.recompute");
 
   const [assessment, setAssessment] = useState<ReadinessAssessment | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -78,7 +81,7 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
           />
         </div>
         <div className="row">
-          <button className="primary" onClick={() => void recompute()} disabled={busy}>
+          <button className="primary" onClick={() => void recompute()} disabled={busy || !mayRecompute}>
             {busy ? "Evaluating…" : "Recompute"}
           </button>
           <span className="meta">

@@ -1,9 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import postgres from "postgres";
 import type { FastifyInstance } from "fastify";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { createSiweMessage } from "viem/siwe";
-import { runMigrations } from "@mpc/db";
+import { runMigrations, withTenant } from "@mpc/db";
+import {
+  hashToken,
+  newSessionToken,
+  SESSION_TTL_SECONDS,
+} from "../../src/plugins/session-token.js";
+import { issueServiceToken } from "../../src/service-tokens.js";
 
 /**
  * Test DB helpers.
@@ -27,7 +32,7 @@ export interface TestFixture {
   readonly operatorB: TestAccount;
   /** tenant A · no role · wallet_only */
   readonly readerA: TestAccount;
-  /** Address not registered in any tenant */
+  /** A key bound to no subject. `signIn` refuses it: a wallet alone signs nobody in (WP7). */
   readonly unknownWallet: TestAccount;
   /** tenant A · reviewer_cp_qp · high_assurance */
   readonly reviewerA: TestAccount;
@@ -42,8 +47,14 @@ export interface TestFixture {
    * This account is a steward in `projectA` but nothing in `otherProjectA`.
    */
   readonly scopedStewardA: TestAccount;
-  /** tenant A · scan_service. System identity that can only produce scan results */
+  /**
+   * tenant A · scan_service, a **service** subject. Holds no wallet and cannot `signIn`; it
+   * authenticates with `scanServiceToken` (D7).
+   */
   readonly scanServiceA: TestAccount;
+  /** Service token of the scan service, scoped to `scan_result`. */
+  readonly scanServiceToken: string;
+  readonly scanServiceSubjectA: string;
   /** tenant A · protocol_proposer. Creates governance proposals */
   readonly proposerA: TestAccount;
   /** tenant A · protocol_voter. Only votes */
@@ -84,10 +95,8 @@ export interface TestFixture {
 }
 
 /**
- * Creates an account together with its private key.
- *
- * From R1, authentication is SIWE signature → session token. Tests need a signing key to
- * log in, so an address alone is not enough.
+ * A fixture person's signing key. The address finds the person (`signIn`), and the key signs
+ * attestations and gate decisions as one of the person's bound wallets.
  */
 export interface TestAccount {
   readonly address: `0x${string}`;
@@ -100,44 +109,346 @@ export function newAccount(): TestAccount {
 }
 
 /**
- * Performs a SIWE login and obtains a session token.
+ * Signs in as the fixture person who holds `account`'s key, and returns a session token.
  *
- * The dev wallet-header path is removed, so every authenticated test goes through here.
- * Tests running at all is evidence that "the real auth flow works".
+ * Wallet sign-in is gone (D3, WP7), so the key only **finds** the person: the subject holding an
+ * active wallet with this address. The session is then a real account session through
+ * `issueTestSession` — an emailed code (first factor) raised with a passkey. A passkey because it
+ * is the only factor that reaches `aal3`, the level every high-assurance role needs
+ * (`requiredAuthenticationLevel`): reviewers, approvers, operators. With it every fixture role is
+ * effective, as it was with the SIWE session this replaces, which counted as `aal3`. Tests of
+ * what a lower level may do issue the session themselves (`issueTestSession`).
+ *
+ * `app` is unused and kept so the signature matches the old helper's call sites.
  */
-export async function signIn(app: FastifyInstance, account: TestAccount): Promise<string> {
-  const nonceResponse = await app.inject({
-    method: "POST",
-    url: "/api/v1/auth/siwe/nonce",
-    payload: { walletAddress: account.address, chainId: 31337 },
+export async function signIn(_app: FastifyInstance, account: TestAccount): Promise<string> {
+  const [holder] = await seedConnection()<{ subject_id: string; tenant_id: string }[]>`
+    SELECT w.subject_id, w.tenant_id
+    FROM core.wallet_identities w
+    JOIN core.subjects s ON s.id = w.subject_id AND s.kind = 'person'
+    WHERE w.wallet_address = ${account.address} AND w.disabled_at IS NULL
+    ORDER BY w.created_at
+    LIMIT 1
+  `;
+  if (!holder) {
+    throw new Error(
+      `signIn: ${account.address} is not an active wallet of any person — a key bound to nobody signs nobody in`,
+    );
+  }
+  return issueTestSession(appConnection(), holder.tenant_id, holder.subject_id, {
+    firstFactor: "email_code",
+    secondFactor: "passkey",
   });
-  const { nonce, statement, uri } = nonceResponse.json() as {
-    nonce: string;
-    statement: string;
-    uri: string;
-  };
+}
 
-  const message = createSiweMessage({
-    address: account.account.address,
-    chainId: 31337,
-    domain: "localhost:3000",
-    nonce,
-    statement,
-    uri,
-    version: "1",
-    issuedAt: new Date(),
-  });
-  const signature = await account.account.signMessage({ message });
+/** Migration-role connection the session helper seeds with. Opened on first use. */
+let seedSql: postgres.Sql | null = null;
+function seedConnection(): postgres.Sql {
+  const url = process.env["DATABASE_URL"];
+  if (!url) throw new Error("DATABASE_URL is required");
+  seedSql ??= postgres(url, { onnotice: () => {}, max: 1, idle_timeout: 2 });
+  return seedSql;
+}
 
-  const verified = await app.inject({
-    method: "POST",
-    url: "/api/v1/auth/siwe/verify",
-    payload: { message, signature },
-  });
+/**
+ * Application-role connection `signIn` issues sessions over — the role the API itself uses, as
+ * `issueTestSession` expects. `setupFixture` creates the login role first. Opened on first use.
+ */
+let appSqlShared: postgres.Sql | null = null;
+function appConnection(): postgres.Sql {
+  const url = process.env["DATABASE_URL"];
+  if (!url) throw new Error("DATABASE_URL is required");
+  const appUrl = new URL(url);
+  appUrl.username = "mpc_app_login";
+  appUrl.password = "app";
+  appSqlShared ??= postgres(appUrl.toString(), { onnotice: () => {}, max: 2, idle_timeout: 2 });
+  return appSqlShared;
+}
 
-  const token = (verified.json() as { sessionToken: string | null }).sessionToken;
-  if (!token) throw new Error("did not receive a session token");
+/**
+ * Issues a session for a subject through the real database path a login flow uses. Use it to
+ * test what a session at a given AAL may do.
+ *
+ * - `google` / `microsoft`: the login-transaction path itself (0121). Such a session exists only
+ *   when a transaction was completed for its subject in the same transaction, so the helper links
+ *   a fixture identity to the subject if it has none of that provider (over the migration
+ *   connection), then starts, claims and completes a sign-in transaction through the functions
+ *   the API calls. Only the ID-token check is skipped — the database never sees the token; the
+ *   OIDC route tests (`oidc.test.ts`) run the whole flow against an in-process provider.
+ * - `email_code`: the emailed-code path itself (0114). An `email_code` session exists only when a
+ *   challenge was consumed in the same transaction, so the helper gives the subject an address
+ *   if it has none (`session-<subject>@example.test`, over the migration connection — the
+ *   application role cannot write it), asks for a code with an HMAC it chose (the database never
+ *   sees the API's key, so any 32 bytes do) and checks it. The mail that start queued is deleted.
+ *
+ * With `secondFactor`, the session is then raised by `test_support.elevate_session`, which writes
+ * the evidence a real ceremony leaves (a consumed challenge for a fixture passkey, a spent step of
+ * a fixture TOTP, a consumed recovery code) and points the session at it — the same rows the
+ * database requires of every second factor (0116). That function exists only in databases
+ * `setupFixture` prepared; no migration creates it. Tests of the ceremonies themselves go through
+ * the MFA routes (`mfa.test.ts`).
+ *
+ * `sql` should be the application connection (`fx.appSql`): the functions are what the API calls.
+ */
+export async function issueTestSession(
+  sql: postgres.Sql,
+  tenantId: string,
+  subjectId: string,
+  factors: {
+    readonly firstFactor: "email_code" | "google" | "microsoft";
+    readonly secondFactor?: "passkey" | "totp" | "recovery_code" | null;
+  },
+): Promise<string> {
+  const firstFactor = factors.firstFactor;
+  if (firstFactor !== "email_code") {
+    const issued = await oidcTestSession(sql, tenantId, subjectId, firstFactor);
+    if (factors.secondFactor) await elevate(sql, tenantId, issued.sessionId, factors.secondFactor);
+    return issued.token;
+  }
+
+  const seed = seedConnection();
+  const [subject] = await seed<{ email: string }[]>`
+    UPDATE core.subjects SET email = COALESCE(email, ${`session-${subjectId}@example.test`})
+    WHERE id = ${subjectId} AND tenant_id = ${tenantId} AND kind = 'person'
+    RETURNING email
+  `;
+  if (!subject) throw new Error(`no person subject ${subjectId} in tenant ${tenantId}`);
+
+  const hmac = randomBytes(32);
+  const challengeId = randomUUID();
+  const [started] = await sql<{ status: string }[]>`
+    SELECT status FROM core.start_email_challenge(
+      'sign_in', ${subject.email}, NULL, ${challengeId}, ${hmac}, '12345678',
+      ${randomUUID()}, ${randomUUID()}
+    )
+  `;
+  if (started?.status !== "issued") throw new Error(`code not issued: ${started?.status}`);
+  await seed`DELETE FROM core.email_outbox WHERE challenge_id = ${challengeId}`;
+
+  const token = newSessionToken();
+  const sessionId = randomUUID();
+  const [verified] = await sql<{ status: string }[]>`
+    SELECT status FROM core.verify_sign_in_code(
+      ${subject.email}, ${hmac}, ${randomUUID()}, ${randomUUID()}, ${sessionId}, ${hashToken(token)},
+      ${SESSION_TTL_SECONDS}
+    )
+  `;
+  if (verified?.status !== "session_created") throw new Error(`no session: ${verified?.status}`);
+
+  if (factors.secondFactor) await elevate(sql, tenantId, sessionId, factors.secondFactor);
   return token;
+}
+
+/** The Microsoft directory fixture identities live in. */
+export const FIXTURE_MICROSOFT_TENANT = "0f0f0f0f-0000-4000-8000-000000000001";
+
+const sha256Hex = (value: string) => createHash("sha256").update(value).digest("hex");
+
+/** A sign-in session for `subjectId` through 0121's functions; see `issueTestSession`. */
+async function oidcTestSession(
+  sql: postgres.Sql,
+  tenantId: string,
+  subjectId: string,
+  provider: "google" | "microsoft",
+): Promise<{ token: string; sessionId: string }> {
+  const seed = seedConnection();
+  const [person] = await seed`
+    SELECT 1 FROM core.subjects WHERE id = ${subjectId} AND tenant_id = ${tenantId} AND kind = 'person'
+  `;
+  if (!person) throw new Error(`no person subject ${subjectId} in tenant ${tenantId}`);
+  const [existing] = await seed<{ issuer: string; subject_key: string }[]>`
+    SELECT issuer, subject_key FROM core.external_identities
+    WHERE subject_id = ${subjectId} AND provider = ${provider} AND revoked_at IS NULL
+  `;
+  let identity = existing;
+  if (!identity) {
+    identity = {
+      issuer: provider === "google"
+        ? "https://accounts.google.com"
+        : `https://login.microsoftonline.com/${FIXTURE_MICROSOFT_TENANT}/v2.0`,
+      subject_key: provider === "google" ? `fixture-${subjectId}` : subjectId,
+    };
+    await seed`
+      INSERT INTO core.external_identities (
+        id, tenant_id, subject_id, provider, issuer, subject_key, idp_tenant, linked_via
+      ) VALUES (
+        ${randomUUID()}, ${tenantId}, ${subjectId}, ${provider}, ${identity.issuer}, ${identity.subject_key},
+        ${provider === "microsoft" ? FIXTURE_MICROSOFT_TENANT : null}, 'link'
+      )
+    `;
+  }
+
+  const state = randomUUID();
+  const binding = randomUUID();
+  const transactionId = randomUUID();
+  const [started] = await sql<{ status: string }[]>`
+    SELECT status FROM core.start_oidc_transaction(
+      ${transactionId}, ${provider}::core.oidc_provider, 'sign_in', ${sha256Hex(state)}, ${sha256Hex(binding)},
+      ${sha256Hex(randomUUID())}, ${randomBytes(48)}, ${`http://localhost:3000/auth/oidc/${provider}/callback`},
+      NULL, NULL, NULL, ${randomUUID()}
+    )
+  `;
+  if (started?.status !== "started") throw new Error(`transaction not started: ${started?.status}`);
+  const [claimed] = await sql<{ status: string }[]>`
+    SELECT status FROM core.claim_oidc_transaction(${sha256Hex(state)}, ${sha256Hex(binding)}, ${provider}::core.oidc_provider, NULL)
+  `;
+  if (claimed?.status !== "claimed") throw new Error(`transaction not claimed: ${claimed?.status}`);
+
+  const token = newSessionToken();
+  const sessionId = randomUUID();
+  const [completed] = await sql<{ status: string }[]>`
+    SELECT status FROM core.complete_oidc_sign_in(
+      ${transactionId}, ${identity.issuer}, ${identity.subject_key}, ${sessionId}, ${hashToken(token)},
+      ${SESSION_TTL_SECONDS}
+    )
+  `;
+  if (completed?.status !== "session_created") throw new Error(`no session: ${completed?.status}`);
+  return { token, sessionId };
+}
+
+/** Raises a session through the test-only elevation below, in the session's tenant. */
+async function elevate(
+  sql: postgres.Sql,
+  tenantId: string,
+  sessionId: string,
+  factor: "passkey" | "totp" | "recovery_code",
+): Promise<void> {
+  await withTenant(sql, { tenantId }, (tx) =>
+    tx`SELECT test_support.elevate_session(${sessionId}, ${factor}::core.session_second_factor)`,
+  );
+}
+
+/**
+ * The test-only elevation behind `issueTestSession`. Created over the superuser connection, owned
+ * by it, and granted to the application role; it bypasses no check the table holds — it writes
+ * the proof rows a ceremony writes. The fixture passkey and TOTP are per subject and reused, and
+ * their key material is random filler: nothing ever verifies against them.
+ */
+const TEST_ELEVATION_SQL = `
+  CREATE SCHEMA IF NOT EXISTS test_support;
+  GRANT USAGE ON SCHEMA test_support TO mpc_app;
+  CREATE OR REPLACE FUNCTION test_support.elevate_session(
+    p_session UUID, p_factor core.session_second_factor
+  ) RETURNS VOID
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = core, pg_temp AS $fn$
+  DECLARE
+    v core.sessions;
+    v_proof UUID := gen_random_uuid();
+    v_challenge UUID := gen_random_uuid();
+    v_credential UUID;
+    v_totp UUID;
+    v_code UUID := gen_random_uuid();
+  BEGIN
+    SELECT * INTO v FROM core.sessions
+    WHERE id = p_session AND tenant_id = core.current_tenant() FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'no session % in the current tenant', p_session; END IF;
+
+    IF p_factor = 'passkey' THEN
+      SELECT id INTO v_credential FROM core.webauthn_credentials
+      WHERE credential_id = 'fixture-' || replace(v.subject_id::text, '-', '');
+      IF v_credential IS NULL THEN
+        v_credential := gen_random_uuid();
+        INSERT INTO core.webauthn_credentials (
+          id, tenant_id, subject_id, credential_id, public_key, aaguid, user_verified, device_type,
+          backed_up, name
+        ) VALUES (
+          v_credential, v.tenant_id, v.subject_id, 'fixture-' || replace(v.subject_id::text, '-', ''),
+          (uuid_send(gen_random_uuid()) || uuid_send(gen_random_uuid())), '00000000-0000-0000-0000-000000000000', true, 'singleDevice', false,
+          'Fixture passkey'
+        );
+      END IF;
+      INSERT INTO core.webauthn_challenges (
+        id, tenant_id, subject_id, session_id, purpose, challenge, expires_at, consumed_at,
+        consumed_by_session_id
+      ) VALUES (
+        v_challenge, v.tenant_id, v.subject_id, v.id, 'authentication',
+        rtrim(translate(encode((uuid_send(gen_random_uuid()) || uuid_send(gen_random_uuid())), 'base64'), '+/', '-_'), '='),
+        now() + interval '5 minutes', now(), v.id
+      );
+      INSERT INTO core.session_factor_proofs (
+        id, tenant_id, subject_id, session_id, factor, webauthn_challenge_id, webauthn_credential_id
+      ) VALUES (v_proof, v.tenant_id, v.subject_id, v.id, 'passkey', v_challenge, v_credential);
+    ELSIF p_factor = 'totp' THEN
+      SELECT id INTO v_totp FROM core.totp_authenticators
+      WHERE subject_id = v.subject_id AND confirmed_at IS NOT NULL AND revoked_at IS NULL;
+      IF v_totp IS NULL THEN
+        v_totp := gen_random_uuid();
+        INSERT INTO core.totp_authenticators (
+          id, tenant_id, subject_id, secret_ciphertext, secret_nonce, pending_expires_at, confirmed_at
+        ) VALUES (
+          v_totp, v.tenant_id, v.subject_id, (uuid_send(gen_random_uuid()) || uuid_send(gen_random_uuid())),
+          substring(uuid_send(gen_random_uuid()) FROM 1 FOR 12), now(), now()
+        );
+      END IF;
+      INSERT INTO core.session_factor_proofs (
+        id, tenant_id, subject_id, session_id, factor, totp_authenticator_id, totp_step
+      ) VALUES (
+        v_proof, v.tenant_id, v.subject_id, v.id, 'totp', v_totp,
+        (extract(epoch FROM clock_timestamp()) * 1000000)::bigint
+      );
+    ELSE
+      INSERT INTO core.recovery_codes (
+        id, tenant_id, subject_id, set_id, code_hash, consumed_at, consumed_by_session_id
+      ) VALUES (
+        v_code, v.tenant_id, v.subject_id, gen_random_uuid(), encode(sha256(uuid_send(gen_random_uuid())), 'hex'),
+        now(), v.id
+      );
+      INSERT INTO core.session_factor_proofs (
+        id, tenant_id, subject_id, session_id, factor, recovery_code_id
+      ) VALUES (v_proof, v.tenant_id, v.subject_id, v.id, 'recovery_code', v_code);
+    END IF;
+
+    UPDATE core.sessions
+    SET second_factor = p_factor, second_factor_at = now(), second_factor_proof_id = v_proof,
+        recovery_limited = (p_factor = 'recovery_code')
+    WHERE id = v.id;
+  END
+  $fn$;
+  REVOKE EXECUTE ON FUNCTION test_support.elevate_session(UUID, core.session_second_factor) FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION test_support.elevate_session(UUID, core.session_second_factor) TO mpc_app;
+`;
+
+/**
+ * Issues a service token the way the operator CLI does (`service-token-cli.ts`), over the
+ * migration connection (`fx.sql`). The subject must be a service subject.
+ */
+export async function issueTestServiceToken(
+  sql: postgres.Sql,
+  input: {
+    readonly tenantId: string;
+    readonly subjectId: string;
+    readonly scopes: readonly ("scan_result" | "cre_report")[];
+    readonly label?: string;
+    readonly ttlSeconds?: number;
+  },
+): Promise<string> {
+  const { token } = await issueServiceToken(sql, {
+    tenantId: input.tenantId,
+    subjectId: input.subjectId,
+    scopes: input.scopes,
+    label: input.label ?? "test-service",
+    ttlSeconds: input.ttlSeconds ?? 24 * 60 * 60,
+  });
+  return token;
+}
+
+/**
+ * Mirrors the admin bind for fixtures that insert wallets directly: identity assurance is the
+ * subject's (0108), and a bind states it. Raises each subject to the highest level among its
+ * active wallets, exactly as the 0108 backfill did for existing rows.
+ */
+export async function syncSubjectAssurance(sql: postgres.Sql | postgres.TransactionSql): Promise<void> {
+  await sql`
+    UPDATE core.subjects s
+    SET assurance_level = w.level
+    FROM (
+      SELECT subject_id, max(assurance_level) AS level
+      FROM core.wallet_identities
+      WHERE subject_id IS NOT NULL AND disabled_at IS NULL
+      GROUP BY subject_id
+    ) w
+    WHERE w.subject_id = s.id AND s.assurance_level < w.level
+  `;
 }
 
 export function bearer(token: string): Record<string, string> {
@@ -161,6 +472,7 @@ export async function setupFixture(): Promise<TestFixture> {
     $$;
     GRANT USAGE ON SCHEMA core, chain, audit TO mpc_app_login;
   `);
+  await sql.unsafe(TEST_ELEVATION_SQL);
 
   const appUrl = new URL(url);
   appUrl.username = "mpc_app_login";
@@ -191,8 +503,8 @@ export async function setupFixture(): Promise<TestFixture> {
     const subject = randomUUID();
     if (tenant === tenantA) operatorSubjectA = subject;
     await sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subject}, ${tenant}, 'person', ${label})
+      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
+      VALUES (${subject}, ${tenant}, 'person', ${label}, 'high_assurance')
     `;
     await sql`
       INSERT INTO core.wallet_identities (
@@ -275,17 +587,21 @@ export async function setupFixture(): Promise<TestFixture> {
       "high_assurance",
     ],
   ] as const) {
+    // The scan service is a service subject (D7): it holds a service token, not a wallet.
+    const service = subject === scanServiceSubject;
     await sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subject}, ${tenantA}, 'person', ${label})
+      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
+      VALUES (${subject}, ${tenantA}, ${service ? "service" : "person"}, ${label}, ${assurance})
     `;
-    await sql`
-      INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
-      ) VALUES (
-        ${randomUUID()}, ${tenantA}, ${subject}, ${wallet.address}, 31337, ${assurance}, now()
-      )
-    `;
+    if (!service) {
+      await sql`
+        INSERT INTO core.wallet_identities (
+          id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        ) VALUES (
+          ${randomUUID()}, ${tenantA}, ${subject}, ${wallet.address}, 31337, ${assurance}, now()
+        )
+      `;
+    }
     const organization = subject === reviewerSubjectA ? reviewOrgA : orgA;
     await sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
@@ -341,8 +657,8 @@ export async function setupFixture(): Promise<TestFixture> {
 
   // Project-level binding. With `project_id` set, it has no effect outside that project.
   await sql`
-    INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-    VALUES (${scopedStewardSubject}, ${tenantA}, 'person', 'Scoped Steward A')
+    INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
+    VALUES (${scopedStewardSubject}, ${tenantA}, 'person', 'Scoped Steward A', 'identity_bound')
   `;
   await sql`
     INSERT INTO core.wallet_identities (
@@ -393,6 +709,13 @@ export async function setupFixture(): Promise<TestFixture> {
     )
   `;
 
+  const scanServiceToken = await issueTestServiceToken(sql, {
+    tenantId: tenantA,
+    subjectId: scanServiceSubject,
+    scopes: ["scan_result"],
+    label: "scan-worker",
+  });
+
   const schemaA = randomUUID();
   await sql`
     INSERT INTO core.attestation_schemas (
@@ -422,6 +745,8 @@ export async function setupFixture(): Promise<TestFixture> {
     approverA,
     stewardA,
     scanServiceA,
+    scanServiceToken,
+    scanServiceSubjectA: scanServiceSubject,
     proposerA,
     voterA,
     auditorA,
@@ -448,8 +773,7 @@ export async function setupFixture(): Promise<TestFixture> {
 export function testEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    SIWE_DOMAIN: "localhost:3000",
-    SIWE_URI: "http://localhost:3000",
+    WEB_ORIGIN: "http://localhost:3000",
     CHAIN_ID: "31337",
     SESSION_SECRET: "test-session-secret-at-least-32-chars",
     NODE_ENV: "test",

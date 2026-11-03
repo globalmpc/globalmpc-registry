@@ -1,36 +1,70 @@
-import { randomBytes } from "node:crypto";
 import type postgres from "postgres";
-import { recoverMessageAddress } from "viem";
-import { parseSiweMessage } from "viem/siwe";
 import {
   BREAK_GLASS_INCIDENT_DUE_HOURS,
   BREAK_GLASS_ROLE,
+  deriveAuthenticationLevel,
+  requiredAuthenticationLevel,
+  satisfiesAuthenticationLevel,
+  SERVICE_ONLY_ROLES,
   TENANT_WIDE_ROLES,
   type AssuranceLevel,
+  type AuthenticationLevel,
+  type FirstFactor,
+  type SecondFactor,
+  type ServiceScope,
 } from "@mpc/api-contract";
 import { withTenant } from "@mpc/db";
-import { isPublicDevAddress } from "@mpc/config";
-import { LOCAL_CHAIN_ID } from "@mpc/domain";
-import type { AppConfig } from "../config.js";
-import { unauthorized } from "../errors.js";
+import type { ResolvedServiceToken, ResolvedSessionRow } from "./session-token.js";
 
+type RoleBinding = {
+  readonly role: string;
+  readonly organizationId: string | null;
+  readonly projectId: string | null;
+  /**
+   * Jurisdictions the binding is limited to (02 §2.5). `null` or absent: not scoped.
+   */
+  readonly jurisdiction?: readonly string[] | null;
+  /** Set only on the `break_glass` binding: the elevation that grants it. */
+  readonly elevationId?: string;
+};
+
+/**
+ * Who is calling, resolved once per request.
+ *
+ * `principal` separates a person's session from a service token. A service has no factors and no
+ * AAL; what it may reach is fixed by its token's scopes (server.ts) and its subject's roles.
+ */
 export interface Session {
-  readonly walletAddress: `0x${string}`;
-  readonly chainId: number;
+  readonly principal: "person" | "service";
+  /** The session id, or the service token id. Recorded in sign-in and sign-out audit rows. */
+  readonly sessionId: string;
+  /**
+   * Every session belongs to a subject in a tenant. Typed nullable because routes written for the
+   * former unbound wallet session still check it; the resolvers never return null here.
+   */
   readonly subjectId: string | null;
   readonly tenantId: string | null;
+  /** Identity assurance of the subject (admin-set). Not the authentication level. */
   readonly assuranceLevel: AssuranceLevel;
-  readonly roleBindings: readonly {
-    readonly role: string;
-    readonly organizationId: string | null;
-    readonly projectId: string | null;
-    /**
-     * Jurisdictions the binding is limited to (02 §2.5). `null` or absent: not scoped.
-     */
-    readonly jurisdiction?: readonly string[] | null;
-    /** Set only on the `break_glass` binding: the elevation that grants it. */
-    readonly elevationId?: string;
-  }[];
+  /** Null for a service. */
+  readonly firstFactor: FirstFactor | null;
+  readonly secondFactor: SecondFactor | null;
+  /**
+   * Restored by a recovery code and not yet past a real factor (WP3): the request hook lets it
+   * reach only `allowsRecoveryLimited` routes, and none of its roles is effective.
+   */
+  readonly recoveryLimited: boolean;
+  /** Derived from the factors (`deriveAuthenticationLevel`). Null for a service. */
+  readonly aal: AuthenticationLevel | null;
+  /** The token's scopes. Only on a service session. */
+  readonly serviceScopes?: readonly ServiceScope[];
+  /**
+   * The **effective** role bindings: those whose AAL minimum this session meets. Everything that
+   * authorizes reads this list, so a narrowed role cannot be used by any path.
+   */
+  readonly roleBindings: readonly RoleBinding[];
+  /** Roles the subject holds that this session does not meet (priority rule 4). */
+  readonly narrowedRoles: readonly { readonly role: string; readonly requiredAal: AuthenticationLevel | null }[];
   readonly projectIds: readonly string[];
   /**
    * Organization ID → project IDs owned by that organization.
@@ -50,159 +84,82 @@ export interface Session {
   readonly device?: { readonly userAgentHash: string | null };
 }
 
-const NONCE_TTL_MS = 10 * 60 * 1000;
+/**
+ * Session row → request session.
+ *
+ * Priority rule 1 lives in the database (revoked, expired, idle). The AAL is derived from the
+ * factors, and the subject's roles are narrowed to those this AAL meets (rule 4). Rule 2 — a
+ * first-factor-only session reaches only MFA, logout and its own session — is the request hook's
+ * (server.ts).
+ */
+export async function resolveSession(sql: postgres.Sql, row: ResolvedSessionRow): Promise<Session> {
+  const aal = deriveAuthenticationLevel({ firstFactor: row.firstFactor, secondFactor: row.secondFactor });
 
-export const SIWE_STATEMENT =
-  "Sign in to MPC Registry. This signature does not move assets or grant any approval.";
-
-export async function issueNonce(
-  sql: postgres.Sql,
-  walletAddress: string,
-  chainId: number,
-): Promise<{ nonce: string; expiresAt: string }> {
-  // A SIWE nonce must be at least 8 alphanumeric characters (EIP-4361).
-  const nonce = randomBytes(12).toString("hex");
-  const expiresAt = new Date(Date.now() + NONCE_TTL_MS).toISOString();
-
-  await sql`
-    INSERT INTO core.siwe_nonces (nonce, wallet_address, chain_id, expires_at)
-    VALUES (${nonce}, ${walletAddress.toLowerCase()}, ${chainId}, ${expiresAt})
-  `;
-
-  return { nonce, expiresAt };
+  return {
+    principal: "person",
+    sessionId: row.sessionId,
+    firstFactor: row.firstFactor,
+    secondFactor: row.secondFactor,
+    recoveryLimited: row.recoveryLimited,
+    aal,
+    subjectId: row.subjectId,
+    tenantId: row.tenantId,
+    assuranceLevel: row.assuranceLevel,
+    ...(await resolveAuthority(sql, row.tenantId, row.subjectId, (role) => {
+      const required = requiredAuthenticationLevel(role);
+      // A recovery code proves possession of a printed code, not of an authenticator: until the
+      // session enrols or proves one, no role is effective, whatever level it would need.
+      if (row.recoveryLimited) return required;
+      return required !== null && satisfiesAuthenticationLevel(aal, required) ? true : required;
+    })),
+  };
 }
 
 /**
- * SIWE verification — ADR-T06.
+ * Service token → request session.
  *
- * Checks: signature validity, domain match, chainId match, unused nonce, expiry.
- * Does not check: who this address is. Identity binding is a separate record (02 §2.9).
- *
- * Only EOA signatures are supported. `recoverMessageAddress` recovers the address locally
- * without RPC, so the login path does not depend on external node availability. Smart contract
- * wallets (EIP-1271) need RPC and are deferred to a separate decision.
+ * No factors and no AAL: a service proves possession of its token, and its reach is the token's
+ * scopes (enforced before any route runs) and its subject's roles.
  */
-export async function verifySiwe(
+export async function resolveServiceSession(
   sql: postgres.Sql,
-  config: AppConfig,
-  message: string,
-  signature: `0x${string}`,
+  token: ResolvedServiceToken,
 ): Promise<Session> {
-  const parsed = parseSiweMessage(message);
-  if (!parsed.address || !parsed.nonce) {
-    throw unauthorized("SIWE_MESSAGE_INVALID", "Cannot parse the SIWE message");
-  }
-
-  if (parsed.domain !== config.siweDomain) {
-    throw unauthorized("SIWE_DOMAIN_MISMATCH", "The message domain does not match this service");
-  }
-  if (parsed.chainId !== config.chainId) {
-    throw unauthorized("SIWE_CHAIN_MISMATCH", "The message chain ID does not match this service");
-  }
-  if (parsed.expirationTime && parsed.expirationTime.getTime() < Date.now()) {
-    throw unauthorized("SIWE_MESSAGE_EXPIRED", "The message has expired");
-  }
-  /**
-   * `notBefore` is the signer stating "do not use before this time".
-   *
-   * Ignoring it makes that declaration meaningless and lets a pre-signed message be used outside
-   * the time the signer intended. That is why EIP-4361 defines the field.
-   */
-  if (parsed.notBefore && parsed.notBefore.getTime() > Date.now()) {
-    throw unauthorized("SIWE_MESSAGE_NOT_YET_VALID", "The message is not valid yet");
-  }
-  /**
-   * `uri` is compared too — 07 §7.1.
-   *
-   * Checking only the domain lets a signature lured from another origin on the same host pass.
-   * What the wallet showed the user and what the server accepts must be the same.
-   */
-  if (parsed.uri !== config.siweUri) {
-    throw unauthorized("SIWE_URI_MISMATCH", "The message uri does not match this service");
-  }
-
-  const address = parsed.address.toLowerCase() as `0x${string}`;
-
-  // Consume the nonce atomically. If two requests arrive together, only one succeeds.
-  const [consumed] = await sql<{ nonce: string }[]>`
-    UPDATE core.siwe_nonces
-    SET consumed_at = now()
-    WHERE nonce = ${parsed.nonce}
-      AND consumed_at IS NULL
-      AND expires_at > now()
-      AND wallet_address = ${address}
-    RETURNING nonce
-  `;
-
-  if (!consumed) {
-    throw unauthorized("SIWE_NONCE_ALREADY_USED", "This nonce has already been used or has expired");
-  }
-
-  let recovered: string;
-  try {
-    recovered = (await recoverMessageAddress({ message, signature })).toLowerCase();
-  } catch {
-    throw unauthorized("SIWE_SIGNATURE_INVALID", "Cannot verify the signature");
-  }
-
-  if (recovered !== address) {
-    throw unauthorized("SIWE_SIGNATURE_INVALID", "The signer does not match the message address");
-  }
-
-  return resolveSession(sql, address, config.chainId);
+  return {
+    principal: "service",
+    sessionId: token.tokenId,
+    subjectId: token.subjectId,
+    tenantId: token.tenantId,
+    assuranceLevel: token.assuranceLevel,
+    firstFactor: null,
+    secondFactor: null,
+    recoveryLimited: false,
+    aal: null,
+    serviceScopes: token.scopes,
+    // Only service roles take effect through a token. A person role the subject holds (by
+    // mistake or on purpose) stays narrowed, so a token never acts as a person.
+    ...(await resolveAuthority(sql, token.tenantId, token.subjectId, (role) =>
+      SERVICE_ONLY_ROLES.includes(role) ? true : null,
+    )),
+  };
 }
 
 /**
- * wallet → identity and role resolution.
+ * The subject's role bindings, narrowed, and what those bindings reach.
  *
- * 02 §2.9: the wallet is an authentication method; identity binding, credential, role binding,
- * and assignment are each separate records. Without a link the state is `wallet_only`, which
- * allows only public read and governance participation (OD-04).
+ * `meets(role)` is `true` when the role is effective in this session, otherwise the AAL it would
+ * need (`null`: never in this kind of session). Narrowing happens before anything is derived from
+ * the bindings, so a narrowed role reaches no project and grants no elevation.
  */
-export async function resolveSession(
+async function resolveAuthority(
   sql: postgres.Sql,
-  walletAddress: `0x${string}`,
-  chainId: number,
-): Promise<Session> {
-  /**
-   * A public development address never holds a session off the local chain.
-   *
-   * Its key is printed by every anvil node or committed to this repository, so anyone can sign
-   * as it. Bootstrap and the admin bind refuse such a wallet on a shared chain; this covers a
-   * binding made before that check existed, at login and on every request that carries a token.
-   * `chainId` must be the API's configured chain, never one read from a token row: a token
-   * issued on the local chain would otherwise skip this check on a shared-chain API. The
-   * request hook drops tokens whose chain differs before calling this (server.ts).
-   */
-  if (chainId !== LOCAL_CHAIN_ID && isPublicDevAddress(walletAddress)) {
-    throw unauthorized(
-      "WALLET_PUBLIC_DEV_ADDRESS",
-      `This is a public development wallet; it cannot sign in on chain ${chainId}`,
-    );
-  }
-
-  // At login the tenant is not yet known, so RLS policies cannot be satisfied.
-  // Only the auth path is split into SECURITY DEFINER functions (0005_session_resolver.sql).
-  // No path other than these two functions bypasses RLS.
-  const [identity] = await sql<
-    { subject_id: string | null; tenant_id: string; assurance_level: AssuranceLevel }[]
-  >`
-    SELECT * FROM core.resolve_wallet_session(${walletAddress}, ${chainId})
-  `;
-
-  if (!identity || identity.subject_id === null) {
-    return {
-      walletAddress,
-      chainId,
-      subjectId: null,
-      tenantId: identity?.tenant_id ?? null,
-      assuranceLevel: "wallet_only",
-      roleBindings: [],
-      projectIds: [],
-    };
-  }
-
-  const bindings = await sql<
+  tenantId: string,
+  subjectId: string,
+  meets: (role: string) => true | AuthenticationLevel | null,
+): Promise<
+  Pick<Session, "roleBindings" | "narrowedRoles" | "projectIds" | "organizationProjectIds" | "projectJurisdictions">
+> {
+  const held = await sql<
     {
       role: string;
       organization_id: string | null;
@@ -210,22 +167,32 @@ export async function resolveSession(
       jurisdiction: string[] | null;
     }[]
   >`
-    SELECT * FROM core.resolve_role_bindings(${identity.subject_id})
+    SELECT * FROM core.resolve_role_bindings(${subjectId})
   `;
 
-  // Only a current `security_operator` holder can be elevated. Revoking that role ends any
-  // elevation with it, and sessions without it skip the lookup.
-  const elevation = bindings.some((row) => row.role === "security_operator")
-    ? await resolveBreakGlassElevation(sql, identity.tenant_id, identity.subject_id)
-    : null;
+  const narrowed = new Map<string, AuthenticationLevel | null>();
+  const bindings = held.filter((row) => {
+    const verdict = meets(row.role);
+    if (verdict === true) return true;
+    narrowed.set(row.role, verdict);
+    return false;
+  });
+
+  // Only a current, effective `security_operator` holder can be elevated. Revoking that role ends
+  // any elevation with it, and sessions without it skip the lookup. The elevation is itself a role
+  // with its own minimum.
+  let elevation: string | null = null;
+  if (bindings.some((row) => row.role === "security_operator")) {
+    const candidate = await resolveBreakGlassElevation(sql, tenantId, subjectId);
+    if (candidate !== null) {
+      const verdict = meets(BREAK_GLASS_ROLE);
+      if (verdict === true) elevation = candidate;
+      else narrowed.set(BREAK_GLASS_ROLE, verdict);
+    }
+  }
   const scoped = bindings.some((row) => row.jurisdiction !== null);
 
   return {
-    walletAddress,
-    chainId,
-    subjectId: identity.subject_id,
-    tenantId: identity.tenant_id,
-    assuranceLevel: identity.assurance_level,
     roleBindings: [
       ...bindings.map((row) => ({
         role: row.role,
@@ -238,15 +205,16 @@ export async function resolveSession(
         ? [{ role: BREAK_GLASS_ROLE, organizationId: null, projectId: null, elevationId: elevation }]
         : []),
     ],
+    narrowedRoles: [...narrowed].map(([role, requiredAal]) => ({ role, requiredAal })),
     projectIds: bindings
       .map((row) => row.project_id)
       .filter((value): value is string => value !== null),
-    organizationProjectIds: await resolveOrganizationProjects(sql, identity.tenant_id, bindings),
+    organizationProjectIds: await resolveOrganizationProjects(sql, tenantId, bindings),
     ...(scoped
       ? {
           projectJurisdictions: await resolveProjectJurisdictions(
             sql,
-            identity.tenant_id,
+            tenantId,
             [...new Set(bindings.flatMap((row) => row.jurisdiction ?? []))],
           ),
         }

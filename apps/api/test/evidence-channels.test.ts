@@ -38,7 +38,7 @@ describeDb("Evidence channel", () => {
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     steward = await signIn(app, fx.stewardA);
     operator = await signIn(app, fx.operatorA);
-    scanService = await signIn(app, fx.scanServiceA);
+    scanService = fx.scanServiceToken;
 
     await fx.sql`
       UPDATE core.source_connections

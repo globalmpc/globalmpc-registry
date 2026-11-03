@@ -1,5 +1,6 @@
 export * from "./common.js";
 export * from "./auth.js";
+export * from "./accounts.js";
 export * from "./authorization.js";
 export * from "./resources.js";
 export * from "./restrictions.js";
@@ -23,3 +24,7 @@ export * from "./structured-claims.js";
 
 export * from "./evidence-ledger.js";
 export * from "./cre.js";
+export * from "./mfa.js";
+export * from "./suspensions.js";
+export * from "./oidc.js";
+export * from "./wallets.js";

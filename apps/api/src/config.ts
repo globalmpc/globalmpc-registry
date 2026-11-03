@@ -1,8 +1,18 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { fingerprintSecret, parseSecretReference, resolveSecret } from "@mpc/config";
+import {
+  fingerprintSecret,
+  parseSecretReference,
+  resolveEmailTransportKind,
+  resolveSecret,
+} from "@mpc/config";
 import type { SecretAudit } from "@mpc/config";
-import { describeChains, isSupportedChainId, SUPPORTED_CHAIN_IDS } from "@mpc/domain";
+import {
+  BSC_MAINNET_CHAIN_ID,
+  describeChains,
+  isSupportedChainId,
+  SUPPORTED_CHAIN_IDS,
+} from "@mpc/domain";
 
 /**
  * Environment variables are validated once at startup.
@@ -21,12 +31,18 @@ const SECRET_VARIABLES = [
   "SESSION_SECRET",
   "OBJECT_SECRET_ACCESS_KEY",
   "EDGE_PROXY_SECRET",
+  "GOOGLE_CLIENT_SECRET",
+  "MICROSOFT_CLIENT_SECRET",
 ] as const;
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
   DATABASE_URL: z.string().min(1),
-  SIWE_DOMAIN: z.string().min(1),
-  SIWE_URI: z.string().url(),
+  /**
+   * The web app's origin (`https://dev-registry.globalmpc.tech`). Invitation links start with it,
+   * and it is the WebAuthn origin and the OIDC redirect base unless those are set (they must
+   * equal it). Required: it used to fall back to the SIWE URI, which is gone with wallet sign-in.
+   */
+  WEB_ORIGIN: z.string().url(),
   // Only BSC mainnet 56, the opBNB testnet 5611 for the dev deployment, and the local chain 31337
   // are allowed (`@mpc/domain` chains). Anchoring on another chain splits the Explorer's
   // verification path. Plain digits only, as in the anchor worker: coercion would also read
@@ -39,6 +55,38 @@ const schema = z.object({
     }),
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
+  /**
+   * Removed with wallet (SIWE) sign-in (D3, WP7). Only `0` — what every deployment now gets — is
+   * still accepted, so an environment that asks for wallet sign-in fails at startup instead of
+   * running without what it asked for.
+   */
+  LEGACY_WALLET_LOGIN: z
+    .string()
+    .optional()
+    .refine((raw) => raw === undefined || raw === "0", {
+      message: "wallet sign-in was removed (WP7); unset LEGACY_WALLET_LOGIN",
+    }),
+  /**
+   * **Test builds only.** Base URL of the E2E relay that stands in for Google and Microsoft: every
+   * request the OIDC library makes to a provider host goes to `<relay>/<host><path>` instead
+   * (`oidc-test-relay.ts`). Refused in production and on mainnet, like the demo keys.
+   */
+  OIDC_TEST_RELAY_URL: z.string().optional(),
+
+  /**
+   * WebAuthn relying party — passkeys (WP3).
+   *
+   * `WEBAUTHN_RP_ID` is the web host passkeys are bound to (`dev-registry.globalmpc.tech`): a
+   * passkey made for one RP ID never signs for another, which is what makes it phishing-
+   * resistant. `WEBAUTHN_ORIGIN` is the exact origin the browser reports
+   * (`https://dev-registry.globalmpc.tech`); an assertion from any other origin is refused.
+   * Required in production, where the origin must be https; development and tests default to
+   * the web origin (`WEB_ORIGIN`) and its host. The ceremony runs on the page an
+   * invitation link opens, so `WEBAUTHN_ORIGIN` must equal the web origin.
+   */
+  WEBAUTHN_RP_ID: z.string().optional(),
+  WEBAUTHN_ORIGIN: z.string().optional(),
 
   /**
    * Request cap — 06 §6.9.
@@ -58,6 +106,37 @@ const schema = z.object({
    * change any number a deployment already runs with.
    */
   PUBLIC_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
+  /**
+   * Mail transport (`resend`, `smtp`, `log`). The API does not send — the jobs worker does — but
+   * it refuses to start in production with anything other than `resend`, so a deployment that
+   * would lose every sign-in code fails at both ends. `RESEND_API_KEY` and `EMAIL_FROM` are the
+   * worker's settings and are not read here: the API never needs the key.
+   */
+  EMAIL_TRANSPORT: z.string().optional(),
+  /**
+   * Google and Microsoft sign-in (WP4). A provider is on when both its client id and secret are
+   * set, and off when neither is. In production one without the other is refused at startup —
+   * a deployment that meant to turn a provider on must not silently run without it.
+   *
+   * The secrets accept a reference (`file:`·`env:`), like the other secrets here.
+   */
+  GOOGLE_CLIENT_ID: z.string().max(256).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().max(512).optional(),
+  MICROSOFT_CLIENT_ID: z.string().max(256).optional(),
+  MICROSOFT_CLIENT_SECRET: z.string().max(512).optional(),
+  /**
+   * Microsoft directories (`tid`, comma-separated GUIDs) allowed to sign in. Unset: any work or
+   * school directory — an identity still has to be linked or invited before it signs anyone in.
+   */
+  MICROSOFT_ALLOWED_TENANTS: z.string().optional(),
+  /**
+   * Origin the providers redirect to: `<OIDC_REDIRECT_BASE>/auth/oidc/{provider}/callback`, a web
+   * page that posts the result to the API through the same-origin proxy. It must be the web
+   * origin (`WEB_ORIGIN`) — the browser binding and the session cookie live there — and defaults
+   * to it. Registered as the redirect URI with each
+   * provider exactly.
+   */
+  OIDC_REDIRECT_BASE: z.string().optional(),
   /** Cap for the login path. Much narrower: it creates rows or verifies signatures without auth. */
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
 
@@ -227,11 +306,22 @@ export interface AppConfig {
   readonly governanceConfirmationDepth: number;
   readonly port: number;
   readonly databaseUrl: string;
-  readonly siweDomain: string;
-  readonly siweUri: string;
   readonly chainId: number;
   readonly sessionSecret: string;
   readonly nodeEnv: "development" | "test" | "production";
+  /** Origin of the web app, without a trailing slash. Invitation links start with it. */
+  readonly webOrigin: string;
+  /** The mail transport the deployment declares (validated; the jobs worker sends). */
+  readonly emailTransport: "resend" | "smtp" | "log";
+  /**
+   * E2E only: the relay every provider request is sent to instead (`OIDC_TEST_RELAY_URL`, no
+   * trailing slash). `null` everywhere else, and always in production.
+   */
+  readonly oidcTestRelayUrl: string | null;
+  /** WebAuthn relying party: the RP ID and the one origin assertions must come from. */
+  readonly webauthn: { readonly rpId: string; readonly origin: string };
+  /** Google / Microsoft sign-in (WP4). A provider is `null` when it is turned off. */
+  readonly oidc: OidcConfig;
   readonly rateLimitMax: number;
   readonly publicRateLimitMax: number;
   readonly authRateLimitMax: number;
@@ -249,6 +339,19 @@ export interface AppConfig {
   readonly requestTimeoutMs: number;
   /** Socket idle cap (ms). Refreshed during transfer, so it does not cut large uploads. */
   readonly socketIdleTimeoutMs: number;
+}
+
+export interface OidcClientConfig {
+  readonly clientId: string;
+  readonly clientSecret: string;
+}
+
+export interface OidcConfig {
+  /** The web origin the providers redirect to, without a trailing slash. */
+  readonly redirectBase: string;
+  readonly google: OidcClientConfig | null;
+  /** `allowedTenants` null: any work or school directory. */
+  readonly microsoft: (OidcClientConfig & { readonly allowedTenants: readonly string[] | null }) | null;
 }
 
 export class ConfigError extends Error {
@@ -313,11 +416,14 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
   return {
     port: value.PORT,
     databaseUrl: value.DATABASE_URL,
-    siweDomain: value.SIWE_DOMAIN,
-    siweUri: value.SIWE_URI,
     chainId: value.CHAIN_ID,
     sessionSecret: value.SESSION_SECRET,
     nodeEnv: value.NODE_ENV,
+    webOrigin: resolveWebOrigin(value),
+    emailTransport: resolveEmailTransport(value),
+    oidcTestRelayUrl: resolveOidcTestRelay(value),
+    webauthn: resolveWebauthn(value, resolveWebOrigin(value)),
+    oidc: resolveOidc(value, resolveWebOrigin(value)),
     rateLimitMax: value.RATE_LIMIT_MAX,
     publicRateLimitMax: value.PUBLIC_RATE_LIMIT_MAX ?? value.RATE_LIMIT_MAX,
     authRateLimitMax: value.AUTH_RATE_LIMIT_MAX,
@@ -338,6 +444,156 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
     chainRpcUrl: value.CHAIN_RPC_URL ?? null,
     governanceTokenAddress: value.GOVERNANCE_TOKEN_ADDRESS?.toLowerCase() ?? null,
     governanceConfirmationDepth: value.GOVERNANCE_CONFIRMATIONS,
+  };
+}
+
+function resolveWebOrigin(value: z.infer<typeof schema>): string {
+  const origin = new URL(value.WEB_ORIGIN);
+  if (origin.protocol !== "https:" && origin.protocol !== "http:") {
+    throw new ConfigError("WEB_ORIGIN must be an http(s) origin");
+  }
+  return origin.origin;
+}
+
+function resolveEmailTransport(value: z.infer<typeof schema>): "resend" | "smtp" | "log" {
+  try {
+    return resolveEmailTransportKind(value.EMAIL_TRANSPORT, value.NODE_ENV);
+  } catch (error) {
+    throw new ConfigError((error as Error).message);
+  }
+}
+
+/**
+ * The E2E provider relay, validated once. Whoever can set it decides which server the API takes
+ * ID tokens and signing keys from, so it exists only where nothing real signs in: refused in
+ * production and on mainnet whatever NODE_ENV says (a mainnet process is not made safe by its
+ * label).
+ */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+function resolveOidcTestRelay(value: z.infer<typeof schema>): string | null {
+  const raw = value.OIDC_TEST_RELAY_URL;
+  if (raw === undefined) return null;
+  if (value.NODE_ENV === "production" || value.CHAIN_ID === BSC_MAINNET_CHAIN_ID) {
+    throw new ConfigError("OIDC_TEST_RELAY_URL is for test builds only; it cannot be set in production or on mainnet");
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConfigError("OIDC_TEST_RELAY_URL must be an http(s) URL such as http://127.0.0.1:4555");
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.search !== "" || url.hash !== "") {
+    throw new ConfigError("OIDC_TEST_RELAY_URL must be an http(s) URL without query or fragment");
+  }
+  // Loopback only: the relay is the E2E run's own process. A host elsewhere would be a server the
+  // API trusts for ID tokens and sends the client secret to, if a non-production deployment were
+  // ever given the variable.
+  if (!LOOPBACK_HOSTS.has(url.hostname) || url.username !== "" || url.password !== "") {
+    throw new ConfigError("OIDC_TEST_RELAY_URL must name this machine (127.0.0.1, [::1] or localhost)");
+  }
+  return url.href.replace(/\/+$/, "");
+}
+
+const HOST_NAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
+/**
+ * The WebAuthn relying party, validated once.
+ *
+ * The RP ID must be a bare host name, and the origin's host must be it or a subdomain of it — the
+ * browser refuses anything else, so a mismatch would only surface as every passkey failing.
+ *
+ * The origin is also the web app's origin (`webOrigin`, where invitation links land and the
+ * ceremony runs): two different values would mean either mail points at a page whose passkeys
+ * the API refuses, or the API accepts ceremonies from a page it never links to.
+ */
+function resolveWebauthn(
+  value: z.infer<typeof schema>,
+  webOrigin: string,
+): { rpId: string; origin: string } {
+  const production = value.NODE_ENV === "production";
+  if (production && (!value.WEBAUTHN_RP_ID || !value.WEBAUTHN_ORIGIN)) {
+    throw new ConfigError("WEBAUTHN_RP_ID and WEBAUTHN_ORIGIN are required in production");
+  }
+  const rpId = value.WEBAUTHN_RP_ID ?? new URL(webOrigin).hostname;
+  const rawOrigin = value.WEBAUTHN_ORIGIN ?? webOrigin;
+  if (!HOST_NAME.test(rpId)) {
+    throw new ConfigError("WEBAUTHN_RP_ID must be a lower-case host name without scheme, port or path");
+  }
+  let origin: URL;
+  try {
+    origin = new URL(rawOrigin);
+  } catch {
+    throw new ConfigError("WEBAUTHN_ORIGIN must be an origin such as https://registry.example.com");
+  }
+  // The browser reports the origin exactly; anything beyond scheme, host and port could never match.
+  if (origin.origin !== rawOrigin) {
+    throw new ConfigError("WEBAUTHN_ORIGIN must be an origin only — scheme, host and optional port, no path");
+  }
+  if (origin.protocol !== "https:" && (production || origin.protocol !== "http:")) {
+    throw new ConfigError("WEBAUTHN_ORIGIN must use https in production (http only for local development)");
+  }
+  if (origin.hostname !== rpId && !origin.hostname.endsWith(`.${rpId}`)) {
+    throw new ConfigError("WEBAUTHN_ORIGIN's host must be WEBAUTHN_RP_ID or a subdomain of it");
+  }
+  if (origin.origin !== webOrigin) {
+    throw new ConfigError(
+      `WEBAUTHN_ORIGIN must equal the web origin (WEB_ORIGIN): ${webOrigin}`,
+    );
+  }
+  return { rpId, origin: origin.origin };
+}
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The OIDC client settings, validated once (WP4).
+ *
+ * A provider needs its client id and secret together. Neither: the provider is off and its
+ * routes answer `OIDC_PROVIDER_DISABLED`. One of the two: refused in production, off elsewhere.
+ */
+function resolveOidc(value: z.infer<typeof schema>, webOrigin: string): OidcConfig {
+  const production = value.NODE_ENV === "production";
+  const pair = (name: string, id: string | undefined, secret: string | undefined): OidcClientConfig | null => {
+    if (id && secret) return { clientId: id, clientSecret: secret };
+    if ((id || secret) && production) {
+      throw new ConfigError(`${name}_CLIENT_ID and ${name}_CLIENT_SECRET must be set together`);
+    }
+    return null;
+  };
+
+  const rawBase = value.OIDC_REDIRECT_BASE ?? webOrigin;
+  let base: URL;
+  try {
+    base = new URL(rawBase);
+  } catch {
+    throw new ConfigError("OIDC_REDIRECT_BASE must be an origin such as https://registry.example.com");
+  }
+  if (base.origin !== rawBase.replace(/\/$/, "")) {
+    throw new ConfigError("OIDC_REDIRECT_BASE must be an origin only — scheme, host and optional port, no path");
+  }
+  if (base.origin !== webOrigin) {
+    throw new ConfigError(`OIDC_REDIRECT_BASE must equal the web origin (WEB_ORIGIN): ${webOrigin}`);
+  }
+  if (production && base.protocol !== "https:") {
+    throw new ConfigError("OIDC_REDIRECT_BASE must use https in production");
+  }
+
+  let allowedTenants: string[] | null = null;
+  if (value.MICROSOFT_ALLOWED_TENANTS !== undefined) {
+    allowedTenants = value.MICROSOFT_ALLOWED_TENANTS.split(",")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.length > 0);
+    if (allowedTenants.length === 0 || allowedTenants.some((entry) => !GUID.test(entry))) {
+      throw new ConfigError("MICROSOFT_ALLOWED_TENANTS must be a comma-separated list of directory (tenant) GUIDs");
+    }
+  }
+
+  const microsoft = pair("MICROSOFT", value.MICROSOFT_CLIENT_ID, value.MICROSOFT_CLIENT_SECRET);
+  return {
+    redirectBase: base.origin,
+    google: pair("GOOGLE", value.GOOGLE_CLIENT_ID, value.GOOGLE_CLIENT_SECRET),
+    microsoft: microsoft ? { ...microsoft, allowedTenants } : null,
   };
 }
 

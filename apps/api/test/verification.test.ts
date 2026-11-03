@@ -6,13 +6,14 @@ import { buildServer } from "../src/server.js";
 import { loadConfig, type AppConfig } from "../src/config.js";
 import {
   idempotencyKey,
+  issueTestSession,
   newAccount,
   setupFixture,
   signIn,
   testEnv,
-  type TestFixture,
-} from "./helpers/db.js";
+  type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
 import { hashSnapshotInput } from "../src/services/evidence-snapshot.js";
+import { bindWalletByProof } from "./helpers/wallets.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -185,11 +186,11 @@ describeDb("Verification and EIP-712 signature", () => {
     return account.signTypedData(payload);
   }
 
-  function submitSignature(attestationId: string, body: Record<string, unknown>) {
+  function submitSignature(attestationId: string, body: Record<string, unknown>, token = reviewerToken, key = idempotencyKey()) {
     return app.inject({
       method: "POST",
       url: `/api/v1/attestations/${attestationId}/signatures`,
-      headers: { authorization: `Bearer ${reviewerToken}`, "idempotency-key": idempotencyKey() },
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": key },
       payload: body,
     });
   }
@@ -747,6 +748,7 @@ describeDb("Verification and EIP-712 signature", () => {
           ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'high_assurance', now()
         )
       `;
+      await syncSubjectAssurance(fx.sql);
       await fx.sql`
         INSERT INTO core.role_bindings (
           id, tenant_id, subject_id, organization_id, project_id, role
@@ -834,5 +836,293 @@ describeDb("Verification and EIP-712 signature", () => {
       SELECT event_type FROM core.outbox WHERE aggregate_id = ${draft.id}
     `;
     expect(events.map((row) => row.event_type)).toContain("verification_attestation.signed");
+  });
+
+  describe("live reviewer authority for relayed signatures", () => {
+    async function pending() {
+      const created = await createCase();
+      const draft = (await draftAttestation(created.id, created.assignmentId)).json();
+      const requested = await requestSignature(draft.id);
+      expect(requested.statusCode, requested.body).toBe(200);
+      const signatureRequest = requested.json();
+      return {
+        attestationId: draft.id as string,
+        body: {
+          signatureRequestId: signatureRequest.signatureRequestId,
+          signature: await signTypedData(signatureRequest.typedData),
+        },
+      };
+    }
+
+    async function expectPending(attestationId: string, signatureRequestId: string) {
+      const [request] = await fx.sql`SELECT consumed_at FROM core.attestation_signature_requests WHERE id = ${signatureRequestId}`;
+      expect(request!.consumed_at).toBeNull();
+      const [attestation] = await fx.sql`SELECT state, signature FROM core.verification_attestations WHERE id = ${attestationId}`;
+      expect(attestation).toMatchObject({ state: "draft", signature: "" });
+      const [count] = await fx.sql`SELECT count(*)::int AS n FROM audit.events WHERE command = 'verification.case.signed' AND resource_id = ${attestationId}`;
+      expect(count!.n).toBe(0);
+    }
+
+    async function waitForBlocked(fragment: string) {
+      const until = Date.now() + 3000;
+      while (Date.now() < until) {
+        const [waiting] = await fx.sql`
+          SELECT 1 FROM pg_stat_activity
+          WHERE datname = current_database() AND wait_event_type = 'Lock'
+            AND query LIKE ${`%${fragment}%`} LIMIT 1
+        `;
+        if (waiting) return;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`No database lock wait observed for ${fragment}`);
+    }
+
+    function deferred() {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => { resolve = done; });
+      return { promise, resolve };
+    }
+
+    it("permits an active same-tenant relay and refuses another tenant without consuming its request", async () => {
+      const prepared = await pending();
+      const otherTenant = await signIn(app, fx.operatorB);
+      const denied = await submitSignature(prepared.attestationId, prepared.body, otherTenant);
+      expect(denied.statusCode, denied.body).toBe(409);
+      expect(denied.json().code).toBe("SIGNATURE_REQUEST_UNUSABLE");
+      await expectPending(prepared.attestationId, prepared.body.signatureRequestId);
+      const accepted = await submitSignature(prepared.attestationId, prepared.body, stewardToken);
+      expect(accepted.statusCode, accepted.body).toBe(200);
+      const [record] = await fx.sql`SELECT actor_subject_id, actor_wallet FROM audit.events WHERE command = 'verification.case.signed' AND resource_id = ${prepared.attestationId}`;
+      expect(record).toMatchObject({ actor_subject_id: fx.stewardSubjectA, actor_wallet: reviewerWallet });
+    });
+
+    it("refuses a suspended reviewer behind an active relay and preserves the request for reinstatement", async () => {
+      const prepared = await pending();
+      const key = idempotencyKey();
+      await fx.sql`UPDATE core.subjects SET suspended_at = now() WHERE id = ${fx.reviewerSubjectA}`;
+      try {
+        const denied = await submitSignature(prepared.attestationId, prepared.body, stewardToken, key);
+        expect(denied.statusCode, denied.body).toBe(422);
+        expect(denied.json().code).toBe("SUBJECT_SUSPENDED");
+        await expectPending(prepared.attestationId, prepared.body.signatureRequestId);
+      } finally {
+        await fx.sql`UPDATE core.subjects SET suspended_at = NULL WHERE id = ${fx.reviewerSubjectA}`;
+      }
+      const retried = await submitSignature(prepared.attestationId, prepared.body, stewardToken, key);
+      expect(retried.statusCode, retried.body).toBe(200);
+    });
+
+    it("waits for a concurrent suspension and refuses its now-suspended signer", async () => {
+      const prepared = await pending();
+      const locked = deferred();
+      const release = deferred();
+      const suspension = fx.sql.begin(async (tx) => {
+        await tx`UPDATE core.subjects SET suspended_at = now() WHERE id = ${fx.reviewerSubjectA}`;
+        locked.resolve();
+        await release.promise;
+      });
+      await locked.promise;
+      let submitted: ReturnType<typeof submitSignature> | undefined;
+      try {
+        submitted = submitSignature(prepared.attestationId, prepared.body, stewardToken);
+        await waitForBlocked("SELECT suspended_at FROM core.subjects");
+        release.resolve();
+        await suspension;
+        const denied = await submitted;
+        expect(denied.statusCode, denied.body).toBe(422);
+        expect(denied.json().code).toBe("SUBJECT_SUSPENDED");
+        await expectPending(prepared.attestationId, prepared.body.signatureRequestId);
+      } finally {
+        release.resolve();
+        await suspension;
+        if (submitted) await submitted;
+        await fx.sql`UPDATE core.subjects SET suspended_at = NULL WHERE id = ${fx.reviewerSubjectA}`;
+      }
+    });
+
+    it("finishes an already-locked acceptance before suspension and preserves that signed history", async () => {
+      const prepared = await pending();
+      const locked = deferred();
+      const release = deferred();
+      const heldAttestation = fx.sql.begin(async (tx) => {
+        await tx`SELECT id FROM core.verification_attestations WHERE id = ${prepared.attestationId} FOR UPDATE`;
+        locked.resolve();
+        await release.promise;
+      });
+      await locked.promise;
+      let submitted: ReturnType<typeof submitSignature> | undefined;
+      let suspension: Promise<unknown> | undefined;
+      try {
+        submitted = submitSignature(prepared.attestationId, prepared.body, stewardToken);
+        await waitForBlocked("UPDATE core.verification_attestations");
+        suspension = fx.sql.begin(async (tx) => {
+          await tx`UPDATE core.subjects SET suspended_at = now() WHERE id = ${fx.reviewerSubjectA}`;
+        });
+        await waitForBlocked("UPDATE core.subjects SET suspended_at");
+        release.resolve();
+        await heldAttestation;
+        const accepted = await submitted;
+        expect(accepted.statusCode, accepted.body).toBe(200);
+        await suspension;
+        const [signed] = await fx.sql`SELECT state, signature, signer_wallet_address FROM core.verification_attestations WHERE id = ${prepared.attestationId}`;
+        expect(signed).toMatchObject({ state: "signed", signature: prepared.body.signature, signer_wallet_address: reviewerWallet });
+        const [subject] = await fx.sql`SELECT suspended_at FROM core.subjects WHERE id = ${fx.reviewerSubjectA}`;
+        expect(subject!.suspended_at).not.toBeNull();
+      } finally {
+        release.resolve();
+        await heldAttestation;
+        if (submitted) await submitted;
+        if (suspension) await suspension;
+        await fx.sql`UPDATE core.subjects SET suspended_at = NULL WHERE id = ${fx.reviewerSubjectA}`;
+      }
+    });
+  });
+
+  /**
+   * A reviewer holds one signing wallet at a time (0130). The signer must be the assigned
+   * reviewer's active wallet — not the wallet the session signed in with, which an account
+   * session does not have. A replace moves signing to the new key at once; attestations the old
+   * key signed stay attributed to it. Runs last in this file: it replaces the reviewer's wallet.
+   */
+  describe("signing with the reviewer's active wallet, across a replace", () => {
+    const second = privateKeyToAccount(generatePrivateKey());
+    let beforeReplace: string;
+    let oldWalletId: string;
+
+    beforeAll(async () => {
+      const signed = await signedWith(reviewerAccount);
+      expect(signed.response.statusCode, signed.response.body).toBe(200);
+      beforeReplace = signed.draftId;
+
+      // Passkey: the reviewer holds one (`signIn` sessions prove it), and binding needs the
+      // strongest factor held (WP5). `reviewerToken` must survive: a replace keeps sessions.
+      const account = await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, {
+        firstFactor: "email_code",
+        secondFactor: "passkey",
+      });
+      const bound = await bindWalletByProof(app, account, second);
+      expect(bound.statusCode, bound.body).toBe(200);
+      expect(bound.json().replaced).toMatchObject({ walletAddress: reviewerWallet });
+      oldWalletId = bound.json().replaced.id;
+
+      // The replaced wallet was operator-verified, so the reviewer fell to the floor and an admin
+      // verifies them again before they sign (0130).
+      const [level] = await fx.sql<{ assurance_level: string }[]>`
+        SELECT assurance_level::text FROM core.subjects WHERE id = ${fx.reviewerSubjectA}
+      `;
+      expect(level!.assurance_level).toBe("wallet_only");
+      const verified = await app.inject({
+        method: "POST",
+        url: `/api/v1/admin/subjects/${fx.reviewerSubjectA}/assurance`,
+        headers: { authorization: `Bearer ${await signIn(app, fx.operatorA)}`, "idempotency-key": idempotencyKey() },
+        payload: { assuranceLevel: "high_assurance", justification: "re-verified after the wallet replace" },
+      });
+      expect(verified.statusCode, verified.body).toBe(200);
+    });
+
+    async function signedWith(account: ReturnType<typeof privateKeyToAccount>) {
+      const created = await createCase();
+      const draft = (await draftAttestation(created.id, created.assignmentId)).json();
+      const signatureRequest = (await requestSignature(draft.id)).json();
+      const signature = await signTypedData(signatureRequest.typedData, account);
+      return {
+        draftId: draft.id as string,
+        response: await submitSignature(draft.id, { signatureRequestId: signatureRequest.signatureRequestId, signature }),
+      };
+    }
+
+    it("a draft names no signer until it is signed", async () => {
+      const created = await createCase();
+      const draft = (await draftAttestation(created.id, created.assignmentId)).json();
+      const [row] = await fx.sql<{ signer_wallet_address: string }[]>`
+        SELECT signer_wallet_address FROM core.verification_attestations WHERE id = ${draft.id}
+      `;
+      expect(row!.signer_wallet_address).toBe(`0x${"0".repeat(40)}`);
+    });
+
+    it("refuses the replaced key, and keeps what it signed attributed to it and the reviewer", async () => {
+      const { response } = await signedWith(reviewerAccount);
+      expect(response.statusCode).toBe(400);
+      expect(response.json().code).toBe("SIGNATURE_SIGNER_MISMATCH");
+
+      const [row] = await fx.sql<{ signer_wallet_address: string; state: string }[]>`
+        SELECT signer_wallet_address, state FROM core.verification_attestations WHERE id = ${beforeReplace}
+      `;
+      expect(row!.signer_wallet_address).toBe(reviewerWallet);
+      const [event] = await fx.sql<{ actor_wallet: string | null; actor_subject_id: string }[]>`
+        SELECT actor_wallet, actor_subject_id FROM audit.events
+        WHERE resource_id = ${beforeReplace} AND command = 'verification.case.signed'
+      `;
+      expect(event).toEqual({ actor_wallet: reviewerWallet, actor_subject_id: fx.reviewerSubjectA });
+      // The old wallet row is history: still the reviewer's, disabled because it was replaced.
+      const [wallet] = await fx.sql<{ subject_id: string; disabled: boolean; reason_code: string }[]>`
+        SELECT w.subject_id, w.disabled_at IS NOT NULL AS disabled, e.reason_code
+        FROM core.wallet_identities w JOIN core.wallet_disable_events e ON e.wallet_identity_id = w.id
+        WHERE w.id = ${oldWalletId}
+      `;
+      expect(wallet).toEqual({ subject_id: fx.reviewerSubjectA, disabled: true, reason_code: "replaced" });
+    });
+
+    it("accepts the reviewer's new wallet and records it as the signer", async () => {
+      const { draftId, response } = await signedWith(second);
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().signerWalletAddress).toBe(second.address.toLowerCase());
+
+      const [event] = await fx.sql<{ actor_wallet: string | null }[]>`
+        SELECT actor_wallet FROM audit.events
+        WHERE resource_id = ${draftId} AND command = 'verification.case.signed'
+      `;
+      expect(event!.actor_wallet).toBe(second.address.toLowerCase());
+      const [row] = await fx.sql<{ signer_wallet_address: string }[]>`
+        SELECT signer_wallet_address FROM core.verification_attestations WHERE id = ${draftId}
+      `;
+      expect(row!.signer_wallet_address).toBe(second.address.toLowerCase());
+    });
+
+    it("refuses an active wallet of another subject", async () => {
+      const { response } = await signedWith(fx.stewardA.account);
+      expect(response.statusCode).toBe(400);
+      expect(response.json().code).toBe("SIGNATURE_SIGNER_MISMATCH");
+    });
+
+    /**
+     * A Google (or Microsoft) session carries no wallet at all (WP4). Signing must not lean on
+     * one: the reviewer requests and submits from that session and the recovered key decides.
+     */
+    it("signs from a Google + passkey session with the reviewer's new wallet", async () => {
+      const google = await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, {
+        firstFactor: "google",
+        secondFactor: "passkey",
+      });
+      const view = await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: { authorization: `Bearer ${google}` } });
+      expect(view.json()).toMatchObject({ authenticated: true, aal: "aal3" });
+      expect(view.json().walletAddress ?? null).toBeNull();
+
+      const created = await createCase();
+      const draft = (await draftAttestation(created.id, created.assignmentId)).json();
+      const headers = { authorization: `Bearer ${google}`, "idempotency-key": idempotencyKey() };
+      const requested = await app.inject({
+        method: "POST",
+        url: `/api/v1/attestations/${draft.id}/signature-requests`,
+        headers,
+        payload: {},
+      });
+      expect(requested.statusCode, requested.body).toBe(200);
+      const signature = await signTypedData(requested.json().typedData, second);
+      const submitted = await app.inject({
+        method: "POST",
+        url: `/api/v1/attestations/${draft.id}/signatures`,
+        headers: { authorization: `Bearer ${google}`, "idempotency-key": idempotencyKey() },
+        payload: { signatureRequestId: requested.json().signatureRequestId, signature },
+      });
+      expect(submitted.statusCode, submitted.body).toBe(200);
+      expect(submitted.json().signerWalletAddress).toBe(second.address.toLowerCase());
+
+      const [event] = await fx.sql<{ actor_wallet: string | null; actor_subject_id: string }[]>`
+        SELECT actor_wallet, actor_subject_id FROM audit.events
+        WHERE resource_id = ${draft.id} AND command = 'verification.case.signed'
+      `;
+      expect(event).toEqual({ actor_wallet: second.address.toLowerCase(), actor_subject_id: fx.reviewerSubjectA });
+    });
   });
 });

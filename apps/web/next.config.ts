@@ -17,49 +17,29 @@ import type { NextConfig } from "next";
  * the webServer in `playwright.config.ts` uses the same flag — if the three diverge,
  * some paths work only locally.
  */
-/**
- * Demo account keys — build-time check.
- *
- * If keys end up in a production build, anyone who knows them can log in with that role at the
- * deployed address. Until now the only safeguard was "the deployment compose does not provide the value";
- * the code did not block it — a single setting was an authentication bypass.
- *
- * Stop the build instead of silently emptying the value. Emptying it would only show a login screen with
- * no accounts and no explanation why.
- */
-function demoAccountKeys(): string {
-  const raw = process.env["NEXT_PUBLIC_DEMO_ACCOUNT_KEYS"] ?? "{}";
-  if (process.env.NODE_ENV === "production" && raw.trim() !== "{}" && raw.trim() !== "") {
-    throw new Error(
-      "NEXT_PUBLIC_DEMO_ACCOUNT_KEYS cannot be set in a production build — anyone who knows the keys can log in with those roles",
-    );
-  }
-  return raw;
-}
-
 const nextConfig: NextConfig = {
   transpilePackages: ["@mpc/ui", "@mpc/domain", "@mpc/canonical", "@mpc/api-contract", "@mpc/policy"],
 
   /**
-   * Make the demo account keys **a value that is always defined at build time**.
-   *
-   * If undefined, Next does not replace `process.env.NEXT_PUBLIC_*` with a literal and
-   * leaves a runtime shim. Then a missing value becomes a shim lookup instead of `undefined`
-   * and can throw in the browser. The default is an empty object — no demo accounts.
-   *
-   * Keys are not in the repository (`lib/session`). E2E generates and injects them on every run.
+   * Values that are **always defined at build time**. If undefined, Next does not replace
+   * `process.env.NEXT_PUBLIC_*` with a literal and leaves a runtime shim, which can throw in the
+   * browser. Empty means the streaming upload stays same-origin.
    */
   env: {
-    NEXT_PUBLIC_DEMO_ACCOUNT_KEYS: demoAccountKeys(),
-    // Same rule: always defined at build time. Empty means the streaming upload stays same-origin.
     NEXT_PUBLIC_API_DIRECT_ORIGIN: process.env["NEXT_PUBLIC_API_DIRECT_ORIGIN"] ?? "",
   },
 
   /**
    * Security headers.
    *
-   * The session token is in `localStorage`, so a single XSS can read it. CSP
-   * narrows that surface.
+   * The session token is an HttpOnly cookie the page cannot read (WP6, `src/lib/bff.ts`), so an
+   * injected script can act as the person while the page is open but cannot carry the token away.
+   * CSP narrows what such a script can do.
+   *
+   * WP6 added no source: the authenticator QR code is drawn as inline SVG elements (no `data:` image,
+   * no QR service), passkeys use `navigator.credentials` (governed by Permissions-Policy, whose
+   * `publickey-credentials-*` default is this origin), and Google / Microsoft are reached by a
+   * top-level navigation, which `connect-src` and `form-action` do not govern.
    *
    * **`script-src` still contains `'unsafe-inline'`.** Next injects its hydration
    * bootstrap as an inline script, and adding a nonce would require switching every response
@@ -108,6 +88,18 @@ const nextConfig: NextConfig = {
             key: "strict-transport-security",
             value: "max-age=31536000; includeSubDomains",
           },
+        ],
+      },
+      {
+        /**
+         * The provider returns `code` and `state` in this page's query. The page strips them before
+         * it calls anything, but the browser fetches the page's own scripts first; with no referrer
+         * those requests do not repeat the code into this server's logs.
+         */
+        source: "/auth/oidc/:path*",
+        headers: [
+          { key: "referrer-policy", value: "no-referrer" },
+          { key: "cache-control", value: "no-store" },
         ],
       },
     ];

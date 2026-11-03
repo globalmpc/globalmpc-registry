@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { connectAs, sessionToken } from "./connect-as";
 
 /**
  * Material-information blackout — 11 §11.12, AC-30.
@@ -6,16 +7,6 @@ import { expect, test, type Page } from "@playwright/test";
  * The screen shows the reason, authority, scope, start, and restriction ID next to the affected
  * action. The same ID is what the API returns when it refuses the action.
  */
-
-async function connectAs(page: Page, label: string): Promise<void> {
-  await page.goto("/connect");
-  const signOut = page.getByRole("button", { name: "Disconnect" });
-  if (await signOut.isVisible().catch(() => false)) {
-    await signOut.click();
-  }
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-}
 
 test.describe("material-information blackout", () => {
   test("an active restriction is shown with its ID next to the affected action", async ({ page }) => {
@@ -37,7 +28,7 @@ test.describe("material-information blackout", () => {
     // No restriction, no notice.
     await expect(page.getByTestId("blackout-notice")).toHaveCount(0);
 
-    const token = await page.evaluate(() => window.localStorage.getItem("mpc.session.token"));
+    const token = await sessionToken(page);
     const headers = { authorization: `Bearer ${token}` };
 
     const created = await page.request.post(

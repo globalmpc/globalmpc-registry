@@ -1,18 +1,14 @@
-import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { createSiweMessage } from "viem/siwe";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
-import { setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
+import { hashToken } from "../src/plugins/session-token.js";
+import { bearer, issueTestSession, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
-const account = privateKeyToAccount(`0x${"11".repeat(32)}`);
-const other = privateKeyToAccount(`0x${"22".repeat(32)}`);
-
-describeDb("SIWE authentication", () => {
+describeDb("account sessions", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
 
@@ -26,340 +22,64 @@ describeDb("SIWE authentication", () => {
     await fx.close();
   });
 
-  async function nonce(address = account.address) {
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/siwe/nonce",
-      payload: { walletAddress: address.toLowerCase(), chainId: 31337 },
-    });
-    return response.json() as { nonce: string; statement: string; expiresAt: string };
-  }
+  const session = (token: string) =>
+    app.inject({ method: "GET", url: "/api/v1/auth/session", headers: bearer(token) });
 
-  function message(overrides: Partial<Parameters<typeof createSiweMessage>[0]> = {}) {
-    return createSiweMessage({
-      address: account.address,
-      chainId: 31337,
-      domain: "localhost:3000",
-      nonce: "placeholder",
-      statement: "s",
-      uri: "http://localhost:3000",
-      version: "1",
-      issuedAt: new Date(),
-      ...overrides,
-    } as Parameters<typeof createSiweMessage>[0]);
-  }
-
-  function verify(payload: { message: string; signature: string }) {
-    return app.inject({ method: "POST", url: "/api/v1/auth/siwe/verify", payload });
-  }
-
-  describe("nonce", () => {
-    it("is issued", async () => {
-      const body = await nonce();
-      expect(body.nonce.length).toBeGreaterThanOrEqual(8);
-      expect(body.statement).toContain("does not move assets or grant any approval");
-    });
-
-    it("differs every time", async () => {
-      const [a, b] = [await nonce(), await nonce()];
-      expect(a.nonce).not.toBe(b.nonce);
-    });
-
-    it("rejects a malformed address", async () => {
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/v1/auth/siwe/nonce",
-        payload: { walletAddress: "not-an-address", chainId: 31337 },
-      });
-      expect(response.statusCode).toBe(400);
-    });
+  it("stores only the token's hash", async () => {
+    const token = await signIn(app, fx.operatorA);
+    expect(await fx.sql`SELECT 1 FROM core.sessions WHERE token_hash = ${token}`).toHaveLength(0);
+    expect(await fx.sql`SELECT 1 FROM core.sessions WHERE token_hash = ${hashToken(token)}`).toHaveLength(1);
   });
 
-  describe("signature verification", () => {
-    it("creates a session from a valid signature", async () => {
-      const { nonce: value, statement } = await nonce();
-      const text = message({ nonce: value, statement });
-      const signature = await account.signMessage({ message: text });
+  it("invalidates the token on logout", async () => {
+    const token = await signIn(app, fx.operatorA);
+    expect((await session(token)).json().authenticated).toBe(true);
 
-      const response = await verify({ message: text, signature });
-      expect(response.statusCode).toBe(200);
+    await app.inject({ method: "POST", url: "/api/v1/auth/logout", headers: bearer(token) });
 
-      const session = response.json();
-      expect(session.walletAddress).toBe(account.address.toLowerCase());
-      // The wallet is unregistered, so wallet_only. A signature alone grants no role (OD-04).
-      expect(session.assuranceLevel).toBe("wallet_only");
-      expect(session.subjectId).toBeNull();
-      expect(session.roleBindings).toEqual([]);
-    });
-
-    it.each(["Audit test browser/1.0", ""])(
-      "records the observed sign-in user-agent hash for %s",
-      async (userAgent) => {
-        const { nonce: value, statement } = await nonce(fx.operatorA.account.address);
-        const text = message({ address: fx.operatorA.account.address, nonce: value, statement });
-        const signature = await fx.operatorA.account.signMessage({ message: text });
-        const response = await app.inject({
-          method: "POST",
-          url: "/api/v1/auth/siwe/verify",
-          headers: { "user-agent": userAgent },
-          payload: { message: text, signature },
-        });
-        expect(response.statusCode).toBe(200);
-        const session = response.json();
-        expect(session).not.toHaveProperty("device");
-        const rows = await fx.sql`
-          SELECT command, user_agent_hash FROM audit.events
-          WHERE tenant_id = ${fx.tenantA} AND correlation_id = ${session.requestId}
-        `;
-        expect(rows).toEqual([{
-          command: "auth.session.created",
-          user_agent_hash: userAgent === ""
-            ? null
-            : createHash("sha256").update(userAgent).digest("hex"),
-        }]);
-      },
-    );
-
-    it("issues a session token after signature verification", async () => {
-      const { nonce: value, statement } = await nonce();
-      const text = message({ nonce: value, statement });
-      const signature = await account.signMessage({ message: text });
-
-      const session = (await verify({ message: text, signature })).json();
-      // The token is not the wallet address. Using the address as a token lets anyone forge it.
-      expect(session.sessionToken).toBeTruthy();
-      expect(session.sessionToken).not.toBe(account.address.toLowerCase());
-      expect(session.verifiedWalletAddress).toBe(account.address.toLowerCase());
-    });
-
-    it("does not store the raw token in the DB", async () => {
-      const { nonce: value, statement } = await nonce();
-      const text = message({ nonce: value, statement });
-      const signature = await account.signMessage({ message: text });
-      const session = (await verify({ message: text, signature })).json();
-
-      const rows = await fx.sql`
-        SELECT token_hash FROM core.sessions WHERE token_hash = ${session.sessionToken}
-      `;
-      // What is stored is a hash. The raw token finds nothing.
-      expect(rows).toHaveLength(0);
-    });
-
-    it("invalidates the token on logout", async () => {
-      const token = await signIn(app, fx.operatorA);
-
-      const before = await app.inject({
-        method: "GET",
-        url: "/api/v1/auth/session",
-        headers: { authorization: `Bearer ${token}` },
-      });
-      expect(before.json().authenticated).toBe(true);
-
-      await app.inject({
-        method: "POST",
-        url: "/api/v1/auth/logout",
-        headers: { authorization: `Bearer ${token}` },
-      });
-
-      const after = await app.inject({
-        method: "GET",
-        url: "/api/v1/auth/session",
-        headers: { authorization: `Bearer ${token}` },
-      });
-      expect(after.json().authenticated).toBe(false);
-    });
-
-    it("does not authenticate a forged token", async () => {
-      const response = await app.inject({
-        method: "GET",
-        url: "/api/v1/auth/session",
-        headers: { authorization: "Bearer forged-token-value" },
-      });
-      expect(response.json().authenticated).toBe(false);
-    });
-
-    it("gives a registered wallet its roles and tenant", async () => {
-      const token = await signIn(app, fx.operatorA);
-      const response = await app.inject({
-        method: "GET",
-        url: "/api/v1/auth/session",
-        headers: { authorization: `Bearer ${token}` },
-      });
-      const session = response.json();
-      expect(session.authenticated).toBe(true);
-      expect(session.tenantId).toBe(fx.tenantA);
-      expect(session.assuranceLevel).toBe("high_assurance");
-      expect(session.roleBindings.map((b: { role: string }) => b.role)).toContain("mpc_operator");
-    });
-
-    it("rejects a forged signature", async () => {
-      const { nonce: value, statement } = await nonce();
-      const text = message({ nonce: value, statement });
-
-      const response = await verify({ message: text, signature: `0x${"00".repeat(65)}` });
-      expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe("SIWE_SIGNATURE_INVALID");
-    });
-
-    it("rejects a signature from a different key", async () => {
-      const { nonce: value, statement } = await nonce();
-      const text = message({ nonce: value, statement });
-      const signature = await other.signMessage({ message: text });
-
-      const response = await verify({ message: text, signature });
-      expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe("SIWE_SIGNATURE_INVALID");
-    });
-
-    it("does not allow a nonce to be used twice", async () => {
-      const { nonce: value, statement } = await nonce();
-      const text = message({ nonce: value, statement });
-      const signature = await account.signMessage({ message: text });
-
-      expect((await verify({ message: text, signature })).statusCode).toBe(200);
-
-      const replay = await verify({ message: text, signature });
-      expect(replay.statusCode).toBe(401);
-      expect(replay.json().code).toBe("SIWE_NONCE_ALREADY_USED");
-    });
-
-    it("rejects a nonce that was never issued", async () => {
-      const text = message({ nonce: "neverissuednonce123", statement: "s" });
-      const signature = await account.signMessage({ message: text });
-
-      const response = await verify({ message: text, signature });
-      expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe("SIWE_NONCE_ALREADY_USED");
-    });
-
-    it("rejects a message for another domain — phishing defense", async () => {
-      const { nonce: value, statement } = await nonce();
-      const text = message({ nonce: value, statement, domain: "evil.example", uri: "http://evil.example" });
-      const signature = await account.signMessage({ message: text });
-
-      const response = await verify({ message: text, signature });
-      expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe("SIWE_DOMAIN_MISMATCH");
-    });
-
-    it("rejects a message for another uri", async () => {
-      /**
-       * Checking only the domain lets through a signature steered to another origin on the
-       * same host. What the wallet showed and what the server accepts must be the same target.
-       */
-      const { nonce: value, statement } = await nonce();
-      const text = message({ nonce: value, statement, uri: "http://localhost:3000/other" });
-      const signature = await account.signMessage({ message: text });
-
-      const response = await verify({ message: text, signature });
-      expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe("SIWE_URI_MISMATCH");
-    });
-
-    it("rejects a message that is not yet valid", async () => {
-      // Honors the signer's notBefore statement: "do not use before this time".
-      const { nonce: value, statement } = await nonce();
-      const text = message({
-        nonce: value,
-        statement,
-        notBefore: new Date(Date.now() + 60 * 60 * 1000),
-      });
-      const signature = await account.signMessage({ message: text });
-
-      const response = await verify({ message: text, signature });
-      expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe("SIWE_MESSAGE_NOT_YET_VALID");
-    });
-
-    it("returns the uri to sign in the nonce response", async () => {
-      const body = (await nonce()) as unknown as { uri: string };
-      expect(body.uri).toBe("http://localhost:3000");
-    });
-
-    /**
-     * The server also states which chain to sign for.
-     *
-     * The web app hard-coded its own chain while stg and prod use 56. The server rejects a different
-     * chain, so real-wallet sign-in succeeded 0 times in those environments. The source of
-     * truth is consolidated into a single server setting.
-     */
-    it("returns the chain ID to sign in the nonce response", async () => {
-      const body = (await nonce()) as unknown as { chainId: number };
-      expect(body.chainId).toBe(loadConfig(testEnv()).chainId);
-    });
-
-    it("issues from the server setting, not the client-sent chain ID", async () => {
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/v1/auth/siwe/nonce",
-        payload: { walletAddress: account.address.toLowerCase(), chainId: 1 },
-      });
-      expect(response.statusCode).toBe(200);
-      expect(response.json().chainId).toBe(loadConfig(testEnv()).chainId);
-    });
-
-    it("issues a nonce without a chain ID", async () => {
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/v1/auth/siwe/nonce",
-        payload: { walletAddress: account.address.toLowerCase() },
-      });
-      expect(response.statusCode).toBe(200);
-    });
-
-    it("rejects a message for another chain ID", async () => {
-      const { nonce: value, statement } = await nonce();
-      const text = message({ nonce: value, statement, chainId: 1 });
-      const signature = await account.signMessage({ message: text });
-
-      const response = await verify({ message: text, signature });
-      expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe("SIWE_CHAIN_MISMATCH");
-    });
-
-    it("rejects an expired message", async () => {
-      const { nonce: value, statement } = await nonce();
-      const text = message({
-        nonce: value,
-        statement,
-        issuedAt: new Date(Date.now() - 7200_000),
-        expirationTime: new Date(Date.now() - 3600_000),
-      });
-      const signature = await account.signMessage({ message: text });
-
-      const response = await verify({ message: text, signature });
-      expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe("SIWE_MESSAGE_EXPIRED");
-    });
-
-    it("rejects a string that is not SIWE format", async () => {
-      const response = await verify({ message: "hello", signature: `0x${"11".repeat(65)}` });
-      expect(response.statusCode).toBe(401);
-    });
-
-    it("rejects a signature over another address's nonce", async () => {
-      const issued = await nonce(other.address);
-      const text = message({ nonce: issued.nonce, statement: issued.statement });
-      const signature = await account.signMessage({ message: text });
-
-      const response = await verify({ message: text, signature });
-      expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe("SIWE_NONCE_ALREADY_USED");
-    });
+    expect((await session(token)).json().authenticated).toBe(false);
   });
 
-  describe("session lookup", () => {
-    it("returns authenticated=false without authentication", async () => {
-      const response = await app.inject({ method: "GET", url: "/api/v1/auth/session" });
-      expect(response.statusCode).toBe(200);
-      expect(response.json().authenticated).toBe(false);
-    });
+  it("does not authenticate a forged token", async () => {
+    expect((await session("forged-token-value")).json().authenticated).toBe(false);
+  });
+
+  it("returns authenticated=false without authentication", async () => {
+    const response = await app.inject({ method: "GET", url: "/api/v1/auth/session" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().authenticated).toBe(false);
+  });
+
+  it("gives a person their roles and tenant, and names no wallet", async () => {
+    const body = (await session(await signIn(app, fx.operatorA))).json();
+    expect(body.authenticated).toBe(true);
+    expect(body.tenantId).toBe(fx.tenantA);
+    expect(body.subjectId).toBe(fx.operatorSubjectA);
+    expect(body.assuranceLevel).toBe("high_assurance");
+    expect(body.firstFactor).toBe("email_code");
+    expect(body.roleBindings.map((b: { role: string }) => b.role)).toContain("mpc_operator");
+    // The wallet a SIWE session signed with was the only reason for these fields (WP7).
+    expect(body).not.toHaveProperty("walletAddress");
+    expect(body).not.toHaveProperty("chainId");
+  });
+
+  it("gives a first-factor-only session the narrow view without wallet fields either", async () => {
+    const token = await issueTestSession(fx.appSql, fx.tenantA, fx.operatorSubjectA, { firstFactor: "email_code" });
+    const body = (await session(token)).json();
+    expect(body).toMatchObject({ authenticated: true, aal: "aal1", roleBindings: [] });
+    expect(body).not.toHaveProperty("walletAddress");
+    expect(body).not.toHaveProperty("chainId");
   });
 });
 
-describeDb("authentication bypass defense (R1)", () => {
+/**
+ * Wallet sign-in is gone (D3, WP7): the SIWE routes do not exist, and a wallet key signs nobody in.
+ * What remains of a wallet is a signing key (`wallet-binding.test.ts`, `signing-wallets.test.ts`).
+ */
+describeDb("wallet sign-in removed", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
+  const key = privateKeyToAccount(`0x${"11".repeat(32)}`);
 
   beforeAll(async () => {
     fx = await setupFixture();
@@ -369,6 +89,24 @@ describeDb("authentication bypass defense (R1)", () => {
   afterAll(async () => {
     await app.close();
     await fx.close();
+  });
+
+  it.each([
+    ["POST", "/api/v1/auth/siwe/nonce", { walletAddress: key.address.toLowerCase(), chainId: 31337 }],
+    ["POST", "/api/v1/auth/siwe/verify", { message: "localhost:3000 wants you to sign in", signature: "0x00" }],
+    ["GET", "/api/v1/auth/siwe/nonce", undefined],
+  ] as const)("answers %s %s with 404 and issues nothing", async (method, url, payload) => {
+    const before = await fx.sql<{ count: number }[]>`SELECT count(*)::int AS count FROM core.sessions`;
+    const response = await app.inject({ method, url, ...(payload ? { payload } : {}) });
+    expect(response.statusCode).toBe(404);
+    expect(response.body).not.toContain("sessionToken");
+    const after = await fx.sql<{ count: number }[]>`SELECT count(*)::int AS count FROM core.sessions`;
+    expect(after[0]!.count).toBe(before[0]!.count);
+  });
+
+  it("keeps no nonce table to fill", async () => {
+    const [row] = await fx.sql<{ exists: boolean }[]>`SELECT to_regclass('core.siwe_nonces') IS NOT NULL AS exists`;
+    expect(row!.exists).toBe(false);
   });
 
   it("does not authenticate a wallet address placed in the header", async () => {
@@ -376,17 +114,14 @@ describeDb("authentication bypass defense (R1)", () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/projects",
-      headers: { authorization: `Bearer ${fx.operatorA.address}` },
+      headers: bearer(fx.operatorA.address),
     });
     expect(response.statusCode).toBe(401);
   });
 
   /**
-   * Production configuration.
-   *
-   * `OBJECT_STORE=memory` is rejected in production — raw evidence would vanish on every
-   * restart. What this checks is the authentication path, so the store is filled with valid
-   * values. Only the client is created; no network is used.
+   * Production configuration. `OBJECT_STORE=memory` is rejected in production, so the store is
+   * filled with valid values; only the client is created, no network is used.
    */
   const productionEnv = () =>
     testEnv({
@@ -394,23 +129,174 @@ describeDb("authentication bypass defense (R1)", () => {
       OBJECT_STORE: "s3",
       OBJECT_BUCKET: "test-bucket",
       OBJECT_REGION: "us-east-1",
+      WEB_ORIGIN: "https://registry.example.com",
+      WEBAUTHN_RP_ID: "registry.example.com",
+      WEBAUTHN_ORIGIN: "https://registry.example.com",
     });
 
-  it("starts normally in production — no dangerous switch exists", async () => {
+  it("accepts account sessions in production", async () => {
     const app2 = await buildServer(loadConfig(productionEnv()), fx.appSql);
-    expect(app2).toBeTruthy();
+    const token = await signIn(app2, fx.operatorA);
+    const response = await app2.inject({ method: "GET", url: "/api/v1/auth/session", headers: bearer(token) });
+    expect(response.json()).toMatchObject({ authenticated: true, firstFactor: "email_code", aal: "aal3" });
     await app2.close();
   });
 
-  it("accepts tokens issued in production", async () => {
-    const app2 = await buildServer(loadConfig(productionEnv()), fx.appSql);
-    const token = await signIn(app2, fx.operatorA);
-    const response = await app2.inject({
-      method: "GET",
-      url: "/api/v1/auth/session",
-      headers: { authorization: `Bearer ${token}` },
+  it("refuses to start a deployment that still asks for wallet sign-in", () => {
+    expect(() => loadConfig({ ...productionEnv(), LEGACY_WALLET_LOGIN: "1" })).toThrow(/LEGACY_WALLET_LOGIN/);
+    expect(() => loadConfig(testEnv({ LEGACY_WALLET_LOGIN: "1" }))).toThrow(/wallet sign-in was removed/);
+  });
+});
+
+/**
+ * `GET /api/v1/auth/sessions`, `POST /api/v1/auth/sessions/{id}/revocation` (0126): a person sees
+ * and ends only their own sessions.
+ */
+describeDb("own sessions", () => {
+  let fx: TestFixture;
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    fx = await setupFixture();
+    app = await buildServer(loadConfig(testEnv()), fx.appSql);
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await fx.close();
+  });
+
+  const list = (token: string) =>
+    app.inject({ method: "GET", url: "/api/v1/auth/sessions", headers: bearer(token) });
+  const revoke = (token: string, id: string) =>
+    app.inject({ method: "POST", url: `/api/v1/auth/sessions/${id}/revocation`, headers: bearer(token) });
+  const sessionIdOf = async (token: string) => {
+    const [row] = await fx.sql<{ id: string }[]>`SELECT id FROM core.sessions WHERE token_hash = ${hashToken(token)}`;
+    return row!.id;
+  };
+  const authenticated = async (token: string) =>
+    (await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: bearer(token) })).json().authenticated;
+
+  it("lists the caller's live sessions, marks the current one, and carries no token", async () => {
+    const mine = await signIn(app, fx.approverA);
+    const other = await signIn(app, fx.approverA);
+    const ended = await signIn(app, fx.approverA);
+    await app.inject({ method: "POST", url: "/api/v1/auth/logout", headers: bearer(ended) });
+    // Someone else's session in the same tenant never appears.
+    const stranger = await signIn(app, fx.reviewerA);
+
+    const response = await list(mine);
+    expect(response.statusCode).toBe(200);
+    const items = response.json().items as { id: string; current: boolean }[];
+    const ids = items.map((item) => item.id);
+    expect(ids).toContain(await sessionIdOf(mine));
+    expect(ids).toContain(await sessionIdOf(other));
+    expect(ids).not.toContain(await sessionIdOf(ended));
+    expect(ids).not.toContain(await sessionIdOf(stranger));
+    expect(items.filter((item) => item.current).map((item) => item.id)).toEqual([await sessionIdOf(mine)]);
+    expect(items.find((item) => item.current)).toMatchObject({
+      firstFactor: "email_code",
+      secondFactor: "passkey",
+      createdAt: expect.any(String),
+      expiresAt: expect.any(String),
     });
-    expect(response.json().authenticated).toBe(true);
-    await app2.close();
+    for (const secret of [mine, other, hashToken(mine), hashToken(other)]) {
+      expect(response.body).not.toContain(secret);
+    }
+  });
+
+  it("ends another session of the caller, records it, and answers a second time without change", async () => {
+    const mine = await signIn(app, fx.auditorA);
+    const other = await signIn(app, fx.auditorA);
+    const otherId = await sessionIdOf(other);
+
+    const first = await revoke(mine, otherId);
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ id: otherId, revoked: true, current: false });
+    expect(await authenticated(other)).toBe(false);
+    expect(await authenticated(mine)).toBe(true);
+    const [row] = await fx.sql<{ revoked_reason: string }[]>`SELECT revoked_reason FROM core.sessions WHERE id = ${otherId}`;
+    expect(row!.revoked_reason).toBe("revoked_by_holder");
+    const audit = await fx.sql`
+      SELECT 1 FROM audit.events WHERE command = 'auth.session.revoked' AND resource_id = ${otherId}
+    `;
+    expect(audit).toHaveLength(1);
+
+    const again = await revoke(mine, otherId);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ id: otherId, revoked: false });
+  });
+
+  it("can end the caller's own session — a sign-out", async () => {
+    const mine = await signIn(app, fx.auditorA);
+    const response = await revoke(mine, await sessionIdOf(mine));
+    expect(response.json()).toMatchObject({ revoked: true, current: true });
+    expect(await authenticated(mine)).toBe(false);
+  });
+
+  it("knows its own session however the id is spelt, and records it so", async () => {
+    const mine = await signIn(app, fx.auditorA);
+    const id = await sessionIdOf(mine);
+    const response = await revoke(mine, id.toUpperCase());
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id, revoked: true, current: true });
+    const [audit] = await fx.sql<{ detail: { current: boolean } }[]>`
+      SELECT detail FROM audit.events WHERE command = 'auth.session.revoked' AND resource_id = ${id}
+    `;
+    expect(audit!.detail.current).toBe(true);
+  });
+
+  it("cannot end another person's session, in this tenant or another, and says nothing about it", async () => {
+    const mine = await signIn(app, fx.disclosureApproverA);
+    const neighbour = await signIn(app, fx.stewardA);
+    const foreign = await signIn(app, fx.operatorB);
+    const unknown = "00000000-0000-4000-8000-000000000000";
+
+    const answers = [];
+    for (const target of [await sessionIdOf(neighbour), await sessionIdOf(foreign), unknown]) {
+      const response = await revoke(mine, target);
+      expect(response.statusCode, target).toBe(404);
+      answers.push(response.json().code);
+    }
+    // One answer for "someone else's" and "no such session".
+    expect(new Set(answers).size).toBe(1);
+    expect(await authenticated(neighbour)).toBe(true);
+    expect(await authenticated(foreign)).toBe(true);
+    // Not an id at all: refused before any lookup, as on every route.
+    expect((await revoke(mine, "not-a-session")).json().code).toBe("PATH_PARAM_INVALID");
+  });
+
+  it("needs a second factor, and is refused to a service token and to nobody", async () => {
+    const firstFactorOnly = await issueTestSession(fx.appSql, fx.tenantA, fx.operatorSubjectA, { firstFactor: "email_code" });
+    const target = await sessionIdOf(await signIn(app, fx.operatorA));
+    expect((await list(firstFactorOnly)).json().code).toBe("MFA_REQUIRED");
+    expect((await revoke(firstFactorOnly, target)).json().code).toBe("MFA_REQUIRED");
+
+    const recovering = await issueTestSession(fx.appSql, fx.tenantA, fx.operatorSubjectA, {
+      firstFactor: "email_code",
+      secondFactor: "recovery_code",
+    });
+    expect((await revoke(recovering, target)).statusCode).toBe(403);
+
+    expect((await list(fx.scanServiceToken)).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/api/v1/auth/sessions" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: `/api/v1/auth/sessions/${target}/revocation` })).statusCode).toBe(401);
+  });
+
+  it("refuses at the database a caller session from another tenant", async () => {
+    const foreign = await sessionIdOf(await signIn(app, fx.operatorB));
+    const target = await sessionIdOf(await signIn(app, fx.operatorA));
+    await expect(
+      fx.appSql.begin(async (tx) => {
+        await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+        return tx`SELECT core.revoke_own_session(${foreign}, ${target})`;
+      }),
+    ).rejects.toThrow(/MFA_SESSION_INVALID/);
+    await expect(
+      fx.appSql.begin(async (tx) => {
+        await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+        return tx`SELECT * FROM core.list_own_sessions(${foreign})`;
+      }),
+    ).rejects.toThrow(/MFA_SESSION_INVALID/);
   });
 });

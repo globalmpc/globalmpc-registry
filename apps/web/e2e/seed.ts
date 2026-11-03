@@ -1,13 +1,18 @@
+import { execFileSync } from "node:child_process";
+import * as path from "node:path";
 import postgres from "postgres";
 import { privateKeyToAccount } from "viem/accounts";
 import { runMigrations } from "@mpc/db";
 import { CATALOG_FIXTURE_KEYS } from "./catalog-fixtures";
+import { cosePublicKey, DEMO_PEOPLE, demoEmail, demoPasskey } from "./demo-people";
+import { e2eScanServiceToken } from "./scan-service-token";
 
 /**
  * Fixed seed for E2E.
  *
- * The web's `DEMO_ACCOUNTS` use fixed addresses, so the seed produces the same values.
- * Random values would make the account cards on screen diverge from the DB.
+ * The demo people (`demo-people.ts`) are accounts: an email address, a passkey and a wallet that
+ * only signs. Their keys come from the run (`playwright.config.ts`), so the seed derives the same
+ * addresses and public keys the browser side holds.
  *
  * The schema is recreated on every run — E2E must not depend on leftover data from a
  * previous run.
@@ -31,13 +36,13 @@ export const E2E_ISSUER_AUTHORITY_ID = "cccccccc-0000-0000-0000-000000000006";
  * Demo account addresses are derived from keys supplied at run time.
  *
  * **Keys are not kept in the repository.** If they were, anyone who knows them could
- * sign in with that role on a deployed address. `playwright.config.ts` generates them
- * fresh on every run and passes them as `E2E_DEMO_ACCOUNT_KEYS`; the same value also goes
- * to the web as `NEXT_PUBLIC_DEMO_ACCOUNT_KEYS` — so the account cards on screen and this
- * seed see the same keys.
+ * sign with that role's key on a deployed address. `playwright.config.ts` generates them
+ * fresh on every run and passes them as `E2E_DEMO_ACCOUNT_KEYS`; the specs' wallet
+ * (`e2e/wallet.ts`) signs with the same keys, so the signatures it makes recover to the
+ * addresses bound here.
  *
- * Addresses are not hardcoded for the same reason. If they diverge from the keys, sign-in
- * succeeds on screen but no role is attached — a mismatch whose cause is hard to find.
+ * Addresses are not hardcoded for the same reason. If they diverge from the keys, a signature
+ * is refused as coming from an unbound wallet — a mismatch whose cause is hard to find.
  */
 const DEMO_KEYS: Readonly<Record<string, string>> = JSON.parse(
   process.env["E2E_DEMO_ACCOUNT_KEYS"] ?? "{}",
@@ -62,8 +67,7 @@ export const OPERATOR_C = addressOfLabel("Operator C");
 export const STEWARD_A = addressOfLabel("Steward A");
 export const APPROVER_A = addressOfLabel("Approver A");
 export const REVIEWER_A = addressOfLabel("Reviewer A");
-/** Scan service. A system identity, not a person. */
-export const SCAN_SERVICE = addressOfLabel("Scan Service");
+/** Scan service subject. A service, not a person: no wallet, only a token (`scan-service.ts`). */
 export const PROPOSER_A = addressOfLabel("Proposer A");
 export const VOTER_A = addressOfLabel("Voter A");
 /** Publishes registry drafts. A different person from the operator who drafts (02 §2.8). */
@@ -278,9 +282,6 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       { subject: "aaaaaaaa-0000-0000-0000-000000000004", wallet: STEWARD_A, label: "Steward A", role: "data_steward", assurance: "identity_bound" },
       { subject: "aaaaaaaa-0000-0000-0000-000000000005", wallet: APPROVER_A, label: "Approver A", role: "gate_approver", assurance: "high_assurance" },
       { subject: E2E_REVIEWER_SUBJECT, wallet: REVIEWER_A, label: "Reviewer A", role: "reviewer_cp_qp", assurance: "high_assurance" },
-      // Scan service. Holds only `upload.scan_result` — kept separate from human roles so
-      // the person who uploads a file cannot pass their own file.
-      { subject: "aaaaaaaa-0000-0000-0000-000000000007", wallet: SCAN_SERVICE, label: "Scan Service", role: "scan_service", assurance: "high_assurance" },
       { subject: "aaaaaaaa-0000-0000-0000-000000000008", wallet: PROPOSER_A, label: "Proposer A", role: "protocol_proposer", assurance: "identity_bound" },
       // Voting rights come from holdings, not from identity (02 §2.3).
       { subject: "aaaaaaaa-0000-0000-0000-000000000009", wallet: VOTER_A, label: "Voter A", role: "protocol_voter", assurance: "wallet_only" },
@@ -306,6 +307,62 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
         )
       `;
     }
+
+    // Identity assurance is the subject's (0108); a bind states it. Every wallet above was
+    // inserted directly, so give each subject the level of its strongest active wallet, as the
+    // admin bind and the 0108 backfill do.
+    await sql`
+      UPDATE core.subjects s SET assurance_level = w.level
+      FROM (
+        SELECT subject_id, max(assurance_level) AS level FROM core.wallet_identities
+        WHERE subject_id IS NOT NULL AND disabled_at IS NULL GROUP BY subject_id
+      ) w
+      WHERE w.subject_id = s.id
+    `;
+
+    // Operator C is the person `wallet-connect.spec.ts` replaces wallets for, and its
+    // "permission but no data" state must survive that. Replacing an operator-verified wallet
+    // lowers assurance (0130), so Operator C holds the wallet the way a person does since WP5 —
+    // bound by proof, `wallet_only` — and its level is the person's, as an admin sets it.
+    await sql`
+      UPDATE core.wallet_identities SET bound_via = 'proof', assurance_level = 'wallet_only'
+      WHERE wallet_address = ${OPERATOR_C}
+    `;
+    await sql`
+      UPDATE core.subjects SET assurance_level = 'high_assurance' WHERE id = 'cccccccc-1000-0000-0000-000000000002'
+    `;
+
+    // Every demo person signs in as an account (WP7): the address they are mailed a code at and a
+    // passkey as their second factor. Written as the superuser, the way the bootstrap CLI and an
+    // accepted invitation write them — the application role cannot set an account email (0112).
+    // The wallet above stays a signing key only.
+    for (const label of DEMO_PEOPLE) {
+      const wallet = addressOfLabel(label);
+      const [person] = await sql<{ id: string; tenant_id: string }[]>`
+        UPDATE core.subjects SET email = ${demoEmail(label)}
+        WHERE id = (SELECT subject_id FROM core.wallet_identities WHERE wallet_address = ${wallet})
+        RETURNING id, tenant_id
+      `;
+      if (!person) throw new Error(`no seeded subject holds the wallet of "${label}"`);
+      const passkey = demoPasskey(label);
+      await sql`
+        INSERT INTO core.webauthn_credentials (
+          id, tenant_id, subject_id, credential_id, public_key, sign_count, transports, aaguid,
+          user_verified, device_type, backed_up, name
+        ) VALUES (
+          gen_random_uuid(), ${person.tenant_id}, ${person.id}, ${passkey.credentialId},
+          ${cosePublicKey(passkey)}, 0, ${["internal"]}, '00000000-0000-0000-0000-000000000000',
+          true, 'singleDevice', false, 'E2E virtual authenticator'
+        )
+      `;
+    }
+
+    // Scan service. Holds only `upload.scan_result` — kept separate from human roles so the
+    // person who uploads a file cannot pass their own file. Registered by the same step a
+    // deploy runs after migrating (`service-token ensure`, decision D7), which creates the
+    // `scan-worker` service subject and stores only the token's hash. The token is new on every
+    // run, derived from this run's demo keys (`scan-service-token.ts`), and lives a day.
+    registerScanServiceToken(databaseUrl, "tenant-a", e2eScanServiceToken());
 
     // Test-only assurance reviewer approves catalog and stage-rule fixtures independently
     // from Operator A, who proposes them. No application approval path is bypassed.
@@ -405,6 +462,34 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
   } finally {
     await sql.end();
   }
+}
+
+/**
+ * Runs `service-token ensure` as the deployment's migration task does. The token goes in the
+ * child's environment only — never on its command line — and its output (which never contains
+ * the token) is not echoed.
+ */
+function registerScanServiceToken(databaseUrl: string, tenantSlug: string, token: string): void {
+  execFileSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "src/service-token-cli.ts",
+      "ensure",
+      tenantSlug,
+      "scan-worker",
+      "scan_service",
+      "scan_result",
+      "1",
+    ],
+    {
+      // Seed runs as CJS under tsx (see the note below), so __dirname is available.
+      cwd: path.join(__dirname, "..", "..", "api"),
+      env: { ...process.env, DATABASE_URL: databaseUrl, SERVICE_TOKEN: token },
+      stdio: ["ignore", "ignore", "inherit"],
+    },
+  );
 }
 
 // The CLI entry point is in `seed-cli.ts`. Playwright loads this module as CJS, so using
