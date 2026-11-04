@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { normalizeEmail, ROLE_MINIMUM_ASSURANCE, satisfiesAssurance } from "@mpc/api-contract";
 import type { AssuranceLevel } from "@mpc/api-contract";
+import { requireDeploymentOwner } from "./deploy-authority.js";
 import { ROLE_DEPLOY_BOUND } from "./audit.js";
 
 /**
@@ -17,8 +18,8 @@ import { ROLE_DEPLOY_BOUND } from "./audit.js";
  * This function **deletes nothing.** Re-running with the same input leaves existing rows as is
  * and fills only what is missing. It must be safe for the deploy pipeline to call every time.
  *
- * Called with an RLS-bypassing connection (superuser). What it creates is the tenant itself,
- * so a tenant context cannot be established first.
+ * Called by the migration table owner. Resolve/create the global tenant first, then keep
+ * all account operations inside its RLS scope. Global email uniqueness is enforced by the DB.
  *
  * **Email only** (account authentication WP2, WP7). The person signs in by emailed code, then
  * enrols a second factor. Bootstrap binds no wallet: a wallet is a signing key the holder binds
@@ -170,18 +171,19 @@ export async function bootstrapOperator(
 ): Promise<BootstrapResult> {
   const { email } = validate(input);
 
+  await requireDeploymentOwner(sql);
   return sql.begin(async (tx) => {
+    const tenantId = await upsertTenant(tx, input);
+    await tx`SELECT set_config('app.current_tenant', ${tenantId}, true)`;
     if (input.subjectId !== undefined) return initializeLegacyOperator(tx, input, email);
-    // Check the address first. If it already belongs to another tenant, stop before creating the
-    // tenant — rejecting after creation leaves an unused tenant behind.
-    // Locked, so a suspension decided while this runs waits for it (or this waits for that).
+    // Lock visible same-tenant accounts. The global unique email constraint rejects a hidden
+    // other-tenant collision; transaction rollback also removes a newly-created tenant.
     const existingEmail = await tx<{ id: string; tenant_id: string; suspended: boolean; assurance_level: AssuranceLevel }[]>`
       SELECT id, tenant_id, suspended_at IS NOT NULL AS suspended, assurance_level
       FROM core.subjects WHERE email = ${email}
       FOR UPDATE
     `;
 
-    const tenantId = await upsertTenant(tx, input);
     // Serialize first-holder decisions across bootstrap runs without conflicting with the
     // KEY SHARE locks ordinary tenant-owned inserts take for their foreign keys.
     await tx`SELECT id FROM core.tenants WHERE id = ${tenantId} FOR NO KEY UPDATE`;
@@ -236,6 +238,12 @@ export async function bootstrapOperator(
     const window = await openEnrolmentWindow(tx, tenantId, subjectId);
 
     return { tenantId, organizationId, subjectId, created, emailBound, roleGranted, ...window };
+  }).catch((error: unknown) => {
+    if ((error as { code?: string; constraint_name?: string }).code === "23505" &&
+        (error as { constraint_name?: string }).constraint_name === "subjects_email_key") {
+      throw new BootstrapError("This email already belongs to another account in another tenant");
+    }
+    throw error;
   });
 }
 

@@ -181,15 +181,11 @@ it("bootstraps an operator with explicit defaults and emits no personal data", a
   expect(written).not.toContain("wallet");
   expect(s.sql.end).toHaveBeenCalledOnce();
 });
-it("refuses to bootstrap with a role that cannot bypass row-level security", async () => {
-  // Aurora's admin is rds_superuser, not a superuser; without BYPASSRLS the inserts would be
-  // refused, and the cross-tenant wallet check would see no other tenant at all.
+it("delegates ownership validation to tenant-scoped bootstrap without requiring BYPASSRLS", async () => {
   bootstrapEnv();
   s.privileges = { rolsuper: false, rolbypassrls: false };
   await import("../src/bootstrap-cli.js");
-  expect(process.exitCode).toBe(1);
-  expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining("BYPASSRLS"));
-  expect(s.bootstrap).not.toHaveBeenCalled();
+  expect(s.bootstrap).toHaveBeenCalledOnce();
   expect(s.sql.end).toHaveBeenCalledOnce();
 });
 it("bootstraps with a role that has BYPASSRLS but is not a superuser", async () => {

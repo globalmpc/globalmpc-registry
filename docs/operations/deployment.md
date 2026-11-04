@@ -69,8 +69,12 @@ URL or the signer key. Provision each tenant's signing secret under one of those
 migration connection. Both check the connecting role before changing anything and name what
 is missing:
 
-- **bootstrap** needs superuser or `BYPASSRLS`: it writes across tenants and checks sign-in
-  addresses against every tenant.
+- **bootstrap and service-token ensure** require ownership (or an inherited owner role) of
+  `core.tenants`, `core.subjects`, and `core.service_tokens`. Application/worker logins are
+  rejected. Resolve/create the tenant inside the transaction, then set `app.current_tenant`
+  before account/token access. FORCE RLS remains enabled; global UNIQUE constraints reject
+  hidden email/token collisions and roll back all new rows. BYPASSRLS is not required for
+  these deployment steps. Apply migration 0136 before running the updated CLI.
 - **The role that runs the migrations owns the `SECURITY DEFINER` functions**, and it too needs
   superuser or `BYPASSRLS`. Many of them read outside the caller's tenant by design — sign-in
   before a tenant is known, an address or identity that must be free in every tenant, token and
@@ -80,7 +84,10 @@ is missing:
   under an owner that does not bypass RLS they fail with "query would be affected by row-level
   security policy" instead of seeing zero rows and answering "nothing there". Every authenticated
   request, sign-in, invitations, email changes, OIDC and wallet binding would all fail at the first
-  use; nothing blocks the deploy. Give the migration role `BYPASSRLS` (Aurora's `rds_superuser` is not superuser).
+  use. This remains a separate runtime requirement: making bootstrap tenant-scoped does not
+  establish that an Aurora deployment can sign in. Verify the effective function owners and
+  actual sign-in/session resolution before release; Aurora's `rds_superuser` is not PostgreSQL
+  superuser. This change does not grant any role BYPASSRLS or relax these fail-closed functions.
 - **login-roles** needs superuser, or on PostgreSQL 16 or later a role with `CREATEROLE` and
   `BYPASSRLS`, `ADMIN OPTION` on `mpc_app_login`/`mpc_worker_login` (or, for one not created yet,
   on `mpc_app`/`mpc_worker`), and `USAGE WITH GRANT OPTION` on schemas `core`, `chain` and
@@ -440,10 +447,11 @@ pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_S
   `BOOTSTRAP_TENANT_SLUG`: the scan worker reads it too, so it is set explicitly once and both
   read the same value. Set both to the same slug on a new environment and one deploy creates the
   tenant, then registers the token for it.
-- **The connecting role.** The task connects as the cluster admin, and bootstrap refuses a role
-  that is neither superuser nor `BYPASSRLS` (it checks addresses across tenants). Not tested on
-  Aurora's `rds_superuser`: if the first run reports that, give the admin `BYPASSRLS` or run the
-  CLI below over a connection that has it.
+- **The connecting role.** The task connects as the migration table owner. Bootstrap and
+  deploy-time token registration are tested under `NOSUPERUSER NOBYPASSRLS` with FORCE RLS.
+  This is a local PostgreSQL test, not proof of the deployed Aurora role configuration.
+  Existing cross-tenant authentication functions and worker roles have separate requirements
+  described above; successful bootstrap alone does not establish runtime readiness.
 
 **Running it by hand** stays available — locally, under Compose, or when the deploy cannot:
 `pnpm --filter @mpc/api bootstrap` over the migration connection, with the same variables in the
@@ -512,8 +520,9 @@ The scan worker and the CRE workflow authenticate with **service tokens**, not w
 `cre_report`), and reaches only the routes those scopes name; only service roles
 (`scan_service`, `cre_reporter`) are effective through it, and no person session makes those
 roles effective. Only the token's hash is stored; a token lives at most a year. Every change is
-audited as `deploy_bound`. The CLI runs over the migration connection (superuser or
-`BYPASSRLS`, like `bootstrap`):
+audited as `deploy_bound`. `ensure` runs tenant-scoped over the migration table-owner connection.
+The other database commands retain their existing superuser/BYPASSRLS contract; `generate`
+requires no database connection:
 
 ```sh
 pnpm --filter @mpc/api service-token generate                 # a new token on stdout; no database
@@ -1071,3 +1080,18 @@ Jobs retains the `outbox` heartbeat kind for existing metrics and alerts. When u
 existing local stack, remove its old `outbox-worker` container so it does not run beside jobs.
 Update external service-name references to `jobs-worker`. Local Compose remains a demo stack;
 production hostnames and credentials are supplied separately.
+
+### Tenant-scoped bootstrap authority (0136)
+
+| Case | Authority and scope | Outcome |
+| --- | --- | --- |
+| Initial operator / unchanged rerun | Migration table owner; selected tenant, live account state | Create first holder or preserve existing authority |
+| Same email in another tenant | Global unique email constraint; tenant-scoped lookup | Refuse and roll back the newly-created tenant |
+| Legacy subject ID | Exact subject in configured tenant; existing role and assurance | First email only; no role or assurance escalation |
+| Token registration / rerun | Migration table owner; selected tenant and service | Preserve revocation/expiry semantics; global token uniqueness rejects other tenants |
+| Enrolment window | Migration-only EXECUTE ACL, invoker privileges and scoped subject | Missing/wrong-tenant subject refuses before changing context |
+| Application/worker connection | No migration table ownership | Refused before bootstrap or ensure writes |
+
+0136 changes only the bootstrap enrolment function to invoker security with RLS on. Its
+migration-owner-only ACL is preserved. It does not disable RLS, change table ownership, grant
+new runtime privileges, or alter the other cross-tenant SECURITY DEFINER functions.

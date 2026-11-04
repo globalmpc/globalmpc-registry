@@ -6,6 +6,7 @@ import {
   SERVICE_SCOPES,
   type ServiceScope,
 } from "@mpc/api-contract";
+import { requireDeploymentOwner } from "./deploy-authority.js";
 import { ROLE_DEPLOY_BOUND } from "./audit.js";
 import { SERVICE_TOKEN_PREFIX, generateServiceToken, hashToken } from "./plugins/session-token.js";
 
@@ -330,7 +331,9 @@ export async function ensureServiceToken(
   assertServiceRole(input.role);
   const hash = hashToken(input.token);
 
-  return sql.begin(async (tx) => {
+  await requireDeploymentOwner(sql);
+  return sql.begin(async (tx): Promise<EnsuredServiceToken> => {
+    await tx`SELECT set_config('app.current_tenant', ${input.tenantId}, true)`;
     // Two deploys running the step at once would otherwise both see "not registered".
     await tx`SELECT pg_advisory_xact_lock(hashtext(${`service-token-ensure:${input.tenantId}:${input.label}`}))`;
 
@@ -451,6 +454,12 @@ export async function ensureServiceToken(
       retired: retired.map((row) => ({ tokenId: row.id, expiresAt: row.expires_at.toISOString() })),
       renewalDue: input.ttlSeconds <= ENSURE_RENEWAL_NOTICE_SECONDS,
     };
+  }).catch((error: unknown) => {
+    if ((error as { code?: string; constraint_name?: string }).code === "23505" &&
+        (error as { constraint_name?: string }).constraint_name === "service_tokens_token_hash_key") {
+      throw new ServiceTokenError("this token is registered for another service; generate a new one");
+    }
+    throw error;
   });
 }
 
