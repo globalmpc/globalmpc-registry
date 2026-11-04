@@ -1,6 +1,5 @@
 import postgres from "postgres";
 import { resolveSecret } from "@mpc/config";
-import { readConnectingRole, rlsBypassProblem } from "@mpc/db";
 import { bootstrapOperator, BootstrapError } from "./bootstrap.js";
 import type { BootstrapInput } from "./bootstrap.js";
 
@@ -15,9 +14,8 @@ import type { BootstrapInput } from "./bootstrap.js";
  * first email, preserving identity and existing authority. It never grants roles or upgrades
  * assurance, and an unchanged subject/email rerun is a no-op. A refusal exits 1, stopping deploy.
  *
- * **Connects with an RLS-bypassing connection.** What it creates is the tenant itself, so a
- * tenant context cannot be established first. Pass the same connection string used to run
- * migrations, not `mpc_app_login`.
+ * Connect as the migration table owner, not an application/worker login. Bootstrap establishes
+ * the tenant scope before account access and does not require BYPASSRLS.
  */
 
 const REQUIRED = [
@@ -45,7 +43,7 @@ if (missing.length > 0) {
       `Missing environment variables — ${missing.join(", ")}`,
       "",
       "Required:",
-      "  DATABASE_URL              same connection used for migrations (bypasses RLS)",
+      "  DATABASE_URL              same table-owner connection used for migrations",
       "  BOOTSTRAP_TENANT_SLUG     tenant identifier. Reused if it already exists",
       "  BOOTSTRAP_TENANT_NAME     tenant display name",
       "  BOOTSTRAP_ORG_NAME        organization legal name",
@@ -90,12 +88,6 @@ const input: BootstrapInput = {
 const sql = postgres(databaseUrl, { onnotice: () => {} });
 
 try {
-  // The address check below must see other tenants' rows too. A role that cannot bypass RLS
-  // (Aurora's `rds_superuser` admin, for one) would fail on the first insert, or worse, pass the
-  // cross-tenant check by seeing nothing.
-  const problem = rlsBypassProblem(await readConnectingRole(sql));
-  if (problem) throw new BootstrapError(problem);
-
   const result = await bootstrapOperator(sql, input);
   // The email address is personal data, so only whether one was bound is printed.
   process.stdout.write(

@@ -24,7 +24,6 @@ const CROSS_TENANT = [
   "core.decide_email_change(uuid,uuid,boolean,text,integer,uuid,bytea,text)",
   "core.complete_email_change(text,bytea,text,text)",
   "core.purge_email_auth_records()",
-  "core.open_bootstrap_enrolment_window(uuid)",
   "core.start_oidc_transaction(uuid,core.oidc_provider,core.oidc_purpose,text,text,text,bytea,text,uuid,text,text,text)",
   "core.claim_oidc_transaction(text,text,core.oidc_provider,uuid)",
   "core.complete_oidc_sign_in(uuid,text,text,uuid,text,integer)",

@@ -95,8 +95,12 @@ const sql = postgres(
 const print = (record: object) => process.stdout.write(`${JSON.stringify(record)}\n`);
 
 try {
-  const problem = rlsBypassProblem(await readConnectingRole(sql));
-  if (problem) throw new ServiceTokenError(problem);
+  // Deploy-time ensure establishes tenant scope and verifies table ownership itself.
+  // Other operator commands retain their existing cross-tenant connection contract.
+  if (command !== "ensure") {
+    const problem = rlsBypassProblem(await readConnectingRole(sql));
+    if (problem) throw new ServiceTokenError(problem);
+  }
 
   switch (command) {
     case "create-subject": {
