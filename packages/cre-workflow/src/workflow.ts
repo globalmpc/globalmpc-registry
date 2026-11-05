@@ -3,7 +3,7 @@ import {
   type CronPayload, type NodeRuntime, type Runtime,
 } from "@chainlink/cre-sdk";
 import {
-  ANVIL_SELECTOR, ERRORS, HTTP_TIMEOUT, MAX_REPORT_BYTES, WorkflowError, canonicalReport, encodeReport, executionKey,
+  chainSelector, ERRORS, HTTP_TIMEOUT, MAX_REPORT_BYTES, WorkflowError, canonicalReport, encodeReport, executionKey,
   goJson, redact, reportRequestBody, scheduledTime, validateConfig, validateReport, type Config,
 } from "./protocol.js";
 
@@ -76,7 +76,7 @@ export function onCron(runtime: Runtime<Config>, payload: CronPayload | undefine
   }
   let result;
   try {
-    result = new cre.capabilities.EVMClient(ANVIL_SELECTOR).writeReport(runtime, {
+    result = new cre.capabilities.EVMClient(chainSelector(config)).writeReport(runtime, {
       receiver: config.receiver, report: signed, gasConfig: { gasLimit: config.gasLimit },
     }).result();
   } catch {

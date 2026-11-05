@@ -105,6 +105,7 @@ test.describe("evidence ledger complete journey", () => {
     // Catalog exclusions use the existing authorized, versioned confirmation UI.
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}`);
+    await page.getByText("Project details, parties and history", { exact: true }).click();
     const matrix = page.getByTestId("fact-matrix");
     await matrix.getByText("Record a matrix row", { exact: true }).click();
     await matrix.getByLabel("Item", { exact: true }).selectOption(licence);
@@ -115,6 +116,7 @@ test.describe("evidence ledger complete journey", () => {
     await page.goto(`/w/projects/${projectId}/data-room`);
     await expect(page.getByTestId(`ledger-status-${licence}`)).toHaveText("Not applicable");
     await page.goto(`/w/projects/${projectId}`);
+    await page.getByText("Project details, parties and history", { exact: true }).click();
     await matrix.getByText("Record a matrix row", { exact: true }).click();
     await matrix.getByLabel("Item", { exact: true }).selectOption(licence);
     await matrix.getByLabel("Status", { exact: true }).selectOption("pending");

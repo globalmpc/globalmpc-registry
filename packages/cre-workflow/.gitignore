@@ -3,3 +3,5 @@
 !*.example
 dist/
 *.local.json
+
+config.dev.json

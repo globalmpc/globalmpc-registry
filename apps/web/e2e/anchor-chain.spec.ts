@@ -41,7 +41,8 @@ test.describe("chain confirmation", () => {
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
     await page.getByRole("button", { name: "Register" }).click();
-    await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "For the chain confirmation check", exact: true })).toBeVisible();
+  await expect(page.locator(".page-head").first()).toContainText(projectKey);
 
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;
 

@@ -72,8 +72,10 @@ test.describe("project registration", () => {
     await page.getByRole("button", { name: "Register" }).click();
 
     await expect(page).toHaveURL(/\/w\/projects\/[0-9a-f-]{36}$/);
-    await expect(page.getByRole("heading", { name: key })).toBeVisible();
-    await expect(page.getByText("copper, gold")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Created by E2E", exact: true })).toBeVisible();
+    await expect(page.locator(".page-head").first()).toContainText(key);
+    await page.getByText("Project details, parties and history", { exact: true }).click();
+    await expect(page.getByText("copper, gold", { exact: true })).toBeVisible();
 
     // The lifecycle starts at draft. Registration is not approval.
     await expect(page.getByText("draft")).toBeVisible();
@@ -188,6 +190,7 @@ test.describe("accessibility", () => {
     await expect(page).toHaveURL(/\/w\/projects$/);
     await page.getByRole("link", { name: "TENANT-B-ONLY" }).click();
 
+    await page.getByText("Project details, parties and history", { exact: true }).click();
     // The lifecycle badge has both a glyph and text (§11.8).
     const badge = page.locator(".badge").first();
     await expect(badge).toBeVisible();
@@ -259,6 +262,7 @@ test.describe("language (OD-30) — English only", () => {
     await expect(page).toHaveURL(/\/w\/projects$/);
     await page.getByRole("link", { name: "TENANT-B-ONLY" }).click();
 
+    await page.getByText("Project details, parties and history", { exact: true }).click();
     await expect(page.locator(".badge").first()).toContainText(/draft/i);
   });
 });

@@ -23,7 +23,8 @@ test("Data Room distinguishes scanner downtime from a missing worker and clears 
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
     await page.getByRole("button", { name: "Register" }).click();
-    await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Scanner availability fixture", exact: true })).toBeVisible();
+  await expect(page.locator(".page-head").first()).toContainText(projectKey);
     const projectId = new URL(page.url()).pathname.split("/").pop();
     expect(projectId).toBeTruthy();
 

@@ -2,3 +2,8 @@ local:
   rpcs:
     - chain-name: anvil-devnet
       url: http://127.0.0.1:8545
+
+dev:
+  rpcs:
+    - chain-name: binance_smart_chain-testnet-opbnb-1
+      url: https://opbnb-testnet-rpc.bnbchain.org

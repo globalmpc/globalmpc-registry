@@ -67,10 +67,20 @@ function reasonsText(reasons: string[]) {
 export function EvidenceLedger({
   summary,
   title,
+  browsable = false,
 }: {
   readonly summary: LedgerSummary;
   readonly title: string;
+  readonly browsable?: boolean;
 }) {
+  const ItemContainer = browsable ? "details" : "div";
+  const ItemHeading = browsable ? "summary" : "div";
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("all");
+  const visibleItems = summary.items.filter((item) =>
+    (!browsable || status === "all" || item.status === status) &&
+    (!browsable || `${item.displayName} ${item.claimType}`.toLowerCase().includes(query.trim().toLowerCase())),
+  );
   const reviewed = summary.items.filter(
     (item) => item.status === "reviewed",
   ).length;
@@ -95,12 +105,28 @@ export function EvidenceLedger({
           {reviewed} / {summary.items.length} items
         </dd>
       </dl>
+      {browsable ? (
+        <div className="evidence-browser-controls">
+          <label>Search evidence items
+            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name or claim type" />
+          </label>
+          <label>Evidence status
+            <select value={status} onChange={(event) => setStatus(event.target.value)}>
+              <option value="all">All statuses</option>
+              {Object.entries(STATUS_LABELS).filter(([value]) => summary.items.some((item) => item.status === value)).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <p role="status">Showing {visibleItems.length} of {summary.items.length} items</p>
+        </div>
+      ) : null}
       {summary.items.length === 0 ? (
         <p>No catalog items assessed.</p>
       ) : (
-        <ul>
-          {summary.items.map((item) => (
+        <ul className={browsable ? "evidence-browser-list" : undefined}>
+          {visibleItems.map((item) => (
             <li key={`${item.claimType}-${item.catalogVersion ?? "legacy"}`}>
+              <ItemContainer className={browsable ? "evidence-browser-item" : undefined}>
+              <ItemHeading>
               <strong>
                 {item.displayName}
                 {item.catalogVersion
@@ -111,6 +137,7 @@ export function EvidenceLedger({
               <span data-testid={`ledger-status-${item.claimType}`}>
                 {statusLabel(item.status)}
               </span>
+              </ItemHeading>
               <p className="meta">Evidence grade: {gradeLabel(item.grade)}</p>
               <p className="meta">
                 Reviewed item scope:{" "}
@@ -151,10 +178,13 @@ export function EvidenceLedger({
                   Limitations: {item.limitations.join("; ")}
                 </p>
               ) : null}
+              </ItemContainer>
             </li>
           ))}
         </ul>
       )}
+      {browsable && summary.items.length > 0 && visibleItems.length === 0 ? <p>No items match these filters. Clear the search or select all statuses.</p> : null}
+      {browsable ? <h3>Stage assessments</h3> : null}
       {summary.stages.map((stage) => (
         <p key={`${stage.gateId}-${stage.ruleSetVersion}`}>
           <strong>{stageLabel(stage.gateId)}</strong>:{" "}
@@ -175,10 +205,12 @@ export function WorkspaceEvidenceLedger({
   token,
   projectId,
   revision = 0,
+  browsable = false,
 }: {
   readonly token: string;
   readonly projectId: string;
   readonly revision?: number;
+  readonly browsable?: boolean;
 }) {
   const [summary, setSummary] = useState<LedgerSummary | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -205,7 +237,7 @@ export function WorkspaceEvidenceLedger({
       </section>
     );
   return summary ? (
-    <EvidenceLedger summary={summary} title="Current evidence assessment" />
+    <EvidenceLedger summary={summary} title="Current evidence assessment" browsable={browsable} />
   ) : (
     <p role="status">Loading evidence assessment…</p>
   );

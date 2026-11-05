@@ -1,3 +1,4 @@
+import { PublicProjectDirectory } from "@/components/PublicProjectDirectory";
 import Link from "next/link";
 import { REQUIRED_BOUNDARY_COPY } from "@mpc/ui";
 import { PUBLIC_NAV } from "@/lib/copy";
@@ -56,11 +57,10 @@ export default function PublicLandingPage() {
     <>
       <section className="hero">
         <div>
-          <h1>Mining Compliance Evidence &amp; Registry Infrastructure</h1>
+          <h1>Explore mining projects</h1>
           <p className="sub">
-            A public record of who reviewed which evidence, under whose authority, with what scope
-            and what limits — and a way to check that the record has not changed since it was
-            published.
+            Browse published projects and their evidence assessments. Open a project to inspect
+            review scope, findings and limitations. No account needed.
           </p>
         </div>
         <Link href="/connect" className="btn-connect">
@@ -68,20 +68,13 @@ export default function PublicLandingPage() {
         </Link>
       </section>
 
-      {/*
-        Put the boundary where it never collapses. Moved to the footer, it goes unread, and an unread
-        warning is not a warning (§11.6).
-      */}
-      <div className="notice" style={{ color: "var(--alert)" }} data-testid="landing-boundaries">
-        <div className="title">What this service does not do</div>
-        <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
-          <li>{REQUIRED_BOUNDARY_COPY.verification}</li>
-          <li>{REQUIRED_BOUNDARY_COPY.readiness}</li>
-          <li>{REQUIRED_BOUNDARY_COPY.sourceStatus}</li>
-          <li>{REQUIRED_BOUNDARY_COPY.proofResult}</li>
-        </ul>
+      <PublicProjectDirectory />
+      <div className="notice" data-testid="landing-boundaries">
+        <p>{REQUIRED_BOUNDARY_COPY.verification} {REQUIRED_BOUNDARY_COPY.readiness}</p>
+        <p className="meta">{REQUIRED_BOUNDARY_COPY.sourceStatus} {REQUIRED_BOUNDARY_COPY.proofResult}</p>
       </div>
-
+      <details className="project-background">
+        <summary>About these records and how to check them</summary>
       <div className="panel" data-testid="landing-separations">
         <h2>Four things this service keeps apart</h2>
         <p className="sub" style={{ marginTop: 0 }}>
@@ -141,6 +134,7 @@ export default function PublicLandingPage() {
           An earlier version stays reachable, marked for what it is.
         </p>
       </div>
+      </details>
     </>
   );
 }

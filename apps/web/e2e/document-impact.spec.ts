@@ -51,7 +51,8 @@ test.describe("document relations", () => {
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
     await page.getByRole("button", { name: "Register" }).click();
-    await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Document relations mine", exact: true })).toBeVisible();
+  await expect(page.locator(".page-head").first()).toContainText(projectKey);
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;
 
     // --- Two documents (data_steward) --------------------------------------

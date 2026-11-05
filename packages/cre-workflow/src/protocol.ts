@@ -4,6 +4,13 @@ import { z } from "zod";
 
 /** Anvil's selector in the official Chainlink chain-selectors registry. */
 export const ANVIL_SELECTOR = 7759470850252068959n;
+/** Official chain-selectors registry: opBNB testnet (5611), not BSC testnet (97). */
+export const OPBNB_TESTNET_SELECTOR = 13274425992935471758n;
+export function chainSelector(config: Pick<Config, "chainId" | "chainName">): bigint {
+  if (config.chainId === "31337" && config.chainName === "anvil-devnet") return ANVIL_SELECTOR;
+  if (config.chainId === "5611" && config.chainName === "binance_smart_chain-testnet-opbnb-1") return OPBNB_TESTNET_SELECTOR;
+  throw new WorkflowError(ERRORS.chain);
+}
 export const MAX_REPORT_BYTES = 16384;
 /** The CRE HTTP capability rejects longer timeouts. */
 export const HTTP_TIMEOUT = "10s";
@@ -18,7 +25,7 @@ export const REPORT_ABI_BYTES = 288;
 export const ERRORS = {
   configTooLarge: "configuration too large",
   configInvalid: "invalid workflow configuration",
-  chain: "only Anvil chain 31337 is supported in this proof of concept",
+  chain: "only configured Anvil (31337) or opBNB testnet (5611) is supported",
   receiver: "invalid receiver",
   ttl: "invalid report TTL",
   gas: "invalid gas limit",
@@ -127,8 +134,8 @@ export function validateConfig(input: unknown): Config {
     || byteLength(config.publicKey) > 200 || loneSurrogate.test(config.schedule) || loneSurrogate.test(config.publicKey)) {
     throw new WorkflowError(ERRORS.configInvalid);
   }
-  // This proof of concept cannot submit to a public chain.
-  if (config.chainName !== "anvil-devnet" || config.chainId !== "31337") throw new WorkflowError(ERRORS.chain);
+  // Exact chain/name pairs prevent selecting a different EVM capability than the report domain.
+  chainSelector(config);
   const receiver = config.receiver.toLowerCase();
   if (!addressPattern.test(config.receiver) || receiver === zeroAddress) throw new WorkflowError(ERRORS.receiver);
   const ttl = unsigned(config.ttlSeconds, 64);

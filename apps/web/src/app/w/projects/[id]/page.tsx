@@ -10,6 +10,8 @@ import {
   type ProjectOverview,
 } from "@/lib/projects-api";
 import { useSession } from "@/lib/session";
+import { WorkspaceEvidenceLedger } from "@/components/EvidenceLedger";
+import { ProjectWorkspaceNav } from "@/components/project/ProjectWorkspaceNav";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { BlackoutNotice } from "@/components/BlackoutNotice";
 import { LifecycleBadge, ReadinessBadge } from "@/components/StatusBadge";
@@ -41,6 +43,7 @@ const REGISTRY_LABEL = { project: "Project Registry", verification: "Verificatio
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { token, session, loading: sessionLoading } = useSession();
+  const [assessmentRevision, setAssessmentRevision] = useState(0);
   const [overview, setOverview] = useState<ProjectOverview | null>(null);
   const [offering, setOffering] = useState<OfferingGateStatus | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -49,6 +52,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   const load = useCallback(() => {
     if (!token) return;
+    // All successful overview mutations share this refresh, including applicability changes.
+    setAssessmentRevision((revision) => revision + 1);
     getProjectOverview(token, id)
       .then((data) => {
         setOverview(data);
@@ -81,8 +86,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     return (
       <div className="page-head">
         <div>
-          <h1>{project?.projectKey ?? "Project"}</h1>
-          <p className="sub">{project?.name ?? ""}</p>
+          <h1>{project?.name ?? "Project"}</h1>
+          <p className="sub">{project ? `${project.projectKey} · ${project.hostCountryIso3} · ${project.minerals.join(", ")}` : ""}</p>
         </div>
         <Link href="/w/projects">← All projects</Link>
       </div>
@@ -301,6 +306,15 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
     return (
       <>
+        <ProjectWorkspaceNav projectId={id} />
+        {actions.includes("readiness.read") ? (
+          <WorkspaceEvidenceLedger key={`${token}:${id}`} token={token} projectId={id} revision={assessmentRevision} browsable />
+        ) : null}
+        {renderReadiness()}
+        {renderOpenGapsLimitationsAndDataAge()}
+        <details className="project-background">
+          <summary>Project details, parties and history</summary>
+          <p className="sub">Identity, factual confirmations, registry records and administrative history.</p>
         {renderIdentity()}
 
         <PartiesPanel
@@ -341,10 +355,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
         {renderRegistries()}
 
-        {renderReadiness()}
-
-        {renderOpenGapsLimitationsAndDataAge()}
-
         <RegistrationRequests
           token={token}
           projectId={id}
@@ -359,42 +369,11 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           canRecord={actions.includes("project.stakeholder.record")}
         />
 
-        <div className="panel">
-          <h2>Actions</h2>
-          <div className="row" style={{ flexWrap: "wrap" }}>
-            <Link href={`/w/projects/${id}/data-room`}>
-              <button>Data Room</button>
-            </Link>
-            <Link href={`/w/projects/${id}/documents`}>
-              <button>Document status</button>
-            </Link>
-            <Link href={`/w/projects/${id}/impacts`}>
-              <button>Documents to recheck</button>
-            </Link>
-            <Link href={`/w/projects/${id}/verification`}>
-              <button>Verification</button>
-            </Link>
-            <Link href={`/w/projects/${id}/readiness`}>
-              <button>Readiness</button>
-            </Link>
-            {/* Gate Decision is a separate screen from readiness (§11.3). On the same screen,
-                      readiness reads as approval. */}
-            <Link href={`/w/projects/${id}/gates/registry_publication`}>
-              <button>Gate decision</button>
-            </Link>
-            <Link href={`/w/projects/${id}/publication`}>
-              <button>Publish</button>
-            </Link>
-          </div>
-          <ul style={{ margin: "14px 0 0", paddingLeft: 18, color: "var(--muted-foreground)" }}>
-            <li>{REQUIRED_BOUNDARY_COPY.readiness}</li>
-            <li>{REQUIRED_BOUNDARY_COPY.verification}</li>
-          </ul>
-        </div>
 
         {offering ? <OfferingPanel offering={offering} /> : null}
 
         {renderRecentActivity()}
+        </details>
 
         <p className="meta">
           Request ID <span className="mono">{project.requestId}</span>

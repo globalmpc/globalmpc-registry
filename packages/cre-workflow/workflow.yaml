@@ -5,3 +5,11 @@ local:
     workflow-path: ./src/main.ts
     config-path: ./config.example.json
     secrets-path: ./secrets.yaml
+
+dev:
+  user-workflow:
+    workflow-name: registry-state-dev
+  workflow-artifacts:
+    workflow-path: ./src/main.ts
+    config-path: ./config.dev.json
+    secrets-path: ./secrets.yaml

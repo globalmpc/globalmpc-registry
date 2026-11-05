@@ -141,6 +141,7 @@ test.describe("accessibility (WCAG 2.2 AA)", () => {
     // Let the sign-in finish before leaving /connect; navigating mid sign-in drops the session.
     await expect(page).toHaveURL(/\/w\/projects$/);
     await page.goto(`/w/projects/${projectId}`);
+    await page.getByText("Project details, parties and history", { exact: true }).click();
     await expect(page.getByTestId("fact-matrix")).toBeVisible();
     await expect(page.getByTestId("stakeholder-history")).not.toContainText("Loading");
     const overview = await analyze(page);

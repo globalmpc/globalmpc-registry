@@ -26,7 +26,7 @@ import { project, type RecordDepth, type RecordView } from "@mpc/ui";
  *
  * Success on 1 does not guarantee 2.
  */
-export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
+export function PublicRecord({ entry, browsableEvidence = false }: { readonly entry: PublicProjection; readonly browsableEvidence?: boolean }) {
   const [proof, setProof] = useState<InclusionProof | null>(null);
   const [depth, setDepth] = useState<RecordDepth>("basic");
 
@@ -54,7 +54,7 @@ export function PublicRecord({ entry }: { readonly entry: PublicProjection }) {
 
   return (
       <>
-        {entry.evidenceLedger ? <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" /> : null}
+        {entry.evidenceLedger ? <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" browsable={browsableEvidence} /> : null}
         {entry.evidenceLedgerCurrent ? <EvidenceLedgerWarnings current={entry.evidenceLedgerCurrent as LedgerCurrent} /> : null}
         <div className="panel">
           <div className="page-head" style={{ marginBottom: 14 }}>
