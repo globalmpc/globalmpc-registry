@@ -1,5 +1,5 @@
 import { responseMeta } from "./common.js";
-import { createCreReportRequest, creReport } from "./cre.js";
+import { createCreReportRequest, creReport, creWorkspace, creDelivery } from "./cre.js";
 import { evidenceLedgerResponse, publicEvidenceLedger, publicEvidenceLedgerCurrent } from "./evidence-ledger.js";
 import { proposeClaimTypeRequest, claimTypeCatalogEntry, claimTypeCatalogQuery, claimTypeCatalogList } from "./resources.js";
 import { z } from "zod";
@@ -1334,6 +1334,18 @@ export const ROUTES: readonly RouteDefinition[] = [
     serviceScope: "cre_report",
     requestSchema: createCreReportRequest,
     responseSchema: creReport,
+  },
+  {
+    method: "get", path: "/api/v1/projects/{projectId}/cre-reports",
+    summary: "Read CRE publication prerequisites and the latest 20 observations",
+    operationId: "getCreWorkspace", public: false, mutation: false, requiresIfMatch: false,
+    action: "cre.report", implemented: true, serviceScope: "cre_report", responseSchema: creWorkspace,
+  },
+  {
+    method: "get", path: "/api/v1/projects/{projectId}/cre-reports/{reportId}/delivery",
+    summary: "Compare a stored report with receiver state on the configured chain",
+    operationId: "getCreDelivery", public: false, mutation: false, requiresIfMatch: false,
+    action: "cre.report", implemented: true, serviceScope: "cre_report", responseSchema: creDelivery,
   },
   ...RESTRICTION_ROUTES,
 

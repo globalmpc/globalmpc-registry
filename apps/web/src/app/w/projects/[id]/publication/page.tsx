@@ -317,6 +317,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
       <div className="page-head">
         <div>
           <h1>Publish</h1>
+          <Link href={`/w/projects/${id}/cre`}>Continue to CRE →</Link>
           <p className="sub">
             Only fields on the allowlist are published. One person drafts, another publishes.
             What is published cannot be taken back.

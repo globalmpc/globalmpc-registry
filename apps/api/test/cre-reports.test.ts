@@ -72,6 +72,47 @@ describeDb("destination-bound CRE report observations", () => {
     payload: { publicKey, chainId: String(loadConfig(testEnv()).chainId), receiver, ttlSeconds: "300", ...payload },
   });
 
+  it("exposes published prerequisites and bounded history only to this project's authorized actors", async () => {
+    await report();
+    const get = (project: string, auth?: string, suffix = "") => app.inject({ method: "GET",
+      url: `/api/v1/projects/${project}/cre-reports${suffix}`, headers: auth ? { authorization: `Bearer ${auth}` } : {} });
+    const response = await get(fx.projectA, token);
+    expect(response.statusCode, response.body).toBe(200);
+    const workspace = response.json();
+    expect(workspace.chainId).toBe(String(loadConfig(testEnv()).chainId));
+    expect(workspace.publication.publicKey).toBe(publicKey);
+    expect(workspace.reports.length).toBeGreaterThan(0);
+    expect(workspace.reports.length).toBeLessThanOrEqual(20);
+    const reportId = workspace.reports[0].id;
+    expect((await get(fx.projectA)).statusCode).toBe(401);
+    expect((await get(fx.projectA, other)).statusCode).toBe(404);
+    expect((await get(fx.otherProjectA, scoped)).statusCode).toBe(403);
+    expect((await get(fx.projectA, other, `/${reportId}/delivery`)).statusCode).toBe(404);
+    expect((await get(fx.otherProjectA, token, `/${reportId}/delivery`)).statusCode).toBe(404);
+    const check = await get(fx.projectA, token, `/${reportId}/delivery`);
+    expect(check.statusCode, check.body).toBe(200);
+    expect(check.json().state).toBe("not_configured");
+    expect((await get(fx.projectA, token, "/not-an-id/delivery")).statusCode).toBe(400);
+  });
+
+  it("accepts PostgreSQL UUIDs without RFC bits on both read routes", async () => {
+    for (const projectId of ["aaaaaaaa-0000-0000-0000-000000000001", "AAAAAAAA-0000-0000-0000-000000000001"]) {
+      for (const suffix of ["", "/aaaaaaaa-0000-0000-0000-000000000002/delivery"]) {
+        const response = await app.inject({ method: "GET",
+          url: `/api/v1/projects/${projectId}/cre-reports${suffix}`,
+          headers: { authorization: `Bearer ${token}` } });
+        // Valid IDs reach tenant-scoped lookup; these absent records are not input errors.
+        expect(response.statusCode, response.body).toBe(404);
+      }
+    }
+    for (const suffix of ["", "/aaaaaaaa-0000-0000-0000-000000000002/delivery"]) {
+      const response = await app.inject({ method: "GET",
+        url: `/api/v1/projects/not-an-id/cre-reports${suffix}`,
+        headers: { authorization: `Bearer ${token}` } });
+      expect(response.statusCode, response.body).toBe(400);
+    }
+  });
+
   it("persists only public ABI fields and fails closed without an approved ledger", async () => {
     const response = await report(); expect(response.statusCode, response.body).toBe(200);
     const body = response.json();

@@ -22,7 +22,9 @@ async function registerSynthetic(page: Page, projectKey: string): Promise<string
     "aaaaaaaa-0000-0000-0000-000000000001",
   );
   await page.getByRole("button", { name: "Register" }).click();
-  await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Synthetic registry screens", exact: true })).toBeVisible();
+  await expect(page.locator(".page-head").first()).toContainText(projectKey);
+  await page.getByText("Project details, parties and history", { exact: true }).click();
   return new URL(page.url()).pathname.split("/").pop() as string;
 }
 
@@ -59,6 +61,7 @@ test.describe("Project Overview", () => {
 
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}`);
+    await page.getByText("Project details, parties and history", { exact: true }).click();
     const matrix = page.getByTestId("fact-matrix");
     await matrix.getByText("Record a matrix row").click();
 
@@ -84,6 +87,7 @@ test.describe("Project Overview", () => {
 
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}`);
+    await page.getByText("Project details, parties and history", { exact: true }).click();
     const parties = page.getByTestId("project-parties");
     await parties.getByText("Submit a party").click();
     await parties.getByRole("combobox", { name: "Party role" }).selectOption("issuer");

@@ -57,7 +57,8 @@ export async function registerSyntheticProject(
     .selectOption("aaaaaaaa-0000-0000-0000-000000000001");
   await page.getByRole("checkbox", { name: "Synthetic test project" }).check();
   await page.getByRole("button", { name: "Register", exact: true }).click();
-  await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
+  await expect(page.getByRole("heading", { name: name, exact: true })).toBeVisible();
+  await expect(page.locator(".page-head").first()).toContainText(projectKey);
   return new URL(page.url()).pathname.split("/").pop()!;
 }
 

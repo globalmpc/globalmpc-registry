@@ -371,3 +371,30 @@ describe("catalog claim and evidence assessment", () => {
     ).toBeNull();
   });
 });
+
+describe("project evidence browser", () => {
+  it("filters rows without changing coverage or stage assessments and preserves signed details", () => {
+    render(<EvidenceLedger title="Project evidence" browsable summary={{ ...summary, items: [...summary.items, { claimType: "survey", displayName: "Site survey", status: "missing", reasons: ["NO_CATALOG_CLAIM"], limitations: [] }] }} />);
+    const item = screen.getByText("Licence").closest("details")!;
+    expect(item.open).toBe(false);
+    fireEvent.click(item.querySelector("summary")!);
+    expect(item.open).toBe(true);
+    expect(screen.getByText("Scope excludes site inspection")).toBeDefined();
+    fireEvent.change(screen.getByLabelText("Evidence status"), { target: { value: "missing" } });
+    expect(screen.queryByText("Licence")).toBeNull();
+    expect(screen.getByText("Site survey")).toBeDefined();
+    expect(screen.getByText("1 / 2 items")).toBeDefined();
+    expect(screen.getByText(/Reviewed 1 \/ 2 required items/)).toBeDefined();
+    fireEvent.change(screen.getByLabelText("Search evidence items"), { target: { value: " LICENCE " } });
+    expect(screen.getByText(/No items match/)).toBeDefined();
+    fireEvent.change(screen.getByLabelText("Evidence status"), { target: { value: "all" } });
+    expect(screen.getByText("Licence")).toBeDefined();
+    expect(screen.queryByText("Site survey")).toBeNull();
+  });
+  it("keeps historical displays expanded without interactive filters", () => {
+    const { container } = render(<EvidenceLedger title="Published evidence" summary={summary} />);
+    expect(container.querySelector("details")).toBeNull();
+    expect(screen.queryByLabelText("Search evidence items")).toBeNull();
+    expect(screen.getByText("Scope excludes site inspection")).toBeDefined();
+  });
+});

@@ -28,6 +28,8 @@ export default function PublicProjectPage({
   useEffect(() => {
     let live = true;
     setBusy(true);
+    setEntry(null);
+    setError(null);
     void getPublicRegistryEntry("project", decodeURIComponent(publicKey))
       .then((found) => {
         if (live) setEntry(found);
@@ -43,11 +45,12 @@ export default function PublicProjectPage({
     };
   }, [publicKey]);
 
+  const projectName = typeof entry?.projectName === "string" ? entry.projectName : decodeURIComponent(publicKey);
   return (
     <>
       <div className="page-head">
         <div>
-          <h1 className="mono">{decodeURIComponent(publicKey)}</h1>
+          <h1>{projectName}</h1>
           <p className="sub">
             Project Registry record. This page is the citable address for this record — the same URL
             keeps resolving after a correction or a revocation, and says which one happened.
@@ -60,7 +63,7 @@ export default function PublicProjectPage({
 
       {busy && !entry ? <p className="sub">Loading…</p> : null}
 
-      {entry ? <PublicRecord entry={entry} /> : null}
+      {entry ? <PublicRecord key={entry.entryVersionId} entry={entry} browsableEvidence /> : null}
     </>
   );
 }

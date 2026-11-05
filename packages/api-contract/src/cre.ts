@@ -21,3 +21,16 @@ export const creReport = z.object({
   sequence: positiveUint64,
   status: z.number().int().min(1).max(5).describe("1=current observation, 2=needs re-review, 3=revoked, 4=reserved, 5=unavailable; not a readiness approval"),
 }).strict();
+
+export const creWorkspace = z.object({
+  chainId: createCreReportRequest.shape.chainId,
+  rpcConfigured: z.boolean(),
+  publication: z.object({ publicKey: z.string(), version: z.number(), status: z.string() }).nullable(),
+  reports: z.array(z.object({ id: z.string().uuid(), report: creReport })),
+});
+export const creDelivery = z.object({
+  state: z.enum(["matched", "different", "empty", "unavailable", "not_configured"]),
+  checkedAt: z.string().nullable(),
+  report: creReport.nullable(),
+  fresh: z.boolean().nullable(),
+});

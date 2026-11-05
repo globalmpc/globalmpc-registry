@@ -1,13 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { keccak256, toBytes } from "viem";
+import { inspectCreDelivery } from "../services/cre-delivery.js";
 import { z } from "zod";
 import { withTenant } from "@mpc/db";
 import { createCreReportRequest, creReport } from "@mpc/api-contract";
 import type { AppConfig } from "../config.js";
 import { assertAuthorized, projectResource, sessionFacts } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
-import { requireMutationContext } from "./shared.js";
+import { requireMutationContext, requireReadContext } from "./shared.js";
 import { parseBody } from "./registry-drafts.js";
 import { badRequest, notFound, unavailable } from "../errors.js";
 import { recordAudit } from "../audit.js";
@@ -15,6 +16,37 @@ import { lockEvidenceLedgerPublicationInputs } from "../services/registry-public
 
 /** An authenticated observation of approved public content, never an approval command. */
 export async function registerCreReportRoutes(app: FastifyInstance, sql: postgres.Sql, config: AppConfig): Promise<void> {
+  app.get<{ Params: { projectId: string } }>("/api/v1/projects/:projectId/cre-reports", async request => {
+    const { session, tenantId } = requireReadContext(request);
+    const { projectId } = parseBody(z.object({ projectId: z.string().guid() }), request.params);
+    assertAuthorized(session, "cre.report", projectResource(tenantId, projectId), sessionFacts(session));
+    return withTenant(sql, { tenantId }, async tx => {
+      const [project] = await tx`SELECT id FROM core.projects WHERE tenant_id=${tenantId} AND id=${projectId}`;
+      if (!project) throw notFound("Project not found");
+      const [publication] = await tx<{ publicKey: string; version: number; status: string }[]>`
+        SELECT e.public_key AS "publicKey", v.version, v.status
+        FROM core.registry_entries e JOIN core.registry_entry_versions v ON v.entry_id=e.id AND v.tenant_id=e.tenant_id
+        WHERE e.tenant_id=${tenantId} AND e.subject_id=${projectId} AND e.registry_type='project'
+          AND v.published_at IS NOT NULL AND v.status IN ('published','revoked','superseded')
+        ORDER BY v.version DESC LIMIT 1`;
+      const reports = await tx<{ id: string; report: unknown }[]>`
+        SELECT id, report FROM core.cre_reports WHERE tenant_id=${tenantId} AND project_id=${projectId}
+        ORDER BY (report ->> 'sequence')::numeric DESC LIMIT 20`;
+      return { chainId: String(config.chainId), rpcConfigured: config.chainRpcUrl !== null,
+        publication: publication ?? null, reports: reports.map(row => ({ id: row.id, report: creReport.parse(row.report) })) };
+    });
+  });
+  app.get<{ Params: { projectId: string; reportId: string } }>("/api/v1/projects/:projectId/cre-reports/:reportId/delivery", async request => {
+    const { session, tenantId } = requireReadContext(request);
+    const { projectId, reportId } = parseBody(z.object({ projectId: z.string().guid(), reportId: z.string().guid() }), request.params);
+    assertAuthorized(session, "cre.report", projectResource(tenantId, projectId), sessionFacts(session));
+    const report = await withTenant(sql, { tenantId }, async tx => {
+      const [row] = await tx`SELECT report FROM core.cre_reports WHERE tenant_id=${tenantId} AND project_id=${projectId} AND id=${reportId}`;
+      if (!row) throw notFound("Report not found");
+      return creReport.parse(row.report);
+    });
+    return inspectCreDelivery(config, report);
+  });
   app.post<{ Params: { projectId: string } }>("/api/v1/projects/:projectId/cre-reports", async request => {
     const { session, tenantId, idempotencyKey } = requireMutationContext(request);
     parseBody(z.object({projectId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)}), request.params);

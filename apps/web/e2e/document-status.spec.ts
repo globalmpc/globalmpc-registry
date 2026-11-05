@@ -50,13 +50,14 @@ test.describe("document status", () => {
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
     await page.getByRole("button", { name: "Register" }).click();
-    await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Document status mine", exact: true })).toBeVisible();
+  await expect(page.locator(".page-head").first()).toContainText(projectKey);
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;
 
     // --- Declare the type (data_steward) -----------------------------------
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}`);
-    await page.getByRole("button", { name: "Document status" }).click();
+    await page.getByRole("link", { name: "Document status", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Document status" })).toBeVisible();
 
     await page.getByRole("textbox", { name: "Document type" }).fill("Exploration licence");

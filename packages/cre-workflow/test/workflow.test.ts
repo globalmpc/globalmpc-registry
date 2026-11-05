@@ -1,9 +1,9 @@
 import { describe, expect } from "vitest";
-import { test, HttpActionsMock, REPORT_METADATA_HEADER_LENGTH } from "@chainlink/cre-sdk/test";
+import { test, EvmMock, HttpActionsMock, REPORT_METADATA_HEADER_LENGTH } from "@chainlink/cre-sdk/test";
 import type { CronPayload } from "@chainlink/cre-sdk";
 import { bytesToHex, decodeAbiParameters } from "viem";
 import {
-  ERRORS, MAX_REPORT_BYTES, executionKey, parseConfig, reportAbi, validateReport, type Config,
+  OPBNB_TESTNET_SELECTOR, chainSelector, validateConfig, ERRORS, MAX_REPORT_BYTES, executionKey, parseConfig, reportAbi, validateReport, type Config,
 } from "../src/protocol.js";
 import { initWorkflow, onCron } from "../src/workflow.js";
 import {
@@ -15,6 +15,25 @@ const decodeReport = (rawReport: Uint8Array) =>
   decodeAbiParameters(reportAbi, bytesToHex(rawReport.slice(REPORT_METADATA_HEADER_LENGTH)));
 
 describe("SDKWorkflow", () => {
+  test("routes dev reports to the opBNB 5611 capability with the same destination domain", () => {
+    const { config, report } = fixture();
+    config.chainId = "5611"; config.chainName = "binance_smart_chain-testnet-opbnb-1";
+    report.chainId = "5611";
+    expect(chainSelector(validateConfig(config))).toBe(OPBNB_TESTNET_SELECTOR);
+    respondWith(report);
+    let writes = 0;
+    EvmMock.testInstance(OPBNB_TESTNET_SELECTOR).writeReport = request => {
+      writes++;
+      expect(decodeReport(request.report!.rawReport)[0]).toBe(5611n);
+      return successfulDelivery();
+    };
+    expect(onCron(testRuntime(config), cronPayload())).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(writes).toBe(1);
+    expect(() => validateConfig({ ...config, chainName: "anvil-devnet" })).toThrow(ERRORS.chain);
+    expect(() => validateConfig({ ...config, chainId: "56" })).toThrow(ERRORS.chain);
+    expect(() => validateReport(JSON.stringify({ ...report, chainId: "31337" }), config)).toThrow(ERRORS.identity);
+  });
+
   test("relays one validated report through the real handler", () => {
     const { config, report } = fixture();
     const runtime = testRuntime(config);

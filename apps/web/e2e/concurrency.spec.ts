@@ -28,7 +28,8 @@ test.describe("concurrent edits", () => {
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
     await operatorPage.getByRole("button", { name: "Register" }).click();
-    await expect(operatorPage.getByRole("heading", { name: projectKey })).toBeVisible();
+    await expect(operatorPage.getByRole("heading", { name: "For the concurrent edit check", exact: true })).toBeVisible();
+  await expect(operatorPage.locator(".page-head").first()).toContainText(projectKey);
     const projectId = new URL(operatorPage.url()).pathname.split("/").pop() as string;
     await operator.close();
 

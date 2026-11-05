@@ -36,7 +36,8 @@ test.describe("golden path", () => {
     );
     await page.getByRole("button", { name: "Register" }).click();
 
-    await expect(page.getByRole("heading", { name: projectKey })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Golden Path mine", exact: true })).toBeVisible();
+  await expect(page.locator(".page-head").first()).toContainText(projectKey);
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;
     expect(projectId).toMatch(/^[0-9a-f-]{36}$/);
 

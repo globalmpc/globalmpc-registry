@@ -16,7 +16,7 @@ test.describe("public entry point", () => {
     // This used to be the sign-in screen. Guards against that regression.
     await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toHaveCount(0);
     await expect(
-      page.getByRole("heading", { name: /Mining Compliance Evidence/ }),
+      page.getByRole("heading", { name: /Explore mining projects/ }),
     ).toBeVisible();
   });
 
@@ -32,6 +32,7 @@ test.describe("public entry point", () => {
   test("separates integrity proof from factual truth side by side", async ({ page }) => {
     await page.goto("/");
 
+    await page.getByText("About these records and how to check them", { exact: true }).click();
     const separations = page.getByTestId("landing-separations");
     await expect(separations).toContainText("Integrity proof");
     await expect(separations).toContainText("Factual truth");

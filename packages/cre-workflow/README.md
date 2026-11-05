@@ -1,8 +1,7 @@
 # `@mpc/cre-workflow` — Registry → Chainlink CRE proof of concept
 
 A TypeScript Chainlink CRE workflow built on the official `@chainlink/cre-sdk` **1.23.0**
-(pinned). It uses the Cron, HTTP, consensus, signed-report and EVM capabilities. The only
-configured chain is local Anvil (chain 31337); the workflow rejects every other chain.
+(pinned). It uses the Cron, HTTP, consensus, signed-report and EVM capabilities. The allowlisted chains are local Anvil (31337) and dev opBNB testnet (5611); mismatched chain/name pairs and every other chain are rejected. A registered chain selector does not establish CRE DON capability availability.
 It runs on a CRE DON, not on our servers, so it lives under `packages/` as a deployable
 artifact (see the placement rule in `CONTRIBUTING.md`). Request and report shapes come
 from `@mpc/api-contract/cre`, the same schemas the API route uses.
@@ -15,7 +14,7 @@ workflow's behaviour; the differences are listed under [Changes from the Go work
 ## What the workflow does
 
 The cron handler relays already-observed Registry status through the authenticated project
-API using ordinary `source.collect` authorization. Source collection runs separately through
+API using `cre.report` authorization. A service token needs the `cre_report` scope and `cre_reporter` role; ordinary operators and stewards remain authorized. Source collection runs separately through
 the existing authenticated collection API **before** relay. That avoids duplicate side effects
 and in-flight idempotency conflicts between DON nodes. Failed source lookups create Registry
 receipts and can become an unavailable status. An API transport failure aborts relay instead
@@ -53,7 +52,7 @@ generating timestamps or consuming sequence numbers. A previously issued report 
   (including a bare `?`), fragments, percent-encoding, dot segments and ports outside
   1–65535 are rejected. The CRE HTTP capability does not follow redirects and the workflow
   rejects non-2xx responses, so configure a direct endpoint.
-- `chainName`/`chainId` must be `anvil-devnet`/`31337`; the receiver must be a nonzero
+- `chainName`/`chainId` must be `anvil-devnet`/`31337` or `binance_smart_chain-testnet-opbnb-1`/`5611`; the receiver must be a nonzero
   20-byte address and is canonicalised to lowercase.
 - `ttlSeconds` is 1–3600, `gasLimit` a positive uint64, `schedule` 1–100 UTF-8 bytes and
   `publicKey` 1–200 UTF-8 bytes. The configuration document is at most 16 KiB and must be a
@@ -147,7 +146,7 @@ nonzero lowercase hex; `0 < validUntil − observedAt ≤ ttlSeconds ≤ 3600`. 
 2=needs-review, 3=revoked, 5=unavailable; 4 is reserved by the receiver and not emitted by
 the API. `validUntil` is a transport deadline, not a licence or professional-approval expiry.
 
-Anvil's chain selector is the official registry value `7759470850252068959`.
+The official chain-selectors registry pins Anvil to `7759470850252068959` and opBNB testnet 5611 to `13274425992935471758`. The EVM client uses the selector for the validated chain/name pair.
 
 ### Idempotency key
 
@@ -195,3 +194,13 @@ and the SDK test harness separately from any live CRE evidence.
 Official references:
 
 - [TypeScript SDK](https://github.com/smartcontractkit/cre-sdk-typescript)
+
+## Dev workspace (5611)
+
+Open a project, then **CRE**. The workspace reads the API's configured chain, checks for a published version, and links to publication when another Disclosure Approver is still needed. Enter the deployed RegistryStatusReceiver address and observation TTL, then **Generate report**. This persists an observation; it does not start CRE or send a transaction. **Refresh reports** retrieves the latest 20 observations, including ones requested by CRE.
+
+**Check receiver** reads `getState(recordId)` using the API's configured `CHAIN_RPC_URL`. The RPC must report the same chain ID. The read is pinned to one block, compares all nine fields, and shows transport freshness separately. Matching current state is evidence of a receiver observation, not proof of a particular transaction, DON execution or finality. A read failure means unavailable, not missing delivery.
+
+**Download workflow configuration** saves `config.dev.json` without credentials. It uses the current site origin; verify that the CRE executor can reach that endpoint before using it. The existing internal dev ALB is not automatically exposed by this change. Keep `REGISTRY_BEARER_TOKEN` in CRE secret storage. The `dev` target in `project.yaml` selects opBNB testnet RPC; `workflow.yaml` selects `config.dev.json`. `config.dev.example.json` contains placeholders and cannot be used as-is.
+
+Before live execution, confirm CRE platform EVM capability and forwarder support on 5611, deploy the receiver with the real forwarder/workflow identity, provision a scoped service credential, and make the report API reachable to that executor. The chain-selectors registry alone is not evidence of capability availability. This PR does not deploy a contract, expose the API, or execute/broadcast a CRE workflow.

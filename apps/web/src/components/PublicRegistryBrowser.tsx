@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listPublicRegistryEntries,
   type PublicRegistryListItem,
@@ -21,6 +21,7 @@ import { ErrorNotice } from "@/components/ErrorNotice";
  */
 
 export interface PublicRegistryBrowserProps {
+  readonly cards?: boolean;
   readonly registryType: "project" | "verification" | "asset";
   /** Where an item opens. If absent, the list is shown without links. */
   readonly hrefFor?: (item: PublicRegistryListItem) => string;
@@ -47,7 +48,9 @@ export function PublicRegistryBrowser({
   searchPlaceholder,
   emptyMessage,
   columns = [],
+  cards = false,
 }: PublicRegistryBrowserProps) {
+  const requestVersion = useRef(0);
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<PublicRegistryListItem[]>([]);
@@ -57,6 +60,7 @@ export function PublicRegistryBrowser({
 
   const load = useCallback(
     async (options: { readonly append: boolean; readonly cursor: string | null }) => {
+      const version = ++requestVersion.current;
       setBusy(true);
       setError(null);
       try {
@@ -65,14 +69,16 @@ export function PublicRegistryBrowser({
           limit: PAGE_SIZE,
           cursor: options.cursor ?? undefined,
         });
+        if (version !== requestVersion.current) return;
         // Append only when continuing. When the query changes, previous results must not remain.
         setItems((previous) => (options.append ? [...previous, ...page.items] : page.items));
         setCursor(page.nextCursor);
       } catch (caught) {
+        if (version !== requestVersion.current) return;
         setError(caught);
         if (!options.append) setItems([]);
       } finally {
-        setBusy(false);
+        if (version === requestVersion.current) setBusy(false);
       }
     },
     [registryType, query],
@@ -80,6 +86,7 @@ export function PublicRegistryBrowser({
 
   useEffect(() => {
     void load({ append: false, cursor: null });
+    return () => { requestVersion.current += 1; };
   }, [load]);
 
   return (
@@ -132,6 +139,7 @@ export function PublicRegistryBrowser({
         </p>
       </div>
 
+      {busy ? <p role="status">Loading published records…</p> : null}
       {error ? <ErrorNotice error={error} /> : null}
 
       <div className="panel" data-testid="public-registry-list">
@@ -139,6 +147,19 @@ export function PublicRegistryBrowser({
           <p className="sub" style={{ margin: 0 }} data-testid="public-registry-empty">
             {query ? `Nothing published matches “${query}”.` : emptyMessage}
           </p>
+        ) : cards ? (
+          <div className="public-project-grid">
+            {items.map((item) => (
+              <article className="public-project-card" key={item.entryVersionId}>
+                <p className="meta mono">{item.publicKey} · v{item.version}</p>
+                <h2>{hrefFor ? <Link href={hrefFor(item)}>{text(item.projection, "projectName") === "—" ? item.publicKey : text(item.projection, "projectName")}</Link> : item.publicKey}</h2>
+                <p>{text(item.projection, "hostCountry")} · {text(item.projection, "mineral")}</p>
+                <p>Status: <strong>{item.status}</strong>{item.revokedAt ? <span style={{ color: "var(--destructive-text)" }}> · revoked</span> : null}</p>
+                <p className="meta">Published {item.publishedAt ?? "Date unavailable"}</p>
+                <p className="meta">A published record is not approval, a licence or an offering.</p>
+              </article>
+            ))}
+          </div>
         ) : (
           <div className="table-scroll">
             <table>

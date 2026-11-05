@@ -82,7 +82,7 @@ The dedicated consumer pins the trusted forwarder, workflow ID and workflow owne
 the destination, sequence, version/hash continuity and TTL. A trusted workflow can still report
 incorrect data: neither these checks nor CRE establish the source's factual truth.
 
-The workflow is deliberately restricted to Anvil chain 31337. Production CRE credentials,
+The workflow allows local Anvil chain 31337 and dev opBNB testnet chain 5611 with exact chain/name binding. Production CRE credentials,
 official source access, BSC rollout, contract authority and legal/data-residency decisions are
 separate prerequisites. The workflow is the TypeScript package `packages/cre-workflow/`
 (`@chainlink/cre-sdk` 1.23.0, pinned). Its SDK-harness tests run with the repository's unit
@@ -120,3 +120,7 @@ distinct evidence rather than a claimed live CRE execution.
 The script leaves the isolated database for inspection. After its connections have closed,
 remove only the database you created when no longer needed. Never reuse a production database
 or relax the consumer's workflow identity checks to make a simulation pass.
+
+## Dev UI
+
+Use project → CRE for publication prerequisites, report creation, configuration download and receiver-state checks on the API-configured chain. See [dev workspace setup](../packages/cre-workflow/README.md#dev-workspace-5611). This UI does not trigger a DON execution; execution credentials, reachable API and supported forwarder remain external prerequisites.

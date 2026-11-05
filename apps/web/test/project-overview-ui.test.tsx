@@ -117,7 +117,11 @@ async function mount(data = routes()) {
   await act(async () => {
     render(<Project params={Promise.resolve({ id: "p1" })} />);
   });
-  if (auth.token) await screen.findByRole("heading", { name: "Identity" });
+  if (auth.token) {
+    await screen.findByRole("navigation", { name: "Project workspace" });
+    fireEvent.click(screen.getByText("Project details, parties and history"));
+    await screen.findByRole("heading", { name: "Identity" });
+  }
   return calls;
 }
 beforeEach(() => {
@@ -241,4 +245,36 @@ describe("project identity and recorded decisions", () => {
     expect(calls).toHaveLength(0);
     expect(screen.getByText(/No account is connected/)).toBeDefined();
   });
+});
+
+it("starts with project work and keeps administration collapsed until requested", async () => {
+  mockHttp(routes());
+  await act(async () => { render(<Project params={Promise.resolve({ id: "p1" })} />); });
+  await screen.findByRole("navigation", { name: "Project workspace" });
+  expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Mine");
+  expect(screen.getByRole("link", { name: /Documents & evidence/ }).getAttribute("href")).toBe("/w/projects/p1/data-room");
+  expect(screen.getByText("Project details, parties and history").closest("details")!.open).toBe(false);
+  expect(screen.getByRole("heading", { name: "Readiness" })).toBeDefined();
+  expect(screen.getByRole("link", { name: /^CRE$/ }).getAttribute("href")).toBe("/w/projects/p1/cre");
+  fireEvent.click(screen.getByText("Project details, parties and history"));
+  expect(screen.getByRole("heading", { name: "Identity" })).toBeDefined();
+});
+
+
+it("refreshes the current assessment after a successful matrix mutation", async () => {
+  auth.session.actions.push("readiness.read");
+  let changed = false;
+  const data = routes();
+  data[`GET ${root}/evidence-ledger`] = () => ({ snapshot: {
+    evaluatedAt: "2026-11-04", inputSnapshotHash: "hash", currentStage: null, stages: [], limitations: [],
+    items: [{ claimType: "rights", displayName: "Rights evidence", status: changed ? "unreviewed" : "not_applicable", reasons: [], limitations: [] }],
+  } });
+  data[`POST ${root}/facts/mineral_rights/confirmations`] = () => { changed = true; return {}; };
+  await mount(data);
+  await waitFor(() => expect(screen.getByTestId("ledger-status-rights").textContent).toBe("Not applicable"));
+  const matrix = within(screen.getByTestId("fact-matrix"));
+  fireEvent.change(matrix.getByLabelText("Status"), { target: { value: "pending" } });
+  fireEvent.change(matrix.getByLabelText("Reason"), { target: { value: "Withdraw exclusion" } });
+  fireEvent.submit(matrix.getByLabelText("Status").closest("form")!);
+  await waitFor(() => expect(screen.getByTestId("ledger-status-rights").textContent).toBe("Unreviewed"));
 });

@@ -480,3 +480,29 @@ it("shows the stored anchor contract in the integrity proof", async () => {
   expect(cell.querySelector("a")?.getAttribute("href")).toBe(`https://testnet.opbnbscan.com/address/${contract}`);
   expect(cell.textContent).toBe(contract);
 });
+
+it("lets anonymous visitors discover named project cards with revocation and shareable links", async () => {
+  const { PublicProjectDirectory } = await import("../src/components/PublicProjectDirectory");
+  const calls = mockHttp({
+    "GET /api/v1/public/registries/project?limit=20": { items: [{ ...listItem, revokedAt: "2026-11-01", projection: { projectName: "Copper Hills", hostCountry: "MNG", mineral: "Copper" } }], nextCursor: null },
+  });
+  render(<PublicProjectDirectory />);
+  const link = await screen.findByRole("link", { name: "Copper Hills" });
+  expect(link.getAttribute("href")).toBe("/explorer/projects/MPC-1");
+  expect(screen.getByText(/revoked/)).toBeDefined();
+  expect(screen.getByText(/not approval, a licence or an offering/)).toBeDefined();
+  expect(calls.every((call) => call.url.includes("/public/"))).toBe(true);
+});
+
+ it("uses the flattened public detail name and safely falls back for non-string names", async () => {
+  const calls = mockHttp({
+    "GET /api/v1/public/registries/project/MPC-1": { ...entry, projectName: "Copper Hills" },
+    "GET /api/v1/public/registries/project/MPC-2": { ...entry, projectName: { unexpected: true } },
+    "GET /api/v1/public/proofs/v1": () => { throw new Error("No proof"); },
+  });
+  const view = await act(async () => render(<PublicProject params={Promise.resolve({ publicKey: "MPC-1" })} />));
+  await screen.findByRole("heading", { name: "Copper Hills" });
+  await act(async () => view.rerender(<PublicProject params={Promise.resolve({ publicKey: "MPC-2" })} />));
+  await waitFor(() => expect(calls.some((call) => call.url.endsWith("MPC-2"))).toBe(true));
+  expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("MPC-2");
+ });
