@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./header-menu";
 import { expect, test, type Page } from "@playwright/test";
 import { connectAs } from "./connect-as";
 
@@ -119,6 +120,7 @@ test.describe("Project List", () => {
 test.describe("global workspace entries", () => {
   test("Data Room, Verification, Readiness & Gates and Authorities are in the nav", async ({ page }) => {
     await connectAs(page, "Steward A");
+    await openHeaderMenu(page, "Workspace");
     const nav = page.getByRole("banner").getByRole("navigation");
     for (const label of ["Data Room", "Verification", "Readiness & Gates", "Authorities"]) {
       await expect(nav.getByRole("link", { name: label, exact: true })).toBeVisible();
@@ -130,6 +132,7 @@ test.describe("global workspace entries", () => {
     const projectId = await registerSynthetic(page, projectKey);
 
     await connectAs(page, "Steward A");
+    await page.getByRole("banner").getByText("Workspace", { exact: true }).click();
     await page.getByRole("banner").getByRole("navigation").getByRole("link", { name: "Data Room", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Data Room" })).toBeVisible();
     await page.getByRole("link", { name: `Open Data Room — ${projectKey}` }).click();

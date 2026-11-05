@@ -431,3 +431,18 @@ export const AUTH_COPY = {
     CROSS_SITE_REQUEST_REFUSED: "This request did not come from this site and was refused.",
   } as Record<string, string>,
 } as const;
+
+/** Project navigation shares one registry across overview and every subpage. */
+export const PROJECT_SECTIONS = [
+  ["", "Overview", []],
+  ["data-room", "Documents & evidence", ["documents", "impacts", "claims"]],
+  ["verification", "Review evidence", ["readiness", "gates"]],
+  ["publication", "Prepare publication", ["cre"]],
+] as const;
+export const PROJECT_TOOLS = [
+  ["documents", "Document status", "data-room"],
+  ["impacts", "Documents to recheck", "data-room"],
+  ["readiness", "Readiness", "verification"],
+  ["gates/registry_publication", "Gate decision", "verification"],
+  ["cre", "CRE", "publication"],
+] as const;

@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./header-menu";
 import { expect, test } from "@playwright/test";
 import { catalogFixtureKey } from "./catalog-fixtures";
 import { connectAs, sessionToken } from "./connect-as";
@@ -276,6 +277,7 @@ test.describe("evidence ledger complete journey", () => {
       page.getByTestId(`ledger-status-${licence}`),
     ).toHaveText("Needs another review");
     await page.goto("/connect");
+    await openHeaderMenu(page, "Account");
     await page.getByRole("button", { name: "Sign out" }).click();
     await page.goto(`/explorer/projects/${projectKey}`);
     await expect(

@@ -224,6 +224,7 @@ test.describe("a wallet is connected only to sign", () => {
     await expect(section.getByTestId("wallet-current")).toContainText(before, { ignoreCase: true });
     expect(calls).not.toContain("com.trustwallet.app:eth_signTypedData_v4");
     // A wallet's refusal is not a sign-out: the account session is not the wallet's.
+    await page.getByRole("banner").getByText("Account", { exact: true }).first().click();
     await expect(page.getByRole("banner").getByRole("button", { name: "Sign out" })).toBeVisible();
   });
 
@@ -274,6 +275,7 @@ test.describe("the account's one signing wallet", () => {
     await expect(section.getByTestId("wallet-current")).toContainText(address, { ignoreCase: true });
     // The replaced wallet is history, and this session is still signed in.
     await expect(section.getByTestId("wallet-history")).toContainText(current, { ignoreCase: true });
+    await page.getByRole("banner").getByText("Account", { exact: true }).first().click();
     await expect(page.getByRole("banner").getByRole("button", { name: "Sign out" })).toBeVisible();
     await page.reload();
     await expect(page.getByTestId("settings-wallets").getByTestId("wallet-current")).toContainText(address, {

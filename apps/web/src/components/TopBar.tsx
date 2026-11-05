@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import type { MouseEvent } from "react";
+import { activateNavigationMenu, NAVIGATION_MENUS } from "@/lib/navigation-menus";
+import { useEffect, type MouseEvent } from "react";
 import { isAccountSession, needsSecondFactor, useSession } from "@/lib/session";
 import { AUTH_COPY, COPY, PUBLIC_NAV } from "@/lib/copy";
 import { visibleNav } from "@/lib/nav";
@@ -23,6 +24,22 @@ const FIRST_FACTOR_LABEL: Readonly<Record<string, string>> = {
 
 export function TopBar() {
   const { session, signOut } = useSession();
+  useEffect(() => {
+    function dismiss(event: PointerEvent | KeyboardEvent) {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      document.querySelectorAll<HTMLDetailsElement>(NAVIGATION_MENUS).forEach((menu) => {
+        if (event instanceof PointerEvent && event.target instanceof Node && menu.contains(event.target)) return;
+        menu.open = false;
+        if (event instanceof KeyboardEvent && event.target instanceof Node && menu.contains(event.target)) menu.querySelector("summary")?.focus();
+      });
+    }
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", dismiss);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", dismiss);
+    };
+  }, []);
   const stepUp = useOptionalStepUp();
   const authenticated = session?.authenticated === true;
   const pendingFactor = needsSecondFactor(session);
@@ -37,24 +54,27 @@ export function TopBar() {
   const roles = effectiveRoles(session);
 
   return (
-    <header className="topbar">
+    <header className="topbar" onClick={activateNavigationMenu}>
       <div className="row topbar-start" style={{ gap: 20 }}>
         {/* Do not typeset the wordmark in the body font (@mpc/design logo.md). The mark
             uses the source asset as-is; only the product name is added as text. The 28px height is above the
             mark minimum of 24px, and the clear space 0.5× (=14px) is given as gap. */}
         <Link href="/" className="brand" style={{ color: "var(--foreground)" }}>
           <img src="/brand/mpc-mark-on-dark.svg" alt="MPC" width={22} height={28} />
-          <span>{COPY.productName}</span>
+          <span>MPC</span>
+          <span className="brand-context">Verification Registry</span>
         </Link>
         {/* Links come from the single registry, not a local array (@mpc/design "chrome"). */}
-        <nav className="row" style={{ gap: 14 }}>
+        <nav className="row" style={{ gap: 14, display: authenticated && !pendingFactor ? undefined : "none" }}>
           {authenticated && !pendingFactor ? (
             <>
-              {workspace.map((entry) => (
-                <Link key={entry.href} href={entry.href}>
-                  {entry.label}
-                </Link>
-              ))}
+              {workspace.filter((entry) => entry.href === "/w/projects" || entry.href === "/w/work").map((entry) => <Link key={entry.href} href={entry.href}>{entry.label}</Link>)}
+              <details className="nav-public">
+                <summary>Workspace</summary>
+                <div className="nav-public-menu">
+                  {workspace.filter((entry) => entry.href !== "/w/projects" && entry.href !== "/w/work").map((entry) => <Link key={entry.href} href={entry.href} onClick={closeMenu}>{entry.label}</Link>)}
+                </div>
+              </details>
               {/* With no roles at all, only "nowhere to go" remains. Give a next action. */}
               {session?.roleBindings?.length ? null : (
                 <Link href="/w/access-requests">{COPY.session.requestAccess}</Link>
@@ -73,18 +93,16 @@ export function TopBar() {
               </details>
             </>
           ) : (
-            PUBLIC_NAV.map((entry) => (
-              <Link key={entry.href} href={entry.href}>
-                {entry.label}
-              </Link>
-            ))
+            null
           )}
         </nav>
       </div>
 
       <div className="row topbar-end">
         {authenticated && session ? (
-          <>
+          <details className="nav-public nav-account">
+            <summary>Account</summary>
+            <div className="nav-public-menu">
             <span className="meta">
               <span data-testid="sign-in-method">{FIRST_FACTOR_LABEL[session.firstFactor ?? ""] ?? "—"}</span>{" "}
               · {session.aal ?? "—"} ·{" "}
@@ -125,13 +143,13 @@ export function TopBar() {
               </button>
             ) : null}
             {isAccountSession(session) && !pendingFactor ? (
-              <Link href="/w/settings">{COPY.session.settings}</Link>
+              <Link href="/w/settings" onClick={closeMenu}>{COPY.session.settings}</Link>
             ) : null}
             <button onClick={() => void signOut()}>{COPY.session.disconnect}</button>
-          </>
+            </div>
+          </details>
         ) : (
           <>
-            <span className="meta">{COPY.session.none}</span>
             <Link href="/connect" className="btn-connect sm">
               {COPY.session.signIn}
             </Link>

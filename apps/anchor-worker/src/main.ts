@@ -37,7 +37,7 @@ import { eoaSubmissionAllowed } from "./anchor-state.js";
  */
 
 function emit(record: Record<string, unknown>): void {
-  process.stdout.write(`${JSON.stringify(record)}\n`);
+  console.log(JSON.stringify(record));
 }
 
 function loadConfig(): ReturnType<typeof loadAnchorConfig> {

@@ -67,10 +67,9 @@ export default function ExplorerPage() {
         </Link>
       </div>
 
-      <GlobalSearchForm />
-
       <PublicRegistryBrowser
         registryType="project"
+        cards
         hrefFor={(item) => `/explorer/projects/${encodeURIComponent(item.publicKey)}`}
         searchPlaceholder="Project name, key, country, or mineral"
         emptyMessage="No project record has been published yet. This is not a permission problem."
@@ -81,6 +80,9 @@ export default function ExplorerPage() {
         ]}
       />
 
+      <details className="project-background">
+        <summary>Find a record or proof</summary>
+        <GlobalSearchForm />
       <div className="panel">
         <h2>Look up a key directly</h2>
         <p className="sub" style={{ marginTop: 0 }}>
@@ -123,6 +125,8 @@ export default function ExplorerPage() {
           </button>
         </form>
       </div>
+
+      </details>
 
       {error ? <ErrorNotice error={error} /> : null}
 

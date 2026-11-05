@@ -978,6 +978,19 @@ README are unchanged by these settings.
 
 ## Observability
 
+The application images follow the shared Node/ECS LGTM pattern. Set `OTEL_ENABLED=true`
+in the CDK deployment environment to enable HTTP/fetch traces and application logs;
+the default is off. CDK assigns separate web/API/worker service names and the dev,
+stg or prod Alloy endpoint. `OTEL_EXPORTER_OTLP_ENDPOINT` can override that endpoint.
+Workers keep JSON stdout for CloudWatch and also use the console bridge for LGTM.
+Logs retain their full messages, structured fields and error details; traces retain
+the attributes produced by HTTP/fetch instrumentation, except requests to configured
+RPC/Safe origins, which are excluded to protect credentials in endpoint URLs. Library coverage
+follows the SDK; no custom business spans or persisted-job trace propagation are added.
+Before enabling an environment, verify gateway reachability and fresh
+Tempo/Loki data. Roll back by redeploying with `OTEL_ENABLED=false`. `/metrics` and
+its existing private-network guard are unchanged.
+
 ```sh
 docker compose -f docker/docker-compose.yml --profile observability up -d
 ```
@@ -1095,3 +1108,19 @@ production hostnames and credentials are supplied separately.
 0136 changes only the bootstrap enrolment function to invoker security with RLS on. Its
 migration-owner-only ACL is preserved. It does not disable RLS, change table ownership, grant
 new runtime privileges, or alter the other cross-tenant SECURITY DEFINER functions.
+
+### Telemetry export and shutdown boundaries
+
+| Case | Authority and input scope | Outcome |
+| --- | --- | --- |
+| Configured RPC/Safe URL | Runtime configuration, including env/file references | Exclude outgoing HTTP/fetch requests to that origin from tracing; never export endpoint path/query credentials |
+| Other HTTP/fetch requests | Existing auto-instrumentation | Preserve normal trace metadata |
+| Unresolvable protected URL reference | Runtime configuration | Disable outgoing HTTP/fetch tracing rather than guessing the secret origin |
+| SIGTERM with application drain | Application owns requests, worker loops and DB cleanup | Keep SDK active during drain; flush at explicit exit or natural completion, bounded to two seconds |
+| Unknown deployment stage with telemetry enabled | Deploy configuration | Refuse synthesis; no fallback to a different environment |
+
+Telemetry uses the pinned Node SDK with official auto-instrumentations and the existing ESM
+loader. Explicit process exit waits for SDK shutdown for at most two seconds, preserving the
+requested exit code. Workers that drain to natural completion flush at `beforeExit`. Stdout
+remains unchanged; collector failure does not prevent application exit. Independent human
+security review is still required before merge for changes to this export boundary.

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { PublicFooter } from "@/components/PublicFooter";
 import "./globals.css";
 import { SessionProvider } from "@/lib/session";
 import { TopBar } from "@/components/TopBar";
@@ -27,9 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               the seven items of spec 11 §11.2; inserting an eighth blurs what
               that list means.
             */}
-            <footer className="footer">
-              <Link href="/legal">Terms, data handling, and support</Link>
-            </footer>
+            <PublicFooter />
           </div>
           </StepUpProvider>
         </SessionProvider>

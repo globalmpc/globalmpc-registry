@@ -25,6 +25,7 @@ export default function PublicProjectsPage() {
 
       <PublicRegistryBrowser
         registryType="project"
+        cards
         hrefFor={(item) => `/explorer/projects/${encodeURIComponent(item.publicKey)}`}
         searchPlaceholder="Project name, key, country, or mineral"
         emptyMessage="No project record has been published yet. This is not a permission problem."

@@ -77,7 +77,7 @@ beforeEach(() => {
     s.signals.set(event, handler);
     return process;
   }) as typeof process.on);
-  vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   vi.stubGlobal("setTimeout", (fn: () => void) => {
     queueMicrotask(fn);
@@ -93,7 +93,7 @@ it("reports stuck quarantined uploads even when no work is handled", async () =>
   await import("../src/main.js");
   expect(s.memory).toHaveBeenCalledOnce();
   expect(s.heartbeat).toHaveBeenCalledWith({ handled: false });
-  expect(process.stdout.write).toHaveBeenCalledWith(
+  expect(console.log).toHaveBeenCalledWith(
     expect.stringContaining('"msg":"scan.stuck"'),
   );
   expect(s.sql.end).toHaveBeenCalledOnce();
@@ -148,7 +148,7 @@ it("logs loop failures and shuts down without losing the signal", async () => {
     throw new Error("scanner failed");
   });
   await import("../src/main.js");
-  expect(process.stdout.write).toHaveBeenCalledWith(
+  expect(console.log).toHaveBeenCalledWith(
     expect.stringContaining("scan.loop.failed"),
   );
   expect(s.sql.end).toHaveBeenCalledOnce();
@@ -168,7 +168,7 @@ it("refuses to start without an API endpoint", async () => {
 it("authenticates with the service token and never logs it", async () => {
   await import("../src/main.js");
   expect(s.client).toHaveBeenCalledWith({ baseUrl: "http://api.test", serviceToken: "mpcsvc_secret" });
-  const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const log = vi.mocked(console.log).mock.calls.flat().join("");
   expect(log).toContain('"identity":"service_token"');
   expect(log).not.toContain("mpcsvc_secret");
 });
@@ -292,7 +292,7 @@ it("backs off on a rejected token instead of leasing again at once, then resumes
   // One lease per back-off window, the window doubling, slept in steps of at most 15 seconds;
   // after the accepted report the ordinary poll interval is back.
   expect(timeline).toEqual(["lease", 5000, "lease", 10000, "lease", 15000, 5000, "lease", "lease", 3000]);
-  const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const log = vi.mocked(console.log).mock.calls.flat().join("");
   expect(log.match(/"msg":"scan\.unauthorized"/g)).toHaveLength(3);
   expect(log).toContain('"level":"error","msg":"scan.unauthorized","failures":3,"backoffMs":20000');
   // The heartbeat says why the worker is idle while it waits, and clears after the success.
@@ -336,7 +336,7 @@ it("scans for the one tenant its token was registered for", async () => {
     expect.objectContaining({ tenantId: "tenant-acme" }), expect.any(Function),
   );
   expect(s.backlog).toHaveBeenCalledWith(s.sql, 3, "tenant-acme");
-  expect(process.stdout.write).toHaveBeenCalledWith(expect.stringContaining('"tenant":"acme"'));
+  expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"tenant":"acme"'));
 });
 
 it("refuses to start without a tenant slug", async () => {

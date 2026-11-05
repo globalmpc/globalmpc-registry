@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./header-menu";
 import { expect, test } from "@playwright/test";
 import { connectAs, prepareSignIn } from "./connect-as";
 import { demoEmail } from "./demo-people";
@@ -219,6 +220,7 @@ test.describe("accessibility", () => {
 test.describe("session", () => {
   test("after disconnecting, the workspace is not accessible", async ({ page }) => {
     await connectAs(page, "Operator A");
+    await openHeaderMenu(page, "Account");
     await page.getByRole("button", { name: "Sign out" }).click();
 
     await page.goto("/w/projects");

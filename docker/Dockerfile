@@ -54,6 +54,15 @@ FROM deps AS web-build
 # lives in the build script of `apps/web/package.json`.
 RUN pnpm --filter @mpc/web build
 
+# Keep the LGTM SDK pinned and isolated from pnpm workspace dependencies.
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS otel
+WORKDIR /opt/otel
+COPY etc/otel/package.json etc/otel/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY etc/otel/otel-console-bridge.cjs etc/otel/runtime.cjs etc/otel/register.mjs etc/otel/otel-wrapper.sh ./
+RUN chmod -R a+rX,go-w /opt/otel && chmod 755 /opt/otel/otel-wrapper.sh \
+ && node --check runtime.cjs && node --check otel-console-bridge.cjs && node --check register.mjs && sh -n otel-wrapper.sh
+
 # --- Runtime --------------------------------------------------------------------
 FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS runtime
 
@@ -79,6 +88,10 @@ RUN addgroup -S -g 10001 mpc \
 # In exchange, devDependencies ship in the image. Size is traded for correctness; to shrink
 # it, a production tree would need to be built separately with `pnpm deploy`.
 COPY --from=web-build /repo /repo
+
+COPY --from=otel /opt/otel /opt/otel
+# Disabled unless complete OTel configuration is supplied at runtime.
+ENTRYPOINT ["/opt/otel/otel-wrapper.sh"]
 
 USER mpc
 

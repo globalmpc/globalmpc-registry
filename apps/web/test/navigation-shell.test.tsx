@@ -12,6 +12,7 @@ import { WorkspaceGate } from "../src/components/WorkspaceGate";
 import { TopBar } from "../src/components/TopBar";
 import { Address } from "../src/components/Address";
 import Connect from "../src/app/connect/page";
+import { PublicFooter } from "../src/components/PublicFooter";
 import Landing from "../src/app/page";
 import Asset from "../src/app/asset-registry/page";
 import Legal from "../src/app/legal/page";
@@ -122,12 +123,13 @@ it("gates loading, signed-out and tenantless sessions while always allowing acce
 });
 it("keeps public navigation available after sign-in and closes its expanded menu", async () => {
   const view = render(<TopBar />);
-  const menu = view.container.querySelector("details")!;
+  const menu = screen.getByText("Public registry", { exact: true }).closest("details")!;
   menu.open = true;
   const publicLink = menu.querySelector("a")!;
   publicLink.addEventListener("click", (event) => event.preventDefault());
   fireEvent.click(publicLink);
   expect(menu.open).toBe(false);
+  fireEvent.click(screen.getByText("Account", { exact: true }));
   const disconnect = screen
     .getAllByRole("button")
     .find((b) => b.textContent?.includes("Sign out"))!;
@@ -182,11 +184,7 @@ it("offers no wallet sign-in, whatever an older server still reports (WP7)", asy
 it("keeps product boundaries and inactive asset gates visible on public informational pages", () => {
   render(<Landing />);
   expect(screen.getByTestId("landing-boundaries").textContent).toContain("not");
-  expect(
-    screen
-      .getByRole("link", { name: "Sign in →" })
-      .getAttribute("href"),
-  ).toBe("/connect");
+  expect(screen.getByRole("heading", { name: "Verification Registry" })).toBeDefined();
   cleanup();
   render(<Asset />);
   expect(screen.getByText("Legal issuance decision")).toBeTruthy();
@@ -263,4 +261,49 @@ it("permission routes explain who can grant access without pretending to file re
   );
   expect(screen.getByText("Not assigned to this project")).toBeTruthy();
   expect(screen.getByText("This screen does not file a request")).toBeTruthy();
+});
+
+it("keeps anonymous header to brand and sign-in, with secondary destinations in the footer", () => {
+  s.session.authenticated = false;
+  const view = render(<><TopBar /><PublicFooter /></>);
+  expect(view.container.querySelector("header nav")?.getAttribute("style")).toContain("display: none");
+  expect(screen.getByRole("link", { name: "Sign in →" })).toBeDefined();
+  const more = screen.getByText("More", { exact: true }).closest("details")!;
+  expect(more.open).toBe(false);
+  fireEvent.click(screen.getByText("More", { exact: true }));
+  expect(more.open).toBe(true);
+  expect(screen.getByRole("link", { name: "Proof Verifier" })).toBeDefined();
+});
+
+it("dismisses header menus with Escape or outside interaction and keeps one menu open", async () => {
+  render(<TopBar />);
+  const publicMenu = screen.getByText("Public registry", { exact: true }).closest("details")!;
+  const accountMenu = screen.getByText("Account", { exact: true }).closest("details")!;
+  fireEvent.click(publicMenu.querySelector("summary")!);
+  await waitFor(() => expect(publicMenu.open).toBe(true));
+  fireEvent.click(accountMenu.querySelector("summary")!);
+  await waitFor(() => expect(accountMenu.open).toBe(true));
+  expect(publicMenu.open).toBe(false);
+  accountMenu.querySelector("summary")!.focus();
+  fireEvent.keyDown(accountMenu.querySelector("summary")!, { key: "Escape" });
+  expect(accountMenu.open).toBe(false);
+  fireEvent.click(publicMenu.querySelector("summary")!);
+  fireEvent.pointerDown(document.body);
+  expect(publicMenu.open).toBe(false);
+});
+
+
+it("switches header and footer menus synchronously without queued toggle races", () => {
+  const view = render(<><TopBar /><PublicFooter /></>);
+  const account = screen.getByText("Account", { exact: true }).closest("details")!;
+  const footer = screen.getByText("More", { exact: true }).closest("details")!;
+  fireEvent.click(account.querySelector("summary")!);
+  expect(account.open).toBe(true);
+  fireEvent.click(footer.querySelector("summary")!);
+  expect(account.open).toBe(false);
+  expect(footer.open).toBe(true);
+  fireEvent.click(account.querySelector("summary")!);
+  expect(account.open).toBe(true);
+  expect(footer.open).toBe(false);
+  expect(view.container.querySelectorAll("details[open]")).toHaveLength(1);
 });

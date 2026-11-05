@@ -87,7 +87,7 @@ const AUTH_PURGE_MS = Number(process.env["AUTH_PURGE_MS"] ?? String(DEFAULT_AUTH
 const sql = postgres(databaseUrl, { onnotice: () => {}, connection: SESSION_CONNECTION });
 
 function emit(record: Record<string, unknown>): void {
-  process.stdout.write(`${JSON.stringify(record)}\n`);
+  console.log(JSON.stringify(record));
 }
 
 const dispatcher = createDispatcher(sql, buildOutboxHandlers(sql, emit));

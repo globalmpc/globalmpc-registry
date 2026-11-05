@@ -490,7 +490,7 @@ it("lets anonymous visitors discover named project cards with revocation and sha
   const link = await screen.findByRole("link", { name: "Copper Hills" });
   expect(link.getAttribute("href")).toBe("/explorer/projects/MPC-1");
   expect(screen.getByText(/revoked/)).toBeDefined();
-  expect(screen.getByText(/not approval, a licence or an offering/)).toBeDefined();
+  expect(screen.getByText("v1")).toBeDefined();
   expect(calls.every((call) => call.url.includes("/public/"))).toBe(true);
 });
 
@@ -506,3 +506,18 @@ it("lets anonymous visitors discover named project cards with revocation and sha
   await waitFor(() => expect(calls.some((call) => call.url.endsWith("MPC-2"))).toBe(true));
   expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("MPC-2");
  });
+
+
+it("searches the compact project directory while typing without another submit control", async () => {
+  const { PublicProjectDirectory } = await import("../src/components/PublicProjectDirectory");
+  const calls = mockHttp({
+    "GET /api/v1/public/registries/project?limit=20": { items: [listItem], nextCursor: null },
+    "GET /api/v1/public/registries/project?q=Gold&limit=20": { items: [], nextCursor: null },
+  });
+  render(<PublicProjectDirectory />);
+  await screen.findByRole("link", { name: "Copper" });
+  expect(screen.queryByTestId("public-search-submit")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Search"), { target: { value: "Gold" } });
+  await screen.findByText("Nothing published matches “Gold”.");
+  expect(calls.some((call) => call.url.includes("q=Gold"))).toBe(true);
+});

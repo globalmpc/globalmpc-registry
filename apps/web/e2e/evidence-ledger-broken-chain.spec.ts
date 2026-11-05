@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./header-menu";
 import { expect, test, type Page } from "@playwright/test";
 import { catalogFixtureKey } from "./catalog-fixtures";
 import { connectAs } from "./connect-as";
@@ -22,6 +23,7 @@ const REASON = "Supporting evidence or its review is no longer current.";
 
 async function disconnect(page: Page) {
   await page.goto("/connect");
+  if (await page.getByRole("banner").locator("summary").filter({ hasText: /^Account$/ }).isVisible()) await openHeaderMenu(page, "Account");
   const button = page.getByRole("button", { name: "Sign out" });
   if (await button.isVisible().catch(() => false)) {
     await button.click();
