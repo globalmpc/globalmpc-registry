@@ -79,7 +79,7 @@ beforeEach(() => {
     state.signals.set(event, handler);
     return process;
   }) as typeof process.on);
-  vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   vi.stubGlobal("setTimeout", (fn: () => void) => {
     queueMicrotask(fn);
@@ -95,10 +95,10 @@ it("heartbeats an idle queue, reports attention and closes on SIGTERM", async ()
   await import("../src/main.js");
   expect(state.heartbeat).toHaveBeenCalledWith({ handled: false });
   expect(state.sql.end).toHaveBeenCalledOnce();
-  expect(process.stdout.write).toHaveBeenCalledWith(
+  expect(console.log).toHaveBeenCalledWith(
     expect.stringContaining('"msg":"anchor.needs_attention"'),
   );
-  expect(process.stdout.write).toHaveBeenCalledWith(
+  expect(console.log).toHaveBeenCalledWith(
     expect.stringContaining('"submissionMode":"eoa"'),
   );
 });
@@ -132,7 +132,7 @@ it("logs only that a Safe service is configured, never any part of its URL", asy
   });
   state.safe.mockReturnValue("safe-client");
   await import("../src/main.js");
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).toContain('"safeService":"configured"');
   expect(logs).not.toMatch(/SAFE-HOST-KEY|SAFE-PATH-KEY|SAFE-QUERY-KEY/);
   // The client itself still gets the full URL.
@@ -148,7 +148,7 @@ it("takes the Safe service URL from the loaded configuration, not the environmen
   vi.stubEnv("SAFE_SERVICE_URL", "https://env-only.safe.test");
   await import("../src/main.js");
   expect(state.safe).not.toHaveBeenCalled();
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).toContain('"safeService":null');
 });
 it("redacts the Safe service URL from loop and startup errors", async () => {
@@ -159,7 +159,7 @@ it("redacts the Safe service URL from loop and startup errors", async () => {
     throw new Error(`Safe failed ${safeServiceUrl}/v1/safes`);
   });
   await import("../src/main.js");
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).toContain("anchor.loop.failed");
   expect(logs).not.toMatch(/SAFE-HOST-KEY/i);
 
@@ -179,7 +179,7 @@ it("redacts RPC credentials when a step fails and still shuts down cleanly", asy
     throw new Error(`RPC failed ${config.rpcUrl}`);
   });
   await import("../src/main.js");
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).toContain("anchor.loop.failed");
   expect(logs).not.toContain("private-key");
   expect(logs).toContain('"submissionMode":"blocked"');
@@ -189,10 +189,10 @@ it("reports the opBNB testnet as EOA only when it is opted in", async () => {
   const modes: string[] = [];
   for (const eoaAllowedChainIds of [[31337], [31337, 5611]]) {
     vi.resetModules();
-    vi.mocked(process.stdout.write).mockClear();
+    vi.mocked(console.log).mockClear();
     state.config.mockReturnValue({ ...config, chainId: 5611, eoaAllowedChainIds });
     await import("../src/main.js");
-    const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+    const logs = vi.mocked(console.log).mock.calls.flat().join("");
     modes.push(/"submissionMode":"([a-z_]+)"/.exec(logs)?.[1] ?? "missing");
   }
   expect(modes).toEqual(["blocked", "eoa"]);
@@ -200,7 +200,7 @@ it("reports the opBNB testnet as EOA only when it is opted in", async () => {
 it("never reports mainnet as EOA, whatever list reaches it", async () => {
   state.config.mockReturnValue({ ...config, chainId: 56, eoaAllowedChainIds: [56] });
   await import("../src/main.js");
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).toContain('"submissionMode":"blocked"');
 });
 it("registers the configured contract for its chain before the first step", async () => {
@@ -338,14 +338,14 @@ it("warns at startup about unsettled transactions left on another chain", async 
   state.otherChains.mockResolvedValue([{ chainId: 5611, inFlight: 3, openSends: 1 }]);
   await import("../src/main.js");
   expect(state.otherChains).toHaveBeenCalledWith(state.sql, 31337, 1_800_000);
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).toContain('"msg":"anchor.other_chain_in_flight"');
   expect(logs).toContain('"chains":[{"chainId":5611,"inFlight":3,"openSends":1}]');
 });
 
 it("stays quiet when no other chain has unsettled transactions", async () => {
   await import("../src/main.js");
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).not.toContain("anchor.other_chain_in_flight");
 });
 
@@ -366,7 +366,7 @@ it("warns again on a busy pass once the interval has passed", async () => {
   // At startup, then on the third pass (61 s later); the second (30 s) is throttled.
   expect(state.otherChains).toHaveBeenCalledTimes(2);
   const warnings = vi
-    .mocked(process.stdout.write)
+    .mocked(console.log)
     .mock.calls.flat()
     .filter((line) => String(line).includes('"msg":"anchor.other_chain_in_flight"'));
   expect(warnings).toHaveLength(2);
@@ -387,7 +387,7 @@ it("keeps stepping when the other-chain count fails on a busy pass", async () =>
   });
   await import("../src/main.js");
   expect(passes).toBe(2);
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   // Its own message: the pass went on, so it is not reported as a failed pass.
   expect(logs).toContain('"msg":"anchor.other_chain_check.failed"');
   expect(logs).not.toContain("anchor.loop.failed");
@@ -409,7 +409,7 @@ it("extends this chain's watched rows to the configured watch before the first s
   await import("../src/main.js");
   expect(state.extendWatch).toHaveBeenCalledWith(state.sql, 31337, 1_800_000);
   expect(order).toEqual(["extend", "step"]);
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).toContain('"msg":"anchor.reorg_watch.extended","transactions":2');
 });
 
@@ -417,7 +417,7 @@ it("logs a failed watch extension under its own message and still steps", async 
   state.extendWatch.mockRejectedValue(new Error(`db down ${config.rpcUrl}`));
   await import("../src/main.js");
   expect(state.step).toHaveBeenCalledOnce();
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).toContain('"msg":"anchor.reorg_watch.extend_failed"');
   expect(logs).not.toContain("anchor.loop.failed");
   expect(logs).not.toContain("private-key");
@@ -475,7 +475,7 @@ it("logs failed chain moves under their own message and still steps", async () =
   state.moves.mockRejectedValue(new Error(`db down ${config.rpcUrl}`));
   await import("../src/main.js");
   expect(state.step).toHaveBeenCalledOnce();
-  const logs = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const logs = vi.mocked(console.log).mock.calls.flat().join("");
   expect(logs).toContain('"msg":"anchor.chain_move.failed"');
   expect(logs).not.toContain("anchor.loop.failed");
   expect(logs).not.toContain("private-key");

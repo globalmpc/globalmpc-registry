@@ -1,3 +1,4 @@
+import { openFooterMenu, openPublicLookup } from "./disclosures";
 import { expect, test } from "@playwright/test";
 
 /**
@@ -16,7 +17,7 @@ test.describe("public entry point", () => {
     // This used to be the sign-in screen. Guards against that regression.
     await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toHaveCount(0);
     await expect(
-      page.getByRole("heading", { name: /Explore mining projects/ }),
+      page.getByRole("heading", { name: /Verification Registry/ }),
     ).toBeVisible();
   });
 
@@ -42,7 +43,7 @@ test.describe("public entry point", () => {
 
   test("account connection remains available as a link", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("main").getByRole("link", { name: /Sign in/ }).click();
+    await page.getByRole("banner").getByRole("link", { name: /Sign in/ }).click();
 
     await expect(page).toHaveURL(/\/connect$/);
     await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
@@ -57,10 +58,10 @@ test.describe("public entry point", () => {
 });
 
 test.describe("public navigation (11 §11.2)", () => {
-  test("six items are visible without sign-in — Projects is merged into Explorer", async ({ page }) => {
+  test("public destinations are grouped under More", async ({ page }) => {
     await page.goto("/");
-    const nav = page.getByRole("banner").getByRole("navigation");
-    await expect(nav.getByRole("link", { name: "Projects", exact: true })).toHaveCount(0);
+    await openFooterMenu(page);
+    const nav = page.getByRole("contentinfo").getByRole("navigation");
 
     for (const label of [
       "Explorer",
@@ -78,6 +79,7 @@ test.describe("public navigation (11 §11.2)", () => {
 test.describe("public unified search", () => {
   test("an unknown hash is reported as an empty result, not a permission problem", async ({ page }) => {
     await page.goto("/explorer");
+    await openPublicLookup(page);
     await page.getByLabel("Find a record").fill(`0x${"ab".repeat(32)}`);
     await page.getByTestId("global-search-submit").click();
 
@@ -99,13 +101,13 @@ test.describe("Explorer list", () => {
     await expect(list).toBeVisible();
     // A table appears if the seed published records, otherwise an empty-state notice.
     // Either way it must not be an "enter a search term first" state.
-    await expect(list.locator("table, [data-testid=public-registry-empty]")).not.toHaveCount(0);
+    await expect(list.locator(".public-project-list, [data-testid=public-registry-empty]")).not.toHaveCount(0);
   });
 
   test("distinguishes an empty result from a permission problem", async ({ page }) => {
     await page.goto("/explorer");
     await page.getByLabel("Search").fill("ZZZ-NOTHING-MATCHES-THIS-ZZZ");
-    await page.getByTestId("public-search-submit").click();
+    await page.getByLabel("Search").press("Enter");
 
     await expect(page.getByTestId("public-registry-empty")).toContainText(
       /Nothing published matches/,

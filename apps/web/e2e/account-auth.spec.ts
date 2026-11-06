@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./header-menu";
 import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import { connectAs } from "./connect-as";
@@ -33,6 +34,7 @@ async function invite(page: Page, email: string): Promise<void> {
   }
   await panel.getByRole("button", { name: "Send invitation" }).click();
   await expect(panel.getByTestId("invitation-list")).toContainText(email);
+  await openHeaderMenu(page, "Account");
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("banner").getByRole("link", { name: "Sign in →" })).toBeVisible();
 }
@@ -118,6 +120,8 @@ test("an invited person signs in by emailed code and authenticator app, and the 
   expect((await forged.json()).code).toBe("CROSS_SITE_REQUEST_REFUSED");
 
   // The access-pending panel offers sign-out too; this is the header's.
+  await page.getByRole("banner").getByText("Account", { exact: true }).first().click();
+  await openHeaderMenu(page, "Account");
   await page.getByRole("banner").getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("banner").getByRole("link", { name: "Sign in →" })).toBeVisible();
   expect((await context.cookies()).some((candidate) => candidate.name === "mpc_session")).toBe(false);
@@ -172,6 +176,7 @@ test("a passkey is added from settings, and an action that needs it prompts for 
   await expect(page).toHaveURL(/\/w\/access-pending$/);
 
   // Add a passkey in account settings — the virtual authenticator answers the browser prompt.
+  await page.getByRole("banner").getByText("Account", { exact: true }).first().click();
   await page.getByRole("banner").getByRole("link", { name: "Account" }).click();
   await expect(page).toHaveURL(/\/w\/settings$/);
   await page.getByTestId("add-factor").click();
@@ -180,6 +185,7 @@ test("a passkey is added from settings, and an action that needs it prompts for 
   await expect(page.getByTestId("passkey-name")).toHaveText("Virtual key");
 
   // Sign in again with the authenticator app only: the session is aal2.
+  await openHeaderMenu(page, "Account");
   await page.getByRole("button", { name: "Sign out" }).first().click();
   await signInByEmail(page, email);
   // The screen offers both factors the account holds.

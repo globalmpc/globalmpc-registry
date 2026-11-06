@@ -32,6 +32,15 @@ RUN rm -rf /worker/node_modules/.pnpm/typescript@* /worker/node_modules/.pnpm/@t
       try { require.resolve("typescript", { paths: ["/worker"] }); throw new Error("typescript still resolves"); } \
       catch (error) { if (error.code !== "MODULE_NOT_FOUND") throw error; }'
 
+# Keep the LGTM SDK pinned and isolated from pnpm workspace dependencies.
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS otel
+WORKDIR /opt/otel
+COPY etc/otel/package.json etc/otel/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY etc/otel/otel-console-bridge.cjs etc/otel/runtime.cjs etc/otel/register.mjs etc/otel/otel-wrapper.sh ./
+RUN chmod -R a+rX,go-w /opt/otel && chmod 755 /opt/otel/otel-wrapper.sh \
+ && node --check runtime.cjs && node --check otel-console-bridge.cjs && node --check register.mjs && sh -n otel-wrapper.sh
+
 FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
@@ -41,6 +50,10 @@ RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
     && addgroup -S -g 10001 mpc \
     && adduser -S -D -H -u 10001 -G mpc -h /app -s /sbin/nologin mpc
 COPY --from=dependencies /worker /app
+COPY --from=otel /opt/otel /opt/otel
+# Disabled unless complete OTel configuration is supplied at runtime.
+ENTRYPOINT ["/opt/otel/otel-wrapper.sh"]
+
 # The only writable path under a read-only root filesystem (tsx's IPC directory, the heartbeat).
 # Compose mounts it as a mode-1777 tmpfs. An ECS task volume is created root-owned 0755, so `mpc`
 # could not write to it, unless the image declares the path as a VOLUME: ECS then copies the

@@ -1,3 +1,7 @@
+import { openPublicLookup } from "./disclosures";
+import { randomUUID } from "node:crypto";
+import { database } from "./mailbox";
+import { openHeaderMenu } from "./header-menu";
 import { expect, test } from "@playwright/test";
 import { connectAs, sessionToken } from "./connect-as";
 import { reportScan } from "./scan-service";
@@ -16,6 +20,34 @@ import { reportScan } from "./scan-service";
  * everything, the separation would not hold.
  */
 
+/** Each attempt owns its source: a failed lookup deliberately degrades the connection. */
+async function createSourceFixture(): Promise<string> {
+  const sql = database();
+  const authorityId = randomUUID();
+  const connectionId = randomUUID();
+  await sql.begin(async (tx) => {
+    await tx`
+      INSERT INTO core.authorities (
+        id, tenant_id, name, jurisdiction, proves, does_not_prove, recognized_scope,
+        verification_method, public_disclosure_level, valid_from, valid_until, state
+      ) SELECT ${authorityId}, tenant_id, name, jurisdiction, proves, does_not_prove,
+               recognized_scope, verification_method, public_disclosure_level,
+               valid_from, valid_until, state
+        FROM core.authorities WHERE id = 'cccccccc-0000-0000-0000-000000000001'
+    `;
+    await tx`
+      INSERT INTO core.source_connections (
+        id, tenant_id, authority_id, connection_key, collection_method, access_basis,
+        secret_reference, state, endpoint, authentication_method, adapter_version, source_schema_version
+      ) SELECT ${connectionId}, tenant_id, ${authorityId}, ${`golden-${connectionId}`},
+               collection_method, access_basis, secret_reference, 'active', endpoint,
+               authentication_method, adapter_version, source_schema_version
+        FROM core.source_connections WHERE id = 'cccccccc-0000-0000-0000-000000000002'
+    `;
+  });
+  return connectionId;
+}
+
 test.describe("golden path", () => {
   // The steps depend on each other's outputs, so they form one test. Splitting them
   // would hide the ordering dependency, and a failure would not show which step broke.
@@ -23,6 +55,7 @@ test.describe("golden path", () => {
 
   test("registration flows through to a public inclusion proof", async ({ page }) => {
     const projectKey = `GOLD-${Date.now()}`;
+    const sourceConnectionId = await createSourceFixture();
 
     // --- 1. Registration (mpc_operator) -----------------------------------
     await connectAs(page, "Operator A");
@@ -102,8 +135,8 @@ test.describe("golden path", () => {
     // The source is the project's jurisdiction's own connection, picked on screen — not a
     // fixed demo id — and the query is what the steward typed.
     const connection = page.getByRole("combobox", { name: "Source connection" });
-    await connection.selectOption("cccccccc-0000-0000-0000-000000000002");
-    await expect(connection).toHaveValue("cccccccc-0000-0000-0000-000000000002");
+    await connection.selectOption(sourceConnectionId);
+    await expect(connection).toHaveValue(sourceConnectionId);
     await page.getByRole("textbox", { name: "Query field" }).fill("licenseNumber");
     await page.getByRole("textbox", { name: "Query value" }).fill(`LIC-${projectKey}`);
     await page.getByRole("button", { name: "Look up the official source" }).click();
@@ -164,7 +197,10 @@ test.describe("golden path", () => {
     await page.goto(`/w/projects/${projectId}/verification`);
 
     // The header shows the connected person's role. Signing is an act of a qualified person.
-    await expect(page.getByText(/reviewer_cp_qp/)).toBeVisible();
+    await openHeaderMenu(page, "Account");
+    await expect(page.getByTestId("effective-roles")).toContainText("reviewer_cp_qp");
+    await expect(page.getByTestId("effective-roles")).toBeVisible();
+    await page.locator("header details.nav-account > summary").click();
 
     await expect(page.getByTestId("case-list")).toBeVisible();
     await page.getByRole("button", { name: "Open this case" }).first().click();
@@ -251,12 +287,14 @@ test.describe("golden path", () => {
 
     // --- 8. Lookup without sign-in ---------------------------------------
     await page.goto("/connect");
+    await openHeaderMenu(page, "Account");
     await page.getByRole("button", { name: "Sign out" }).click();
 
     // Arriving via a link, the screen looks up on its own. Pressing once more also checks
     // that the direct lookup path works — it is a different button from list search.
     await page.goto(`/explorer?registryType=project&publicKey=${projectKey}`);
-    await page.getByRole("button", { name: "Look up" }).click();
+    await openPublicLookup(page);
+    await page.getByRole("button", { name: "Look up", exact: true }).click();
 
     await expect(page.getByRole("heading", { name: "Published record" })).toBeVisible();
     await expect(page.getByTestId("shared-status")).toHaveText("published");

@@ -22,7 +22,7 @@ import { createHeartbeat } from "@mpc/db";
  */
 
 function emit(record: Record<string, unknown>): void {
-  process.stdout.write(`${JSON.stringify(record)}\n`);
+  console.log(JSON.stringify(record));
 }
 
 function required(name: string): string {

@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./header-menu";
 import { expect, type Page } from "@playwright/test";
 import { demoEmail, demoPasskey } from "./demo-people";
 import { addVirtualAuthenticator, database, mailedCode } from "./mailbox";
@@ -121,7 +122,10 @@ async function signInByJourney(page: Page, label: string, wallet: boolean): Prom
 async function expectSignedIn(page: Page): Promise<void> {
   const topBar = page.locator("header.topbar");
   await expect(topBar.getByTestId("sign-in-method")).toHaveText("email");
+  const account = topBar.locator("details.nav-account");
+  await openHeaderMenu(page, "Account");
   await expect(topBar.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await account.locator("summary").click();
 }
 
 async function isComplete(page: Page, subjectId: string): Promise<boolean> {

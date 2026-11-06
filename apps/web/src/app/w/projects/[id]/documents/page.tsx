@@ -545,17 +545,13 @@ export default function DocumentStatusPage({ params }: { params: Promise<{ id: s
 
       <ErrorNotice error={error} />
 
+      {renderDocuments()}
       {renderDocumentsByStatus()}
-
+      {renderNextToExpire()}
       {renderCoverageByTier()}
-
       {renderExpectedDocumentTypes()}
-
       {renderTypesNobodyDeclared()}
 
-      {renderNextToExpire()}
-
-      {renderDocuments()}
     </>
   );
 }

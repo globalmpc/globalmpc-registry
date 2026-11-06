@@ -1,3 +1,5 @@
+import { openFooterMenu } from "./disclosures";
+import { openHeaderMenu } from "./header-menu";
 import { expect, test } from "@playwright/test";
 import { connectAs } from "./connect-as";
 
@@ -11,6 +13,7 @@ import { connectAs } from "./connect-as";
 test.describe("workspace navigation", () => {
   test("every global item in the spec is present as a link", async ({ page }) => {
     await connectAs(page, "Operator A");
+    await openHeaderMenu(page, "Workspace");
     const nav = page.getByRole("banner").getByRole("navigation");
 
     for (const label of [
@@ -34,6 +37,7 @@ test.describe("workspace navigation", () => {
 
   test("menus outside the role are not shown", async ({ page }) => {
     await connectAs(page, "Steward A");
+    await openHeaderMenu(page, "Workspace");
     const nav = page.getByRole("banner").getByRole("navigation");
 
     await expect(nav.getByRole("link", { name: "Projects", exact: true })).toBeVisible();
@@ -44,6 +48,7 @@ test.describe("workspace navigation", () => {
 
   test("public menus are reachable while signed in", async ({ page }) => {
     await connectAs(page, "Steward A");
+    await openHeaderMenu(page, "Workspace");
     const nav = page.getByRole("banner").getByRole("navigation");
 
     await nav.getByText("Public registry").click();
@@ -230,10 +235,21 @@ test.describe("terms and data handling", () => {
     await expect(page.getByTestId("legal-support")).toBeVisible();
   });
 
-  test("is reachable from any screen", async ({ page }) => {
-    await page.goto("/explorer");
-    await page.getByRole("link", { name: /Terms, data handling, and support/ }).click();
-
+  test("is reachable from the signed-in workspace too", async ({ page }) => {
+    await connectAs(page, "Operator A");
+    await openFooterMenu(page);
+    await page.getByRole("contentinfo").getByRole("link", { name: "Terms, data handling, and support", exact: true }).click();
     await expect(page).toHaveURL(/\/legal$/);
+    await expect(page.getByRole("contentinfo").locator("details")).not.toHaveAttribute("open");
+  });
+
+  test("is reachable from any screen", async ({ page }) => {
+    for (const path of ["/", "/explorer", "/verify"]) {
+      await page.goto(path);
+      await openFooterMenu(page);
+      await page.getByRole("contentinfo").getByRole("link", { name: "Terms, data handling, and support", exact: true }).click();
+      await expect(page).toHaveURL(/\/legal$/);
+      await expect(page.getByRole("contentinfo").locator("details")).not.toHaveAttribute("open");
+    }
   });
 });

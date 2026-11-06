@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./header-menu";
 import { randomUUID } from "node:crypto";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { connectAs, holdPasskey, sessionToken } from "./connect-as";
@@ -53,6 +54,8 @@ async function unlinkGoogle(page: Page): Promise<void> {
 }
 
 async function signOut(page: Page): Promise<void> {
+  await page.getByRole("banner").getByText("Account", { exact: true }).first().click();
+  await openHeaderMenu(page, "Account");
   await page.getByRole("banner").getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("banner").getByRole("link", { name: "Sign in →" })).toBeVisible();
 }

@@ -110,7 +110,7 @@ beforeEach(() => {
     s.signals.set(event, handler);
     return process;
   }) as typeof process.on);
-  vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   vi.stubGlobal("setTimeout", (fn: () => void) => {
     queueMicrotask(fn);
@@ -125,7 +125,7 @@ it("sweeps expiries, emits a heartbeat when idle, and closes its connection", as
   await import("../src/main.js");
   expect(s.heartbeat).toHaveBeenCalledWith({ published: 0, delivered: 0 });
   expect(s.sql.end).toHaveBeenCalledTimes(2);
-  const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const log = vi.mocked(console.log).mock.calls.flat().join("");
   expect(log).toContain("document.expiry.flagged");
   expect(log).toContain("credential.expiry.flagged");
   expect(log).toContain(
@@ -154,7 +154,7 @@ it("keeps publishing when expiry sweeps or dead-letter settlement fail", async (
     return { handled: true, delivered: 0, failed: 1 };
   });
   await import("../src/main.js");
-  const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+  const log = vi.mocked(console.log).mock.calls.flat().join("");
   for (const event of [
     "outbox.dead_letter.settle_failed",
     "document.expiry.sweep_failed",
@@ -175,7 +175,7 @@ it("reports unexpected failures without stamping events published", async () => 
     throw new Error("DB unavailable");
   });
   await import("../src/main.js");
-  expect(process.stdout.write).toHaveBeenCalledWith(
+  expect(console.log).toHaveBeenCalledWith(
     expect.stringContaining("outbox.loop.failed"),
   );
   expect(s.heartbeat).not.toHaveBeenCalled();

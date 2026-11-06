@@ -57,6 +57,7 @@ test.describe("document status", () => {
     // --- Declare the type (data_steward) -----------------------------------
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}`);
+    await page.getByText("More project tools", { exact: true }).click();
     await page.getByRole("link", { name: "Document status", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Document status" })).toBeVisible();
 

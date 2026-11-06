@@ -1,36 +1,26 @@
-import Link from "next/link";
-import { REQUIRED_BOUNDARY_COPY } from "@mpc/ui";
+"use client";
 
-const TASKS = [
-  ["data-room", "Documents & evidence", "Upload files, connect sources and record claims."],
-  ["verification", "Review evidence", "Inspect claims and signed reviewer findings."],
-  ["publication", "Prepare publication", "Prepare a record for independent disclosure approval."],
-] as const;
-const TOOLS = [
-  ["documents", "Document status"],
-  ["impacts", "Documents to recheck"],
-  ["readiness", "Readiness"],
-  ["cre", "CRE"],
-  ["gates/registry_publication", "Gate decision"],
-] as const;
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+import { PROJECT_SECTIONS as SECTIONS, PROJECT_TOOLS as TOOLS } from "@/lib/copy";
 
 export function ProjectWorkspaceNav({ projectId }: { readonly projectId: string }) {
   const base = `/w/projects/${encodeURIComponent(projectId)}`;
+  const pathname = usePathname();
+  const segment = pathname?.slice(base.length + 1).split("/")[0] ?? "";
+  const active = SECTIONS.find(([path, , children]) => path === segment || (children as readonly string[]).includes(segment));
   return (
-    <nav aria-label="Project workspace" className="panel">
-      <h2>Work on this project</h2>
-      <div className="project-task-grid">
-        {TASKS.map(([path, title, description]) => (
-          <Link className="project-task-link" key={path} href={`${base}/${path}`}>
-            <strong>{title} →</strong>
-            <span>{description}</span>
-          </Link>
-        ))}
+    <nav aria-label="Project workspace" className="project-navigation">
+      <div className="project-navigation-main">
+        {SECTIONS.map(([path, title]) => <Link key={path} href={path ? `${base}/${path}` : base} aria-current={active?.[0] === path ? "page" : undefined}>{title}</Link>)}
       </div>
-      <div className="project-tool-links">
-        {TOOLS.map(([path, title]) => <Link key={path} href={`${base}/${path}`}>{title}</Link>)}
-      </div>
-      <p className="meta">{REQUIRED_BOUNDARY_COPY.verification}</p>
+      {!segment ? <details className="project-navigation-tools">
+        <summary>More project tools</summary>
+        <div className="project-navigation-secondary">{TOOLS.map(([path, title]) => <Link key={path} href={`${base}/${path}`}>{title}</Link>)}</div>
+      </details> : <div className="project-navigation-secondary">
+        {TOOLS.filter(([, , parent]) => parent === active?.[0]).map(([path, title]) => <Link key={path} href={`${base}/${path}`} aria-current={pathname === `${base}/${path}` ? "page" : undefined}>{title}</Link>)}
+      </div>}
     </nav>
   );
 }

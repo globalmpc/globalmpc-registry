@@ -89,9 +89,15 @@ export function PublicRegistryBrowser({
     return () => { requestVersion.current += 1; };
   }, [load]);
 
+  useEffect(() => {
+    if (!cards) return;
+    const timer = setTimeout(() => setQuery(draft.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [cards, draft]);
+
   return (
     <>
-      <div className="panel">
+      <div className={cards ? "public-directory-search" : "panel"}>
         <form
           className="row"
           style={{ alignItems: "flex-end" }}
@@ -101,7 +107,7 @@ export function PublicRegistryBrowser({
           }}
         >
           <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
-            <label htmlFor="public-search">Search</label>
+            <label htmlFor="public-search" className={cards ? "sr-only" : undefined}>Search</label>
             <input
               id="public-search"
               value={draft}
@@ -113,14 +119,14 @@ export function PublicRegistryBrowser({
             The label changes while loading, so selecting by name picks different elements depending on
             timing. Provide a separate anchor for tests.
           */}
-          <button
+          {!cards ? <button
             className="primary"
             type="submit"
             data-testid="public-search-submit"
             disabled={busy}
           >
             {busy ? "Loading…" : "Search"}
-          </button>
+          </button> : null}
           {query ? (
             <button
               type="button"
@@ -133,30 +139,34 @@ export function PublicRegistryBrowser({
             </button>
           ) : null}
         </form>
-        <p className="meta" style={{ marginBottom: 0 }}>
+        {!cards ? <p className="meta" style={{ marginBottom: 0 }}>
           Published records only. Drafts are never returned here, and the listing does not say which
           organisation published a record.
-        </p>
+        </p> : null}
       </div>
 
       {busy ? <p role="status">Loading published records…</p> : null}
       {error ? <ErrorNotice error={error} /> : null}
 
-      <div className="panel" data-testid="public-registry-list">
+      <div className={cards ? "public-directory-results" : "panel"} data-testid="public-registry-list">
+        {cards ? <p className="meta public-directory-caption">PROJECTS · Published records</p> : null}
         {items.length === 0 && !busy ? (
           <p className="sub" style={{ margin: 0 }} data-testid="public-registry-empty">
             {query ? `Nothing published matches “${query}”.` : emptyMessage}
           </p>
         ) : cards ? (
-          <div className="public-project-grid">
+          <div className="public-project-list">
             {items.map((item) => (
-              <article className="public-project-card" key={item.entryVersionId}>
-                <p className="meta mono">{item.publicKey} · v{item.version}</p>
-                <h2>{hrefFor ? <Link href={hrefFor(item)}>{text(item.projection, "projectName") === "—" ? item.publicKey : text(item.projection, "projectName")}</Link> : item.publicKey}</h2>
-                <p>{text(item.projection, "hostCountry")} · {text(item.projection, "mineral")}</p>
-                <p>Status: <strong>{item.status}</strong>{item.revokedAt ? <span style={{ color: "var(--destructive-text)" }}> · revoked</span> : null}</p>
-                <p className="meta">Published {item.publishedAt ?? "Date unavailable"}</p>
-                <p className="meta">A published record is not approval, a licence or an offering.</p>
+              <article className="public-project-row" key={item.entryVersionId}>
+                <div>
+                  <h2>{hrefFor ? <Link href={hrefFor(item)}>{text(item.projection, "projectName") === "—" ? item.publicKey : text(item.projection, "projectName")}</Link> : item.publicKey}</h2>
+                  <p className="meta">{item.publicKey} · {text(item.projection, "mineral")} · {text(item.projection, "hostCountry")}</p>
+                </div>
+                <p className="meta">v{item.version}</p>
+                <div>
+                  <span className={item.revokedAt ? "public-project-status revoked" : "public-project-status"}>{item.status}{item.revokedAt && item.status !== "revoked" ? " · revoked" : ""}</span>
+                  <p className="meta">Published {item.publishedAt ?? "Date unavailable"}</p>
+                </div>
               </article>
             ))}
           </div>

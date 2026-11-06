@@ -1,3 +1,5 @@
+import { openPublicLookup } from "./disclosures";
+import { openHeaderMenu } from "./header-menu";
 import { expect, test } from "@playwright/test";
 import { connectAs } from "./connect-as";
 
@@ -82,9 +84,11 @@ test.describe("chain confirmation", () => {
     );
 
     // --- Check the proof without sign-in ---------------------------------
+    await openHeaderMenu(page, "Account");
     await page.getByRole("button", { name: "Sign out" }).click();
     await page.goto(`/explorer?registryType=project&publicKey=${projectKey}`);
-    await page.getByRole("button", { name: "Search" }).click();
+    await openPublicLookup(page);
+    await page.getByRole("button", { name: "Look up", exact: true }).click();
 
     await expect(page.getByTestId("proof-panel")).toBeVisible();
     await expect(page.getByText("Path matches")).toBeVisible();
