@@ -3,12 +3,12 @@ packages:
   - "apps/*"
 
 # cre-compile (the SDK's WASM build scripts) imports the TypeScript compiler API without
-# declaring it. Resolve it to the workflow package's TypeScript 5 instead of the root
+# declaring it. Resolve it to the workflow package's TypeScript 6 instead of the root
 # TypeScript 7, which has no JavaScript API.
 packageExtensions:
   "@chainlink/cre-sdk@1.23.0":
     peerDependencies:
-      typescript: "5.9.3"
+      typescript: "6.0.3"
 
 # GHSA-mrhx-c7xc-m3w5 (zod < 4.6.6: memory exhaustion from issue accumulation on large
 # arrays). The only vulnerable copy is zod 3.25.76, pinned by @chainlink/cre-sdk 1.23.0,

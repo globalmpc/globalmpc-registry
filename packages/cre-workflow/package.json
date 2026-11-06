@@ -12,13 +12,13 @@
   "dependencies": {
     "@chainlink/cre-sdk": "1.23.0",
     "@mpc/api-contract": "workspace:*",
-    "viem": "2.57.13",
+    "viem": "2.57.14",
     "zod": "4.6.7"
   },
   "files": [
     "src"
   ],
   "devDependencies": {
-    "typescript": "5.9.3"
+    "typescript": "6.0.3"
   }
 }
