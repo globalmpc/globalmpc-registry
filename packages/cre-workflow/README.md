@@ -62,7 +62,7 @@ generating timestamps or consuming sequence numbers. A previously issued report 
 
 ```sh
 pnpm --filter @mpc/cre-workflow test        # also part of `pnpm test:unit` and coverage
-pnpm --filter @mpc/cre-workflow typecheck   # TypeScript 5.9 (what cre-compile uses)
+pnpm --filter @mpc/cre-workflow typecheck   # TypeScript 6.0 (what cre-compile uses)
 pnpm --filter @mpc/cre-workflow build:wasm  # needs Bun >= 1.2.21; not run in CI
 ```
 
@@ -84,7 +84,7 @@ from the SDK.
 compatibility and determinism, bundles with Bun and compiles to WASM with Javy. Bun is not a
 repository dependency: install Bun **1.2.21 or newer** separately. The output
 `dist/workflow.wasm` is ignored. `cre-compile` loads the TypeScript compiler API, so
-`pnpm-workspace.yaml` links this package's TypeScript 5.9.3 into the SDK; the root
+`pnpm-workspace.yaml` links this package's TypeScript 6.0.3 into the SDK; the root
 TypeScript 7 has no JavaScript API.
 
 `cre-compile` fetches the Javy compiler on first use (`v8.1.0` from the

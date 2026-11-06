@@ -1,7 +1,7 @@
 'use strict';
 // Standard console bridge: preserve original output and export its complete body.
-const { logs, SeverityNumber } = require('@opentelemetry/api-logs');
-const { context } = require('@opentelemetry/api');
+// SDK 3 stabilizes Logs in the main API; the standalone api-logs package is removed.
+const { logs, SeverityNumber, context } = require('@opentelemetry/api');
 const { format } = require('node:util');
 const logger = logs.getLogger('console');
 const levels = { debug: SeverityNumber.DEBUG, log: SeverityNumber.INFO, info: SeverityNumber.INFO,
