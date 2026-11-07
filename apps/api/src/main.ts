@@ -37,14 +37,19 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     shuttingDown = true;
 
     void (async () => {
+      let exitCode = 0;
       try {
         await app.close();
         await sql.end({ timeout: 5 });
-        process.exit(0);
       } catch (error) {
         app.log.error({ err: error }, "graceful shutdown failed");
-        process.exit(1);
+        exitCode = 1;
       }
+      // The isolated preload owns the SDK. Await its bounded flush only after the
+      // application has drained; startup refusal paths keep native synchronous exit.
+      const shutdownTelemetry = (globalThis as Record<symbol, unknown>)[Symbol.for("mpc.telemetry.shutdown")];
+      if (typeof shutdownTelemetry === "function") await shutdownTelemetry();
+      process.exit(exitCode);
     })();
   });
 }
