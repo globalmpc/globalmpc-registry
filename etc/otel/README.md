@@ -23,3 +23,16 @@ The console bridge imports Logs, SeverityNumber and context from the main API;
 the old standalone api-logs package no longer exists. API 1.10 is an explicit
 runtime dependency rather than an accidental transitive import. The telemetry
 smoke tests exercise actual trace/log export, protected origins and signal drain.
+
+## Process termination contract
+
+The preload never replaces `process.exit`: startup refusals must terminate immediately,
+without running the next statement or queued work. Explicit immediate exits can drop
+buffered telemetry, as with Node's normal output semantics.
+
+Natural worker shutdown flushes on `beforeExit`. The API drains HTTP and database work,
+then awaits the optional `globalThis[Symbol.for('mpc.telemetry.shutdown')]` hook before
+its explicit exit. The hook is idempotent and bounded to two seconds, including collector
+outages. With telemetry disabled the hook is absent. Signal handling without an application
+listener also uses the bounded flush before terminating; application signal listeners keep
+ownership of their own drain sequence.
