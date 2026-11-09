@@ -47,18 +47,15 @@ function stop() {
     });
   });
 }
-const exit = process.exit.bind(process);
-let exiting = false;
-process.exit = (code) => {
-  if (exiting) return;
-  exiting = true;
-  const exitCode = code ?? process.exitCode ?? 0;
-  void stop().finally(() => exit(exitCode));
-};
+// Explicit exits are synchronous startup refusal boundaries: never replace process.exit.
+// Applications that deliberately exit after draining can await this optional hook first.
+globalThis[Symbol.for('mpc.telemetry.shutdown')] = stop;
 process.once('beforeExit', stop);
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
     // With no application listener, retain normal signal termination semantics.
-    if (process.listenerCount(signal) === 1) process.exit(signal === 'SIGTERM' ? 143 : 130);
+    if (process.listenerCount(signal) === 1) {
+      void stop().finally(() => process.exit(signal === 'SIGTERM' ? 143 : 130));
+    }
   });
 }

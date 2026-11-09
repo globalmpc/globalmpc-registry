@@ -1,3 +1,4 @@
+import { BUILT_SERVER } from "./e2e/server-mode";
 import { defineConfig, devices } from "@playwright/test";
 import { generatePrivateKey } from "viem/accounts";
 import { E2E_MAX_RETRIES } from "./e2e/catalog-fixtures";
@@ -159,21 +160,23 @@ export default defineConfig({
     {
       // Google and Microsoft for the account specs: the provider's back channel for the API and
       // the person's approval for the specs. Loopback only; never built or deployed.
-      command: "pnpm exec tsx e2e/oidc-relay.ts",
+      command: "node e2e/server-process.mjs oidc pnpm exec tsx e2e/oidc-relay.ts",
       stdout: "pipe",
       stderr: "pipe",
       url: `http://127.0.0.1:${OIDC_PORT}/__e2e/health`,
       reuseExistingServer: !process.env["CI"],
+      gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
       timeout: 30_000,
       env: { E2E_OIDC_PORT: String(OIDC_PORT) },
     },
     {
-      command: "pnpm --filter @mpc/api start",
+      command: "node apps/web/e2e/server-process.mjs api pnpm --filter @mpc/api start",
       stdout: "pipe",
       stderr: "pipe",
       cwd: "../..",
       port: API_PORT,
       reuseExistingServer: !process.env["CI"],
+      gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
       timeout: 60_000,
       env: {
         DATABASE_URL: APP_URL,
@@ -217,16 +220,16 @@ export default defineConfig({
       },
     },
     {
-      // The `--webpack` flag lives in the dev script of `package.json`. Calling next directly
-      // here would split the flag across two places.
-      // Another port is appended to the script's own `--port 3000`; the last one given wins.
-      command: WEB_PORT === 3000 ? "pnpm dev" : `pnpm dev --port ${WEB_PORT}`,
+      // Build once before E2E when selected; local development retains next dev.
+      command: `node e2e/server-process.mjs web pnpm ${BUILT_SERVER ? "start" : "dev"} --port ${WEB_PORT}`,
       stdout: "pipe",
       stderr: "pipe",
       port: WEB_PORT,
       reuseExistingServer: !process.env["CI"],
+      gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
       timeout: 120_000,
       env: {
+        NODE_ENV: BUILT_SERVER ? "production" : "development",
         // Webpack's dev server retains compiled routes throughout the browser suite.
         // Bound its heap so it collects before starving Chromium/API on shared CI hosts.
         // Next's dev server restarts itself as the heap nears this bound, and the requests in
