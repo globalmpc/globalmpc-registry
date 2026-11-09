@@ -2,7 +2,7 @@
 
 # Design tokens
 
-`@mpc/design` 0.1.0 · 44 tokens (38 CSS variables)
+`@mpc/design` 0.2.1 · 44 tokens (38 CSS variables)
 
 `tokens/*.json` is the only source. This document and the CSS, JSON, SCSS, and
 Dart in `dist/` are all generated from it. `*` marks a reference-only value

@@ -1,4 +1,4 @@
-// MPC design tokens 0.1.0 — GENERATED from tokens/*.json. Do not edit.
+// MPC design tokens 0.2.1 — GENERATED from tokens/*.json. Do not edit.
 
 import 'dart:ui';
 

@@ -276,7 +276,7 @@ export default function GateDecisionPage({
               marginTop: 14,
               padding: 12,
               background: "var(--muted)",
-              borderRadius: 6,
+              borderRadius: "var(--radius-lg)",
               whiteSpace: "pre-wrap",
               fontSize: 12,
             }}
