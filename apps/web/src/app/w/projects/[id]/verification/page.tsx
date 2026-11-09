@@ -568,7 +568,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
                 marginTop: 14,
                 padding: 12,
                 background: "var(--muted)",
-                borderRadius: 6,
+                borderRadius: "var(--radius-lg)",
                 whiteSpace: "pre-wrap",
                 fontSize: 12,
               }}

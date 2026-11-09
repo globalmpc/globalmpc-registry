@@ -24,7 +24,7 @@ export function TotpQr({ uri, size = 192 }: { readonly uri: string; readonly siz
       height={size}
       viewBox={`0 0 ${modules} ${modules}`}
       shapeRendering="crispEdges"
-      style={{ background: "#fff", borderRadius: 4 }}
+      style={{ background: "#fff", borderRadius: "var(--radius-md)" }}
     >
       <path d={cells.join("")} fill="#000" />
     </svg>

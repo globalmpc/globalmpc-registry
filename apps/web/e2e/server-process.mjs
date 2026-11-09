@@ -31,15 +31,31 @@ function memory() {
 }
 let stopping = false;
 let shutdown;
+let cleanupFailed = false;
 const child = spawn(command, args, { stdio: ['inherit', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
 
+function requestStop(signal) {
+  return shutdown ||= stopGroup(child.pid, signal).catch(error => {
+    cleanupFailed = true;
+    const event = { event: 'cleanup-failure', error: error.code || error.name };
+    try {
+      record(event);
+      if (directory) writeFileSync(join(directory, `${label}-cleanup-failure.json`), JSON.stringify(event));
+    } catch { console.error(`[e2e-service] ${label} cleanup diagnostics unavailable`); }
+    console.error(`[e2e-service] ${label} cleanup failed`);
+    process.exitCode = 1;
+    // A child that could not terminate must not retain the wrapper forever.
+    child.stdout.destroy(); child.stderr.destroy(); child.unref();
+  });
+}
 const timer = setInterval(() => record({ event: 'sample', memory: memory() }), 2000);
 timer.unref();
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
   if (stopping) return;
   stopping = true;
-  shutdown ||= stopGroup(child.pid, signal);
   record({ event: 'requested-stop', signal });
+  if (directory) writeFileSync(join(directory, `shutdown-${process.pid}.json`), JSON.stringify({ signal }));
+  void requestStop(signal);
 });
 // Install shutdown handlers before forwarding readiness output to the test controller.
 record({ event: 'start', pid: child.pid, wrapperPid: process.pid, memory: memory() });
@@ -47,12 +63,12 @@ child.stdout.pipe(process.stdout);
 child.stderr.pipe(process.stderr);
 function finish(code, signal, error) {
   clearInterval(timer);
-  shutdown ||= stopGroup(child.pid);
+  void requestStop('SIGTERM');
   const event = { event: 'exit', code, signal, expected: stopping, error: error?.code, memory: memory() };
   record(event);
   if (!stopping && directory) writeFileSync(join(directory, `${label}-failure.json`), JSON.stringify(event));
   console.error(`[e2e-service] ${label} exited: code=${code} signal=${signal} expected=${stopping}`);
-  process.exitCode = code || (signal || error ? 1 : 0);
+  process.exitCode = cleanupFailed ? 1 : code || (signal || error ? 1 : 0);
 }
 child.once('error', error => finish(null, null, error));
 child.once('exit', (code, signal) => finish(code, signal));

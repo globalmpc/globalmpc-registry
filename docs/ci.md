@@ -127,6 +127,7 @@ runner hardware and queue time separately. A faster failing run is not an improv
 | Unexpected test-server exit | The monitored launcher stops the owned Playwright batch with failure and preserves exit code/signal and memory evidence; it does not retry a broken server or skip tests to obtain success. |
 | External cancellation | SIGINT/SIGTERM starts one bounded process-group shutdown deadline, preserved even when the immediate child exits. Cancellation cannot become a successful test run. |
 | Final status | Failure markers are checked after recorded-server cleanup; a late marker outranks a successful CLI exit. |
+| Recorded-server shutdown | The wrapper acknowledges that its requested-stop state is set before the controller signals its child group. Missing acknowledgement uses bounded fallback cleanup and fails the batch. |
 | Requested teardown | The launcher forwards shutdown to its own child process group; normal Playwright teardown is recorded separately from crashes. |
 
 Run `node --test apps/web/e2e/server-process.test.mjs` for monitor regressions. Launch browser
@@ -134,3 +135,16 @@ batches from `apps/web` with `node e2e/run-playwright.mjs [Playwright arguments]
 `CI_TEMP_DIR` controls the diagnostics parent directory. The manager retains process artifacts
 for both successful and failing browser runs; samples exclude command arguments and environment
 values. Compare cgroup counters at server start and exit before attributing a failure to OOM.
+
+Cleanup interprets Linux process state rather than PID existence alone: an acknowledged
+zombie wrapper has completed, and a group containing only terminated/zombie members is
+finished. A live descendant still requires cleanup even if the group leader is a zombie.
+Missing acknowledgement and recorded crashes still fail the batch; zombie handling never
+turns those cases into success.
+
+The controller uses one idempotent finalization path for normal exit, spawn error,
+server failure and cancellation. Test-group cleanup rejection is handled immediately;
+recorded-server cleanup does not depend on a later CLI exit event. After that cleanup,
+an uninterruptible CLI cannot retain the controller indefinitely: it exits unsuccessfully.
+The server wrapper likewise catches cleanup rejection and records failure before releasing
+its child handles. Fault-injection regressions cover both caller contracts.
