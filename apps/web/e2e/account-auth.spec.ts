@@ -1,3 +1,4 @@
+import { BUILT_SERVER, SESSION_COOKIE } from "./server-mode";
 import { openHeaderMenu } from "./header-menu";
 import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
@@ -107,8 +108,8 @@ test("an invited person signs in by emailed code and authenticator app, and the 
   await expect(page.getByTestId("sign-in-method")).toHaveText("email");
 
   // The session is an HttpOnly, SameSite=Strict cookie; nothing script can read holds the token.
-  const cookie = (await context.cookies()).find((candidate) => candidate.name === "mpc_session");
-  expect(cookie).toMatchObject({ httpOnly: true, sameSite: "Strict", path: "/" });
+  const cookie = (await context.cookies()).find((candidate) => candidate.name === SESSION_COOKIE);
+  expect(cookie).toMatchObject({ httpOnly: true, secure: BUILT_SERVER, sameSite: "Strict", path: "/" });
   expect(await page.evaluate(() => document.cookie)).not.toContain(cookie!.value);
   expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain(
     cookie!.value,
@@ -124,7 +125,7 @@ test("an invited person signs in by emailed code and authenticator app, and the 
   await openHeaderMenu(page, "Account");
   await page.getByRole("banner").getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("banner").getByRole("link", { name: "Sign in →" })).toBeVisible();
-  expect((await context.cookies()).some((candidate) => candidate.name === "mpc_session")).toBe(false);
+  expect((await context.cookies()).some((candidate) => candidate.name === SESSION_COOKIE)).toBe(false);
 
   // An encoded spelling of the verify route (review M1). The API would decode `%76` and issue a
   // session; the proxy must refuse it rather than pass the token back to page script. The code is
@@ -147,14 +148,14 @@ test("an invited person signs in by emailed code and authenticator app, and the 
   expect(encoded.status).toBe(400);
   expect(JSON.parse(encoded.text)).toMatchObject({ code: "PATH_ENCODING_REFUSED" });
   expect(encoded.text).not.toContain("sessionToken");
-  expect((await context.cookies()).some((candidate) => candidate.name === "mpc_session")).toBe(false);
+  expect((await context.cookies()).some((candidate) => candidate.name === SESSION_COOKIE)).toBe(false);
 
   // Signing in again: the emailed code on the literal route, then the authenticator app (a later
   // step than enrolment).
   const literal = await post("/api/v1/auth/email/verify", { email, code });
   expect(literal.status).toBe(200);
   expect(literal.text).not.toContain("sessionToken");
-  expect((await context.cookies()).some((candidate) => candidate.name === "mpc_session")).toBe(true);
+  expect((await context.cookies()).some((candidate) => candidate.name === SESSION_COOKIE)).toBe(true);
   await page.goto("/auth/mfa");
   await expect(page.getByRole("heading", { name: "Second step" })).toBeVisible();
   const next = await totp(secret, step);

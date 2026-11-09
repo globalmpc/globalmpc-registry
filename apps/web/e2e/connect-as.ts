@@ -1,3 +1,4 @@
+import { BUILT_SERVER, SESSION_COOKIE } from "./server-mode";
 import { openHeaderMenu } from "./header-menu";
 import { expect, type Page } from "@playwright/test";
 import { demoEmail, demoPasskey } from "./demo-people";
@@ -13,14 +14,11 @@ import { useWallet as installTestWallet } from "./wallet";
  */
 export async function sessionToken(page: Page): Promise<string> {
   const cookie = (await page.context().cookies()).find(
-    (candidate) => candidate.name === SESSION_COOKIE || candidate.name === "__Host-mpc_session",
+    (candidate) => candidate.name === SESSION_COOKIE,
   );
   expect(cookie, "no session cookie: sign in first").toBeDefined();
   return cookie!.value;
 }
-
-/** The development cookie name (`bff.ts`); the run's web server is never a production build. */
-const SESSION_COOKIE = "mpc_session";
 
 /**
  * Sessions this worker has already signed in, by person. Reusing one is what keeps the suite from
@@ -66,7 +64,7 @@ export async function connectAs(
   const cached = sessions.get(label);
   if (cached) {
     await context.addCookies([
-      { name: SESSION_COOKIE, value: cached, domain: "localhost", path: "/", httpOnly: true, sameSite: "Strict" },
+      { name: SESSION_COOKIE, value: cached, url: `${BUILT_SERVER ? "https" : "http"}://localhost:${process.env["E2E_WEB_PORT"] ?? 3000}/`, secure: BUILT_SERVER, httpOnly: true, sameSite: "Strict" },
     ]);
     if (await isComplete(page, subjectId)) {
       await page.goto("/w/projects");

@@ -141,6 +141,7 @@ test('SIGTERM keeps telemetry alive during drain and preserves explicit exit sta
       await new Promise(resolve => setTimeout(resolve, 100));
       console.log('FINAL_DRAIN_MARKER');
       clearInterval(keepAlive);
+      await globalThis[Symbol.for('mpc.telemetry.shutdown')]?.();
       process.exit(7);
     });
     console.log('DRAIN_READY');`;
@@ -152,12 +153,33 @@ test('SIGTERM keeps telemetry alive during drain and preserves explicit exit sta
     assert.ok(result.stdout.includes('FINAL_DRAIN_MARKER'));
     assert.ok(Buffer.concat(batches).includes('FINAL_DRAIN_MARKER'), 'final drain log reaches collector');
     batches.length = 0;
-    const natural = await run(true, endpoint, cli, source.replace('process.exit(7);', 'process.exitCode = 7;'), {}, true);
+    const natural = await run(true, endpoint, cli, source.replace("await globalThis[Symbol.for('mpc.telemetry.shutdown')]?.();", '').replace('process.exit(7);', 'process.exitCode = 7;'), {}, true);
     assert.equal(natural.code, 7, natural.stderr);
     assert.ok(Buffer.concat(batches).includes('FINAL_DRAIN_MARKER'));
     const started = Date.now();
     const outage = await run(true, 'http://127.0.0.1:1', cli, source, {}, true);
     assert.equal(outage.code, 7);
     assert.ok(Date.now()-started < 6000, 'collector failure has bounded exit');
+  }
+});
+
+
+test('startup refusal exits synchronously before initialization or queued work', async (t) => {
+  const { mkdtempSync, existsSync, rmSync } = require('node:fs');
+  const dir = mkdtempSync('/tmp/otel-exit-contract-');
+  t.after(() => rmSync(dir, {recursive:true,force:true}));
+  for (const enabled of [false, true]) {
+    for (const cli of [false, true]) {
+      const sentinel = dir + '/' + enabled + '-' + cli;
+      const source = `
+        import { writeFileSync } from 'node:fs';
+        console.log('STARTUP_REFUSED');
+        setTimeout(() => writeFileSync(${JSON.stringify(sentinel)}, 'queued work ran'), 0);
+        process.exit(1);
+        writeFileSync(${JSON.stringify(sentinel)}, 'database initialization reached');`;
+      const result = await run(enabled, 'http://127.0.0.1:1', cli, source);
+      assert.equal(result.code, 1, result.stderr);
+      assert.equal(existsSync(sentinel), false, 'process.exit must not return or run queued work');
+    }
   }
 });

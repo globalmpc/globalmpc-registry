@@ -108,3 +108,29 @@ audit does not establish that development dependencies have no advisories.
 
 Local results, CI results, and external-service results are distinct evidence.
 Record their scope and revision, and report required checks that remain unverified.
+
+### Private integration server comparison
+
+The manager's Registry workflow separates full application coverage/migration checks from
+browser/chain journeys, with one PostgreSQL service per job. Browser batches remain sequential
+within their job, and the schema is reset before the anchor worker starts.
+
+`E2E_WEB_SERVER=built` selects `next start` after `pnpm --filter @mpc/web build`;
+`dev` (the local default) selects `next dev`. The manager's `e2e-web-server` input selects
+the comparison mode. Include build and installation time when comparing runs, and record
+runner hardware and queue time separately. A faster failing run is not an improvement.
+
+| Boundary | Authority and required behavior |
+| --- | --- |
+| Browser session | Built mode uses the production `__Host-` cookie with Secure, HttpOnly and SameSite=Strict; development keeps its existing cookie. Test helpers follow that choice; the BFF policy is unchanged. |
+| Mock identity provider | Only the API runs in development with the loopback OIDC relay. The built web server retains production behavior; the relay never enters a production deployment. |
+| Unexpected test-server exit | The monitored launcher stops the owned Playwright batch with failure and preserves exit code/signal and memory evidence; it does not retry a broken server or skip tests to obtain success. |
+| External cancellation | SIGINT/SIGTERM starts one bounded process-group shutdown deadline, preserved even when the immediate child exits. Cancellation cannot become a successful test run. |
+| Final status | Failure markers are checked after recorded-server cleanup; a late marker outranks a successful CLI exit. |
+| Requested teardown | The launcher forwards shutdown to its own child process group; normal Playwright teardown is recorded separately from crashes. |
+
+Run `node --test apps/web/e2e/server-process.test.mjs` for monitor regressions. Launch browser
+batches from `apps/web` with `node e2e/run-playwright.mjs [Playwright arguments]`.
+`CI_TEMP_DIR` controls the diagnostics parent directory. The manager retains process artifacts
+for both successful and failing browser runs; samples exclude command arguments and environment
+values. Compare cgroup counters at server start and exit before attributing a failure to OOM.

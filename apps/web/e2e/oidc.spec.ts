@@ -1,3 +1,4 @@
+import { BUILT_SERVER, SESSION_COOKIE, OIDC_COOKIE } from "./server-mode";
 import { openHeaderMenu } from "./header-menu";
 import { randomUUID } from "node:crypto";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
@@ -33,9 +34,9 @@ function cookie(cookies: readonly { name: string }[], name: string) {
 
 async function expectStrictSession(context: BrowserContext): Promise<void> {
   const cookies = await context.cookies();
-  expect(cookie(cookies, "mpc_session")).toMatchObject({ httpOnly: true, sameSite: "Strict", path: "/" });
+  expect(cookie(cookies, SESSION_COOKIE)).toMatchObject({ httpOnly: true, secure: BUILT_SERVER, sameSite: "Strict", path: "/" });
   // The binding is single-use: gone once the callback completed.
-  expect(cookie(cookies, "mpc_oidc")).toBeUndefined();
+  expect(cookie(cookies, OIDC_COOKIE)).toBeUndefined();
 }
 
 /**
@@ -74,8 +75,8 @@ test("a person links Google from settings at aal2, then signs in with it and sti
   await page.getByTestId("link-google").click();
   const atProvider = await link.visited;
   expect(atProvider.url.origin).toBe("https://accounts.google.com");
-  expect(cookie(atProvider.cookies, "mpc_oidc")).toMatchObject({ httpOnly: true, sameSite: "Strict" });
-  expect(cookie(atProvider.cookies, "mpc_session")).toMatchObject({ httpOnly: true, sameSite: "Strict" });
+  expect(cookie(atProvider.cookies, OIDC_COOKIE)).toMatchObject({ httpOnly: true, secure: BUILT_SERVER, sameSite: "Strict" });
+  expect(cookie(atProvider.cookies, SESSION_COOKIE)).toMatchObject({ httpOnly: true, secure: BUILT_SERVER, sameSite: "Strict" });
   await expect(page.getByTestId("oidc-linked")).toContainText("Google is now linked to your account.");
   await expectStrictSession(context);
   await page.goto("/w/settings");
@@ -87,7 +88,7 @@ test("a person links Google from settings at aal2, then signs in with it and sti
   await page.goto("/connect");
   const signIn = await approveAtProvider(page, { sub });
   await page.getByTestId("oidc-google").click();
-  expect(cookie((await signIn.visited).cookies, "mpc_oidc")).toMatchObject({ sameSite: "Strict" });
+  expect(cookie((await signIn.visited).cookies, OIDC_COOKIE)).toMatchObject({ sameSite: "Strict" });
   await expect(page).toHaveURL(/\/auth\/mfa/);
   await page.goto("/w/projects");
   await expect(page).toHaveURL(/\/auth\/mfa\?next=%2Fw%2Fprojects/);
@@ -106,7 +107,7 @@ test("a person links Google from settings at aal2, then signs in with it and sti
   await page.getByTestId("oidc-google").click();
   await stranger.visited;
   await expect(page.getByTestId("oidc-error")).toBeVisible();
-  expect(cookie(await context.cookies(), "mpc_session")).toBeUndefined();
+  expect(cookie(await context.cookies(), SESSION_COOKIE)).toBeUndefined();
 });
 
 test("an invited person accepts with Microsoft once the directory vouches for the address (xms_edov)", async ({
@@ -141,7 +142,7 @@ test("an invited person accepts with Microsoft once the directory vouches for th
   await page.getByTestId("oidc-microsoft").click();
   await unverified.visited;
   await expect(page.getByTestId("oidc-error")).toBeVisible();
-  expect(cookie(await context.cookies(), "mpc_session")).toBeUndefined();
+  expect(cookie(await context.cookies(), SESSION_COOKIE)).toBeUndefined();
 
   // With it, the same invitation is accepted and the person owes a second factor.
   await page.getByTestId("oidc-error").getByRole("link").click();
@@ -151,7 +152,7 @@ test("an invited person accepts with Microsoft once the directory vouches for th
   await page.getByTestId("oidc-microsoft").click();
   const atProvider = await vouched.visited;
   expect(atProvider.url.origin).toBe("https://login.microsoftonline.com");
-  expect(cookie(atProvider.cookies, "mpc_oidc")).toMatchObject({ httpOnly: true, sameSite: "Strict" });
+  expect(cookie(atProvider.cookies, OIDC_COOKIE)).toMatchObject({ httpOnly: true, secure: BUILT_SERVER, sameSite: "Strict" });
   await expect(page).toHaveURL(/\/auth\/mfa/);
   await expect(page.getByRole("heading", { name: "Set up your second factor" })).toBeVisible();
 
