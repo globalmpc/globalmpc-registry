@@ -14,7 +14,7 @@ test.describe("workspace navigation", () => {
   test("every global item in the spec is present as a link", async ({ page }) => {
     await connectAs(page, "Operator A");
     await openHeaderMenu(page, "Workspace");
-    const nav = page.getByRole("banner").getByRole("navigation");
+    const nav = page.getByRole("complementary", { name: "Workspace navigation" });
 
     for (const label of [
       "My Work",
@@ -38,7 +38,7 @@ test.describe("workspace navigation", () => {
   test("menus outside the role are not shown", async ({ page }) => {
     await connectAs(page, "Steward A");
     await openHeaderMenu(page, "Workspace");
-    const nav = page.getByRole("banner").getByRole("navigation");
+    const nav = page.getByRole("complementary", { name: "Workspace navigation" });
 
     await expect(nav.getByRole("link", { name: "Projects", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "My Activity", exact: true })).toBeVisible();
@@ -48,11 +48,8 @@ test.describe("workspace navigation", () => {
 
   test("public menus are reachable while signed in", async ({ page }) => {
     await connectAs(page, "Steward A");
-    await openHeaderMenu(page, "Workspace");
-    const nav = page.getByRole("banner").getByRole("navigation");
-
-    await nav.getByText("Public registry").click();
-    await nav.getByRole("link", { name: "Proof Verifier", exact: true }).click();
+    await openFooterMenu(page);
+    await page.getByRole("contentinfo").getByRole("link", { name: "Proof Verifier", exact: true }).click();
     await expect(page).toHaveURL(/\/verify$/);
   });
 });

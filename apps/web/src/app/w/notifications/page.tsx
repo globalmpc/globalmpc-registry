@@ -39,10 +39,12 @@ export default function NotificationsPage() {
   const [items, setItems] = useState<Notification[]>([]);
   // The server caps the list and says so. An unread count from a capped list is a floor.
   const [truncated, setTruncated] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
 
   const reload = useCallback(async () => {
     if (!token) return;
+    setLoading(true);
     try {
       const page = await listNotifications(token);
       setItems(page.items);
@@ -50,7 +52,7 @@ export default function NotificationsPage() {
       setError(null);
     } catch (caught) {
       setError(caught);
-    }
+    } finally { setLoading(false); }
   }, [token]);
 
   useEffect(() => {
@@ -90,7 +92,7 @@ export default function NotificationsPage() {
       ) : null}
 
       <div className="panel">
-        {items.length === 0 ? (
+        {loading ? <p role="status">Loading notifications…</p> : error && items.length === 0 ? null : items.length === 0 ? (
           <p className="sub" style={{ margin: 0 }}>
             Nothing has happened that concerns you. This is not a permission problem.
           </p>
@@ -127,7 +129,7 @@ export default function NotificationsPage() {
                           onClick={() => {
                             void markNotificationRead(token!, newIdempotencyKey(), item.id).then(
                               () => reload(),
-                            );
+                            ).catch(setError);
                           }}
                         >
                           Mark read

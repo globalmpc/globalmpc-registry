@@ -102,7 +102,7 @@ export default function ProjectListPage() {
       >
         <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
           <div className="field" style={{ minWidth: 160 }}>
-            <label htmlFor="filter-stage">Stage</label>
+            <label htmlFor="filter-stage">Lifecycle</label>
             <select
               id="filter-stage"
               value={filters.stage ?? ""}

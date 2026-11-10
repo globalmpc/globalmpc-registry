@@ -250,6 +250,10 @@ class FakeChain implements ChainClient {
 
 describeDb("anchor submission and finality", () => {
   let sql: postgres.Sql;
+  let administrator: postgres.Sql;
+  let databaseUrl: string;
+  const databaseName = `anchor_submitter_${randomUUID().replaceAll("-", "")}`;
+  let databaseCreated = false;
   let tenantId: string;
   let batchRowId: string;
   let transactionId: string;
@@ -262,12 +266,26 @@ describeDb("anchor submission and finality", () => {
   };
 
   beforeAll(async () => {
-    sql = postgres(process.env["DATABASE_URL"]!, { onnotice: () => {}, prepare: false });
+    // Drain reports and chain moves intentionally range over every tenant/chain. Other API
+    // suites retain 5611 fixtures, so this suite owns a database rather than relying on order
+    // or deleting another suite's transactions. The configured CI PostgreSQL owner has CREATEDB.
+    administrator = postgres(process.env["DATABASE_URL"]!, { onnotice: () => {}, prepare: false });
+    await administrator`CREATE DATABASE ${administrator(databaseName)}`;
+    databaseCreated = true;
+    const url = new URL(process.env["DATABASE_URL"]!);
+    url.pathname = `/${databaseName}`;
+    databaseUrl = url.href;
+    sql = postgres(databaseUrl, { onnotice: () => {}, prepare: false });
     await runMigrations(sql);
   });
 
   afterAll(async () => {
-    await sql.end();
+    try { await sql?.end(); }
+    finally {
+      try {
+        if (databaseCreated) await administrator`DROP DATABASE ${administrator(databaseName)} WITH (FORCE)`;
+      } finally { await administrator?.end(); }
+    }
   });
 
   beforeEach(async () => {
@@ -1314,7 +1332,7 @@ describeDb("anchor submission and finality", () => {
     /** As the worker connects: its grants, through the 0103 trigger. */
     let worker: postgres.Sql;
     beforeAll(() => {
-      worker = postgres(process.env["DATABASE_URL"]!, {
+      worker = postgres(databaseUrl, {
         onnotice: () => {},
         prepare: false,
         connection: { role: "mpc_worker" },
@@ -1442,7 +1460,7 @@ describeDb("anchor submission and finality", () => {
     `;
     await sql`ANALYZE chain.transactions`;
     const queries: { text: string; parameters: unknown[] }[] = [];
-    const traced = postgres(process.env["DATABASE_URL"]!, {
+    const traced = postgres(databaseUrl, {
       onnotice: () => {},
       prepare: false,
       debug: (_connection, text, parameters) => {

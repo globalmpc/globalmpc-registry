@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PublicProjectHeader } from "@/components/PublicProjectHeader";
 import { use, useEffect, useState } from "react";
 import { getPublicRegistryEntry, type PublicProjection } from "@/lib/api";
 import { ErrorNotice } from "@/components/ErrorNotice";
@@ -45,19 +45,9 @@ export default function PublicProjectPage({
     };
   }, [publicKey]);
 
-  const projectName = typeof entry?.projectName === "string" ? entry.projectName : decodeURIComponent(publicKey);
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>{projectName}</h1>
-          <p className="sub">
-            Project Registry record. This page is the citable address for this record — the same URL
-            keeps resolving after a correction or a revocation, and says which one happened.
-          </p>
-        </div>
-        <Link href="/explorer/projects">← All projects</Link>
-      </div>
+      <PublicProjectHeader key={publicKey} entry={entry} publicKey={publicKey} />
 
       {error ? <ErrorNotice error={error} /> : null}
 

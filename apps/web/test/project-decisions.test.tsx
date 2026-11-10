@@ -234,7 +234,7 @@ describe("publication separation of duties", () => {
   it("drafts, acknowledges publication and creates a pre-submission batch", async () => {
     const calls = mockHttp(publicationRoutes());
     await mount(Publication);
-    await screen.findByText("Copper");
+    await screen.findByRole("heading", { name: "Copper" });
     fireEvent.click(screen.getByTestId("draft"));
     await screen.findByTestId("pending-draft");
     expect((screen.getByTestId("publish") as HTMLButtonElement).disabled).toBe(
@@ -307,7 +307,7 @@ describe("publication separation of duties", () => {
       "POST /api/v1/registry-entries": failure(),
     });
     await mount(Publication);
-    await screen.findByText("Copper");
+    await screen.findByRole("heading", { name: "Copper" });
     fireEvent.click(screen.getByTestId("draft"));
     await screen.findByRole("alert");
     await waitFor(() =>

@@ -430,6 +430,9 @@ export function streamUploadUrl(projectId: string, directOrigin: string | undefi
   return new URL(path, directOrigin).toString();
 }
 
+/** Missing on older cached responses: callers must not infer new ownership from document state. */
+export type UploadCreationResult = ObjectUpload & { reused?: boolean };
+
 /**
  * File upload.
  *
@@ -441,7 +444,7 @@ export async function createUpload(
   projectId: string,
   file: File,
   key: string,
-): Promise<ObjectUpload> {
+): Promise<UploadCreationResult> {
   if (file.size > BASE64_UPLOAD_LIMIT_BYTES) {
     const form = new FormData();
     form.append("file", file, file.name);
@@ -461,7 +464,7 @@ export async function createUpload(
       body: form,
       },
     );
-    return parse<ObjectUpload>(response);
+    return parse<UploadCreationResult>(response);
   }
 
   const buffer = await file.arrayBuffer();
@@ -478,7 +481,7 @@ export async function createUpload(
       originalFilename: file.name,
     }),
   });
-  return parse<ObjectUpload>(response);
+  return parse<UploadCreationResult>(response);
 }
 
 export async function recordScanResult(

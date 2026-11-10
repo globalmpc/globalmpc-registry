@@ -1,3 +1,4 @@
+import { uploadCreationResult } from "./resources.js";
 import { responseMeta } from "./common.js";
 import { createCreReportRequest, creReport, creWorkspace, creDelivery } from "./cre.js";
 import { evidenceLedgerResponse, publicEvidenceLedger, publicEvidenceLedgerCurrent } from "./evidence-ledger.js";
@@ -475,7 +476,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: "source.upload",
     implemented: true,
-    responseSchema: objectUpload,
+    responseSchema: uploadCreationResult,
   },
   {
     method: "post",
@@ -487,7 +488,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     requiresIfMatch: false,
     action: "source.upload",
     implemented: true,
-    responseSchema: objectUpload,
+    responseSchema: uploadCreationResult,
   },
   {
     method: "post",

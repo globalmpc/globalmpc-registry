@@ -109,6 +109,13 @@ audit does not establish that development dependencies have no advisories.
 Local results, CI results, and external-service results are distinct evidence.
 Record their scope and revision, and report required checks that remain unverified.
 
+The anchor-submitter integration suite creates a uniquely named database on the configured
+PostgreSQL cluster and drops only that database at teardown. The configured test owner needs
+CREATEDB (the CI service's postgres user has it). Its global chain-drain/move assertions must
+not see another API suite's retained transactions; all its worker-role and traced connections
+therefore use that private database. This preserves meaningful global assertions without
+depending on file order or deleting another suite's fixtures.
+
 ### Private integration server comparison
 
 The manager's Registry workflow separates full application coverage/migration checks from
@@ -127,6 +134,7 @@ runner hardware and queue time separately. A faster failing run is not an improv
 | Unexpected test-server exit | The monitored launcher stops the owned Playwright batch with failure and preserves exit code/signal and memory evidence; it does not retry a broken server or skip tests to obtain success. |
 | External cancellation | SIGINT/SIGTERM starts one bounded process-group shutdown deadline, preserved even when the immediate child exits. Cancellation cannot become a successful test run. |
 | Final status | Failure markers are checked after recorded-server cleanup; a late marker outranks a successful CLI exit. |
+| Recorded-server shutdown | The wrapper acknowledges that its requested-stop state is set before the controller signals its child group. Missing acknowledgement uses bounded fallback cleanup and fails the batch. |
 | Requested teardown | The launcher forwards shutdown to its own child process group; normal Playwright teardown is recorded separately from crashes. |
 
 Run `node --test apps/web/e2e/server-process.test.mjs` for monitor regressions. Launch browser
@@ -134,3 +142,44 @@ batches from `apps/web` with `node e2e/run-playwright.mjs [Playwright arguments]
 `CI_TEMP_DIR` controls the diagnostics parent directory. The manager retains process artifacts
 for both successful and failing browser runs; samples exclude command arguments and environment
 values. Compare cgroup counters at server start and exit before attributing a failure to OOM.
+
+Cleanup interprets Linux process state rather than PID existence alone: an acknowledged
+zombie wrapper has completed, and a group containing only terminated/zombie members is
+finished. A live descendant still requires cleanup even if the group leader is a zombie.
+Missing acknowledgement and recorded crashes still fail the batch; zombie handling never
+turns those cases into success.
+
+The controller uses one idempotent finalization path for normal exit, spawn error,
+server failure and cancellation. Test-group cleanup rejection is handled immediately;
+recorded-server cleanup does not depend on a later CLI exit event. After that cleanup,
+an uninterruptible CLI cannot retain the controller indefinitely: it exits unsuccessfully.
+The server wrapper likewise catches cleanup rejection and records failure before releasing
+its child handles. Fault-injection regressions cover both caller contracts.
+
+CLI output closure is tracked separately from CLI exit and process-group termination.
+After recorded-server cleanup completes, the controller allows stdout/stderr one second
+to drain. Pipes still open after that deadline are destroyed and the child handle is
+unreferenced; this fails the batch even if the CLI exited successfully. A detached
+process holding either pipe cannot retain the controller indefinitely. Output closing
+within the deadline retains the original result and final log output.
+
+| Finalization case | Authority / input scope | Result priority |
+| --- | --- | --- |
+| CLI exited and its group stopped, detached descendant retains output | Owned CLI stdout/stderr closure, checked after recorded-server cleanup | Drain timeout fails and releases handles |
+| Recorded-server cleanup failed and output remains open | Cleanup failure and owned output closure are independent live signals | Failure remains; bounded drain still releases handles |
+| Output closes within the drain deadline | Both owned streams closed; CLI status and existing failure/cancellation state | Existing failure overrides cancellation, which overrides CLI status |
+
+Quality runs cancel superseded revisions of the same PR/ref while retaining job
+parallelism. The application caller and manager reusable workflow use distinct
+concurrency group prefixes to avoid cancelling the active caller. Deploy workflows
+retain their existing non-cancelling concurrency policy.
+
+| Concurrent runs | Identity / scope | Decision |
+| --- | --- | --- |
+| Two revisions of one PR | PR number within this repository | New quality run cancels the older run |
+| Separate PRs or branch pushes | Different PR numbers or full refs | Separate concurrency groups; parallel execution remains allowed |
+| Caller and reusable workflow | Distinct caller/reusable group prefixes | The current run does not cancel itself |
+
+The caller guard takes effect when this workflow revision is used; the durable
+manager guard requires publishing the updated generated workflow to `release`.
+Neither guard retroactively cancels old runs that started without concurrency.

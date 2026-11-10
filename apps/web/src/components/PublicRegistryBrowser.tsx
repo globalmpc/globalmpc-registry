@@ -6,6 +6,7 @@ import {
   listPublicRegistryEntries,
   type PublicRegistryListItem,
 } from "@/lib/api";
+import { DirectoryEvidence } from "./DirectoryEvidence";
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
@@ -146,11 +147,11 @@ export function PublicRegistryBrowser({
       </div>
 
       {busy ? <p role="status">Loading published records…</p> : null}
-      {error ? <ErrorNotice error={error} /> : null}
+      {error ? <><ErrorNotice error={error} /><button type="button" disabled={busy} onClick={() => void load({ append: false, cursor: null })}>Retry published records</button></> : null}
 
       <div className={cards ? "public-directory-results" : "panel"} data-testid="public-registry-list">
         {cards ? <p className="meta public-directory-caption">PROJECTS · Published records</p> : null}
-        {items.length === 0 && !busy ? (
+        {items.length === 0 && !busy && !error ? (
           <p className="sub" style={{ margin: 0 }} data-testid="public-registry-empty">
             {query ? `Nothing published matches “${query}”.` : emptyMessage}
           </p>
@@ -162,10 +163,10 @@ export function PublicRegistryBrowser({
                   <h2>{hrefFor ? <Link href={hrefFor(item)}>{text(item.projection, "projectName") === "—" ? item.publicKey : text(item.projection, "projectName")}</Link> : item.publicKey}</h2>
                   <p className="meta">{item.publicKey} · {text(item.projection, "mineral")} · {text(item.projection, "hostCountry")}</p>
                 </div>
-                <p className="meta">v{item.version}</p>
+                <DirectoryEvidence value={item.projection.evidenceLedger} />
                 <div>
                   <span className={item.revokedAt ? "public-project-status revoked" : "public-project-status"}>{item.status}{item.revokedAt && item.status !== "revoked" ? " · revoked" : ""}</span>
-                  <p className="meta">Published {item.publishedAt ?? "Date unavailable"}</p>
+                  <p className="meta"><span>v{item.version}</span> · Published {item.publishedAt ? new Date(item.publishedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }) : "Date unavailable"}</p>
                 </div>
               </article>
             ))}

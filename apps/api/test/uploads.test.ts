@@ -262,10 +262,35 @@ describeDb("uploads", () => {
     };
 
     const first = await upload(stewardToken, body);
+    expect(first.json().reused).toBe(false);
+    const classified = await app.inject({
+      method: "PATCH", url: `/api/v1/uploads/${first.json().id}/document-profile`,
+      headers: { authorization: `Bearer ${stewardToken}`, "idempotency-key": idempotencyKey(), "if-match": `"${first.json().version}"` },
+      payload: { documentType: "Original permit", validUntil: "2030-12-31" },
+    });
+    expect(classified.statusCode).toBe(200);
     const second = await upload(stewardToken, body);
+    expect(second.json()).toMatchObject({ reused: true, documentType: "Original permit", validUntil: "2030-12-31", version: classified.json().version });
 
     // Storing twice splits the evidence, leaving it unclear which copy is under review.
     expect(second.json().id).toBe(first.json().id);
+  });
+
+  it("replays the creator result after a lost response rather than misidentifying it as reuse", async () => {
+    const key = idempotencyKey();
+    const request = {
+      method: "POST" as const, url: `/api/v1/projects/${fx.projectA}/uploads`,
+      headers: { authorization: `Bearer ${stewardToken}`, "idempotency-key": key },
+      payload: { contentBase64: Buffer.from("idempotent creation replay").toString("base64"), contentType: "text/plain" },
+    };
+    const first = await app.inject(request);
+    const replay = await app.inject(request);
+    expect(first.statusCode).toBe(200);
+    expect(replay.statusCode).toBe(200);
+    expect(first.json().reused).toBe(false);
+    expect(replay.json()).toEqual(first.json());
+    const distinct = await upload(stewardToken, request.payload);
+    expect(distinct.json()).toMatchObject({ id: first.json().id, reused: true });
   });
 
   describe("the same content uploaded again", () => {
@@ -325,6 +350,8 @@ describeDb("uploads", () => {
       const responses = await heldAtInsert(8, () => upload(stewardToken, { contentBase64 }));
 
       expect(responses.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
+      expect(responses.filter((response) => response.json().reused === false)).toHaveLength(1);
+      expect(responses.filter((response) => response.json().reused === true)).toHaveLength(7);
       const ids = new Set(responses.map((response) => response.json().id));
       expect(ids.size).toBe(1);
       const [count] = await fx.sql<{ n: string }[]>`
@@ -409,6 +436,10 @@ describeDb("uploads", () => {
       // If the paths hashed differently, one file would become two pieces of evidence.
       expect(viaBase64.contentHash).toBe(viaStream.contentHash);
       expect(viaBase64.id).toBe(viaStream.id);
+      expect(viaStream.reused).toBe(false);
+      expect(viaBase64.reused).toBe(true);
+      const repeatedStream = (await streamUpload(stewardToken, content)).json();
+      expect(repeatedStream).toMatchObject({ id: viaStream.id, reused: true });
     });
 
     it("identical streamed uploads at the same moment all get the one upload, never a 500", async () => {
@@ -416,6 +447,8 @@ describeDb("uploads", () => {
       const responses = await heldAtInsert(8, () => streamUpload(stewardToken, content));
 
       expect(responses.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
+      expect(responses.filter((response) => response.json().reused === false)).toHaveLength(1);
+      expect(responses.filter((response) => response.json().reused === true)).toHaveLength(7);
       expect(new Set(responses.map((response) => response.json().id)).size).toBe(1);
     });
 

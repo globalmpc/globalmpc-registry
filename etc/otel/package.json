@@ -4,8 +4,8 @@
   "private": true,
   "description": "OpenTelemetry auto-instrumentation runtime for the LGTM rollout. Installed into /opt/otel, never the application's node_modules. Generated from a verified build; regenerate with npm install, do not hand-edit.",
   "dependencies": {
-    "@opentelemetry/auto-instrumentations-node": "0.82.0",
-    "@opentelemetry/sdk-node": "0.300.0",
+    "@opentelemetry/auto-instrumentations-node": "0.83.0",
+    "@opentelemetry/sdk-node": "0.301.0",
     "@opentelemetry/api": "1.10.0"
   },
   "scripts": {

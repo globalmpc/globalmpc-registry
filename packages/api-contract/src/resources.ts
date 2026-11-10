@@ -299,6 +299,11 @@ export const objectUpload = z.object({
   version: z.number().int().positive(),
 });
 
+/** Creation versus content reuse belongs to the idempotent POST result, not document state. */
+export const uploadCreationResult = objectUpload.extend({
+  reused: z.boolean().optional().describe("True when identical content already existed in this project; replay preserves the original result. Absent on older cached responses"),
+});
+
 /** Short-lived download URL. No permanent public URL is created (06 §6.7). */
 /**
  * Scanner liveness.

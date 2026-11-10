@@ -1,6 +1,6 @@
 {
   "name": "@mpc/design",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "MPC design system — tokens, logo assets, and the rules that keep a project on brand.",
   "license": "Apache-2.0",
   "private": true,
