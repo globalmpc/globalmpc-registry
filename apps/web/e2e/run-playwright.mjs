@@ -9,35 +9,95 @@ mkdirSync(root, { recursive: true });
 const directory = mkdtempSync(join(root, 'e2e-process-'));
 console.log(`[e2e-process] diagnostics: ${directory}`);
 const child = spawn('pnpm', ['exec', 'playwright', 'test', ...process.argv.slice(2)], {
-  stdio: 'inherit', detached: process.platform !== 'win32',
+  stdio: ['inherit', 'pipe', 'pipe'], detached: process.platform !== 'win32',
   env: { ...process.env, E2E_DIAGNOSTICS_DIR: directory },
 });
 let failed = false;
-let shutdown;
 let cancelled;
-function stop(signal) {
-  return shutdown ||= stopGroup(child.pid, signal, 10_000);
+let childEnded = false;
+let childCode;
+let childSignal;
+let finalizing;
+function entries() {
+  try { return readdirSync(directory); }
+  catch { failed = true; console.error('[e2e-process] Cannot read process diagnostics.'); return []; }
+}
+async function cleanupRecordedServers() {
+  const servers = [];
+  for (const name of entries().filter(name => name.endsWith('-process.jsonl'))) {
+    try { servers.push(JSON.parse(readFileSync(join(directory, name), 'utf8').split('\n')[0])); }
+    catch { failed = true; console.error('[e2e-process] Incomplete server record; continuing other cleanup.'); }
+  }
+  const results = await Promise.allSettled(servers.map(server => stopRecordedServer(server, directory)));
+  failed ||= results.some(result => result.status === 'rejected' || !result.value);
+}
+async function drainOutput() {
+  // CLI exit and process-group termination do not close pipes inherited by a
+  // detached descendant. Start this separate deadline only after server cleanup.
+  const pipes = [child.stdout, child.stderr].filter(pipe => pipe && !pipe.closed);
+  if (!pipes.length) return true;
+  return new Promise(resolve => {
+    const finish = drained => {
+      clearTimeout(deadline);
+      for (const pipe of pipes) pipe.off('close', onClose);
+      resolve(drained);
+    };
+    const onClose = () => { if (pipes.every(pipe => pipe.closed)) finish(true); };
+    const deadline = setTimeout(() => finish(false), 1000);
+    for (const pipe of pipes) pipe.once('close', onClose);
+    onClose();
+  });
+}
+function finalize() {
+  // Start cleanup from every terminal path, not just the CLI's exit event. The
+  // cached promise owns its rejection handler before any signal callback returns.
+  return finalizing ||= (async () => {
+    clearInterval(monitor);
+    let groupStopped = false;
+    try { await stopGroup(child.pid, cancelled || 'SIGTERM', 10_000); groupStopped = true; }
+    catch { failed = true; console.error('[e2e-process] Test group cleanup failed; continuing recorded-server cleanup.'); }
+    await cleanupRecordedServers();
+    const outputDrained = await drainOutput();
+    if (!outputDrained) {
+      failed = true;
+      console.error('[e2e-process] CLI output did not close before the drain deadline.');
+    }
+    failed ||= entries().some(name => name.endsWith('-failure.json'));
+    const status = failed ? 1 : cancelled ? (cancelled === 'SIGINT' ? 130 : 143) : childCode ?? (childSignal ? 1 : 0);
+    // Uninterruptible CLI I/O can retain the ChildProcess handle indefinitely.
+    // Only after recorded-server cleanup, fail and release this controller.
+    if (!groupStopped || !childEnded || !outputDrained) {
+      child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+      process.exitCode = status || 1;
+    } else process.exitCode = status;
+  })().catch(() => {
+    console.error('[e2e-process] Finalization failed.');
+    child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+    process.exitCode = 1;
+  });
 }
 const monitor = setInterval(() => {
-  if (failed || !readdirSync(directory).some(name => name.endsWith('-failure.json'))) return;
+  if (finalizing) return;
+  const names = entries();
+  if (!failed && !names.some(name => name.endsWith('-failure.json'))) return;
   failed = true;
   console.error('[e2e-process] A server exited unexpectedly; stopping this batch. See process diagnostics.');
-  void stop('SIGTERM');
+  void finalize();
 }, 200);
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
   cancelled ||= signal;
-  void stop(signal);
+  process.exitCode = failed ? 1 : cancelled === 'SIGINT' ? 130 : 143;
+  void finalize();
 });
-child.once('error', error => { console.error(error.code); clearInterval(monitor); process.exitCode = 1; });
-child.once('exit', async (code, signal) => {
-  clearInterval(monitor);
-  await stop('SIGTERM');
-  // Playwright gives each webServer its own group. Its CLI can itself be killed,
-  // so clean up only groups recorded by this invocation, including detached servers.
-  const servers = readdirSync(directory).filter(name => name.endsWith('-process.jsonl')).map(name =>
-    JSON.parse(readFileSync(join(directory, name), 'utf8').split('\n')[0]));
-  await Promise.all(servers.map(stopRecordedServer));
-  // A crash marker may arrive after the last poll or during teardown.
-  failed ||= readdirSync(directory).some(name => name.endsWith('-failure.json'));
-  process.exitCode = failed ? 1 : cancelled ? (cancelled === 'SIGINT' ? 130 : 143) : code ?? (signal ? 1 : 0);
+child.once('error', error => {
+  console.error(error.code); failed = true; childEnded = true;
+  void finalize();
 });
+child.once('exit', (code, signal) => {
+  childEnded = true; childCode = code; childSignal = signal;
+  void finalize();
+});
+// Keep descendant output on owned pipes, so an uninterruptible CLI cannot keep
+// the Actions step's stdout/stderr descriptors open after this controller leaves.
+child.stdout.pipe(process.stdout);
+child.stderr.pipe(process.stderr);

@@ -435,7 +435,7 @@ export const AUTH_COPY = {
 /** Project navigation shares one registry across overview and every subpage. */
 export const PROJECT_SECTIONS = [
   ["", "Overview", []],
-  ["data-room", "Documents & evidence", ["documents", "impacts", "claims"]],
+  ["data-room", "Documents & evidence", ["documents", "impacts", "claims", "register", "requirements"]],
   ["verification", "Review evidence", ["readiness", "gates"]],
   ["publication", "Prepare publication", ["cre"]],
 ] as const;
@@ -445,4 +445,18 @@ export const PROJECT_TOOLS = [
   ["readiness", "Readiness", "verification"],
   ["gates/registry_publication", "Gate decision", "verification"],
   ["cre", "CRE", "publication"],
+] as const;
+
+/** Sidebar destinations use server actions for visibility, never client role guesses. */
+export const WORKSPACE_PROJECT_LINKS = [
+  { path: "", label: "Project overview", requires: "project.read" },
+  { path: "requirements", label: "Requirements", requires: "readiness.read" },
+  { path: "data-room", label: "Documents & evidence", requires: "evidence.read" },
+  { path: "verification", label: "Review evidence", requires: "verification.read" },
+  { path: "impacts", label: "Impact", requires: "evidence.read" },
+  { path: "readiness", label: "Readiness", requires: "readiness.read" },
+  { path: "gates/registry_publication", label: "Decision", requires: "readiness.read" },
+  { path: "publication", label: "Publication", requires: "registry.read" },
+  { path: "team", label: "Team", requires: "admin.read" },
+  { path: "audit", label: "Project audit", requires: "audit.read" },
 ] as const;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { StageAssessments } from "./StageAssessments";
 import { ErrorNotice } from "./ErrorNotice";
 import {
   getEvidenceLedger,
@@ -91,7 +92,7 @@ export function EvidenceLedger({
         Computed evidence assessment, separate from human confirmations,
         readiness, and permission to proceed.
       </p>
-      <dl className="dl">
+      <dl className={browsable ? "assessment-summary" : "dl"}>
         <dt>Evaluated at</dt>
         <dd>{summary.evaluatedAt}</dd>
         <dt>Evidence stage at assessment</dt>
@@ -105,6 +106,7 @@ export function EvidenceLedger({
           {reviewed} / {summary.items.length} items
         </dd>
       </dl>
+      {browsable ? <StageAssessments summary={summary} /> : null}
       {browsable ? (
         <div className="evidence-browser-controls">
           <label>Search evidence items
@@ -133,8 +135,8 @@ export function EvidenceLedger({
                   ? ` · catalog v${item.catalogVersion}`
                   : ""}
               </strong>
-              :{" "}
-              <span data-testid={`ledger-status-${item.claimType}`}>
+              {!browsable ? ": " : null}
+              <span className={`state-label state-${item.status}`} data-testid={`ledger-status-${item.claimType}`}>
                 {statusLabel(item.status)}
               </span>
               </ItemHeading>
@@ -183,9 +185,8 @@ export function EvidenceLedger({
           ))}
         </ul>
       )}
-      {browsable && summary.items.length > 0 && visibleItems.length === 0 ? <p>No items match these filters. Clear the search or select all statuses.</p> : null}
-      {browsable ? <h3>Stage assessments</h3> : null}
-      {summary.stages.map((stage) => (
+      {browsable && summary.items.length > 0 && visibleItems.length === 0 ? <p>No items match these filters. <button type="button" onClick={() => { setQuery(""); setStatus("all"); }}>Clear filters</button></p> : null}
+      {!browsable ? summary.stages.map((stage) => (
         <p key={`${stage.gateId}-${stage.ruleSetVersion}`}>
           <strong>{stageLabel(stage.gateId)}</strong>:{" "}
           {statusLabel(stage.status)} · rule {stage.ruleSetVersion}
@@ -196,7 +197,7 @@ export function EvidenceLedger({
             ? ` · Missing: ${stage.missing.join(", ")}`
             : ""}
         </p>
-      ))}
+      )) : null}
       <p className="meta">{summary.limitations.join("; ")}</p>
     </section>
   );

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
 import { connectIsolated } from "./helpers/isolated-db.js";
@@ -214,9 +214,12 @@ describe("SMTP transport", () => {
   let server: Server;
   let port = 0;
   const received: string[] = [];
+  const socketErrors: Error[] = [];
+  let onQuit: ((socket: Socket) => void) | null = null;
 
   beforeAll(async () => {
     server = createServer((socket) => {
+      socket.on("error", (error) => socketErrors.push(error));
       let data = false;
       let buffer = "";
       socket.write("220 test ESMTP\r\n");
@@ -238,7 +241,9 @@ describe("SMTP transport", () => {
           else if (line === "DATA") {
             data = true;
             socket.write("354 go\r\n");
-          } else if (line === "QUIT") socket.end("221 bye\r\n");
+          } else if (line === "QUIT") {
+            if (onQuit) onQuit(socket); else socket.end("221 bye\r\n");
+          }
           else socket.write("250 OK\r\n");
         }
       });
@@ -249,6 +254,7 @@ describe("SMTP transport", () => {
 
   afterAll(async () => {
     await new Promise((resolve) => server.close(resolve));
+    expect(socketErrors).toEqual([]);
   });
 
   it("delivers one message to one recipient, with no header a parameter could add", async () => {
@@ -265,6 +271,31 @@ describe("SMTP transport", () => {
     expect(received.filter((line) => line.startsWith("RCPT TO"))).toEqual([`RCPT TO:<${ADDRESS}>`]);
     expect(received.some((line) => line.startsWith("Bcc:"))).toBe(false);
     expect(received).toContain("..");
+  });
+
+  it("waits for the peer's QUIT reply before completing delivery", async () => {
+    let release!: () => void;
+    let observed!: () => void;
+    const quit = new Promise<void>((resolve) => { observed = resolve; });
+    onQuit = (socket) => { release = () => socket.end("221 bye\r\n"); observed(); };
+    let completed = false;
+    const sending = createSmtpTransport("127.0.0.1", port, 2000).send({
+      id: randomUUID(), template: "sign_in_code", to: ADDRESS,
+      from: "no-reply@localhost.test", subject: "s", text: "t",
+    }).then((result) => { completed = true; return result; });
+    try { await quit; expect(completed).toBe(false); }
+    finally { release(); onQuit = null; }
+    expect(await sending).toEqual({ ok: true });
+  });
+
+  it("does not retry accepted mail when the QUIT acknowledgement fails", async () => {
+    onQuit = (socket) => socket.end("500 quit unavailable\r\n");
+    try {
+      expect(await createSmtpTransport("127.0.0.1", port, 2000).send({
+        id: randomUUID(), template: "sign_in_code", to: ADDRESS,
+        from: "no-reply@localhost.test", subject: "s", text: "t",
+      })).toEqual({ ok: true });
+    } finally { onQuit = null; }
   });
 
   it("refuses an address that would break out of the envelope", async () => {

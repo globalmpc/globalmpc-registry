@@ -16,8 +16,8 @@
     "@mpc/db": "workspace:*",
     "@mpc/domain": "workspace:*",
     "@mpc/storage": "workspace:*",
-    "postgres": "^4.0.0",
+    "postgres": "^4.1.0",
     "tsx": "4.23.15",
-    "viem": "2.57.14"
+    "viem": "2.57.16"
   }
 }

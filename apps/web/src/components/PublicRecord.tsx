@@ -54,8 +54,9 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
 
   return (
       <>
-        {entry.evidenceLedger ? <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" browsable={browsableEvidence} /> : null}
         {entry.evidenceLedgerCurrent ? <EvidenceLedgerWarnings current={entry.evidenceLedgerCurrent as LedgerCurrent} /> : null}
+        {entry.evidenceLedger ? <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" browsable={browsableEvidence} /> : null}
+
         <div className="panel">
           <div className="page-head" style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0 }}>Published record</h2>
@@ -201,12 +202,12 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
           ) : null}
         </div>
 
-        {entry.history.length > 0 ? (
-          <div className="panel">
+        <div className="panel" id="record-history">
             <h2>Earlier versions</h2>
+            {entry.history.length === 0 ? <p className="sub">No earlier versions returned for this record.</p> : null}
             {/* Do not hide correction/revocation history. Same reason as not making a past
                 state look current (§11.6). */}
-            <div className="table-scroll">
+            {entry.history.length > 0 ? <div className="table-scroll">
               <table>
                 <thead>
                   <tr>
@@ -225,9 +226,8 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
                   ))}
                 </tbody>
               </table>
-            </div>
+            </div> : null}
           </div>
-        ) : null}
 
         <div className="panel" data-testid="proof-panel">
           <h2>Integrity proof</h2>

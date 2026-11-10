@@ -160,7 +160,7 @@ describe("document provenance", () => {
   });
   it("keeps a replacement quarantined and marks which document it supersedes", async () => {
     const data = routes();
-    data["POST /api/v1/projects/p1/uploads"] = { id: "new", version: 1, state: "quarantined" };
+    data["POST /api/v1/projects/p1/uploads"] = { reused: false, id: "new", version: 1, state: "quarantined" };
     data["PATCH /api/v1/uploads/new/document-profile"] = {
       id: "new",
       version: 2,
@@ -217,4 +217,34 @@ describe("document provenance", () => {
     await screen.findByText("Document changed");
     expect((screen.getByLabelText("Document type") as HTMLInputElement).value).toBe("report");
   });
+});
+it("retains a replacement upload across a classification failure and scanner version change", async () => {
+  const data = routes();
+  let attempts = 0;
+  data["POST /api/v1/projects/p1/uploads"] = { reused: false, id: "new", version: 1, state: "quarantined", documentType: null, validUntil: null, supersedesUploadId: null };
+  data["PATCH /api/v1/uploads/new/document-profile"] = (call: import("./support/http").HttpCall) => {
+    if (++attempts === 1) throw new Error("Profile reply interrupted");
+    if (call.headers.get("if-match") === '"1"') return Response.json({ code: "RESOURCE_VERSION_MISMATCH", message: "Document changed", retryable: false, correlationId: "test" }, { status: 412 });
+    return { id: "new", version: 3, state: "scanned_clean" };
+  };
+  data["GET /api/v1/projects/p1/document-graph?focus=new"] = { nodes: [documentNode("new", { state: "scanned_clean", version: 2, documentType: null, validUntil: null })], links: [] };
+  const calls = await mount(data);
+  fireEvent.change(screen.getByLabelText("File"), { target: { files: [new File(["corrected"], "new.pdf", { type: "application/pdf" })] } });
+  fireEvent.click(screen.getByRole("button", { name: "Upload new version" }));
+  await screen.findByText("Profile reply interrupted");
+  fireEvent.click(screen.getByRole("button", { name: "Upload new version" }));
+  await screen.findByTestId("new-version-created");
+  expect(calls.filter((call) => call.url.endsWith("/uploads") && call.method === "POST")).toHaveLength(1);
+  expect(calls.filter((call) => call.method === "PATCH").map((call) => call.headers.get("if-match"))).toEqual(['"1"', '"1"', '"2"']);
+});
+
+
+it.each([true, undefined])("never assigns a predecessor to reused or unconfirmed content (%s)", async (reused) => {
+  const data = routes();
+  data["POST /api/v1/projects/p1/uploads"] = { id: "not-in-partial-graph", version: 1, state: "quarantined", reused };
+  const calls = await mount(data);
+  fireEvent.change(screen.getByLabelText("File"), { target: { files: [new File(["existing"], "existing.pdf", { type: "application/pdf" })] } });
+  fireEvent.click(screen.getByRole("button", { name: "Upload new version" }));
+  await screen.findByText(/already in the Data Room/);
+  expect(calls.filter((call) => call.method === "PATCH")).toHaveLength(0);
 });

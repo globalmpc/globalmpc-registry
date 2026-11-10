@@ -111,7 +111,7 @@ test.describe("Project List", () => {
     await expect(page.getByRole("link", { name: projectKey })).toBeVisible();
     await expect(page.getByTestId("project-list")).toContainText("Synthetic test");
 
-    await page.getByRole("combobox", { name: "Stage" }).selectOption("retired");
+    await page.getByRole("combobox", { name: "Lifecycle" }).selectOption("retired");
     await expect(page.getByRole("link", { name: projectKey })).toHaveCount(0);
     await expect(page.getByText(/No project matches these filters/)).toBeVisible();
   });
@@ -121,7 +121,7 @@ test.describe("global workspace entries", () => {
   test("Data Room, Verification, Readiness & Gates and Authorities are in the nav", async ({ page }) => {
     await connectAs(page, "Steward A");
     await openHeaderMenu(page, "Workspace");
-    const nav = page.getByRole("banner").getByRole("navigation");
+    const nav = page.getByRole("complementary", { name: "Workspace navigation" });
     for (const label of ["Data Room", "Verification", "Readiness & Gates", "Authorities"]) {
       await expect(nav.getByRole("link", { name: label, exact: true })).toBeVisible();
     }
@@ -132,8 +132,8 @@ test.describe("global workspace entries", () => {
     const projectId = await registerSynthetic(page, projectKey);
 
     await connectAs(page, "Steward A");
-    await page.getByRole("banner").getByText("Workspace", { exact: true }).click();
-    await page.getByRole("banner").getByRole("navigation").getByRole("link", { name: "Data Room", exact: true }).click();
+    await openHeaderMenu(page, "Workspace");
+    await page.getByRole("complementary", { name: "Workspace navigation" }).getByRole("link", { name: "Data Room", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Data Room" })).toBeVisible();
     await page.getByRole("link", { name: `Open Data Room — ${projectKey}` }).click();
     await expect(page).toHaveURL(new RegExp(`/w/projects/${projectId}/data-room$`));

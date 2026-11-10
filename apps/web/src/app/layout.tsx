@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { PublicFooter } from "@/components/PublicFooter";
 import "./globals.css";
+import "./reference-layout.css";
 import { SessionProvider } from "@/lib/session";
+import { PageFrame } from "@/components/PageFrame";
 import { TopBar } from "@/components/TopBar";
 import { StepUpProvider } from "@/components/auth/StepUp";
 
@@ -20,8 +22,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <SessionProvider>
           <StepUpProvider>
           <div className="shell">
+            <a className="skip-link" href="#main">Skip to main content</a>
             <TopBar />
-            <main className="main">{children}</main>
+            <PageFrame>{children}</PageFrame>
             {/*
               Terms, data processing, and support live in the footer. Public navigation is
               the seven items of spec 11 §11.2; inserting an eighth blurs what

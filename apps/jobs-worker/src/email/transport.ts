@@ -200,7 +200,10 @@ export function createSmtpTransport(host: string, port: number, timeoutMs: numbe
           "Content-Transfer-Encoding: 8bit",
         ].join("\r\n");
         await session.command(`${headers}\r\n\r\n${body}\r\n.`, 250);
-        socket.write("QUIT\r\n");
+        // Drain the QUIT reply before closing: dropping a socket with unread reply
+        // bytes can reset the peer. DATA's 250 already accepted the message, so a
+        // failed QUIT must not turn successful delivery into a duplicate retry.
+        try { await session.command("QUIT", 221); } catch { /* already accepted */ }
         return { ok: true };
       } catch (error) {
         if (error instanceof SmtpReplyError) {

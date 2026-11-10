@@ -470,7 +470,7 @@ export async function registerUploadRoutes(
           const existing = await uploadWithContent(tx, request.params.projectId, contentHash);
           if (existing) {
             assertSameSensitivity(existing, parsed.data.sensitivity);
-            return { ...toView(existing), requestId, asOf };
+            return { ...toView(existing), reused: true, requestId, asOf };
           }
 
           const uploadId = randomUUID();
@@ -498,7 +498,7 @@ export async function registerUploadRoutes(
             // above ran before it existed; answer as a later duplicate would be answered.
             const winner = (await uploadWithContent(tx, request.params.projectId, contentHash))!;
             assertSameSensitivity(winner, parsed.data.sensitivity);
-            return { ...toView(winner), requestId, asOf };
+            return { ...toView(winner), reused: true, requestId, asOf };
           }
 
           await recordAudit(tx, {
@@ -518,7 +518,7 @@ export async function registerUploadRoutes(
             },
           });
 
-          return { ...toView(row), requestId, asOf };
+          return { ...toView(row), reused: false, requestId, asOf };
         }),
       );
     },
@@ -606,7 +606,7 @@ export async function registerUploadRoutes(
           // deleting it would let a storage error turn into an upload failure.
           if (existing) {
             assertSameSensitivity(existing, STREAM_SENSITIVITY);
-            return { ...toView(existing), requestId, asOf };
+            return { ...toView(existing), reused: true, requestId, asOf };
           }
 
           const [row] = await tx<UploadRow[]>`
@@ -630,7 +630,7 @@ export async function registerUploadRoutes(
               stored.contentHash,
             ))!;
             assertSameSensitivity(winner, STREAM_SENSITIVITY);
-            return { ...toView(winner), requestId, asOf };
+            return { ...toView(winner), reused: true, requestId, asOf };
           }
 
           await recordAudit(tx, {
@@ -647,7 +647,7 @@ export async function registerUploadRoutes(
             detail: { byteSize: stored.byteSize, contentType: stored.contentType, via: "multipart" },
           });
 
-          return { ...toView(row), requestId, asOf };
+          return { ...toView(row), reused: false, requestId, asOf };
         }),
       );
     },

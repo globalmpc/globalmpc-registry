@@ -54,7 +54,13 @@ export default function MyWorkPage() {
 
       {error ? <ErrorNotice error={error} /> : null}
 
-      <div className="panel" data-testid="work-assigned">
+      {!work && !error ? <p role="status">Loading your work…</p> : null}
+      {work ? <div className="work-summary" aria-label="Work summary">
+        <a href="#assigned-work"><span>Assigned to you</span><strong>{work.assignedToMe.length}</strong><span className="meta">Review and act</span></a>
+        <a href="#waiting-work"><span>Waiting on someone else</span><strong>{work.waitingOnOthers.length}</strong><span className="meta">Decisions in progress</span></a>
+        <a href="#unassigned-work"><span>Open and unassigned</span><strong>{work.unassigned.length}{work.unassignedTruncated ? "+" : ""}</strong><span className="meta">Work to pick up</span></a>
+      </div> : null}
+      <div className="panel" id="assigned-work" data-testid="work-assigned">
         <h2>Assigned to you</h2>
         {work && work.assignedToMe.length === 0 ? (
           <p className="sub" style={{ margin: 0 }}>
@@ -97,7 +103,7 @@ export default function MyWorkPage() {
         )}
       </div>
 
-      <div className="panel" data-testid="work-waiting">
+      <div className="panel" id="waiting-work" data-testid="work-waiting">
         <h2>Waiting on someone else</h2>
         <p className="sub" style={{ marginTop: 0 }}>
           You started these. There is nothing for you to do until another person decides.
@@ -117,7 +123,7 @@ export default function MyWorkPage() {
         )}
       </div>
 
-      <div className="panel" data-testid="work-unassigned">
+      <div className="panel" id="unassigned-work" data-testid="work-unassigned">
         <h2>Open and unassigned</h2>
         <p className="sub" style={{ marginTop: 0 }}>
           Nobody has picked these up. They are here because a queue that shows only assigned work

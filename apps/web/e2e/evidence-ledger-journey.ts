@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { openDisclosure } from "./disclosures";
 import { connectAs, sessionToken } from "./connect-as";
 
 /**
@@ -172,9 +173,19 @@ export async function expectApprovedLedgerPanel(
   ).toHaveText(`${reviewed} / ${ledger.items.length} items`);
   const stage = ledger.stages.find((candidate) => candidate.gateId === ledger.currentStage)!;
   expect(stage.status).toBe("ok");
-  await expect(panel).toContainText(
-    `${expected.stage}: Requirements met · rule ${stage.ruleSetVersion} · Reviewed ${stage.reviewedItems} / ${stage.requiredItems} required items`,
-  );
+  const stageCard = panel.locator("details.stage-assessment").filter({
+    has: page.locator("summary strong", { hasText: expected.stage }),
+  });
+  if (await stageCard.count()) {
+    await openDisclosure(stageCard);
+    await expect(stageCard.locator("summary")).toContainText("Requirements met");
+    await expect(stageCard).toContainText(`Rule ${stage.ruleSetVersion}`);
+    await expect(stageCard).toContainText(`Reviewed ${stage.reviewedItems} / ${stage.requiredItems} required items`);
+  } else {
+    await expect(panel).toContainText(
+      `${expected.stage}: Requirements met · rule ${stage.ruleSetVersion} · Reviewed ${stage.reviewedItems} / ${stage.requiredItems} required items`,
+    );
+  }
   for (const claimType of expected.reviewedClaimTypes) {
     const item = ledger.items.find((candidate) => candidate.claimType === claimType)!;
     expect(item.limitations.length).toBeGreaterThan(0);

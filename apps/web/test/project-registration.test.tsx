@@ -161,7 +161,7 @@ it("renders project facts and sends every filter to the server, clearing filters
   expect(screen.getByText("2 stale signal(s)")).toBeTruthy();
   expect(screen.getByText("No claims")).toBeTruthy();
   for (const [label, value] of [
-    ["Stage", "draft"],
+    ["Lifecycle", "draft"],
     ["Host country (ISO3)", "mng"],
     ["Weakest grade", "verified"],
     ["Reference label", "official_reference"],
@@ -181,7 +181,7 @@ it("renders project facts and sends every filter to the server, clearing filters
   expect(requests.at(-1)).toContain("stale=true");
   expect(screen.getByText(/No project matches these filters/)).toBeTruthy();
   for (const label of [
-    "Stage",
+    "Lifecycle",
     "Weakest grade",
     "Reference label",
     "Host country (ISO3)",

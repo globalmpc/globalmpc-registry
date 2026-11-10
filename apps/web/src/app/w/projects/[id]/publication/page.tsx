@@ -15,8 +15,9 @@ import {
   type RegistryDraft,
 } from "@/lib/api";
 import { useSession } from "@/lib/session";
-import { persistEvidenceLedger, type LedgerSummary } from "@/lib/evidence-ledger-api";
-import { EvidenceLedger, WorkspaceEvidenceLedger } from "@/components/EvidenceLedger";
+import { persistEvidenceLedger } from "@/lib/evidence-ledger-api";
+import { WorkspaceEvidenceLedger } from "@/components/EvidenceLedger";
+import { DisclosurePreview } from "@/components/DisclosurePreview";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { BlackoutNotice } from "@/components/BlackoutNotice";
 
@@ -100,18 +101,14 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
     return (
       <div className="panel">
         <h2>1. What will be public</h2>
-        {pending?.projection.evidenceLedger ? (
-          <EvidenceLedger
-            summary={pending.projection.evidenceLedger as LedgerSummary}
-            title="Evidence assessment in this draft"
-          />
-        ) : token ? <WorkspaceEvidenceLedger token={token} projectId={id} /> : null}
+        {pending ? <DisclosurePreview projection={pending.projection} /> : project ? <DisclosurePreview projection={buildProjection(project)} /> : null}
+        {!pending && token ? <WorkspaceEvidenceLedger token={token} projectId={id} /> : null}
         <p className="sub" style={{ marginTop: 0 }}>
           Only the fields below and the approved evidence assessment go out. Source documents,
           coordinates, person-level identifiers, and internal notes leave under no approval.
         </p>
         {project ? (
-          <div className="table-scroll">
+          <details className="disclosure-fields"><summary>Inspect exact disclosure fields</summary><div className="table-scroll">
             <table>
               <thead>
                 <tr>
@@ -132,7 +129,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
                 )}
               </tbody>
             </table>
-          </div>
+          </div></details>
         ) : (
           <p className="sub">Loading…</p>
         )}

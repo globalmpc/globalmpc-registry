@@ -33418,6 +33418,10 @@
                           "type": "integer",
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "reused": {
+                          "description": "True when identical content already existed in this project; replay preserves the original result. Absent on older cached responses",
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -33889,6 +33893,10 @@
                           "type": "integer",
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "reused": {
+                          "description": "True when identical content already existed in this project; replay preserves the original result. Absent on older cached responses",
+                          "type": "boolean"
                         }
                       },
                       "required": [

@@ -56,12 +56,11 @@ export function TopBar() {
   return (
     <header className="topbar" onClick={activateNavigationMenu}>
       <div className="row topbar-start" style={{ gap: 20 }}>
-        {/* Do not typeset the wordmark in the body font (@mpc/design logo.md). The mark
-            uses the source asset as-is; only the product name is added as text. The 28px height is above the
-            mark minimum of 24px, and the clear space 0.5× (=14px) is given as gap. */}
+        {/* Official horizontal lockup, used as-is (@mpc/design logo.md). Rendered at 120px wide,
+            the digital minimum for this lockup; the height follows the 152:64 aspect ratio. The
+            product name stays visible beside it, one clearspace (0.5x the 51px mark) away. */}
         <Link href="/" className="brand" style={{ color: "var(--foreground)" }}>
-          <img src="/brand/mpc-mark-on-dark.svg" alt="MPC" width={22} height={28} />
-          <span>MPC</span>
+          <img src="/brand/mpc-lockup-horizontal-on-dark.svg" alt="MPC" width={120} height={51} />
           <span className="brand-context">Verification Registry</span>
         </Link>
         {/* Links come from the single registry, not a local array (@mpc/design "chrome"). */}

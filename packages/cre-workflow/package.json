@@ -12,7 +12,7 @@
   "dependencies": {
     "@chainlink/cre-sdk": "1.23.0",
     "@mpc/api-contract": "workspace:*",
-    "viem": "2.57.14",
+    "viem": "2.57.16",
     "zod": "4.6.7"
   },
   "files": [

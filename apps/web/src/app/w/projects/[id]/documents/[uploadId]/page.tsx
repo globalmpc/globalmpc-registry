@@ -17,6 +17,7 @@ import {
   type DocumentLinkKind,
   type ObjectUpload,
 } from "@/lib/api";
+import { saveDocumentProfileWithRecovery, validateDocumentClassification, type ProfileAttempt } from "@/lib/document-profile-recovery";
 import { useSession } from "@/lib/session";
 import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
@@ -78,6 +79,8 @@ export default function DocumentPage({
   const versionFileInput = useRef<HTMLInputElement>(null);
   const versionPhotoInput = useRef<HTMLInputElement>(null);
   const [versionValid, setVersionValid] = useState("");
+  const replacement = useRef<{ file: File; uploaded: ObjectUpload; attempt: ProfileAttempt } | null>(null);
+  const replacementKey = useRef<{ file: File; key: string } | null>(null);
   const [created, setCreated] = useState<ObjectUpload | null>(null);
 
   const load = useCallback(async () => {
@@ -442,31 +445,35 @@ export default function DocumentPage({
             if (!versionFile) return;
             const file = versionFile;
             void step(async (activeToken) => {
-              const uploaded = await createUpload(activeToken, id, file, newIdempotencyKey());
+              const classification = validateDocumentClassification({
+                ...(self.documentType ? { documentType: self.documentType } : {}),
+                ...(versionValid ? { validUntil: versionValid } : {}),
+              });
+              if (replacementKey.current?.file !== file) replacementKey.current = { file, key: newIdempotencyKey() };
+              const pending = replacement.current?.file === file ? replacement.current : null;
+              const result = pending ? null : await createUpload(activeToken, id, file, replacementKey.current.key);
+              const uploaded = pending?.uploaded ?? result!;
               /**
                * The server stores identical content once and hands back the existing upload.
                * Marking that one as the new version would quietly turn an unrelated document
-               * into this document's successor, so stop here. A fresh upload is always in
-               * quarantine and not yet in this project's list.
+               * into this document's successor, so stop here. The server must confirm
+               * creation; quarantine or a partial graph alone does not prove it.
                */
-              if (uploaded.state !== "quarantined" || nodes.has(uploaded.id)) {
+              if (result && (result.reused !== false || uploaded.state !== "quarantined" || nodes.has(uploaded.id))) {
                 throw new Error(
                   `This file is already in the Data Room as upload ${uploaded.id}. ` +
                     "Upload the revised file, or open that document and mark it as the new version there.",
                 );
               }
-              const marked = await updateDocumentProfile(
-                activeToken,
-                uploaded.id,
-                uploaded.version,
-                {
-                  supersedesUploadId: uploadId,
-                  ...(self.documentType ? { documentType: self.documentType } : {}),
-                  ...(versionValid ? { validUntil: versionValid } : {}),
-                },
-                newIdempotencyKey(),
+              const recovery = pending ?? { file, uploaded, attempt: { current: null } };
+              replacement.current = recovery;
+              const marked = await saveDocumentProfileWithRecovery(
+                activeToken, id, uploaded, { ...classification, supersedesUploadId: uploadId }, recovery.attempt,
+                (latest) => { recovery.uploaded = latest; },
               );
               setCreated(marked);
+              replacement.current = null;
+              replacementKey.current = null;
               setVersionFile(null);
               if (versionFileInput.current) versionFileInput.current.value = "";
               if (versionPhotoInput.current) versionPhotoInput.current.value = "";
@@ -513,6 +520,7 @@ export default function DocumentPage({
               id="new-version-valid-until"
               type="date"
               value={versionValid}
+              disabled={busy}
               onChange={(event) => setVersionValid(event.target.value)}
             />
           </div>

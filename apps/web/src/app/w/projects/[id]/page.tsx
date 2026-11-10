@@ -307,6 +307,11 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     return (
       <>
         <ProjectWorkspaceNav projectId={id} />
+        <div className="project-next-actions" aria-label="Project next steps">
+          <div><span className="eyebrow">Evidence needing attention</span><strong>{project.readiness.flatMap((row) => row.openGaps).length} recorded gaps</strong>{actions.includes("readiness.read") ? <Link href={`/w/projects/${id}/requirements`}>Inspect requirements →</Link> : null}</div>
+          <div><span className="eyebrow">Evidence changes</span><strong>{project.dataAge.openStaleSignals} open stale signals</strong>{actions.includes("evidence.read") ? <Link href={`/w/projects/${id}/impacts`}>Check impact →</Link> : null}</div>
+          {actions.includes("source.upload") ? <div><span className="eyebrow">Add supporting material</span><strong>Register evidence</strong><Link href={`/w/projects/${id}/register`}>Upload a file →</Link></div> : null}
+        </div>
         {actions.includes("readiness.read") ? (
           <WorkspaceEvidenceLedger key={`${token}:${id}`} token={token} projectId={id} revision={assessmentRevision} browsable />
         ) : null}
