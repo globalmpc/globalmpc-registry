@@ -705,3 +705,8 @@ form { max-width: 100%; }
 @media (min-width: 641px) {
   .public-project-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 270px; }
 }
+
+/* Assessment progress is visible before opening a record's diagnostic details. */
+.project-progress { display: grid; gap: .35rem; min-width: 13rem; max-width: 32rem; overflow-wrap: anywhere; }
+.project-progress progress { width: 100%; height: .65rem; accent-color: var(--primary); }
+.footer-inner { flex-wrap: wrap; }

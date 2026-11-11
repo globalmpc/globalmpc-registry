@@ -268,11 +268,11 @@ it("keeps anonymous header to brand and sign-in, with secondary destinations in 
   const view = render(<><TopBar /><PublicFooter /></>);
   expect(view.container.querySelector("header nav")?.getAttribute("style")).toContain("display: none");
   expect(screen.getByRole("link", { name: "Sign in →" })).toBeDefined();
-  const more = screen.getByText("More", { exact: true }).closest("details")!;
+  const more = screen.getByText("Search & verification tools", { exact: true }).closest("details")!;
   expect(more.open).toBe(false);
-  fireEvent.click(screen.getByText("More", { exact: true }));
+  fireEvent.click(screen.getByText("Search & verification tools", { exact: true }));
   expect(more.open).toBe(true);
-  expect(screen.getByRole("link", { name: "Proof Verifier" })).toBeDefined();
+  expect(screen.getByRole("link", { name: "Verify a proof" })).toBeDefined();
 });
 
 it("dismisses header menus with Escape or outside interaction and keeps one menu open", async () => {
@@ -296,7 +296,7 @@ it("dismisses header menus with Escape or outside interaction and keeps one menu
 it("switches header and footer menus synchronously without queued toggle races", () => {
   const view = render(<><TopBar /><PublicFooter /></>);
   const account = screen.getByText("Account", { exact: true }).closest("details")!;
-  const footer = screen.getByText("More", { exact: true }).closest("details")!;
+  const footer = screen.getByText("Search & verification tools", { exact: true }).closest("details")!;
   fireEvent.click(account.querySelector("summary")!);
   expect(account.open).toBe(true);
   fireEvent.click(footer.querySelector("summary")!);

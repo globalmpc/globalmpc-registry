@@ -11,7 +11,6 @@ import {
 } from "@/lib/projects-api";
 import { useSession } from "@/lib/session";
 import { WorkspaceEvidenceLedger } from "@/components/EvidenceLedger";
-import { ProjectWorkspaceNav } from "@/components/project/ProjectWorkspaceNav";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { BlackoutNotice } from "@/components/BlackoutNotice";
 import { LifecycleBadge, ReadinessBadge } from "@/components/StatusBadge";
@@ -306,7 +305,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
     return (
       <>
-        <ProjectWorkspaceNav projectId={id} />
         <div className="project-next-actions" aria-label="Project next steps">
           <div><span className="eyebrow">Evidence needing attention</span><strong>{project.readiness.flatMap((row) => row.openGaps).length} recorded gaps</strong>{actions.includes("readiness.read") ? <Link href={`/w/projects/${id}/requirements`}>Inspect requirements →</Link> : null}</div>
           <div><span className="eyebrow">Evidence changes</span><strong>{project.dataAge.openStaleSignals} open stale signals</strong>{actions.includes("evidence.read") ? <Link href={`/w/projects/${id}/impacts`}>Check impact →</Link> : null}</div>

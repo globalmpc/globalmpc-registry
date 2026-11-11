@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { activateNavigationMenu, NAVIGATION_MENUS } from "@/lib/navigation-menus";
 import { useEffect, type MouseEvent } from "react";
 import { isAccountSession, needsSecondFactor, useSession } from "@/lib/session";
@@ -24,6 +25,7 @@ const FIRST_FACTOR_LABEL: Readonly<Record<string, string>> = {
 
 export function TopBar() {
   const { session, signOut } = useSession();
+  const inWorkspace = usePathname().startsWith("/w/");
   useEffect(() => {
     function dismiss(event: PointerEvent | KeyboardEvent) {
       if (event instanceof KeyboardEvent && event.key !== "Escape") return;
@@ -115,7 +117,7 @@ export function TopBar() {
           <span className="brand-context">Verification Registry</span>
         </Link>
         {/* Links come from the single registry, not a local array (@mpc/design "chrome"). */}
-        <nav className="row" style={{ gap: 14, display: authenticated && !pendingFactor ? undefined : "none" }}>
+        <nav className="row" style={{ gap: 14, display: authenticated && !pendingFactor && !inWorkspace ? undefined : "none" }}>
           {authenticated && !pendingFactor ? (
             <>
               {workspace.filter((entry) => entry.href === "/w/projects" || entry.href === "/w/work").map((entry) => <Link key={entry.href} href={entry.href}>{entry.label}</Link>)}

@@ -118,7 +118,7 @@ async function mount(data = routes()) {
     render(<Project params={Promise.resolve({ id: "p1" })} />);
   });
   if (auth.token) {
-    await screen.findByRole("navigation", { name: "Project workspace" });
+    await screen.findByText("Project details, parties and history");
     fireEvent.click(screen.getByText("Project details, parties and history"));
     await screen.findByRole("heading", { name: "Identity" });
   }
@@ -250,12 +250,12 @@ describe("project identity and recorded decisions", () => {
 it("starts with project work and keeps administration collapsed until requested", async () => {
   mockHttp(routes());
   await act(async () => { render(<Project params={Promise.resolve({ id: "p1" })} />); });
-  await screen.findByRole("navigation", { name: "Project workspace" });
+  await screen.findByText("Project details, parties and history");
   expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Mine");
-  expect(screen.getByRole("link", { name: /Documents & evidence/ }).getAttribute("href")).toBe("/w/projects/p1/data-room");
+  expect(screen.queryByRole("navigation", { name: "Project workspace" })).toBeNull();
   expect(screen.getByText("Project details, parties and history").closest("details")!.open).toBe(false);
   expect(screen.getByRole("heading", { name: "Readiness" })).toBeDefined();
-  expect(screen.getByRole("link", { name: /^CRE$/ }).getAttribute("href")).toBe("/w/projects/p1/cre");
+  expect(screen.queryByText("More project tools")).toBeNull();
   fireEvent.click(screen.getByText("Project details, parties and history"));
   expect(screen.getByRole("heading", { name: "Identity" })).toBeDefined();
 });
