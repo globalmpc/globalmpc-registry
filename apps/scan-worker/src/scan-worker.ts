@@ -1,4 +1,5 @@
 import type postgres from "postgres";
+import { withTenant } from "@mpc/db";
 import { MAX_SCAN_BYTES, scanDeadlineMs, type ScanVerdict } from "./scanner.js";
 
 /**
@@ -95,7 +96,7 @@ async function leaseOne(
   sql: postgres.Sql,
   options: ScanOptions,
 ): Promise<LeasedUpload | undefined> {
-  const rows = (await sql.begin(async (tx) => {
+  const rows = (await withTenant(sql, { tenantId: options.tenantId }, async (tx) => {
     const [row] = await tx<LeasedUpload[]>`
       SELECT id, tenant_id, object_key, version, byte_size
       FROM core.object_uploads
@@ -139,14 +140,16 @@ async function recordFailure(
   reason: string,
   refundAttempt = false,
 ): Promise<void> {
-  await sql`
-    UPDATE core.object_uploads
-    SET rejection_reason = ${reason.slice(0, 300)}, scan_leased_until = NULL,
-        scan_attempts = scan_attempts - ${refundAttempt ? 1 : 0}
-    WHERE id = ${row.id} AND state = 'quarantined' AND version = ${row.version}
-      AND scan_attempts = ${row.scan_attempts}
-      AND scan_leased_until = ${row.lease_token}::text::timestamptz
-  `;
+  await withTenant(sql, { tenantId: row.tenant_id }, async tx => {
+    await tx`
+      UPDATE core.object_uploads
+      SET rejection_reason = ${reason.slice(0, 300)}, scan_leased_until = NULL,
+          scan_attempts = scan_attempts - ${refundAttempt ? 1 : 0}
+      WHERE tenant_id = ${row.tenant_id} AND id = ${row.id} AND state = 'quarantined' AND version = ${row.version}
+        AND scan_attempts = ${row.scan_attempts}
+        AND scan_leased_until = ${row.lease_token}::text::timestamptz
+    `;
+  });
 }
 
 export async function scanOnce(
@@ -205,46 +208,51 @@ export async function scanOnce(
     return { handled: true, uploadId: row.id, verdict: "error" };
   }
 
-  try {
-    await report({
-      uploadId: row.id,
-      version: row.version,
-      result: verdict.kind,
-      ...(verdict.kind === "infected" ? { detail: verdict.signature } : {}),
-    });
-  } catch (error) {
-    // A failed report equals no scan. Leave the state and retry — patching the DB directly here
-    // would create a bypass path.
-    //
-    // A 401 is the worker's credential, not the file: the token is not registered yet (a worker
-    // that started before the deploy's registration step), or was revoked. The attempt is given
-    // back, so the file is retried once the token works instead of reaching the attempt cap and
-    // needing a person.
-    const unauthorized = (error as { status?: unknown }).status === 401;
-    await recordFailure(sql, row, `report_error: ${String(error)}`, unauthorized);
+  async function reportVerdict(row: LeasedUpload, verdict: Exclude<ScanVerdict, { kind: "error" }>): Promise<ScanStepResult> {
+    try {
+      await report({
+        uploadId: row.id,
+        version: row.version,
+        result: verdict.kind,
+        ...(verdict.kind === "infected" ? { detail: verdict.signature } : {}),
+      });
+    } catch (error) {
+      // A failed report equals no scan. Leave the state and retry — patching the DB directly here
+      // would create a bypass path.
+      //
+      // A 401 is the worker's credential, not the file: the token is not registered yet (a worker
+      // that started before the deploy's registration step), or was revoked. The attempt is given
+      // back, so the file is retried once the token works instead of reaching the attempt cap and
+      // needing a person.
+      const unauthorized = (error as { status?: unknown }).status === 401;
+      await recordFailure(sql, row, `report_error: ${String(error)}`, unauthorized);
+      log({
+        level: "error",
+        msg: unauthorized ? "scan.report_unauthorized" : "scan.report_failed",
+        uploadId: row.id,
+        error: String(error),
+      });
+      return { handled: true, uploadId: row.id, verdict: "error", ...(unauthorized ? { unauthorized: true as const } : {}) };
+    }
+
     log({
-      level: "error",
-      msg: unauthorized ? "scan.report_unauthorized" : "scan.report_failed",
+      level: verdict.kind === "infected" ? "warn" : "info",
+      msg: `scan.${verdict.kind}`,
       uploadId: row.id,
-      error: String(error),
+      // No file names. The log would become a channel for restricted information.
+      ...(verdict.kind === "infected" ? { signature: verdict.signature } : {}),
     });
-    return { handled: true, uploadId: row.id, verdict: "error", ...(unauthorized ? { unauthorized: true as const } : {}) };
+
+    return {
+      handled: true,
+      uploadId: row.id,
+      verdict: verdict.kind,
+      ...(verdict.kind === "infected" ? { signature: verdict.signature } : {}),
+    };
   }
 
-  log({
-    level: verdict.kind === "infected" ? "warn" : "info",
-    msg: `scan.${verdict.kind}`,
-    uploadId: row.id,
-    // No file names. The log would become a channel for restricted information.
-    ...(verdict.kind === "infected" ? { signature: verdict.signature } : {}),
-  });
+  return reportVerdict(row, verdict);
 
-  return {
-    handled: true,
-    uploadId: row.id,
-    verdict: verdict.kind,
-    ...(verdict.kind === "infected" ? { signature: verdict.signature } : {}),
-  };
 }
 
 /** Scan queue stats. Uploads at the attempt cap need a person to look at them. */
@@ -252,17 +260,19 @@ export async function scanBacklog(sql: postgres.Sql, maxAttempts: number, tenant
   readonly pending: number;
   readonly stuck: number;
 }> {
-  const [row] = await sql<{ pending: string; stuck: string }[]>`
-    SELECT
-      count(*) FILTER (WHERE state = 'quarantined' AND scan_attempts < ${maxAttempts})
-        AS pending,
-      count(*) FILTER (WHERE state = 'quarantined' AND scan_attempts >= ${maxAttempts})
-        AS stuck
-    FROM core.object_uploads
-    WHERE tenant_id = ${tenantId}
-  `;
+  return withTenant(sql, { tenantId }, async tx => {
+    const [row] = await tx<{ pending: string; stuck: string }[]>`
+      SELECT
+        count(*) FILTER (WHERE state = 'quarantined' AND scan_attempts < ${maxAttempts})
+          AS pending,
+        count(*) FILTER (WHERE state = 'quarantined' AND scan_attempts >= ${maxAttempts})
+          AS stuck
+      FROM core.object_uploads
+      WHERE tenant_id = ${tenantId}
+    `;
 
-  return { pending: Number(row?.pending ?? 0), stuck: Number(row?.stuck ?? 0) };
+    return { pending: Number(row?.pending ?? 0), stuck: Number(row?.stuck ?? 0) };
+  });
 }
 
 /**

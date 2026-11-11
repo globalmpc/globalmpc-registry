@@ -58,21 +58,25 @@ function committedFixtureKeys(): { source: string; key: `0x${string}` }[] {
       for (const key of line.match(KEY) ?? []) found.push({ source: file, key: key as `0x${string}` });
     }
   }
-  for (const tree of ["apps", "packages"]) {
-    for (const entry of readdirSync(join(ROOT, tree), { withFileTypes: true })) {
-      const directory = join(ROOT, tree, entry.name, "test");
-      if (!entry.isDirectory()) continue;
-      // Not every workspace package has tests.
-      let files: string[];
-      try { files = testSources(directory); } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw error;
-      }
-      for (const file of files) {
-        for (const key of signingFixtureKeys(readFileSync(file, "utf8"))) found.push({ source: file.slice(ROOT.length + 1), key });
+  function collectTestFixtureKeys() {
+    for (const tree of ["apps", "packages"]) {
+      for (const entry of readdirSync(join(ROOT, tree), { withFileTypes: true })) {
+        const directory = join(ROOT, tree, entry.name, "test");
+        if (!entry.isDirectory()) continue;
+        // Not every workspace package has tests.
+        let files: string[];
+        try { files = testSources(directory); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        for (const file of files) {
+          for (const key of signingFixtureKeys(readFileSync(file, "utf8"))) found.push({ source: file.slice(ROOT.length + 1), key });
+        }
       }
     }
   }
+
+  collectTestFixtureKeys();
   for (const file of readdirSync(join(ROOT, "contracts", "test")).filter((name) => name.endsWith(".sol"))) {
     const source = `contracts/test/${file}`;
     // Solidity fixture keys are integers; addresses and arbitrary bytes32 values are excluded.

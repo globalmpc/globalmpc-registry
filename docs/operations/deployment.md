@@ -1124,3 +1124,19 @@ loader. Explicit process exit waits for SDK shutdown for at most two seconds, pr
 requested exit code. Workers that drain to natural completion flush at `beforeExit`. Stdout
 remains unchanged; collector failure does not prevent application exit. Independent human
 security review is still required before merge for changes to this export boundary.
+
+## Scan worker tenant-scoped database access
+
+The scan worker does not require BYPASSRLS. It resolves the configured
+`SCAN_SERVICE_TENANT_SLUG` to a tenant UUID, then runs queue leasing, failure/attempt
+updates and backlog reads inside transaction-local `withTenant` contexts. Explicit
+tenant predicates remain in those queries. Object reads, antivirus scans and API
+reports run after the lease transaction closes; the API still owns scan-result
+state transitions and service-token authorization.
+
+A NOBYPASSRLS login needs the existing scan privileges (including the worker role's
+id/slug tenant lookup, upload SELECT/UPDATE and heartbeat access). This change does
+not alter deployment role attributes or grants. Jobs/anchor worker cross-tenant
+requirements are separate; do not grant BYPASSRLS to an API login to recover scans.
+A successful local regression is not evidence that a previously failed shared-dev
+seed completed; deploy the worker fix and verify the retained demo scan on retry.

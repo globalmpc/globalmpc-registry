@@ -324,7 +324,6 @@ export async function buildServer(
     request.clientIp = resolveEdgeClient(request.headers, request.ip);
   });
 
-
   /**
    * Public and authenticated routes count in separate pools (07 §7.1). The pool is chosen by
    * the matched route, which is known before any session lookup.
@@ -377,7 +376,6 @@ export async function buildServer(
     }
   });
 
-
   app.decorateRequest("session", null);
 
   /**
@@ -403,7 +401,7 @@ export async function buildServer(
     const token = extractBearerToken(request.headers.authorization);
     if (!token) return;
 
-    if (isServiceToken(token)) {
+    async function authenticateService(token: string): Promise<void> {
       const service = await resolveServiceToken(sql, token);
       if (!service) return;
       /**
@@ -421,6 +419,10 @@ export async function buildServer(
         });
       }
       request.session = await resolveServiceSession(sql, service);
+    }
+
+    if (isServiceToken(token)) {
+      await authenticateService(token);
       return;
     }
 

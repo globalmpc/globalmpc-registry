@@ -32,16 +32,21 @@ export function validateCatalogValues(definition: unknown, values: Values): void
       if (field.required) throw unprocessable("CLAIM_FIELDS_INVALID", `Required field: ${field.key}`);
       continue;
     }
-    let valid = false;
-    if (field.type === "boolean") valid = typeof value === "boolean";
-    if (field.type === "string") valid = typeof value === "string" && value.trim().length > 0;
-    if (field.type === "number") valid = typeof value === "string" && /^-?(0|[1-9][0-9]{0,77})(\.[0-9]{1,38})?$/.test(value);
-    if (field.type === "date" && typeof value === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value) && !value.startsWith("0000-")) {
-      const date = new Date(`${value}T00:00:00.000Z`);
-      valid = Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
-    }
+    const valid = validCatalogField(field.type, value);
     if (!valid) throw unprocessable("CLAIM_FIELDS_INVALID", `Invalid ${field.type} field: ${field.key}`);
   }
+}
+
+function validCatalogField(type: string, value: string | boolean): boolean {
+  let valid = false;
+  if (type === "boolean") valid = typeof value === "boolean";
+  if (type === "string") valid = typeof value === "string" && value.trim().length > 0;
+  if (type === "number") valid = typeof value === "string" && /^-?(0|[1-9][0-9]{0,77})(\.[0-9]{1,38})?$/.test(value);
+  if (type === "date" && typeof value === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value) && !value.startsWith("0000-")) {
+    const date = new Date(`${value}T00:00:00.000Z`);
+    valid = Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }
+  return valid;
 }
 
 export async function resolveCatalogClaim(
@@ -78,21 +83,26 @@ export async function resolveCatalogClaim(
     validateCatalogValues(catalog.definition, values);
     catalogVersion = catalog.catalog_version;
   }
-  if (catalogEntryId !== null && input.sourceReceiptId) {
-    const [receipt] = await tx<{ id: string }[]>`
-      SELECT id FROM core.source_receipts WHERE id = ${input.sourceReceiptId} AND project_id = ${projectId}
-    `;
-    if (!receipt) throw unprocessable("CLAIM_RECEIPT_UNAVAILABLE", "The source receipt must belong to this project");
+  async function validateEvidenceBindings(): Promise<string[]> {
+    if (catalogEntryId !== null && input.sourceReceiptId) {
+      const [receipt] = await tx<{ id: string }[]>`
+        SELECT id FROM core.source_receipts WHERE id = ${input.sourceReceiptId} AND project_id = ${projectId}
+      `;
+      if (!receipt) throw unprocessable("CLAIM_RECEIPT_UNAVAILABLE", "The source receipt must belong to this project");
+    }
+    const documentUploadIds = [...new Set(input.documentUploadIds ?? [])];
+    if (documentUploadIds.length > 0) {
+      const uploads = await tx<{ id: string }[]>`
+        SELECT id FROM core.object_uploads
+        WHERE id = ANY(${documentUploadIds}::uuid[]) AND project_id = ${projectId}
+          AND state::text IN ('scanned_clean', 'promoted') AND revoked_at IS NULL
+        FOR SHARE
+      `;
+      if (uploads.length !== documentUploadIds.length) throw unprocessable("CLAIM_DOCUMENT_UNAVAILABLE", "Every document must be an active, scanned upload of this project");
+    }
+    return documentUploadIds;
   }
-  const documentUploadIds = [...new Set(input.documentUploadIds ?? [])];
-  if (documentUploadIds.length > 0) {
-    const uploads = await tx<{ id: string }[]>`
-      SELECT id FROM core.object_uploads
-      WHERE id = ANY(${documentUploadIds}::uuid[]) AND project_id = ${projectId}
-        AND state::text IN ('scanned_clean', 'promoted') AND revoked_at IS NULL
-      FOR SHARE
-    `;
-    if (uploads.length !== documentUploadIds.length) throw unprocessable("CLAIM_DOCUMENT_UNAVAILABLE", "Every document must be an active, scanned upload of this project");
-  }
+
+  const documentUploadIds = await validateEvidenceBindings();
   return { catalogEntryId, catalogVersion, structuredValues: values, documentUploadIds };
 }

@@ -96,8 +96,78 @@ export function PublicRegistryBrowser({
     return () => clearTimeout(timer);
   }, [cards, draft]);
 
-  return (
-    <>
+  function renderCards() {
+    return (
+
+          <div className="public-project-list">
+            {items.map((item) => (
+              <article className="public-project-row" key={item.entryVersionId}>
+                <div>
+                  <h2>{hrefFor ? <Link href={hrefFor(item)}>{text(item.projection, "projectName") === "—" ? item.publicKey : text(item.projection, "projectName")}</Link> : item.publicKey}</h2>
+                  <p className="meta">{item.publicKey} · {text(item.projection, "mineral")} · {text(item.projection, "hostCountry")}</p>
+                </div>
+                <DirectoryEvidence value={item.projection.evidenceLedger} />
+                <div>
+                  <span className={item.revokedAt ? "public-project-status revoked" : "public-project-status"}>{item.status}{item.revokedAt && item.status !== "revoked" ? " · revoked" : ""}</span>
+                  <p className="meta"><span>v{item.version}</span> · Published {item.publishedAt ? new Date(item.publishedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }) : "Date unavailable"}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+
+    );
+  }
+
+  function renderTable() {
+    return (
+
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  {columns.map((column) => (
+                    <th key={column.field}>{column.label}</th>
+                  ))}
+                  <th>Status</th>
+                  <th>Version</th>
+                  <th>Published</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.entryVersionId}>
+                    <td className="mono">
+                      {hrefFor ? (
+                        <Link href={hrefFor(item)}>{item.publicKey}</Link>
+                      ) : (
+                        item.publicKey
+                      )}
+                    </td>
+                    {columns.map((column) => (
+                      <td key={column.field}>{text(item.projection, column.field)}</td>
+                    ))}
+                    <td className="mono">
+                      {/* Keep revocation/supersession next to the status. Not making it look current
+                          is what §11.6 requires. */}
+                      {item.status}
+                      {item.revokedAt ? (
+                        <span style={{ color: "var(--destructive-text)" }}> · revoked</span>
+                      ) : null}
+                    </td>
+                    <td className="mono">v{item.version}</td>
+                    <td className="mono meta">{item.publishedAt ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+    );
+  }
+
+  function renderSearch() {
+    return <>
       <div className={cards ? "public-directory-search" : "panel"}>
         <form
           className="row"
@@ -146,6 +216,12 @@ export function PublicRegistryBrowser({
         </p> : null}
       </div>
 
+    </>;
+  }
+
+  return (
+    <>
+      {renderSearch()}
       {busy ? <p role="status">Loading published records…</p> : null}
       {error ? <><ErrorNotice error={error} /><button type="button" disabled={busy} onClick={() => void load({ append: false, cursor: null })}>Retry published records</button></> : null}
 
@@ -155,65 +231,7 @@ export function PublicRegistryBrowser({
           <p className="sub" style={{ margin: 0 }} data-testid="public-registry-empty">
             {query ? `Nothing published matches “${query}”.` : emptyMessage}
           </p>
-        ) : cards ? (
-          <div className="public-project-list">
-            {items.map((item) => (
-              <article className="public-project-row" key={item.entryVersionId}>
-                <div>
-                  <h2>{hrefFor ? <Link href={hrefFor(item)}>{text(item.projection, "projectName") === "—" ? item.publicKey : text(item.projection, "projectName")}</Link> : item.publicKey}</h2>
-                  <p className="meta">{item.publicKey} · {text(item.projection, "mineral")} · {text(item.projection, "hostCountry")}</p>
-                </div>
-                <DirectoryEvidence value={item.projection.evidenceLedger} />
-                <div>
-                  <span className={item.revokedAt ? "public-project-status revoked" : "public-project-status"}>{item.status}{item.revokedAt && item.status !== "revoked" ? " · revoked" : ""}</span>
-                  <p className="meta"><span>v{item.version}</span> · Published {item.publishedAt ? new Date(item.publishedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }) : "Date unavailable"}</p>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Key</th>
-                  {columns.map((column) => (
-                    <th key={column.field}>{column.label}</th>
-                  ))}
-                  <th>Status</th>
-                  <th>Version</th>
-                  <th>Published</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => (
-                  <tr key={item.entryVersionId}>
-                    <td className="mono">
-                      {hrefFor ? (
-                        <Link href={hrefFor(item)}>{item.publicKey}</Link>
-                      ) : (
-                        item.publicKey
-                      )}
-                    </td>
-                    {columns.map((column) => (
-                      <td key={column.field}>{text(item.projection, column.field)}</td>
-                    ))}
-                    <td className="mono">
-                      {/* Keep revocation/supersession next to the status. Not making it look current
-                          is what §11.6 requires. */}
-                      {item.status}
-                      {item.revokedAt ? (
-                        <span style={{ color: "var(--destructive-text)" }}> · revoked</span>
-                      ) : null}
-                    </td>
-                    <td className="mono">v{item.version}</td>
-                    <td className="mono meta">{item.publishedAt ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        ) : cards ? renderCards() : renderTable()}
 
         {cursor ? (
           <button

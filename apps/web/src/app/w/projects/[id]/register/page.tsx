@@ -84,6 +84,30 @@ export default function RegisterEvidencePage({
       setBusy(false);
     }
   }
+  function renderProgress() {
+    return (
+      <ol className="registration-steps" aria-label="Registration progress">
+        <li aria-current={step === 1 ? "step" : undefined}>1 · Choose file</li>
+        <li aria-current={step === 2 ? "step" : undefined}>
+          2 · Classify and upload
+        </li>
+        <li aria-current={done ? "step" : undefined}>3 · Link evidence</li>
+      </ol>
+    );
+  }
+
+  function renderErrors() {
+    return <>
+      {validation ? (
+        <p className="notice" role="alert">
+          {validation}
+        </p>
+      ) : null}
+      {error ? <ErrorNotice error={error} /> : null}
+
+    </>;
+  }
+
   return (
     <>
       <Link href={`${base}/requirements`} className="meta">
@@ -98,19 +122,8 @@ export default function RegisterEvidencePage({
           </p>
         </div>
       </div>
-      <ol className="registration-steps" aria-label="Registration progress">
-        <li aria-current={step === 1 ? "step" : undefined}>1 · Choose file</li>
-        <li aria-current={step === 2 ? "step" : undefined}>
-          2 · Classify and upload
-        </li>
-        <li aria-current={done ? "step" : undefined}>3 · Link evidence</li>
-      </ol>
-      {validation ? (
-        <p className="notice" role="alert">
-          {validation}
-        </p>
-      ) : null}
-      {error ? <ErrorNotice error={error} /> : null}
+      {renderProgress()}
+      {renderErrors()}
       {!session?.actions?.includes("source.upload") ? (
         <p className="notice">
           Your current session cannot upload evidence.{" "}

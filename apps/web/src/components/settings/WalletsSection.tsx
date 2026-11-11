@@ -110,14 +110,33 @@ export function WalletsSection({
 
   const label = active ? C.replace : C.bind;
 
-  return (
-    <div className="panel" data-testid="settings-wallets">
-      <h2>{C.wallets}</h2>
-      <p className="sub" style={{ marginTop: 0 }}>
-        {C.walletsLead}
-      </p>
-      <ErrorLine error={loadError ?? error} />
+  function renderReplacementResult() {
+    return <>
+      {replaced && !pending ? (
+        <div className="notice" role="status" data-testid="replace-done">
+          <p>{C.replaceDone}</p>
+          {replaced.operatorVerified ? (
+            <div data-testid="replace-done-operator">
+              <p>{C.replaceDoneOperator(replaced.assurance ?? "wallet_only")}</p>
+              {replaced.inactive.length > 0 ? (
+                <p>
+                  {C.replaceDoneInactive}{" "}
+                  <span className="mono" data-testid="replace-done-inactive">
+                    {replaced.inactive.join(", ")}
+                  </span>
+                </p>
+              ) : null}
+              <p>{C.replaceDoneNext}</p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
+    </>;
+  }
+
+  function renderWalletList() {
+    return <>
       <div data-testid="wallet-list">
         {active ? (
           <div data-testid="wallet-current">
@@ -148,6 +167,18 @@ export function WalletsSection({
         ) : null}
       </div>
 
+    </>;
+  }
+
+  return (
+    <div className="panel" data-testid="settings-wallets">
+      <h2>{C.wallets}</h2>
+      <p className="sub" style={{ marginTop: 0 }}>
+        {C.walletsLead}
+      </p>
+      <ErrorLine error={loadError ?? error} />
+
+      {renderWalletList()}
       {pending ? (
         <div className="notice" data-testid="replace-confirm">
           <p>{C.replaceWarning(pending.challenge.replaces!.walletAddress, pending.address)}</p>
@@ -200,25 +231,7 @@ export function WalletsSection({
         </div>
       ) : null}
 
-      {replaced && !pending ? (
-        <div className="notice" role="status" data-testid="replace-done">
-          <p>{C.replaceDone}</p>
-          {replaced.operatorVerified ? (
-            <div data-testid="replace-done-operator">
-              <p>{C.replaceDoneOperator(replaced.assurance ?? "wallet_only")}</p>
-              {replaced.inactive.length > 0 ? (
-                <p>
-                  {C.replaceDoneInactive}{" "}
-                  <span className="mono" data-testid="replace-done-inactive">
-                    {replaced.inactive.join(", ")}
-                  </span>
-                </p>
-              ) : null}
-              <p>{C.replaceDoneNext}</p>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      {renderReplacementResult()}
 
       {disabling && active ? (
         <form

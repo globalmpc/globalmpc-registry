@@ -108,18 +108,22 @@ export async function forwardStreamUpload(
     return envelope(502, "API_UNREACHABLE", "The registry API could not be reached. Try again", true);
   }
 
-  const text = await upstream.text();
-  const passed = new Headers({ "cache-control": "no-store" });
-  for (const name of PASSED_HEADERS) {
-    const value = upstream.headers.get(name);
-    if (value) passed.set(name, value);
+  async function forwardResponse() {
+    const text = await upstream.text();
+    const passed = new Headers({ "cache-control": "no-store" });
+    for (const name of PASSED_HEADERS) {
+      const value = upstream.headers.get(name);
+      if (value) passed.set(name, value);
+    }
+    if (text === "") return new NextResponse(null, { status: upstream.status, headers: passed });
+    let body: unknown;
+    try {
+      body = JSON.parse(text) as unknown;
+    } catch {
+      return envelope(502, "API_UNREACHABLE", "The registry API answered something unreadable", true);
+    }
+    return NextResponse.json(withoutCredentials(body), { status: upstream.status, headers: passed });
   }
-  if (text === "") return new NextResponse(null, { status: upstream.status, headers: passed });
-  let body: unknown;
-  try {
-    body = JSON.parse(text) as unknown;
-  } catch {
-    return envelope(502, "API_UNREACHABLE", "The registry API answered something unreadable", true);
-  }
-  return NextResponse.json(withoutCredentials(body), { status: upstream.status, headers: passed });
+
+  return forwardResponse();
 }

@@ -65,14 +65,18 @@ code,
 
 .topbar {
   display: flex;
-  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   padding: 14px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  /* Keep the account area at the top right; long menus wrap within the left area. */
+  /* Keep the account area at the top right;
+  long menus wrap within the left area. */
   flex-wrap: nowrap;
+  min-height: 64px;
+  align-items: center;
+  padding-left: max(24px, calc((100vw - 1248px) / 2));
+  padding-right: max(24px, calc((100vw - 1248px) / 2));
 }
 
 .topbar-start {
@@ -164,18 +168,21 @@ code,
 .main {
   flex: 1;
   width: 100%;
-  max-width: 1180px;
   margin: 0 auto;
   padding: 28px 24px 64px;
+  max-width: 1280px;
+  padding-left: 16px;
+  padding-right: 16px;
+  padding-top: 38px;
 }
 
 .page-head {
   display: flex;
-  align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
   flex-wrap: wrap;
+  margin-bottom: 28px;
+  align-items: flex-start;
 }
 
 /* Headlines use the display typeface with -0.02em tracking — the same combination @mpc/design's
@@ -221,10 +228,10 @@ thead th {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted-foreground);
-  background: var(--muted);
-  padding: 9px 12px;
   font-weight: 600;
   white-space: nowrap;
+  background: transparent;
+  padding: 10px 12px;
 }
 
 tbody td {
@@ -335,10 +342,6 @@ button.link {
   padding: 16px;
 }
 
-.dialog-backdrop .panel {
-  max-width: 480px;
-  width: 100%;
-}
 
 /* Account connection entry point. A link (`<a>`) that must read as a button — styled like body
    links, the login path would be invisible on public screens. `.sm` in the header. */
@@ -495,6 +498,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 190px 1fr;
   gap: 8px 16px;
+  row-gap: 10px;
 }
 
 .dl dt {
@@ -510,7 +514,6 @@ button:disabled {
   color: var(--muted-foreground);
   font-size: 12px;
 }
-
 
 /* Installed wallets. With only one, it looks like a single button. */
 .wallet-choices {
@@ -595,13 +598,32 @@ button:disabled {
   .topbar-end { flex-basis: auto; flex-wrap: nowrap; justify-content: flex-end; margin-left: auto; }
 }
 
-.public-directory-heading { margin: 12px 0 28px; }
-.public-directory-heading h1 { font-size: 1.875rem; margin-bottom: 10px; }
-.public-directory-search { max-width: 576px; margin-bottom: 30px; }
+.public-directory-heading {
+  margin: 0 0 18px;
+}
+.public-directory-heading h1 {
+  margin-bottom: 10px;
+  font-size: 1.875rem;
+  line-height: 1.3;
+}
+.public-directory-search {
+  max-width: 576px;
+  margin-bottom: 30px;
+}
 .public-directory-search input { height: 44px; }
 .public-directory-caption { margin-bottom: 12px; font-size: 0.75rem; letter-spacing: 0.04em; }
 .public-project-list { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
-.public-project-row { display: grid; grid-template-columns: minmax(0, 1fr) 100px 210px; gap: 24px; padding: 18px 20px; align-items: center; overflow-wrap: anywhere; }
+.public-project-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 100px 210px;
+  gap: 24px;
+  padding: 18px 20px;
+  align-items: center;
+  overflow-wrap: anywhere;
+  padding-top: 16px;
+  padding-bottom: 16px;
+  min-height: 80px;
+}
 .public-project-row + .public-project-row { border-top: 1px solid var(--border); }
 .public-project-row h2 { font-size: 1rem; margin: 0 0 6px; }
 .public-project-row h2 a { color: var(--foreground); }
@@ -617,18 +639,25 @@ button:disabled {
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
 /* One hierarchy across public pages, workspaces, settings and administration. */
-.main { max-width: 1248px; padding-top: 36px; }
-.page-head { margin-bottom: 28px; align-items: flex-start; }
+
 .page-head h1 { font-size: 1.75rem; margin-bottom: 8px; }
 .page-head .sub { max-width: 76ch; line-height: 1.6; }
 .panel .panel { padding: 16px 0; margin-bottom: 0; }
 .panel > h2 { margin-bottom: 16px; }
-thead th { background: transparent; padding: 10px 12px; }
+
 tbody td, tbody th { padding: 14px 12px; }
-.dl { row-gap: 10px; }
+
 form { max-width: 100%; }
 .field input, .field select, .field textarea { max-width: 100%; }
-.dialog-backdrop .panel { background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; }
+
+.dialog-backdrop .panel {
+  max-width: 480px;
+  width: 100%;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+}
 .project-navigation { margin-bottom: 28px; }
 .project-navigation-main { display: flex; gap: 24px; border-bottom: 1px solid var(--border); overflow-x: auto; }
 .project-navigation-main a { padding: 12px 0; white-space: nowrap; color: var(--muted-foreground); }
@@ -637,22 +666,19 @@ form { max-width: 100%; }
 .project-navigation-secondary a { color: var(--muted-foreground); }
 .project-navigation-secondary a[aria-current] { color: var(--foreground); text-decoration: underline; }
 @media (max-width: 640px) {
-  .main { padding: 24px 16px 48px; }
+  .main { padding: 38px 16px 48px; }
   .page-head h1 { font-size: 1.5rem; }
   .panel { padding: 20px 0; }
   .project-navigation-main { gap: 20px; }
 }
 .project-navigation-tools > summary { cursor: pointer; color: var(--muted-foreground); font-size: 0.8125rem; padding-top: 12px; }
 /* Match the reference's composition, not just its palette. */
-.main { max-width: 1280px; padding-left: 16px; padding-right: 16px; padding-top: 38px; }
-.topbar { min-height: 64px; align-items: center; padding-left: max(24px, calc((100vw - 1248px) / 2)); padding-right: max(24px, calc((100vw - 1248px) / 2)); }
+
 .topbar .btn-connect.sm { color: var(--foreground); background: var(--secondary); border-color: var(--border-strong); padding: 4px 10px; font-weight: 500; }
-.public-directory-heading { margin: 0 0 18px; }
-.public-directory-heading h1 { font-size: 1.875rem; line-height: 1.3; }
+
 .public-directory-heading .sub { font-size: 1rem; }
 .directory-highlights { display: flex; flex-wrap: wrap; gap: 12px 28px; margin-bottom: 20px; color: var(--muted-foreground); }
-.public-directory-search { margin-bottom: 30px; }
-.public-project-row { padding-top: 16px; padding-bottom: 16px; min-height: 80px; }
+
 .footer-inner { max-width: 1248px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; font-size: 0.75rem; }
 .footer-navigation { position: relative; margin-left: auto; }
 .footer-navigation summary { cursor: pointer; }
