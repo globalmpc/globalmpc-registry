@@ -98,53 +98,61 @@ export default function SecondFactorPage() {
     );
   }
 
-  const holdsFactor = Boolean(status && (status.passkeyEnrolled || status.totpEnrolled));
-  const mayEnrol = Boolean(
-    status && (status.enrolment.passkey === "allowed" || status.enrolment.totp === "allowed"),
-  );
+  function renderFactorStatus() {
+    const holdsFactor = Boolean(status && (status.passkeyEnrolled || status.totpEnrolled));
+    const mayEnrol = Boolean(
+      status && (status.enrolment.passkey === "allowed" || status.enrolment.totp === "allowed"),
+    );
+
+    return (
+      <>
+        <div className="page-head">
+          <div>
+            <h1>{status?.recoveryLimited ? C.reenrolHeading : holdsFactor ? C.heading : C.enrolHeading}</h1>
+            <p className="sub">
+              {status?.recoveryLimited ? C.reenrolLead : holdsFactor ? C.challengeLead : C.enrolLead}
+            </p>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="notice" style={{ color: "var(--destructive-text)" }} role="alert">
+            {error}
+          </div>
+        ) : null}
+
+        {status === null ? null : status.recoveryLimited ? (
+          <div className="panel" data-testid="mfa-reenrol">
+            {mayEnrol ? <Enrolment enrolment={status.enrolment} onEnrolled={(result) => void proved(result)} /> : null}
+          </div>
+        ) : holdsFactor ? (
+          <div className="panel" data-testid="mfa-challenge">
+            <SecondFactorChallenge
+              status={status}
+              allowRecovery
+              onProved={(result) => void proved(result)}
+              onRecovered={() => {
+                void refresh().then(load);
+              }}
+            />
+          </div>
+        ) : mayEnrol ? (
+          <div className="panel" data-testid="mfa-enrol">
+            <Enrolment enrolment={status.enrolment} onEnrolled={(result) => void proved(result)} />
+          </div>
+        ) : (
+          <div className="notice" style={{ color: "var(--alert)" }} data-testid="mfa-window-closed">
+            <div className="title">{C.windowClosedHeading}</div>
+            {C.windowClosed}
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>{status?.recoveryLimited ? C.reenrolHeading : holdsFactor ? C.heading : C.enrolHeading}</h1>
-          <p className="sub">
-            {status?.recoveryLimited ? C.reenrolLead : holdsFactor ? C.challengeLead : C.enrolLead}
-          </p>
-        </div>
-      </div>
-
-      {error ? (
-        <div className="notice" style={{ color: "var(--destructive-text)" }} role="alert">
-          {error}
-        </div>
-      ) : null}
-
-      {status === null ? null : status.recoveryLimited ? (
-        <div className="panel" data-testid="mfa-reenrol">
-          {mayEnrol ? <Enrolment enrolment={status.enrolment} onEnrolled={(result) => void proved(result)} /> : null}
-        </div>
-      ) : holdsFactor ? (
-        <div className="panel" data-testid="mfa-challenge">
-          <SecondFactorChallenge
-            status={status}
-            allowRecovery
-            onProved={(result) => void proved(result)}
-            onRecovered={() => {
-              void refresh().then(load);
-            }}
-          />
-        </div>
-      ) : mayEnrol ? (
-        <div className="panel" data-testid="mfa-enrol">
-          <Enrolment enrolment={status.enrolment} onEnrolled={(result) => void proved(result)} />
-        </div>
-      ) : (
-        <div className="notice" style={{ color: "var(--alert)" }} data-testid="mfa-window-closed">
-          <div className="title">{C.windowClosedHeading}</div>
-          {C.windowClosed}
-        </div>
-      )}
+      {renderFactorStatus()}
 
       <p className="meta">
         <button type="button" className="link" onClick={() => void signOut().then(() => router.push("/connect"))}>

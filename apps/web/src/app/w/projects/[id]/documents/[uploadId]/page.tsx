@@ -574,23 +574,8 @@ export default function DocumentPage({
     ) : null;
   };
 
-  return (
-    <>
-      <div className="page-head">
-        <div>
-          <h1 data-testid="document-title">{documentLabel(self, uploadId)}</h1>
-          <p className="sub">
-            What this document rests on, what rests on it, and what would need a second look if it
-            changed. Links are declared by people; nothing is inferred.
-          </p>
-        </div>
-        <Link href={`/w/projects/${id}/data-room`}>← Data Room</Link>
-      </div>
-
-      {error ? <ErrorNotice error={error} /> : null}
-
-      {renderMissingDocument()}
-
+  function renderDocumentStatus() {
+    return <>
       {replaced ? (
         <div className="notice" data-testid="document-replaced">
           <div className="title">A newer version replaced this document</div>
@@ -607,10 +592,11 @@ export default function DocumentPage({
         </div>
       ) : null}
 
-      {renderPreviousVersion()}
+    </>;
+  }
 
-      {renderProfile()}
-
+  function renderRelationshipsAndActions() {
+    return <>
       <div className="panel">
         <h2>Rests on</h2>
         <LinkTable
@@ -657,6 +643,32 @@ export default function DocumentPage({
           <Link href={`/w/projects/${id}/data-room`}>Data Room</Link>.
         </div>
       ) : null}
+    </>;
+  }
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h1 data-testid="document-title">{documentLabel(self, uploadId)}</h1>
+          <p className="sub">
+            What this document rests on, what rests on it, and what would need a second look if it
+            changed. Links are declared by people; nothing is inferred.
+          </p>
+        </div>
+        <Link href={`/w/projects/${id}/data-room`}>← Data Room</Link>
+      </div>
+
+      {error ? <ErrorNotice error={error} /> : null}
+
+      {renderMissingDocument()}
+
+      {renderDocumentStatus()}
+      {renderPreviousVersion()}
+
+      {renderProfile()}
+
+      {renderRelationshipsAndActions()}
     </>
   );
 }

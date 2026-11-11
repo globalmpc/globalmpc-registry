@@ -50,6 +50,31 @@ export function ErrorNotice({ error, context }: { error: unknown; context?: "sig
    */
   const need = stepUpNeed(error);
   if (need) {
+    return renderStepUp(need);
+  }
+
+  /**
+   * Identity assurance below the role's minimum (plan priority rule 4): the person holds the role
+   * but an administrator has to verify their identity first — say that, not a refusal code.
+   */
+  if (envelope.details?.reason === "ASSURANCE_LEVEL_INSUFFICIENT") {
+    return (
+      <div className="notice" style={{ color: "var(--alert)" }} role="alert" data-testid="error-notice">
+        <div className="title" data-testid="assurance-needed">
+          {COPY.assurance.heading}
+        </div>
+        <div>{COPY.assurance.lead(envelope.details.requiredAssurance ?? "high_assurance")}</div>
+        <div className="meta" style={{ marginTop: 8, color: "inherit" }}>
+          <span className="mono">
+            ({status} {envelope.details.reason})
+          </span>{" "}
+          · Trace ID <span className="mono">{envelope.correlationId}</span>
+        </div>
+      </div>
+    );
+  }
+
+  function renderStepUp(need: NonNullable<ReturnType<typeof stepUpNeed>>) {
     return (
       <div className="notice" style={{ color: "var(--alert)" }} role="alert" data-testid="error-notice">
         <div className="title">{AUTH_COPY.stepUp.heading}</div>
@@ -79,27 +104,6 @@ export function ErrorNotice({ error, context }: { error: unknown; context?: "sig
     );
   }
 
-  /**
-   * Identity assurance below the role's minimum (plan priority rule 4): the person holds the role
-   * but an administrator has to verify their identity first — say that, not a refusal code.
-   */
-  if (envelope.details?.reason === "ASSURANCE_LEVEL_INSUFFICIENT") {
-    return (
-      <div className="notice" style={{ color: "var(--alert)" }} role="alert" data-testid="error-notice">
-        <div className="title" data-testid="assurance-needed">
-          {COPY.assurance.heading}
-        </div>
-        <div>{COPY.assurance.lead(envelope.details.requiredAssurance ?? "high_assurance")}</div>
-        <div className="meta" style={{ marginTop: 8, color: "inherit" }}>
-          <span className="mono">
-            ({status} {envelope.details.reason})
-          </span>{" "}
-          · Trace ID <span className="mono">{envelope.correlationId}</span>
-        </div>
-      </div>
-    );
-  }
-
   const friendly =
     (context === "signing" ? COPY.signing[envelope.code] : undefined) ?? AUTH_COPY.errors[envelope.code];
 
@@ -114,6 +118,20 @@ export function ErrorNotice({ error, context }: { error: unknown; context?: "sig
         </span>
       </div>
 
+      <ErrorDetails envelope={envelope} />
+
+      <div className="meta" style={{ marginTop: 8, color: "inherit" }}>
+        {envelope.retryable
+          ? "This error can be retried."
+          : "Retrying will produce the same result."}{" "}
+        · Trace ID <span className="mono">{envelope.correlationId}</span>
+      </div>
+    </div>
+  );
+}
+
+function ErrorDetails({ envelope }: { envelope: ApiError["envelope"] }) {
+  return <>
       {envelope.details?.reason ? (
         <div className="meta" style={{ color: "inherit" }}>
           Reason: <span className="mono">{envelope.details.reason}</span>
@@ -168,12 +186,5 @@ export function ErrorNotice({ error, context }: { error: unknown; context?: "sig
         </div>
       ) : null}
 
-      <div className="meta" style={{ marginTop: 8, color: "inherit" }}>
-        {envelope.retryable
-          ? "This error can be retried."
-          : "Retrying will produce the same result."}{" "}
-        · Trace ID <span className="mono">{envelope.correlationId}</span>
-      </div>
-    </div>
-  );
+  </>;
 }

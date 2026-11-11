@@ -136,26 +136,30 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
 
   const dailySpendCapWei = loadDailySpendCap(env);
 
-  // Solo EOA submission is for the local chain and, by explicit opt-in, the opBNB testnet. On
-  // mainnet the Safe multisig holds the submitter role, and a setting must not be able to open a
-  // path around it — so listing any other chain refuses startup instead of relying on the
-  // default. The default stays the local chain alone: a testnet signer is a funded key, and
-  // enabling it is the operator's decision.
-  const eoaAllowedChainIds = (env.ANCHOR_EOA_CHAIN_IDS ?? String(LOCAL_CHAIN_ID))
-    .split(",")
-    .map((value) => value.trim())
-    .filter((value) => value !== "")
-    .map((value) => {
-      if (!/^[0-9]+$/.test(value)) throw new Error("ANCHOR_EOA_CHAIN_IDS has an invalid chain id");
-      const id = Number(value);
-      if (!isEoaAnchorEligibleChainId(id)) {
-        throw new Error(
-          `ANCHOR_EOA_CHAIN_IDS may list only ${EOA_ANCHOR_ELIGIBLE_CHAIN_IDS.join(", ")}; chain ${id} anchors through the Safe`,
-        );
-      }
-      return id;
-    });
+  function loadEoaAllowedChains() {
+    // Solo EOA submission is for the local chain and, by explicit opt-in, the opBNB testnet. On
+    // mainnet the Safe multisig holds the submitter role, and a setting must not be able to open a
+    // path around it — so listing any other chain refuses startup instead of relying on the
+    // default. The default stays the local chain alone: a testnet signer is a funded key, and
+    // enabling it is the operator's decision.
+    const eoaAllowedChainIds = (env.ANCHOR_EOA_CHAIN_IDS ?? String(LOCAL_CHAIN_ID))
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value !== "")
+      .map((value) => {
+        if (!/^[0-9]+$/.test(value)) throw new Error("ANCHOR_EOA_CHAIN_IDS has an invalid chain id");
+        const id = Number(value);
+        if (!isEoaAnchorEligibleChainId(id)) {
+          throw new Error(
+            `ANCHOR_EOA_CHAIN_IDS may list only ${EOA_ANCHOR_ELIGIBLE_CHAIN_IDS.join(", ")}; chain ${id} anchors through the Safe`,
+          );
+        }
+        return id;
+      });
+    return eoaAllowedChainIds;
+  }
 
+  const eoaAllowedChainIds = loadEoaAllowedChains();
   // Safe address that receives proposals on chains where EOA submission is blocked. Without it,
   // nothing happens on that chain, and the worker logs that fact.
   const safeAddress = env.ANCHOR_SAFE_ADDRESS?.toLowerCase() ?? null;
@@ -169,21 +173,26 @@ export function loadAnchorConfig(env: AnchorEnv): AnchorConfig {
   const gasLimit = BigInt(positiveInteger(env, "ANCHOR_GAS_LIMIT", 200_000));
   // A finite gwei value can still overflow to Infinity in wei (1e300) or round to 0 wei; BigInt()
   // would throw a bare RangeError on the first, and a 0 cap could never send.
-  const feeCapWeiNumber = Math.round(feeCapGwei * 1e9);
-  if (!Number.isFinite(feeCapWeiNumber) || feeCapWeiNumber < 1) {
-    throw new Error("ANCHOR_FEE_CAP_GWEI must be a finite number of at least 1 wei");
-  }
-  const feeCapWei = BigInt(feeCapWeiNumber);
-  // Every send is reserved at gas limit × fee cap until settled, and a broadcast that failed is
-  // settled only once the next send reuses its nonce. A cap with room for a single send would
-  // keep that next send out forever, so it must fit two.
-  // On OP-stack this is only the startup floor: the live L1 quote must also fit twice before
-  // an EOA send is admitted (`checkSubmitAllowed`). No signed ceiling exists for that L1 fee.
-  const minimumCapWei = 2n * gasLimit * feeCapWei;
-  if (dailySpendCapWei < minimumCapWei) {
-    throw new Error(
-      `ANCHOR_DAILY_SPEND_CAP_WEI must be at least 2 × ANCHOR_GAS_LIMIT × ANCHOR_FEE_CAP_GWEI (${minimumCapWei} wei)`,
-    );
+  const feeCapWei = checkedFeeCap();
+
+  function checkedFeeCap(): bigint {
+    const feeCapWeiNumber = Math.round(feeCapGwei * 1e9);
+    if (!Number.isFinite(feeCapWeiNumber) || feeCapWeiNumber < 1) {
+      throw new Error("ANCHOR_FEE_CAP_GWEI must be a finite number of at least 1 wei");
+    }
+    const feeCapWei = BigInt(feeCapWeiNumber);
+    // Every send is reserved at gas limit × fee cap until settled, and a broadcast that failed is
+    // settled only once the next send reuses its nonce. A cap with room for a single send would
+    // keep that next send out forever, so it must fit two.
+    // On OP-stack this is only the startup floor: the live L1 quote must also fit twice before
+    // an EOA send is admitted (`checkSubmitAllowed`). No signed ceiling exists for that L1 fee.
+    const minimumCapWei = 2n * gasLimit * feeCapWei;
+    if (dailySpendCapWei < minimumCapWei) {
+      throw new Error(
+        `ANCHOR_DAILY_SPEND_CAP_WEI must be at least 2 × ANCHOR_GAS_LIMIT × ANCHOR_FEE_CAP_GWEI (${minimumCapWei} wei)`,
+      );
+    }
+    return feeCapWei;
   }
 
   return {

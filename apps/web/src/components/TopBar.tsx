@@ -53,6 +53,57 @@ export function TopBar() {
   const inactive = assuranceNarrowedRoles(session);
   const roles = effectiveRoles(session);
 
+  function renderAccountIdentity() {
+    if (!session) return null;
+    return (
+            <span className="meta">
+              <span data-testid="sign-in-method">{FIRST_FACTOR_LABEL[session.firstFactor ?? ""] ?? "—"}</span>{" "}
+              · {session.aal ?? "—"} ·{" "}
+              <span data-testid="effective-roles">
+                {roles.join(", ") || (inactive.length > 0 ? "" : COPY.session.noRoles)}
+              </span>
+              {inactive.length > 0 ? (
+                <>
+                  {roles.length > 0 ? " · " : null}
+                  <span
+                    data-testid="inactive-roles"
+                    title={COPY.session.inactiveReason}
+                    style={{ textDecoration: "line-through" }}
+                  >
+                    {inactive.map((entry) => entry.role).join(", ")}
+                  </span>{" "}
+                  <span data-testid="inactive-roles-reason">
+                    ({COPY.session.inactiveRoles}: {COPY.session.inactiveReason})
+                  </span>
+                </>
+              ) : null}{" "}
+              · {session.assuranceLevel}
+            </span>
+    );
+  }
+
+  function renderStepUp() {
+    return <>
+            {narrowed.length > 0 && stepUp && !pendingFactor ? (
+              <button
+                type="button"
+                data-testid="step-up-narrowed"
+                title={AUTH_COPY.stepUp.narrowed}
+                onClick={() =>
+                  void stepUp
+                    .prompt(narrowed.some((entry) => entry.requiredAal === "aal3") ? "aal3" : "aal2")
+                    .catch((caught: unknown) => {
+                      if (!(caught instanceof StepUpCancelled)) throw caught;
+                    })
+                }
+              >
+                {AUTH_COPY.stepUp.button(narrowed.map((entry) => entry.role).join(", "))}
+              </button>
+            ) : null}
+
+    </>;
+  }
+
   return (
     <header className="topbar" onClick={activateNavigationMenu}>
       <div className="row topbar-start" style={{ gap: 20 }}>
@@ -102,45 +153,8 @@ export function TopBar() {
           <details className="nav-public nav-account">
             <summary>Account</summary>
             <div className="nav-public-menu">
-            <span className="meta">
-              <span data-testid="sign-in-method">{FIRST_FACTOR_LABEL[session.firstFactor ?? ""] ?? "—"}</span>{" "}
-              · {session.aal ?? "—"} ·{" "}
-              <span data-testid="effective-roles">
-                {roles.join(", ") || (inactive.length > 0 ? "" : COPY.session.noRoles)}
-              </span>
-              {inactive.length > 0 ? (
-                <>
-                  {roles.length > 0 ? " · " : null}
-                  <span
-                    data-testid="inactive-roles"
-                    title={COPY.session.inactiveReason}
-                    style={{ textDecoration: "line-through" }}
-                  >
-                    {inactive.map((entry) => entry.role).join(", ")}
-                  </span>{" "}
-                  <span data-testid="inactive-roles-reason">
-                    ({COPY.session.inactiveRoles}: {COPY.session.inactiveReason})
-                  </span>
-                </>
-              ) : null}{" "}
-              · {session.assuranceLevel}
-            </span>
-            {narrowed.length > 0 && stepUp && !pendingFactor ? (
-              <button
-                type="button"
-                data-testid="step-up-narrowed"
-                title={AUTH_COPY.stepUp.narrowed}
-                onClick={() =>
-                  void stepUp
-                    .prompt(narrowed.some((entry) => entry.requiredAal === "aal3") ? "aal3" : "aal2")
-                    .catch((caught: unknown) => {
-                      if (!(caught instanceof StepUpCancelled)) throw caught;
-                    })
-                }
-              >
-                {AUTH_COPY.stepUp.button(narrowed.map((entry) => entry.role).join(", "))}
-              </button>
-            ) : null}
+            {renderAccountIdentity()}
+            {renderStepUp()}
             {isAccountSession(session) && !pendingFactor ? (
               <Link href="/w/settings" onClick={closeMenu}>{COPY.session.settings}</Link>
             ) : null}

@@ -130,48 +130,7 @@ export function trackTransaction(input: TrackInput): TrackResult {
   }
 
   if (input.observation.kind === "receipt") {
-    const { status, blockNumber, blockHash } = input.observation;
-
-    if (status === "reverted") {
-      // The contract rejected it. Resending the same payload gives the same result.
-      return {
-        nextState: "reverted",
-        confirmations: 0,
-        blockNumber,
-        blockHash,
-        reorged: false,
-        reason: "execution_reverted",
-      };
-    }
-
-    // If the same transaction shows up in a different block, the previously seen block is gone.
-    const reorged =
-      input.recordedBlockHash !== null && input.recordedBlockHash !== blockHash;
-
-    const confirmations = confirmationsOf(blockNumber, input.headBlockNumber);
-    const deepEnough = confirmations >= input.confirmationDepth;
-    // Depth alone is a block count, and block counts differ in time: 12 blocks are 3 s on opBNB.
-    // The node's safe or finalized head is the chain's own statement that the block stays.
-    const final = input.finalizedBlockNumber === null || blockNumber <= input.finalizedBlockNumber;
-    const confirmed = deepEnough && final;
-
-    return {
-      // Recompute the state even on re-confirmation after a reorg. Below the confirmation depth
-      // or above the finalized head it returns to included — never keep confirmed while only
-      // swapping the block.
-      nextState: confirmed ? "confirmed" : "included",
-      confirmations,
-      blockNumber,
-      blockHash,
-      reorged,
-      reason: reorged
-        ? "reorg_reobserved"
-        : confirmed
-          ? "confirmed"
-          : deepEnough
-            ? "awaiting_finality"
-            : "included",
-    };
+    return trackReceipt(input, input.observation);
   }
 
   if (input.observation.kind === "unknown") {
@@ -218,6 +177,51 @@ export function trackTransaction(input: TrackInput): TrackResult {
   }
 
   return keep("pending");
+}
+
+function trackReceipt(input: TrackInput, observation: Extract<Observation, { kind: "receipt" }>): TrackResult {
+  const { status, blockNumber, blockHash } = observation;
+
+  if (status === "reverted") {
+    // The contract rejected it. Resending the same payload gives the same result.
+    return {
+      nextState: "reverted",
+      confirmations: 0,
+      blockNumber,
+      blockHash,
+      reorged: false,
+      reason: "execution_reverted",
+    };
+  }
+
+  // If the same transaction shows up in a different block, the previously seen block is gone.
+  const reorged =
+    input.recordedBlockHash !== null && input.recordedBlockHash !== blockHash;
+
+  const confirmations = confirmationsOf(blockNumber, input.headBlockNumber);
+  const deepEnough = confirmations >= input.confirmationDepth;
+  // Depth alone is a block count, and block counts differ in time: 12 blocks are 3 s on opBNB.
+  // The node's safe or finalized head is the chain's own statement that the block stays.
+  const final = input.finalizedBlockNumber === null || blockNumber <= input.finalizedBlockNumber;
+  const confirmed = deepEnough && final;
+
+  return {
+    // Recompute the state even on re-confirmation after a reorg. Below the confirmation depth
+    // or above the finalized head it returns to included — never keep confirmed while only
+    // swapping the block.
+    nextState: confirmed ? "confirmed" : "included",
+    confirmations,
+    blockNumber,
+    blockHash,
+    reorged,
+    reason: reorged
+      ? "reorg_reobserved"
+      : confirmed
+        ? "confirmed"
+        : deepEnough
+          ? "awaiting_finality"
+          : "included",
+  };
 }
 
 /**

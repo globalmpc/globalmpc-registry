@@ -14,6 +14,14 @@
 4. Run focused local checks, then promptly push authorized changes and open or update the PR so CI can start. Continue remaining verification while CI runs. Do not delay CI for an exhaustive local rerun when focused checks make the change reviewable. Completion still requires the verification below; do not weaken checks or thresholds.
 5. Fix actionable findings directly, then review and verify the fixes and affected regressions. Do not stop at listing fixable findings.
 
+## Tenant-scoped database access
+
+- Tenant-scoped API, worker, CLI and seed operations must work with RLS enforced. Use the established transaction-local tenant context (`withTenant`) for every tenant-table read/write, including queue selection, leases, retries, failure bookkeeping and backlog/health queries. A `WHERE tenant_id = ...` predicate alone does not set the RLS context.
+- Derive the tenant from the authenticated actor/service identity or explicit trusted deployment configuration. Keep that authority consistent through every query and retry. Release the transaction before storage, scanner or network calls; verify pooled connections do not retain tenant context.
+- Prove tenant-scoped behavior using a non-superuser, NOBYPASSRLS role with the intended runtime grants. Assert those role attributes in the test, and cover both own-tenant success and other-tenant exclusion. Superuser, table-owner or BYPASSRLS-only tests do not establish runtime RLS correctness.
+- Treat existing explicitly cross-tenant jobs separately: document and review their authority and required privileges. Do not fix an empty queue by granting BYPASSRLS, disabling RLS or reusing a privileged role for the API. BYPASSRLS is a role attribute and is not inherited through membership.
+- Regression reference: the scan worker's queue reads omitted tenant context and its BYPASSRLS test role concealed the failure. `apps/scan-worker/test/scanner.test.ts` now runs queue lifecycle regressions with RLS enforced; see `docs/reviews/scan-worker-tenant-rls.md`.
+
 ## Verification and completion
 
 - Apply `docs/review-guidelines.md`, including browser reproduction of suspicious user-visible behavior and direct API/negative tests for security boundaries.

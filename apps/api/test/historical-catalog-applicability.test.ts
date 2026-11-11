@@ -68,20 +68,26 @@ describeDb("historical catalog warnings do not read legacy matrix applicability"
       }
       await tx`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
         VALUES(${policyId},${fx.tenantA},'historical-rights','1.0.0','stage.exploration','MNG',now(),${tx.json(definition)},'effective')`;
-      const inputBasis = { policies: [{ id: policyId, definition }],
-        applicableStageRequirements: [{ policySetId: policyId, requirementId: "rights-review" }],
-        manual: frozenExcluded ? [{ fact_key: claimType, status: "not_applicable" }] : [] };
-      const status = frozenExcluded ? "not_applicable" : reviewed && evidence ? "reviewed" : "unreviewed";
-      const snapshot: LedgerSnapshot = {
-        id: null, projectId: fx.projectA, evaluatedAt, inputSnapshotHash: ledgerInputHash(inputBasis, evaluatedAt),
-        evaluatorVersion: "1", inputBasis,
-        items: [{ claimType, catalogVersion: 1, displayName: payload.displayName, status, grade: initialGrade,
-          reviewScope: reviewed ? [claimType] : [], reviews: [], claimIds: [claimId], attestationIds: reviewed ? [attestationId] : [],
-          reasons: [frozenExcluded ? "RECORDED_NOT_APPLICABLE" : reviewed && evidence ? "CURRENT_SCOPED_REVIEW" : "CURRENT_SCOPED_REVIEW_REQUIRED"], limitations: [] }],
-        stages: [{ gateId: "stage.exploration", policySetId: policyId, ruleSetVersion: "1.0.0", status: passingStage ? "ok" : "gap",
-          missing: [], reviewedItems: passingStage ? "1" : "0", requiredItems: "1" }],
-        currentStage: passingStage ? "stage.exploration" : null, limitations: [],
-      };
+      const snapshot = historicalSnapshot();
+
+      function historicalSnapshot(): LedgerSnapshot {
+        const inputBasis = { policies: [{ id: policyId, definition }],
+          applicableStageRequirements: [{ policySetId: policyId, requirementId: "rights-review" }],
+          manual: frozenExcluded ? [{ fact_key: claimType, status: "not_applicable" }] : [] };
+        const status = frozenExcluded ? "not_applicable" : reviewed && evidence ? "reviewed" : "unreviewed";
+        const snapshot: LedgerSnapshot = {
+          id: null, projectId: fx.projectA, evaluatedAt, inputSnapshotHash: ledgerInputHash(inputBasis, evaluatedAt),
+          evaluatorVersion: "1", inputBasis,
+          items: [{ claimType, catalogVersion: 1, displayName: payload.displayName, status, grade: initialGrade,
+            reviewScope: reviewed ? [claimType] : [], reviews: [], claimIds: [claimId], attestationIds: reviewed ? [attestationId] : [],
+            reasons: [frozenExcluded ? "RECORDED_NOT_APPLICABLE" : reviewed && evidence ? "CURRENT_SCOPED_REVIEW" : "CURRENT_SCOPED_REVIEW_REQUIRED"], limitations: [] }],
+          stages: [{ gateId: "stage.exploration", policySetId: policyId, ruleSetVersion: "1.0.0", status: passingStage ? "ok" : "gap",
+            missing: [], reviewedItems: passingStage ? "1" : "0", requiredItems: "1" }],
+          currentStage: passingStage ? "stage.exploration" : null, limitations: [],
+        };
+        return snapshot;
+      }
+
       const stored = await persistEvidenceLedger(tx, fx.tenantA, snapshot);
       if (addedUnreviewed) await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
         SELECT ${randomUUID()},tenant_id,project_id,claim_type,'Later historical claim',source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of

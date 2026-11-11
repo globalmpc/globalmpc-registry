@@ -68,6 +68,8 @@ describe("ClamAV response parsing", () => {
 
 describeDb("scan worker", () => {
   let sql: postgres.Sql;
+  let scanSql: postgres.Sql;
+  const scanRole = `scan_rls_${randomUUID().replaceAll("-", "")}`;
   let tenantId: string;
   let projectId: string;
   let uploadId: string;
@@ -125,9 +127,15 @@ describeDb("scan worker", () => {
   beforeAll(async () => {
     sql = postgres(process.env["DATABASE_URL"]!, { onnotice: () => {}, prepare: false });
     await runMigrations(sql);
+    await sql.unsafe(`CREATE ROLE ${scanRole} NOLOGIN NOSUPERUSER NOBYPASSRLS IN ROLE mpc_worker`);
+    scanSql = postgres(process.env["DATABASE_URL"]!, {
+      max: 2, onnotice: () => {}, prepare: false, connection: { role: scanRole },
+    });
   });
 
   afterAll(async () => {
+    await scanSql?.end();
+    await sql.unsafe(`DROP ROLE IF EXISTS ${scanRole}`);
     await sql.end();
   });
 
@@ -184,7 +192,7 @@ describeDb("scan worker", () => {
     `;
   });
 
-  const step = () => scanOnce(sql, store, scan, report, options, log);
+  const step = () => scanOnce(scanSql, store, scan, report, options, log);
 
   async function stateOf() {
     const [row] = await sql<
@@ -195,6 +203,20 @@ describeDb("scan worker", () => {
     `;
     return row!;
   }
+
+  it("processes its tenant with RLS enforced and releases pooled tenant context", async () => {
+    const [role] = await scanSql<{ rolsuper: boolean; rolbypassrls: boolean }[]>`
+      SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user`;
+    expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+    expect(await scanSql`SELECT id FROM core.object_uploads WHERE id=${uploadId}`).toEqual([]);
+    expect(await scanBacklog(scanSql, options.maxAttempts, tenantId)).toEqual({ pending: 1, stuck: 0 });
+    expect((await step()).verdict).toBe("clean");
+    expect((await stateOf()).state).toBe("scanned_clean");
+    // Once the tenant transaction ends, every pooled connection must again see no rows.
+    await Promise.all([1, 2].map(async () => {
+      expect(await scanSql`SELECT id FROM core.object_uploads WHERE id=${uploadId}`).toEqual([]);
+    }));
+  });
 
   it("moves a clean verdict to scanned_clean and bumps the version", async () => {
     const before = await stateOf();
@@ -302,10 +324,10 @@ describeDb("scan worker", () => {
     const leaseOnly = { tenantId, maxAttempts: 3, leaseMs: 60_000 };
     const slowScan = () => new Promise<ScanVerdict>(() => {});
 
-    void scanOnce(sql, store, slowScan, report, leaseOnly, log);
+    void scanOnce(scanSql, store, slowScan, report, leaseOnly, log);
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const second = await scanOnce(sql, store, scan, report, leaseOnly, log);
+    const second = await scanOnce(scanSql, store, scan, report, leaseOnly, log);
     expect(second.handled).toBe(false);
   });
 
@@ -328,7 +350,7 @@ describeDb("scan worker", () => {
     await step();
     await step();
 
-    const backlog = await scanBacklog(sql, options.maxAttempts, tenantId);
+    const backlog = await scanBacklog(scanSql, options.maxAttempts, tenantId);
     // Only this worker's tenant is counted, so earlier cases' rows are not.
     expect(backlog).toEqual({ pending: 0, stuck: 1 });
   });
@@ -375,21 +397,21 @@ describeDb("scan worker", () => {
     const keys: string[] = [];
     const watched: ScanStore = { async get(key) { keys.push(key); return objects.get(key) ?? null; } };
 
-    expect((await scanOnce(sql, watched, scan, report, options, log)).uploadId).toBe(uploadId);
-    expect((await scanOnce(sql, watched, scan, report, options, log)).handled).toBe(false);
+    expect((await scanOnce(scanSql, watched, scan, report, options, log)).uploadId).toBe(uploadId);
+    expect((await scanOnce(scanSql, watched, scan, report, options, log)).handled).toBe(false);
     expect(keys).toEqual([`quarantine/${tenantId}/${uploadId}`]);
     expect(reported.map((entry) => entry.uploadId)).toEqual([uploadId]);
     const [after] = await otherState();
     expect(after).toEqual(before);
     expect(after).toMatchObject({ state: "quarantined", scan_attempts: 0, scan_leased_until: null });
     // Nor does it show up in this worker's backlog.
-    expect(await scanBacklog(sql, options.maxAttempts, tenantId)).toEqual({ pending: 0, stuck: 0 });
-    expect((await scanBacklog(sql, options.maxAttempts, otherTenant)).pending).toBe(1);
+    expect(await scanBacklog(scanSql, options.maxAttempts, tenantId)).toEqual({ pending: 0, stuck: 0 });
+    expect((await scanBacklog(scanSql, options.maxAttempts, otherTenant)).pending).toBe(1);
   });
 
   it("resolves its tenant from the slug its token was registered for", async () => {
-    expect(await resolveScanTenant(sql, `scan-${tenantId.slice(0, 8)}`)).toBe(tenantId);
-    expect(await resolveScanTenant(sql, "no-such-tenant")).toBeUndefined();
+    expect(await resolveScanTenant(scanSql, `scan-${tenantId.slice(0, 8)}`)).toBe(tenantId);
+    expect(await resolveScanTenant(scanSql, "no-such-tenant")).toBeUndefined();
   });
 
   it("does all of this as the worker role, which reads a tenant's id and slug and nothing else", async () => {
@@ -418,7 +440,7 @@ describeDb("scan worker", () => {
     const countedScan = async (): Promise<ScanVerdict> => { scans++; return { kind: "clean" }; };
     const before = await stateOf();
     for (let poll = 0; poll < 3; poll++) {
-      expect(await scanOnce(sql, countedStore, countedScan, report, guarded, log))
+      expect(await scanOnce(scanSql, countedStore, countedScan, report, guarded, log))
         .toEqual({ handled: false, scannerUnavailable: true });
     }
     expect(await stateOf()).toEqual(before);
@@ -426,7 +448,7 @@ describeDb("scan worker", () => {
     expect(scans).toBe(0);
     expect(reported).toEqual([]);
     available = true;
-    expect((await scanOnce(sql, countedStore, countedScan, report, guarded, log)).verdict).toBe("clean");
+    expect((await scanOnce(scanSql, countedStore, countedScan, report, guarded, log)).verdict).toBe("clean");
     expect((await stateOf()).state).toBe("scanned_clean");
     expect((await stateOf()).scan_attempts).toBe(1);
     expect(reads).toBe(1);
@@ -437,7 +459,7 @@ describeDb("scan worker", () => {
     const guarded = { ...options, scannerAvailable: async () => true };
     const disconnected = async (): Promise<ScanVerdict> => ({ kind: "error", reason: "connection refused", unavailable: true });
     for (let poll = 0; poll < 3; poll++) {
-      expect((await scanOnce(sql, store, disconnected, report, guarded, log)).scannerUnavailable).toBe(true);
+      expect((await scanOnce(scanSql, store, disconnected, report, guarded, log)).scannerUnavailable).toBe(true);
       const after = await stateOf();
       expect(after.scan_attempts).toBe(0);
       expect(after.scan_leased_until).toBeNull();
@@ -453,9 +475,9 @@ describeDb("scan worker", () => {
     const guarded = { ...options, scannerAvailable: async () => true };
     const connectedFailure = async (): Promise<ScanVerdict> => ({ kind: "error", reason: "connection reset after upload" });
     for (let attempt = 0; attempt < 3; attempt++) {
-      expect((await scanOnce(sql, store, connectedFailure, report, guarded, log)).handled).toBe(true);
+      expect((await scanOnce(scanSql, store, connectedFailure, report, guarded, log)).handled).toBe(true);
     }
-    expect((await scanOnce(sql, store, connectedFailure, report, guarded, log)).handled).toBe(false);
+    expect((await scanOnce(scanSql, store, connectedFailure, report, guarded, log)).handled).toBe(false);
     expect((await stateOf()).scan_attempts).toBe(3);
     expect((await stateOf()).state).toBe("quarantined");
     expect(reported).toEqual([]);
@@ -465,7 +487,7 @@ describeDb("scan worker", () => {
     let startedFirst!: () => void;
     let finishFirst!: (result: ScanVerdict) => void;
     const firstStarted = new Promise<void>((resolve) => { startedFirst = resolve; });
-    const first = scanOnce(sql, store, () => {
+    const first = scanOnce(scanSql, store, () => {
       startedFirst();
       return new Promise<ScanVerdict>((resolve) => { finishFirst = resolve; });
     }, report, options, log);
@@ -474,7 +496,7 @@ describeDb("scan worker", () => {
     let startedSecond!: () => void;
     let finishSecond!: (result: ScanVerdict) => void;
     const secondStarted = new Promise<void>((resolve) => { startedSecond = resolve; });
-    const second = scanOnce(sql, store, () => {
+    const second = scanOnce(scanSql, store, () => {
       startedSecond();
       return new Promise<ScanVerdict>((resolve) => { finishSecond = resolve; });
     }, report, options, log);
@@ -501,7 +523,7 @@ describeDb("scan worker", () => {
     let started!: () => void;
     let finish!: (bytes: Uint8Array | null) => void;
     const reading = new Promise<void>((resolve) => { started=resolve; });
-    const pending = scanOnce(sql, {get: () => { started(); return new Promise((resolve) => { finish=resolve; }); }}, scan, report, options, log);
+    const pending = scanOnce(scanSql, {get: () => { started(); return new Promise((resolve) => { finish=resolve; }); }}, scan, report, options, log);
     await reading;
     const [lease] = await sql<{remaining:number}[]>`SELECT extract(epoch FROM(scan_leased_until-now()))::float8 AS remaining FROM core.object_uploads WHERE id=${uploadId}`;
     expect(lease!.remaining).toBeGreaterThan(450);
@@ -522,11 +544,11 @@ describeDb("scan worker", () => {
         settle = () => mode === "reject" ? reject(signal!.reason) : resolve(new Uint8Array([1,2,3]));
       }, {once:true});
     }) };
-    const pending = scanOnce(sql, slowStore, async () => { scans++; return {kind:"clean"}; }, report,
+    const pending = scanOnce(scanSql, slowStore, async () => { scans++; return {kind:"clean"}; }, report,
       {...options,objectReadTimeoutMs:5}, log);
     await sawAbort;
     expect((await stateOf()).scan_leased_until).not.toBeNull();
-    expect((await scanOnce(sql, store, scan, report, options, log)).handled).toBe(false);
+    expect((await scanOnce(scanSql, store, scan, report, options, log)).handled).toBe(false);
     settle();
     expect((await pending).verdict).toBe("error");
     expect(scans).toBe(0);
@@ -539,7 +561,7 @@ describeDb("scan worker", () => {
 
   it("does not scan or report an object whose bytes differ from leased size metadata", async () => {
     let scans=0;
-    const result=await scanOnce(sql,{get:async()=>new Uint8Array(4)},async()=>{scans++;return {kind:"clean"};},report,options,log);
+    const result=await scanOnce(scanSql,{get:async()=>new Uint8Array(4)},async()=>{scans++;return {kind:"clean"};},report,options,log);
     expect(result.verdict).toBe("error");
     expect(scans).toBe(0);
     expect(reported).toEqual([]);

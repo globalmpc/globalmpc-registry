@@ -57,16 +57,21 @@ export async function recordSourceObservation(
       AND outcome <> 'out_of_order'
     ORDER BY observed_at DESC,observation_sequence DESC LIMIT 1
   `;
-  const outOfOrder = (latest && input.observedAt < latest.observed_at)
-    || (previous && input.observedAt < previous.observed_at);
-  let outcome = input.result === "source_returned_no_record" ? "no_record" : "unavailable";
-  let affected: string[] = [];
-  if (input.result === "confirmed_from_source" && input.rawHash !== null) {
-    outcome = !previous ? "baseline"
-      : input.observedAt < previous.observed_at ? "out_of_order"
-      : input.rawHash === previous.raw_hash ? "unchanged" : "changed";
+  function observationOutcome(): string {
+    const outOfOrder = (latest && input.observedAt < latest.observed_at)
+      || (previous && input.observedAt < previous.observed_at);
+    let outcome = input.result === "source_returned_no_record" ? "no_record" : "unavailable";
+    if (input.result === "confirmed_from_source" && input.rawHash !== null) {
+      outcome = !previous ? "baseline"
+        : input.observedAt < previous.observed_at ? "out_of_order"
+        : input.rawHash === previous.raw_hash ? "unchanged" : "changed";
+    }
+    if (outOfOrder) outcome = "out_of_order";
+    return outcome;
   }
-  if (outOfOrder) outcome = "out_of_order";
+
+  const outcome = observationOutcome();
+  let affected: string[] = [];
   if (outcome === "changed" || (outcome === "no_record" && previous
       && input.observedAt >= previous.observed_at)) {
     // A recognized missing record needs review, never automatic revocation. Failures do not

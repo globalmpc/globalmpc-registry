@@ -797,79 +797,83 @@ async function submitPending(
     return proposeToSafe(tx, chain, config, log, row, safe);
   }
 
-  // An earlier attempt may be on chain although no hash was recorded: the send answer was lost
-  // (timeout), or the process died before this transaction committed — the attempt count below
-  // is rolled back with it. Ask the chain before sending again.
-  const reconciled = await reconcileBeforeSend(tx, chain, config, log, row);
-  if (reconciled) return reconciled;
+  return submitEoa();
 
-  let prepared: PreparedSend;
-  try {
-    prepared = await chain.prepareSubmitRoot(sendInput);
-  } catch (error) {
-    await countSendAttempt(tx, row);
-    return recordFailedSend(tx, config, log, row, error);
-  }
+  async function submitEoa(): Promise<StepResult> {
+    // An earlier attempt may be on chain although no hash was recorded: the send answer was lost
+    // (timeout), or the process died before this transaction committed — the attempt count below
+    // is rolled back with it. Ask the chain before sending again.
+    const reconciled = await reconcileBeforeSend(tx, chain, config, log, row);
+    if (reconciled) return reconciled;
 
-  // Only a reservation for this exact transaction, signer and nonce can occupy the retry
-  // slot. Signing supplies that identity; it does not broadcast or create a ledger entry.
-  let retryReservationWei = 0n;
-  if (l1FeeBound > 0n) {
+    let prepared: PreparedSend;
     try {
-      const [retry] = await tx<{ reserved: string }[]>`
-        SELECT COALESCE(MAX(s.gas_limit * COALESCE(s.max_fee_per_gas, ${config.feeCapWei.toString()}::NUMERIC)
-          + s.l1_fee_bound), 0)::TEXT AS reserved
-        FROM chain.anchor_sends s
-        WHERE s.chain_id = ${config.chainId} AND s.transaction_id = ${row.id}
-          AND s.signer = ${prepared.from.toLowerCase()} AND s.nonce = ${prepared.nonce}
-          AND s.settled_at IS NULL AND s.gas_limit IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM chain.gas_spend g
-            WHERE g.chain_id = s.chain_id AND g.tx_hash = s.tx_hash
-          )
-      `;
-      retryReservationWei = BigInt(retry?.reserved ?? "0");
+      prepared = await chain.prepareSubmitRoot(sendInput);
     } catch (error) {
-      return recordFailedRead(tx, config, log, row, "retry_reservation_read_failed", error);
+      await countSendAttempt(tx, row);
+      return recordFailedSend(tx, config, log, row, error);
     }
+
+    // Only a reservation for this exact transaction, signer and nonce can occupy the retry
+    // slot. Signing supplies that identity; it does not broadcast or create a ledger entry.
+    let retryReservationWei = 0n;
+    if (l1FeeBound > 0n) {
+      try {
+        const [retry] = await tx<{ reserved: string }[]>`
+          SELECT COALESCE(MAX(s.gas_limit * COALESCE(s.max_fee_per_gas, ${config.feeCapWei.toString()}::NUMERIC)
+            + s.l1_fee_bound), 0)::TEXT AS reserved
+          FROM chain.anchor_sends s
+          WHERE s.chain_id = ${config.chainId} AND s.transaction_id = ${row.id}
+            AND s.signer = ${prepared.from.toLowerCase()} AND s.nonce = ${prepared.nonce}
+            AND s.settled_at IS NULL AND s.gas_limit IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM chain.gas_spend g
+              WHERE g.chain_id = s.chain_id AND g.tx_hash = s.tx_hash
+            )
+        `;
+        retryReservationWei = BigInt(retry?.reserved ?? "0");
+      } catch (error) {
+        return recordFailedRead(tx, config, log, row, "retry_reservation_read_failed", error);
+      }
+    }
+    const finalGuard = checkSubmitAllowed({
+      ...guardInput,
+      retryReservationWei,
+    });
+    if (!finalGuard.allow) return recordSubmissionBlocked(tx, log, row, finalGuard.reason);
+    await countSendAttempt(tx, row);
+
+    // In the ledger before it can reach the network, committed on its own connection. If this
+    // transaction rolls back or the process dies after the broadcast, the send still counts
+    // against the cap until its receipt or its nonce settles it.
+    try {
+      await recordSend(sql, config, row, prepared, l1FeeBound);
+    } catch (error) {
+      // Not in the ledger means not counted against the cap: never broadcast it. The row waits
+      // and the same send is signed again next time.
+      return recordFailedRead(tx, config, log, row, "send_ledger_failed", error);
+    }
+
+    try {
+      await chain.broadcast(prepared);
+    } catch (error) {
+      // The row stays created and is retried. The ledger row stays open: a timeout may hide a
+      // send that reached the network. A send that did not is settled once its nonce is reused.
+      return recordFailedSend(tx, config, log, row, error);
+    }
+
+    const txHash = prepared.txHash;
+    await tx`
+      UPDATE chain.transactions
+      SET state = 'submitted', tx_hash = ${txHash},
+          contract_address = ${config.contractAddress.toLowerCase()},
+          submitted_at = now(), last_error = NULL, updated_at = now()
+      WHERE id = ${row.id}
+    `;
+
+    log({ level: "info", msg: "anchor.submitted", transactionId: row.id, txHash });
+    return { handled: true, transactionId: row.id, from: "created", to: "submitted" };
   }
-  const finalGuard = checkSubmitAllowed({
-    ...guardInput,
-    retryReservationWei,
-  });
-  if (!finalGuard.allow) return recordSubmissionBlocked(tx, log, row, finalGuard.reason);
-  await countSendAttempt(tx, row);
-
-  // In the ledger before it can reach the network, committed on its own connection. If this
-  // transaction rolls back or the process dies after the broadcast, the send still counts
-  // against the cap until its receipt or its nonce settles it.
-  try {
-    await recordSend(sql, config, row, prepared, l1FeeBound);
-  } catch (error) {
-    // Not in the ledger means not counted against the cap: never broadcast it. The row waits
-    // and the same send is signed again next time.
-    return recordFailedRead(tx, config, log, row, "send_ledger_failed", error);
-  }
-
-  try {
-    await chain.broadcast(prepared);
-  } catch (error) {
-    // The row stays created and is retried. The ledger row stays open: a timeout may hide a
-    // send that reached the network. A send that did not is settled once its nonce is reused.
-    return recordFailedSend(tx, config, log, row, error);
-  }
-
-  const txHash = prepared.txHash;
-  await tx`
-    UPDATE chain.transactions
-    SET state = 'submitted', tx_hash = ${txHash},
-        contract_address = ${config.contractAddress.toLowerCase()},
-        submitted_at = now(), last_error = NULL, updated_at = now()
-    WHERE id = ${row.id}
-  `;
-
-  log({ level: "info", msg: "anchor.submitted", transactionId: row.id, txHash });
-  return { handled: true, transactionId: row.id, from: "created", to: "submitted" };
 }
 
 async function recordSubmissionBlocked(
@@ -1454,60 +1458,66 @@ async function trackPending(
     return recordFailedRead(tx, config, log, row, "observation_failed", error);
   }
 
-  if (observation.kind === "receipt") {
-    // Record the cost even when the observation does not change the state. A branch below
-    // ("nothing changed: stamp the time and return") would otherwise skip recording the cost
-    // despite a receipt, and the daily cap would see 0 and stay open forever.
-    //
-    // The row's columns hold the latest attempt only. The daily cap sums the ledger, which
-    // keeps one row per mined hash — a resubmission or reorg re-observation does not erase an
-    // earlier attempt's gas, and seeing the same hash again does not count it twice.
-    await tx`
-      UPDATE chain.transactions
-      SET gas_used = ${observation.gasUsed.toString()},
-          effective_gas_price = ${observation.effectiveGasPrice.toString()}
-      WHERE id = ${row.id}
-    `;
-    await tx`
-      INSERT INTO chain.gas_spend (
-        chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price, l1_fee
-      ) VALUES (
-        ${config.chainId}, ${row.tx_hash}, ${row.id}, ${row.tenant_id},
-        ${observation.gasUsed.toString()}, ${observation.effectiveGasPrice.toString()},
-        ${observation.l1Fee.toString()}
-      )
-      ON CONFLICT (chain_id, tx_hash) DO NOTHING
-    `;
-    await settle(tx, config.chainId, row.tx_hash, "receipt");
+  async function processReceipt(txHash: string): Promise<StepResult | undefined> {
+    if (observation.kind === "receipt") {
+      // Record the cost even when the observation does not change the state. A branch below
+      // ("nothing changed: stamp the time and return") would otherwise skip recording the cost
+      // despite a receipt, and the daily cap would see 0 and stay open forever.
+      //
+      // The row's columns hold the latest attempt only. The daily cap sums the ledger, which
+      // keeps one row per mined hash — a resubmission or reorg re-observation does not erase an
+      // earlier attempt's gas, and seeing the same hash again does not count it twice.
+      await tx`
+        UPDATE chain.transactions
+        SET gas_used = ${observation.gasUsed.toString()},
+            effective_gas_price = ${observation.effectiveGasPrice.toString()}
+        WHERE id = ${row.id}
+      `;
+      await tx`
+        INSERT INTO chain.gas_spend (
+          chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price, l1_fee
+        ) VALUES (
+          ${config.chainId}, ${row.tx_hash}, ${row.id}, ${row.tenant_id},
+          ${observation.gasUsed.toString()}, ${observation.effectiveGasPrice.toString()},
+          ${observation.l1Fee.toString()}
+        )
+        ON CONFLICT (chain_id, tx_hash) DO NOTHING
+      `;
+      await settle(tx, config.chainId, txHash, "receipt");
+    }
+
+    if (observation.kind === "receipt" && observation.status === "reverted") {
+      const followed = await followAnchoringTransaction(tx, chain, config, log, row, "duplicate_send_reverted");
+      if (followed) return followed;
+    }
+
+    if (
+      observation.kind === "receipt" &&
+      observation.status === "success" &&
+      row.external_batch_id &&
+      row.merkle_root &&
+      !storedRoot(observation, trackedContractOf(row, config), row.external_batch_id, row.merkle_root)
+    ) {
+      // Mined and successful, yet the contract recorded no root for this batch here: a Safe
+      // execution whose inner call failed, or a transaction to some other address. Confirming it
+      // would publish a proof the chain does not back. If another transaction stored the batch,
+      // follow that one; otherwise a person looks, as with any batch whose chain state is unclear.
+      const followed = await followAnchoringTransaction(
+        tx,
+        chain,
+        config,
+        log,
+        row,
+        "anchored_by_another_transaction",
+      );
+      if (followed) return followed;
+      return requireReconciliation(tx, log, row, "receipt_without_root_submitted");
+    }
+    return undefined;
   }
 
-  if (observation.kind === "receipt" && observation.status === "reverted") {
-    const followed = await followAnchoringTransaction(tx, chain, config, log, row, "duplicate_send_reverted");
-    if (followed) return followed;
-  }
-
-  if (
-    observation.kind === "receipt" &&
-    observation.status === "success" &&
-    row.external_batch_id &&
-    row.merkle_root &&
-    !storedRoot(observation, trackedContractOf(row, config), row.external_batch_id, row.merkle_root)
-  ) {
-    // Mined and successful, yet the contract recorded no root for this batch here: a Safe
-    // execution whose inner call failed, or a transaction to some other address. Confirming it
-    // would publish a proof the chain does not back. If another transaction stored the batch,
-    // follow that one; otherwise a person looks, as with any batch whose chain state is unclear.
-    const followed = await followAnchoringTransaction(
-      tx,
-      chain,
-      config,
-      log,
-      row,
-      "anchored_by_another_transaction",
-    );
-    if (followed) return followed;
-    return requireReconciliation(tx, log, row, "receipt_without_root_submitted");
-  }
+  const receiptResult = await processReceipt(row.tx_hash);
+  if (receiptResult) return receiptResult;
 
   // A complete receipt (or a handled reverted receipt whose lookup answered) resolves the
   // search episode independently of the finality prerequisite that remains below.
@@ -1534,86 +1544,90 @@ async function trackPending(
     dropTimeoutMs: config.dropTimeoutMs,
   });
 
-  if (result.reorged && row.block_number && row.block_hash) {
-    // An overturned confirmation is kept, never deleted. Even if resubmission restores the same
-    // result, the fact that it flipped once is itself evidence for judging reliability.
-    await tx`
-      INSERT INTO chain.reorg_events (
-        id, tenant_id, transaction_id, previous_block_number,
-        previous_block_hash, detected_state
-      ) VALUES (
-        ${randomUUID()}, ${row.tenant_id}, ${row.id}, ${row.block_number},
-        ${row.block_hash}, ${row.state}
-      )
-    `;
-    log({
-      level: "warn",
-      msg: "anchor.reorg.detected",
-      transactionId: row.id,
-      previousBlockHash: row.block_hash,
-      newBlockHash: result.blockHash,
-    });
-  }
+  return persistObservation();
 
-  if (result.nextState === row.state && result.blockHash === row.block_hash) {
-    // Stamp the check time even when nothing changed. Otherwise the same row is re-picked
-    // immediately and pending rows behind it never progress.
-    await tx`UPDATE chain.transactions SET updated_at = now() WHERE id = ${row.id}`;
-    // Completed tracking clears any finality retry schedule as well as the search episode.
-    if (observation.kind === "receipt") await clearFailedSearch(tx, row);
+  async function persistObservation(): Promise<StepResult> {
+    if (result.reorged && row.block_number && row.block_hash) {
+      // An overturned confirmation is kept, never deleted. Even if resubmission restores the same
+      // result, the fact that it flipped once is itself evidence for judging reliability.
+      await tx`
+        INSERT INTO chain.reorg_events (
+          id, tenant_id, transaction_id, previous_block_number,
+          previous_block_hash, detected_state
+        ) VALUES (
+          ${randomUUID()}, ${row.tenant_id}, ${row.id}, ${row.block_number},
+          ${row.block_hash}, ${row.state}
+        )
+      `;
+      log({
+        level: "warn",
+        msg: "anchor.reorg.detected",
+        transactionId: row.id,
+        previousBlockHash: row.block_hash,
+        newBlockHash: result.blockHash,
+      });
+    }
+
+    if (result.nextState === row.state && result.blockHash === row.block_hash) {
+      // Stamp the check time even when nothing changed. Otherwise the same row is re-picked
+      // immediately and pending rows behind it never progress.
+      await tx`UPDATE chain.transactions SET updated_at = now() WHERE id = ${row.id}`;
+      // Completed tracking clears any finality retry schedule as well as the search episode.
+      if (observation.kind === "receipt") await clearFailedSearch(tx, row);
+      return {
+        handled: true,
+        transactionId: row.id,
+        from: row.state,
+        to: row.state,
+        reason: result.reason,
+        // A pending transaction is picked again at once; without a back-off the loop polls the
+        // node as fast as it answers. Confirmed rows are already spaced by `recheckIntervalMs`.
+        waiting: row.state !== "confirmed",
+      };
+    }
+
+    await tx`
+      UPDATE chain.transactions
+      SET state = ${result.nextState},
+          block_number = ${result.blockNumber},
+          block_hash = ${result.blockHash},
+          confirmations = ${result.confirmations},
+          confirmed_at = ${result.nextState === "confirmed" ? tx`now()` : null},
+          -- Stored so a worker on another chain can tell when this one stops watching (0103).
+          -- A re-confirmation at a new block lands here too and restarts the watch.
+          reorg_watch_until = ${
+            result.nextState === "confirmed"
+              ? tx`now() + ${`${config.reorgWatchMs} milliseconds`}::interval`
+              : null
+          },
+          updated_at = now()
+      WHERE id = ${row.id}
+    `;
+
+    // A resolved receipt or a terminal/manual-decision transition ends this search episode.
+    // Clear only after its state update succeeds; failed finality reads must keep eligibility.
+    if (observation.kind === "receipt" || result.nextState === "reconciliation_required" || result.nextState === "dropped") {
+      await clearFailedSearch(tx, row);
+    }
+
+    log({
+      level: "info",
+      msg: "anchor.state.changed",
+      transactionId: row.id,
+      from: row.state,
+      to: result.nextState,
+      confirmations: result.confirmations,
+      reason: result.reason,
+    });
+
     return {
       handled: true,
       transactionId: row.id,
       from: row.state,
-      to: row.state,
+      to: result.nextState,
       reason: result.reason,
-      // A pending transaction is picked again at once; without a back-off the loop polls the
-      // node as fast as it answers. Confirmed rows are already spaced by `recheckIntervalMs`.
-      waiting: row.state !== "confirmed",
     };
   }
-
-  await tx`
-    UPDATE chain.transactions
-    SET state = ${result.nextState},
-        block_number = ${result.blockNumber},
-        block_hash = ${result.blockHash},
-        confirmations = ${result.confirmations},
-        confirmed_at = ${result.nextState === "confirmed" ? tx`now()` : null},
-        -- Stored so a worker on another chain can tell when this one stops watching (0103).
-        -- A re-confirmation at a new block lands here too and restarts the watch.
-        reorg_watch_until = ${
-          result.nextState === "confirmed"
-            ? tx`now() + ${`${config.reorgWatchMs} milliseconds`}::interval`
-            : null
-        },
-        updated_at = now()
-    WHERE id = ${row.id}
-  `;
-
-  // A resolved receipt or a terminal/manual-decision transition ends this search episode.
-  // Clear only after its state update succeeds; failed finality reads must keep eligibility.
-  if (observation.kind === "receipt" || result.nextState === "reconciliation_required" || result.nextState === "dropped") {
-    await clearFailedSearch(tx, row);
-  }
-
-  log({
-    level: "info",
-    msg: "anchor.state.changed",
-    transactionId: row.id,
-    from: row.state,
-    to: result.nextState,
-    confirmations: result.confirmations,
-    reason: result.reason,
-  });
-
-  return {
-    handled: true,
-    transactionId: row.id,
-    from: row.state,
-    to: result.nextState,
-    reason: result.reason,
-  };
 }
 
 /**
@@ -2156,37 +2170,44 @@ async function processChainMove(
   let unknownOutcome = request.operator_settled || request.unmapped_safe_execution;
   try {
     if (await context.signerPending()) return waiting("signer_pending");
-    // Where a landed send of ours stored this batch, if it did: its receipt names the contract.
     const landedOn: string[] = [];
-    let receiptFinality: { head: number; finalized: number | null } | undefined;
-    for (const hash of request.tracked_hashes) {
-      const observation = await chain.observe(hash);
-      if (observation.kind !== "receipt") {
-        unknownOutcome = true;
-        continue;
-      }
-      // Receipt settlement accounts for gas immediately, including reverts. It does not prove
-      // the nonce is irreversibly spent: a reorg can make the same signed send land successfully
-      // after a move. Recheck every landed receipt against this old chain's live finality policy.
-      receiptFinality ??= {
-        head: await chain.headBlockNumber(),
-        finalized: config.finalityTag === "none" ? null : await chain.finalizedBlockNumber(config.finalityTag),
-      };
-      if (
-        confirmationsOf(observation.blockNumber, receiptFinality.head) < config.confirmationDepth ||
-        (receiptFinality.finalized !== null && observation.blockNumber > receiptFinality.finalized)
-      ) {
-        return waiting("open_send");
-      }
-      // A reverted outer Safe call does not consume the Safe's logical nonce. Even when this
-      // outer EOA hash is final, the signed Safe payload may execute again in a different hash.
-      if (observation.status === "reverted" && request.safe_execution_hashes.includes(hash)) unknownOutcome = true;
-      for (const submission of observation.rootSubmissions) {
-        if (submission.batchId === request.external_batch_id.toLowerCase()) {
-          landedOn.push(submission.contract.toLowerCase());
+    const receiptWait = await checkTrackedReceipts();
+    if (receiptWait) return receiptWait;
+
+    async function checkTrackedReceipts(): Promise<ChainMoveOutcome | undefined> {
+      // Where a landed send of ours stored this batch, if it did: its receipt names the contract.
+      let receiptFinality: { head: number; finalized: number | null } | undefined;
+      for (const hash of request.tracked_hashes) {
+        const observation = await chain.observe(hash);
+        if (observation.kind !== "receipt") {
+          unknownOutcome = true;
+          continue;
+        }
+        // Receipt settlement accounts for gas immediately, including reverts. It does not prove
+        // the nonce is irreversibly spent: a reorg can make the same signed send land successfully
+        // after a move. Recheck every landed receipt against this old chain's live finality policy.
+        receiptFinality ??= {
+          head: await chain.headBlockNumber(),
+          finalized: config.finalityTag === "none" ? null : await chain.finalizedBlockNumber(config.finalityTag),
+        };
+        if (
+          confirmationsOf(observation.blockNumber, receiptFinality.head) < config.confirmationDepth ||
+          (receiptFinality.finalized !== null && observation.blockNumber > receiptFinality.finalized)
+        ) {
+          return waiting("open_send");
+        }
+        // A reverted outer Safe call does not consume the Safe's logical nonce. Even when this
+        // outer EOA hash is final, the signed Safe payload may execute again in a different hash.
+        if (observation.status === "reverted" && request.safe_execution_hashes.includes(hash)) unknownOutcome = true;
+        for (const submission of observation.rootSubmissions) {
+          if (submission.batchId === request.external_batch_id.toLowerCase()) {
+            landedOn.push(submission.contract.toLowerCase());
+          }
         }
       }
+      return undefined;
     }
+
     // Recorded contract first: a row that reached the chain did so there.
     const candidates = [
       ...new Set(

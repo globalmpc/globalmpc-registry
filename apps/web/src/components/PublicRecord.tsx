@@ -52,6 +52,41 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
   // go missing at some depth (AC-26).
   const shown = project(view, depth) as Record<string, unknown>;
 
+  function renderExplanation() {
+    return <>
+          {"proves" in shown ? (
+            <div data-testid="explanation-layer">
+              <div className="row" style={{ marginTop: 18, alignItems: "flex-start", gap: 24 }}>
+                <div style={{ flex: 1, minWidth: 240 }}>
+                  <h2 style={{ fontSize: 13 }}>What this authority establishes</h2>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: "var(--positive)" }}>
+                    {view.explanation.proves.length > 0 ? (
+                      view.explanation.proves.map((item) => <li key={item}>{item}</li>)
+                    ) : (
+                      <li>Nothing has been anchored for this version yet.</li>
+                    )}
+                  </ul>
+                </div>
+                <div style={{ flex: 1, minWidth: 240 }}>
+                  <h2 style={{ fontSize: 13 }}>What it does not establish</h2>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: "var(--alert)" }}>
+                    {view.explanation.doesNotProve.length > 0 ? (
+                      view.explanation.doesNotProve.map((item) => <li key={item}>{item}</li>)
+                    ) : (
+                      <li>Factual accuracy, reviewer standing, and legal effect.</li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+              <p className="meta" style={{ marginTop: 12 }}>
+                {view.explanation.freshnessExplanation}
+              </p>
+            </div>
+          ) : null}
+
+    </>;
+  }
+
   return (
       <>
         {entry.evidenceLedgerCurrent ? <EvidenceLedgerWarnings current={entry.evidenceLedgerCurrent as LedgerCurrent} /> : null}
@@ -131,36 +166,7 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
             ))}
           </ul>
 
-          {"proves" in shown ? (
-            <div data-testid="explanation-layer">
-              <div className="row" style={{ marginTop: 18, alignItems: "flex-start", gap: 24 }}>
-                <div style={{ flex: 1, minWidth: 240 }}>
-                  <h2 style={{ fontSize: 13 }}>What this authority establishes</h2>
-                  <ul style={{ margin: 0, paddingLeft: 18, color: "var(--positive)" }}>
-                    {view.explanation.proves.length > 0 ? (
-                      view.explanation.proves.map((item) => <li key={item}>{item}</li>)
-                    ) : (
-                      <li>Nothing has been anchored for this version yet.</li>
-                    )}
-                  </ul>
-                </div>
-                <div style={{ flex: 1, minWidth: 240 }}>
-                  <h2 style={{ fontSize: 13 }}>What it does not establish</h2>
-                  <ul style={{ margin: 0, paddingLeft: 18, color: "var(--alert)" }}>
-                    {view.explanation.doesNotProve.length > 0 ? (
-                      view.explanation.doesNotProve.map((item) => <li key={item}>{item}</li>)
-                    ) : (
-                      <li>Factual accuracy, reviewer standing, and legal effect.</li>
-                    )}
-                  </ul>
-                </div>
-              </div>
-              <p className="meta" style={{ marginTop: 12 }}>
-                {view.explanation.freshnessExplanation}
-              </p>
-            </div>
-          ) : null}
-
+          {renderExplanation()}
           {"rawHashReference" in shown ? (
             <div data-testid="expert-layer">
               <h2 style={{ marginTop: 18 }}>Receipt and integrity detail</h2>
@@ -229,76 +235,7 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
             </div> : null}
           </div>
 
-        <div className="panel" data-testid="proof-panel">
-          <h2>Integrity proof</h2>
-          {proof ? (
-            <>
-              <dl className="dl">
-                <dt>Merkle check</dt>
-                <dd>
-                  {proof.merkleVerified ? (
-                    <span style={{ color: "var(--positive)" }}>Path matches</span>
-                  ) : (
-                    <span style={{ color: "var(--destructive-text)" }}>Does not match</span>
-                  )}
-                </dd>
-                <dt>Chain confirmation state</dt>
-                <dd className="mono">{proof.confirmationState}</dd>
-                <dt>Inclusion confirmed</dt>
-                <dd data-testid="proof-included">
-                  {proof.included ? (
-                    <span style={{ color: "var(--positive)" }}>Confirmed</span>
-                  ) : (
-                    // included is true only when confirmed. Before that it is not yet
-                    // final (06 §6.8 no hidden success).
-                    <span style={{ color: "var(--alert)" }}>
-                      Not confirmed yet — shown once the chain confirms
-                    </span>
-                  )}
-                </dd>
-                <dt>root</dt>
-                <dd className="mono" style={{ wordBreak: "break-all" }}>
-                  {proof.root}
-                </dd>
-                <dt>Transaction</dt>
-                <dd>
-                  <TxLink chainId={proof.chainId} hash={proof.transactionHash} />
-                </dd>
-                <dt>Anchor contract</dt>
-                <dd data-testid="proof-contract">
-                  <ContractLink
-                    chainId={proof.chainId}
-                    address={proof.contractAddress}
-                    transactionHash={proof.transactionHash}
-                  />
-                </dd>
-              </dl>
-
-              <div className="row" style={{ marginTop: 14, alignItems: "flex-start", gap: 24 }}>
-                <div style={{ flex: 1, minWidth: 240 }}>
-                  <h2 style={{ fontSize: 13 }}>What this proof confirms</h2>
-                  <ul style={{ margin: 0, paddingLeft: 18, color: "var(--positive)" }}>
-                    {proof.proves.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-                <div style={{ flex: 1, minWidth: 240 }} data-testid="proof-disclaimer">
-                  <h2 style={{ fontSize: 13 }}>What it does not confirm</h2>
-                  <ul style={{ margin: 0, paddingLeft: 18, color: "var(--alert)" }}>
-                    {proof.doesNotProve.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </>
-          ) : (
-            <p className="sub" style={{ margin: 0 }}>
-              Not anchored yet. An integrity proof exists only after a batch is built.
-            </p>
-          )}
-        </div>
+        <IntegrityProof proof={proof} />
 
         <div className="notice" style={{ color: "var(--alert)" }}>
           <div className="title">Integrity and authority are different questions</div>
@@ -370,4 +307,80 @@ function toRecordView(entry: PublicProjection, proof: InclusionProof | null): Re
   transactionHash: proof?.transactionHash ?? null,
     },
   };
+}
+
+function IntegrityProof({ proof }: { readonly proof: InclusionProof | null }) {
+  return (
+        <div className="panel" data-testid="proof-panel">
+          <h2>Integrity proof</h2>
+          {proof ? (
+            <>
+              <dl className="dl">
+                <dt>Merkle check</dt>
+                <dd>
+                  {proof.merkleVerified ? (
+                    <span style={{ color: "var(--positive)" }}>Path matches</span>
+                  ) : (
+                    <span style={{ color: "var(--destructive-text)" }}>Does not match</span>
+                  )}
+                </dd>
+                <dt>Chain confirmation state</dt>
+                <dd className="mono">{proof.confirmationState}</dd>
+                <dt>Inclusion confirmed</dt>
+                <dd data-testid="proof-included">
+                  {proof.included ? (
+                    <span style={{ color: "var(--positive)" }}>Confirmed</span>
+                  ) : (
+                    // included is true only when confirmed. Before that it is not yet
+                    // final (06 §6.8 no hidden success).
+                    <span style={{ color: "var(--alert)" }}>
+                      Not confirmed yet — shown once the chain confirms
+                    </span>
+                  )}
+                </dd>
+                <dt>root</dt>
+                <dd className="mono" style={{ wordBreak: "break-all" }}>
+                  {proof.root}
+                </dd>
+                <dt>Transaction</dt>
+                <dd>
+                  <TxLink chainId={proof.chainId} hash={proof.transactionHash} />
+                </dd>
+                <dt>Anchor contract</dt>
+                <dd data-testid="proof-contract">
+                  <ContractLink
+                    chainId={proof.chainId}
+                    address={proof.contractAddress}
+                    transactionHash={proof.transactionHash}
+                  />
+                </dd>
+              </dl>
+
+              <div className="row" style={{ marginTop: 14, alignItems: "flex-start", gap: 24 }}>
+                <div style={{ flex: 1, minWidth: 240 }}>
+                  <h2 style={{ fontSize: 13 }}>What this proof confirms</h2>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: "var(--positive)" }}>
+                    {proof.proves.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div style={{ flex: 1, minWidth: 240 }} data-testid="proof-disclaimer">
+                  <h2 style={{ fontSize: 13 }}>What it does not confirm</h2>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: "var(--alert)" }}>
+                    {proof.doesNotProve.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="sub" style={{ margin: 0 }}>
+              Not anchored yet. An integrity proof exists only after a batch is built.
+            </p>
+          )}
+        </div>
+
+  );
 }

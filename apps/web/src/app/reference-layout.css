@@ -98,6 +98,7 @@ textarea:focus-visible {
 }
 .workspace-content .project-navigation-main {
   gap: 22px;
+  display: none;
 }
 .workspace-content .panel {
   border-bottom: 1px solid var(--border);
@@ -133,6 +134,9 @@ body:has(.workspace-shell) .topbar-start > nav {
   gap: 16px;
   margin: 24px 0;
 }
+.help-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .work-summary > a {
   display: grid;
   gap: 8px;
@@ -151,9 +155,7 @@ body:has(.workspace-shell) .topbar-start > nav {
   font-size: 32px;
   line-height: 1.2;
 }
-.help-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
+
 .assessment-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -324,6 +326,7 @@ body:has(.workspace-shell) .topbar-start > nav {
 }
 .public-project-row {
   background: var(--surface);
+  position: relative;
 }
 .public-project-row:hover {
   background: var(--surface-elevated);
@@ -544,9 +547,7 @@ body:has(.workspace-shell) .topbar-start > nav {
 .directory-evidence strong {
   font-weight: 500;
 }
-.public-project-row {
-  position: relative;
-}
+
 .public-project-row h2 a::after {
   content: "";
   position: absolute;
@@ -557,9 +558,7 @@ body:has(.workspace-shell) .topbar-start > nav {
   outline-offset: -2px;
 }
 /* Project destinations live in the sidebar; contextual tools remain above the page. */
-.workspace-content .project-navigation-main {
-  display: none;
-}
+
 .workspace-content
   .project-navigation:has(.project-navigation-secondary:empty) {
   display: none;
