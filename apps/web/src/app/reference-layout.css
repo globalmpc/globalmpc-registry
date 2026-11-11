@@ -580,7 +580,7 @@ body:has(.workspace-shell) .topbar-start > nav {
   top: 17px;
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-sm);
   background: var(--copper);
 }
 .audit-timeline p {
