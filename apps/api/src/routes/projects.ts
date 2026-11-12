@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { withTenant } from "@mpc/db";
 import { createProjectRequest, projectListQuery, updateProjectRequest } from "@mpc/api-contract";
-import { badRequest, forbidden, notFound } from "../errors.js";
+import { AppError, badRequest, forbidden, notFound } from "../errors.js";
 import { capRows } from "../list-window.js";
 import {
   actableOrganizations,
@@ -22,6 +22,7 @@ import {
   requireMutationContext,
   requireReadContext,
 } from "./shared.js";
+import { savedProjectProgress } from "../services/project-progress.js";
 import { listProjectItems } from "../services/project-registry.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
@@ -283,11 +284,21 @@ export async function registerProjectRoutes(
       ),
     );
     const window = capRows(items, PROJECT_LIST_LIMIT);
+    const progressIds = window.items.filter(item => {
+      try {
+        assertAuthorized(session, "readiness.read", projectResource(tenantId, item.id), sessionFacts(session));
+        return true;
+      } catch (error) {
+        if (error instanceof AppError && error.statusCode === 403) return false;
+        throw error;
+      }
+    }).map(item => item.id);
+    const progress = await withTenant(sql, { tenantId }, tx => savedProjectProgress(tx, tenantId, progressIds));
 
     return {
       // Capped after the filters, most recently updated first: a filtered list that stops at the
       // cap says so instead of reading as complete.
-      items: window.items,
+      items: window.items.map(item => ({ ...item, stageProgress: progress.get(item.id) ?? null })),
       truncated: window.truncated,
       limit: window.limit,
       requestId: request.context.requestId,

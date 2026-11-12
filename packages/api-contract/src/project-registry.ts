@@ -232,6 +232,19 @@ export const projectListQuery = z
   })
   .strict();
 
+/** Saved evidence stage only; never a current approval or a raw ledger. */
+export const projectStageProgress = z.object({
+  evaluatedAt: isoDateTime,
+  currentStage: z.string().nullable(),
+  stages: z.array(z.object({
+    gateId: z.string(), ruleSetVersion: z.string(), status: z.enum(READINESS_STATUSES),
+    missing: z.array(z.string()),
+    reviewedItems: z.string().regex(/^(0|[1-9][0-9]*)$/).optional(),
+    requiredItems: z.string().regex(/^(0|[1-9][0-9]*)$/).optional(),
+  })),
+});
+export type ProjectStageProgress = z.infer<typeof projectStageProgress>;
+
 export const projectListItem = z.object({
   id: z.string(),
   projectKey: z.string(),
@@ -245,6 +258,7 @@ export const projectListItem = z.object({
   projectRegistryStatus: z.enum(["none", "draft", "published", "revoked", "superseded"]),
   /** Worst of the latest assessment per gate. `null` = never assessed, which is not a pass. */
   readinessSummary: z.enum(READINESS_STATUSES).nullable(),
+  stageProgress: projectStageProgress.nullable().optional(),
   weakestGrade: z.enum(GRADES).nullable(),
   openStaleSignals: z.number().int().nonnegative(),
   ownerOrganizationId: z.string(),

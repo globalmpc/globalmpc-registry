@@ -20939,6 +20939,78 @@
                                   }
                                 ]
                               },
+                              "stageProgress": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "evaluatedAt": {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                      },
+                                      "currentStage": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      },
+                                      "stages": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "gateId": {
+                                              "type": "string"
+                                            },
+                                            "ruleSetVersion": {
+                                              "type": "string"
+                                            },
+                                            "status": {
+                                              "type": "string",
+                                              "enum": [
+                                                "ok",
+                                                "watch",
+                                                "gap",
+                                                "not_evaluable"
+                                              ]
+                                            },
+                                            "missing": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "reviewedItems": {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]*)$"
+                                            },
+                                            "requiredItems": {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]*)$"
+                                            }
+                                          },
+                                          "required": [
+                                            "gateId",
+                                            "ruleSetVersion",
+                                            "status",
+                                            "missing"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "evaluatedAt",
+                                      "currentStage",
+                                      "stages"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "weakestGrade": {
                                 "anyOf": [
                                   {
@@ -21819,6 +21891,78 @@
                                 "gap",
                                 "not_evaluable"
                               ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "stageProgress": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "evaluatedAt": {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+                                },
+                                "currentStage": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "stages": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "gateId": {
+                                        "type": "string"
+                                      },
+                                      "ruleSetVersion": {
+                                        "type": "string"
+                                      },
+                                      "status": {
+                                        "type": "string",
+                                        "enum": [
+                                          "ok",
+                                          "watch",
+                                          "gap",
+                                          "not_evaluable"
+                                        ]
+                                      },
+                                      "missing": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "reviewedItems": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]*)$"
+                                      },
+                                      "requiredItems": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]*)$"
+                                      }
+                                    },
+                                    "required": [
+                                      "gateId",
+                                      "ruleSetVersion",
+                                      "status",
+                                      "missing"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "evaluatedAt",
+                                "currentStage",
+                                "stages"
+                              ],
+                              "additionalProperties": false
                             },
                             {
                               "type": "null"

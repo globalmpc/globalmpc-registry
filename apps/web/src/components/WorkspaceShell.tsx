@@ -51,10 +51,10 @@ export function WorkspaceShell({
   const projectLinks = WORKSPACE_PROJECT_LINKS.filter((entry) =>
     actions.includes(entry.requires),
   );
-  function link(href: string, label: string, exact = false) {
-    const current = exact
+  function link(href: string, label: string, exact = false, active = false) {
+    const current = active || (exact
       ? pathname === href
-      : pathname === href || pathname.startsWith(`${href}/`);
+      : pathname === href || pathname.startsWith(`${href}/`));
     return (
       <Link key={href} href={href} aria-current={current ? "page" : undefined}>
         {label}
@@ -101,6 +101,8 @@ export function WorkspaceShell({
                 `/w/projects/${selectedId}${entry.path ? `/${entry.path}` : ""}`,
                 entry.label,
                 !entry.path,
+                (entry.path === "data-room" && ["documents", "claims"].some(path => pathname.startsWith(`/w/projects/${selectedId}/${path}`))) ||
+                  (entry.path === "requirements" && pathname === `/w/projects/${selectedId}/register`),
               ),
             )}
           </nav>
@@ -111,11 +113,12 @@ export function WorkspaceShell({
             {entries
               .filter(
                 (entry) =>
-                  !["/w/work", "/w/projects", "/w/notifications"].includes(
+                  !["/w/work", "/w/projects", "/w/notifications", ...(selectedId ? ["/w/data-room", "/w/verification", "/w/readiness"] : [])].includes(
                     entry.href,
                   ),
               )
               .map((entry) => link(entry.href, entry.label, true))}
+            {selectedId && actions.includes("registry.read") ? link(`/w/projects/${selectedId}/cre`, "CRE status relay", true) : null}
           </nav>
         </details>
         <nav

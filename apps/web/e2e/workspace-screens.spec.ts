@@ -48,9 +48,19 @@ test.describe("workspace navigation", () => {
 
   test("public menus are reachable while signed in", async ({ page }) => {
     await connectAs(page, "Steward A");
-    await openFooterMenu(page);
-    await page.getByRole("contentinfo").getByRole("link", { name: "Proof Verifier", exact: true }).click();
-    await expect(page).toHaveURL(/\/verify$/);
+    // Independent copy and destination expectations catch partial navigation renames.
+    for (const [name, path, heading] of [
+      ["Advanced record search", "/explorer", "Public Explorer"],
+      ["Verification records", "/explorer/verifications", "Verification Records"],
+      ["Verify a proof", "/verify", "Proof Verifier"],
+      ["Protocol governance", "/governance", "Governance"],
+    ]) {
+      await openFooterMenu(page);
+      await page.getByRole("contentinfo").getByRole("link", { name, exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`${path}$`));
+      await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+      await expect(page.getByRole("contentinfo").locator("details.footer-navigation")).not.toHaveAttribute("open");
+    }
   });
 });
 
@@ -234,7 +244,7 @@ test.describe("terms and data handling", () => {
 
   test("is reachable from the signed-in workspace too", async ({ page }) => {
     await connectAs(page, "Operator A");
-    await openFooterMenu(page);
+    await expect(page.getByRole("contentinfo").locator("details.footer-navigation")).not.toHaveAttribute("open");
     await page.getByRole("contentinfo").getByRole("link", { name: "Terms, data handling, and support", exact: true }).click();
     await expect(page).toHaveURL(/\/legal$/);
     await expect(page.getByRole("contentinfo").locator("details")).not.toHaveAttribute("open");
@@ -243,7 +253,7 @@ test.describe("terms and data handling", () => {
   test("is reachable from any screen", async ({ page }) => {
     for (const path of ["/", "/explorer", "/verify"]) {
       await page.goto(path);
-      await openFooterMenu(page);
+      await expect(page.getByRole("contentinfo").locator("details.footer-navigation")).not.toHaveAttribute("open");
       await page.getByRole("contentinfo").getByRole("link", { name: "Terms, data handling, and support", exact: true }).click();
       await expect(page).toHaveURL(/\/legal$/);
       await expect(page.getByRole("contentinfo").locator("details")).not.toHaveAttribute("open");

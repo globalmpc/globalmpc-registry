@@ -19,7 +19,7 @@
     "check:brand": "tsx scripts/check-brand-assets.ts",
     "check:migration-rollback": "pnpm --filter @mpc/db rollback-check",
     "check": "pnpm typecheck && pnpm test && pnpm check:openapi && pnpm check:brand",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "node --test scripts/coverage-temp.test.mjs && node --import ./scripts/coverage-temp.mjs ./node_modules/vitest/vitest.mjs run --coverage"
   },
   "devDependencies": {
     "@mpc/api-contract": "workspace:*",
