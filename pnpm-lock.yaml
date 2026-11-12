@@ -19,6 +19,9 @@ importers:
       '@openzeppelin/contracts':
         specifier: 5.6.1
         version: 5.6.1
+      '@openzeppelin/contracts-upgradeable':
+        specifier: 5.6.1
+        version: 5.6.1(@openzeppelin/contracts@5.6.1)
       '@types/node':
         specifier: 22.20.1
         version: 22.20.1
@@ -964,6 +967,11 @@ packages:
   '@noble/hashes@2.4.0':
     resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
     engines: {node: '>= 20.19.0'}
+
+  '@openzeppelin/contracts-upgradeable@5.6.1':
+    resolution: {integrity: sha512-n4a/vfRs114lXyUdYg7pyY8LvFKWvCDF5lEcRRAVxap8g6ZEdLqm+9tmt2zTtRHcNMxTYp9y5t6KBof4tHp7Og==}
+    peerDependencies:
+      '@openzeppelin/contracts': 5.6.1
 
   '@openzeppelin/contracts@5.6.1':
     resolution: {integrity: sha512-Ly6SlsVJ3mj+b18W3R8gNufB7dTICT105fJhodGAGgyC2oqnBAhqSiNDJ8V8DLY05cCz81GLI0CU5vNYA1EC/w==}
@@ -2865,6 +2873,10 @@ snapshots:
   '@noble/hashes@2.2.0': {}
 
   '@noble/hashes@2.4.0': {}
+
+  '@openzeppelin/contracts-upgradeable@5.6.1(@openzeppelin/contracts@5.6.1)':
+    dependencies:
+      '@openzeppelin/contracts': 5.6.1
 
   '@openzeppelin/contracts@5.6.1': {}
 

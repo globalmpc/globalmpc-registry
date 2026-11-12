@@ -90,6 +90,7 @@ const failure = () =>
 describe("signed gate decisions", () => {
   it("requires a condition for go on watch and submits the exact signed content", async () => {
     const calls = mockHttp({
+      "GET /api/v1/projects/p1/readiness-policy-options?gateId=publication": { items: [{ id: "actual-policy", ruleSetId: "publication", version: "1", gateId: "publication", jurisdictionProfile: "MNG", effectiveFrom: "2026-01-01T00:00:00Z" }] },
       "POST /api/v1/projects/p1/readiness-assessments": assessment(),
       "POST /api/v1/projects/p1/gate-decisions/signature-requests": {
         signatureRequestId: "s1",
@@ -141,7 +142,8 @@ describe("signed gate decisions", () => {
       assuranceLevel: "wallet_only",
     } as typeof saved;
     try {
-      mockHttp({ "POST /api/v1/projects/p1/readiness-assessments": assessment() });
+      mockHttp({ "GET /api/v1/projects/p1/readiness-policy-options?gateId=publication": { items: [{ id: "actual-policy", ruleSetId: "publication", version: "1", gateId: "publication", jurisdictionProfile: "MNG", effectiveFrom: "2026-01-01T00:00:00Z" }] },
+      "POST /api/v1/projects/p1/readiness-assessments": assessment() });
       await mount(Gate);
       expect(screen.getByTestId("assurance-notice").textContent).toContain("gate_approver");
       fireEvent.click(screen.getByText("Load current readiness"));
@@ -156,6 +158,7 @@ describe("signed gate decisions", () => {
   });
   it("blocks go for gaps but permits a signed hold", async () => {
     mockHttp({
+      "GET /api/v1/projects/p1/readiness-policy-options?gateId=publication": { items: [{ id: "actual-policy", ruleSetId: "publication", version: "1", gateId: "publication", jurisdictionProfile: "MNG", effectiveFrom: "2026-01-01T00:00:00Z" }] },
       "POST /api/v1/projects/p1/readiness-assessments": assessment("gap"),
       "POST /api/v1/projects/p1/gate-decisions/signature-requests": () => {
         throw new Error("Wallet service unavailable");
@@ -177,7 +180,8 @@ describe("signed gate decisions", () => {
     );
   });
   it("shows assessment errors and requires a connected account", async () => {
-    mockHttp({ "POST /api/v1/projects/p1/readiness-assessments": failure() });
+    mockHttp({ "GET /api/v1/projects/p1/readiness-policy-options?gateId=publication": { items: [{ id: "actual-policy", ruleSetId: "publication", version: "1", gateId: "publication", jurisdictionProfile: "MNG", effectiveFrom: "2026-01-01T00:00:00Z" }] },
+      "POST /api/v1/projects/p1/readiness-assessments": failure() });
     await mount(Gate);
     fireEvent.click(screen.getByText("Load current readiness"));
     await screen.findByRole("alert");

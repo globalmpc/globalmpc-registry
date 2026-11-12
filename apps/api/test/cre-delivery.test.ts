@@ -8,6 +8,16 @@ const config = { chainId: 5611, chainRpcUrl: "https://rpc.example" };
 const state = () => ({ ...expected, chainId: 5611n, registryVersion: 1n, observedAt: 100n, validUntil: 400n, sequence: 1n });
 beforeEach(() => { vi.clearAllMocks(); rpc.getChainId.mockResolvedValue(5611); rpc.getBlock.mockResolvedValue({ number: 55n, timestamp: 200n }); rpc.readContract.mockResolvedValue(state()); });
 describe("CRE receiver observation", () => {
+  it("reads the dedicated CRE chain while retaining a different anchor chain", async () => {
+    rpc.getChainId.mockResolvedValue(97);
+    rpc.readContract.mockResolvedValue({ ...state(), chainId: 97n });
+    expect(await inspectCreDelivery({ ...config, creChainId: 97, creChainRpcUrl: "https://cre.example" }, { ...expected, chainId: "97" }))
+      .toMatchObject({ state: "matched", report: { chainId: "97" } });
+    vi.clearAllMocks();
+    expect(await inspectCreDelivery({ ...config, creChainId: 97, creChainRpcUrl: null }, { ...expected, chainId: "97" }))
+      .toMatchObject({ state: "not_configured" });
+    expect(rpc.getChainId).not.toHaveBeenCalled();
+  });
   it("compares every field at a single block, independently of positive status", async () => {
     expect(await inspectCreDelivery(config, expected)).toEqual({ state: "matched", checkedAt: "200", report: expected, fresh: true });
     expect(rpc.readContract).toHaveBeenCalledWith(expect.objectContaining({ blockNumber: 55n, address: expected.receiver, args: [expected.recordId] }));

@@ -102,7 +102,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
       <div className="panel">
         <h2>1. What will be public</h2>
         {pending ? <DisclosurePreview projection={pending.projection} /> : project ? <DisclosurePreview projection={buildProjection(project)} /> : null}
-        {!pending && token ? <WorkspaceEvidenceLedger token={token} projectId={id} /> : null}
+        {!pending && token ? <WorkspaceEvidenceLedger mayManagePolicies={session?.actions?.includes("registry.read") ?? false} token={token} projectId={id} /> : null}
         <p className="sub" style={{ marginTop: 0 }}>
           Only the fields below and the approved evidence assessment go out. Source documents,
           coordinates, person-level identifiers, and internal notes leave under no approval.

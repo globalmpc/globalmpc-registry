@@ -14,7 +14,7 @@ with **BNB Smart Chain (BSC)** as its intended production network. Project teams
 supporting evidence, reviewers sign their findings, and approvers decide which records
 can be published. A public Explorer lets readers inspect published records and their proofs.
 
-**Status:** In development. Contracts have not been deployed on BSC mainnet or testnet.
+**Status:** In development. BSC mainnet deployment is pending.
 
 ## Technology Stack
 
@@ -27,6 +27,7 @@ can be published. A public Explorer lets readers inspect published records and t
 ## Supported Networks
 
 - **BNB Smart Chain Mainnet (Chain ID: 56)** — intended production network; deployment pending.
+- **BSC Testnet (Chain ID: 97)** — CRE Receiver and status delivery.
 - **opBNB Testnet (Chain ID: 5611)** — shared dev/test deployment.
 - **Local Anvil (Chain ID: 31337)** — development and automated testing.
 
@@ -35,7 +36,11 @@ can be published. A public Explorer lets readers inspect published records and t
 | Network | Contract | Address |
 |---|---|---|
 | BNB Smart Chain Mainnet | RegistryAnchorV1 | Not deployed |
+| BSC Testnet (97) | CRE Receiver proxy | [`0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F`](https://testnet.bscscan.com/address/0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F) |
 | opBNB Testnet (5611) | RegistryAnchorV1 | [`0x40197aff5a3db7542ceff4198fc52dc730a6c39f`](https://testnet.opbnbscan.com/address/0x40197aff5a3db7542ceff4198fc52dc730a6c39f) |
+
+The Receiver proxy on97 and anchor on5611 share the same hexadecimal address
+but are separate contracts on separate networks.
 
 The opBNB testnet deployment, its roles and transaction are recorded in
 [`docs/operations/testnet-contract.md`](docs/operations/testnet-contract.md#deployment-record).
@@ -60,6 +65,16 @@ BNB Smart Chain is set as the target network in these files:
 - [`docs/operations/mainnet-contract.md`](docs/operations/mainnet-contract.md) — the BSC mainnet (Chain ID 56)
   deployment procedure and the decisions it waits on.
 - [`.env.example`](.env.example) — defaults to the local chain (31337) for development.
+
+## CRE Receiver
+
+CRE reports are delivered to a separate upgradeable Receiver proxy. Deployment,
+workflow binding and upgrades: [`contracts/README.md`](contracts/README.md).
+
+Set `CRE_CHAIN_ID=97` and `CRE_CHAIN_RPC_URL` on the API for BSC Testnet delivery.
+These settings do not change the existing anchor's `CHAIN_ID` or RPC.
+Project → CRE generates observations and downloads workflow configuration;
+the CRE workflow must be registered and run separately.
 
 ## Current Features
 

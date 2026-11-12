@@ -59,10 +59,12 @@ Language:
 
 ### Logo
 
-- Clearspace: 0.5× the mark's height on all sides
+- Clearspace: 0.5× the mark's height on all sides, except in fixed headers and the compact lockup, which have their own rows below
 - Minimum size — mark: 24px digital · 10mm print
 - Minimum size — horizontal lockup: 120px wide digital · 32mm print
 - Stacked lockup: Use above 96px wide only
+- Clearspace — fixed headers: When a header bar shows the horizontal lockup file and is shorter than the lockup plus its clearspace: at least 0.125× the mark's height above and below; 0.5× to the side. Most headers use the compact lockup instead (next row)
+- Compact lockup — headers and footers: In a header bar or a footer, the mark may stand beside "MPC" set as text instead of the horizontal lockup file: the mark file rendered 24–28px tall, "MPC" in the display face at weight 600 and 16px (or the wordmark file at the same height), 8–14px apart, both centred on one line. 0.5× the mark's height of clearspace to the side. The 120px lockup minimum does not apply to it
 
 Don'ts:
 
@@ -71,5 +73,5 @@ Don'ts:
 - Add shadows, glows, outlines, or bevels.
 - Recolour the mark outside the copper scale.
 - Place the full-colour mark on photography — use a mono variant.
-- Rearrange, resize, or re-space the mark against the wordmark.
+- Rearrange, resize, or re-space the mark against the wordmark — except as the compact lockup in headers and footers.
 - Set the wordmark in a substitute typeface.

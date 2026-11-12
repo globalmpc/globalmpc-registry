@@ -34,11 +34,6 @@ const COPIES: readonly Copy[] = [
     why: "TopBar brand mark",
   },
   {
-    origin: "mpc-lockup-horizontal-on-dark.svg",
-    copy: "apps/web/public/brand/mpc-lockup-horizontal-on-dark.svg",
-    why: "TopBar horizontal lockup",
-  },
-  {
     origin: "mpc-mark-on-dark.svg",
     copy: "apps/web/src/app/icon.svg",
     why: "favicon (Next app router convention)",

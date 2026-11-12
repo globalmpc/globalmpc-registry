@@ -2587,3 +2587,15 @@ export async function updateNotificationSinkState(
   });
   return parse<NotificationSink>(response);
 }
+
+export interface ReadinessPolicyOption {
+  id: string; ruleSetId: string; version: string; gateId: string;
+  jurisdictionProfile: string; effectiveFrom: string;
+}
+
+export async function getReadinessPolicyOptions(token: string, projectId: string, gateId?: string): Promise<{ items: ReadinessPolicyOption[] }> {
+  const query = gateId === undefined ? "" : `?gateId=${encodeURIComponent(gateId)}`;
+  return parse(await apiFetch(`/api/v1/projects/${encodeURIComponent(projectId)}/readiness-policy-options${query}`, {
+    headers: authHeader(token),
+  }));
+}

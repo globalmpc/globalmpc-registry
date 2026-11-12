@@ -121,13 +121,15 @@ describeDb("metrics endpoint", () => {
 
   it("does not use tenant as a label", async () => {
     const token = await signIn(app, fx.operatorA);
-    await app.inject({
+    const response = await app.inject({
       method: "GET",
       url: "/api/v1/projects",
       headers: { authorization: `Bearer ${token}` },
     });
+    expect(response.statusCode).toBe(200);
 
     const output = (await app.inject({ method: "GET", url: "/metrics" })).body;
+    expect(output).toContain('http_requests_total{method="GET",route="/api/v1/projects",status="2xx"} 1');
     // Metrics are unauthenticated, so the tenant list would be exposed.
     expect(output).not.toContain(fx.tenantA);
   });

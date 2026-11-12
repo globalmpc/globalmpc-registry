@@ -92,6 +92,7 @@ export const ROUTE_LAYER_RULES: readonly { readonly pattern: string; readonly la
   { pattern: "/api/v1/projects/{projectId}/stale-signals", layer: "data_oracle" },
   { pattern: "/api/v1/stale-signals/**", layer: "data_oracle" },
   { pattern: "/api/v1/jurisdictions/**", layer: "data_oracle" },
+  { pattern: "/api/v1/projects/{projectId}/readiness-policy-options", layer: "data_oracle" },
   { pattern: "/api/v1/projects/{projectId}/readiness-assessments", layer: "data_oracle" },
   { pattern: "/api/v1/readiness-assessments/**", layer: "data_oracle" },
   { pattern: "/api/v1/review-registry/policy-sets/**", layer: "data_oracle" },

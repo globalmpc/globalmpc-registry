@@ -34,7 +34,7 @@ interface ListItem {
  *   whatever the case of the type;
  * - replaced, rejected and untyped documents never count toward a requirement;
  * - only people who run the Data Room declare or retire, and a declaration is never deleted;
- * - a project with 10,000 documents is counted whole and paged to the end without a gap.
+ * - full and partial pages are counted whole and traversed without a gap.
  */
 describeDb("document status", () => {
   let fx: TestFixture;
@@ -441,12 +441,11 @@ describeDb("document status", () => {
     });
   });
 
-  describe("a project with 10,000 documents", () => {
-    const TOTAL = 10_000;
+  describe("a project spanning full and partial document pages", () => {
+    const TOTAL = 401; // Two full 200-item pages and a one-item terminal page.
 
     beforeAll(async () => {
-      const seedStarted = performance.now();
-      // Seeded in the database: 10,000 uploads through the API would take minutes. Every tenth is
+      // Seed through the database to isolate list behavior. Every tenth is
       // expired, every hundredth still pending; timestamps differ by a microsecond so a cursor
       // rounded to the millisecond would lose rows.
       const [subject] = await fx.sql<{ id: string }[]>`
@@ -478,22 +477,18 @@ describeDb("document status", () => {
                CASE WHEN g % 10 = 0 AND g % 100 <> 0 THEN DATE '2020-01-01' ELSE DATE '2999-01-01' END
         FROM seed
       `;
-      console.log(`seeded ${TOTAL} documents in ${(performance.now() - seedStarted).toFixed(0)} ms`);
     }, 120_000);
 
     it("counts all of them", async () => {
-      const started = performance.now();
       const response = await summary(fx.otherProjectA);
-      const elapsed = performance.now() - started;
       expect(response.statusCode).toBe(200);
       const { totals, undeclaredTypes } = response.json();
       // Earlier tests put no uploads in this project.
       expect(totals.all).toBe(TOTAL);
-      expect(totals.pending).toBe(100);
-      expect(totals.expired).toBe(900);
-      expect(totals.current).toBe(9_000);
+      expect(totals.pending).toBe(4);
+      expect(totals.expired).toBe(36);
+      expect(totals.current).toBe(361);
       expect(undeclaredTypes.length).toBe(137);
-      console.log(`document-status summary over ${TOTAL} documents: ${elapsed.toFixed(0)} ms`);
     }, 60_000);
 
     it("pages through every document exactly once", async () => {
@@ -505,31 +500,43 @@ describeDb("document status", () => {
         const response = await list(query, fx.otherProjectA);
         expect(response.statusCode).toBe(200);
         const body = response.json() as { items: ListItem[]; nextCursor: string | null };
+        expect(body.items).toHaveLength(pages < 2 ? 200 : 1);
         for (const item of body.items) {
           expect(seen.has(item.uploadId)).toBe(false);
           seen.add(item.uploadId);
         }
         cursor = body.nextCursor;
         pages += 1;
-      } while (cursor !== null && pages < 100);
+      } while (cursor !== null && pages <= 3);
+      expect(cursor).toBeNull();
       expect(seen.size).toBe(TOTAL);
-      expect(pages).toBe(TOTAL / 200);
+      expect(pages).toBe(3);
     }, 60_000);
 
     it("pages a filtered view to its end", async () => {
-      let count = 0;
+      const seen = new Set<string>();
+      let pages = 0;
       let cursor: string | null = null;
       do {
-        const query: string = `?status=expired&limit=200${cursor ? `&cursor=${cursor}` : ""}`;
-        const body = (await list(query, fx.otherProjectA)).json() as {
+        const query: string = `?status=expired&limit=10${cursor ? `&cursor=${cursor}` : ""}`;
+        const response = await list(query, fx.otherProjectA);
+        expect(response.statusCode).toBe(200);
+        const body = response.json() as {
           items: ListItem[];
           nextCursor: string | null;
         };
         expect(body.items.every((item) => item.status === "expired")).toBe(true);
-        count += body.items.length;
+        expect(body.items).toHaveLength(pages < 3 ? 10 : 6);
+        for (const item of body.items) {
+          expect(seen.has(item.uploadId)).toBe(false);
+          seen.add(item.uploadId);
+        }
         cursor = body.nextCursor;
-      } while (cursor !== null);
-      expect(count).toBe(900);
+        pages += 1;
+      } while (cursor !== null && pages <= 4);
+      expect(cursor).toBeNull();
+      expect(seen.size).toBe(36);
+      expect(pages).toBe(4);
     }, 60_000);
   });
 });

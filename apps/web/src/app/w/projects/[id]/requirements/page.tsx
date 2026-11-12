@@ -49,6 +49,7 @@ export default function RequirementsPage({
           token={token}
           projectId={id}
           browsable
+          mayManagePolicies={actions.includes("registry.read")}
         />
       ) : null}
     </>

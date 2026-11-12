@@ -398,3 +398,10 @@ describe("project evidence browser", () => {
     expect(screen.getByText("Scope excludes site inspection")).toBeDefined();
   });
 });
+
+it("explains unconfigured stages and links authorized operators to policy setup", async () => {
+  mockHttp({ "GET /api/v1/projects/p1/evidence-ledger": { snapshot: { ...summary, stages: [], currentStage: null } } });
+  await act(async () => { render(<WorkspaceEvidenceLedger token="token" projectId="p1" mayManagePolicies />); });
+  await screen.findByText("Stage progression needs configured policies");
+  expect(screen.getByRole("link", { name: "Configure policy sets in review registries →" }).getAttribute("href")).toBe("/w/registries");
+});

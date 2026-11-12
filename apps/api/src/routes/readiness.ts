@@ -1,3 +1,4 @@
+import { registerReadinessOptionRoutes } from "./readiness-options.js";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
@@ -327,6 +328,7 @@ export async function registerReadinessRoutes(
   sql: postgres.Sql,
   config: AppConfig,
 ): Promise<void> {
+  await registerReadinessOptionRoutes(app, sql);
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/readiness-assessments",
     async (request) => {

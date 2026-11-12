@@ -221,6 +221,9 @@ test.describe("golden path", () => {
     // --- 5. Readiness assessment (data_steward) ---------------------------
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/readiness`);
+    // Other complete specs install additional policies in the shared E2E tenant.
+    // Select this journey's publication policy instead of relying on a sole option.
+    await page.getByRole("combobox", { name: "Rule set" }).selectOption("dddddddd-0000-0000-0000-000000000001");
     await page.getByRole("button", { name: "Recompute" }).click();
     await expect(page.getByText("Result hash", { exact: true })).toBeVisible();
 
@@ -230,6 +233,7 @@ test.describe("golden path", () => {
     // --- 6. Gate decision (gate_approver) ---------------------------------
     await connectAs(page, "Approver A");
     await page.goto(`/w/projects/${projectId}/gates/registry_publication`);
+    await page.getByRole("combobox", { name: "Rule set" }).selectOption("dddddddd-0000-0000-0000-000000000001");
     await page.getByRole("button", { name: "Load current readiness" }).click();
     // The guidance sentence also contains "There is no deciding without one", so a loose OR
     // regex matches two elements. Wait exactly for the heading of the loaded result.

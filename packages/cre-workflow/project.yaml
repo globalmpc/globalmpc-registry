@@ -5,5 +5,5 @@ local:
 
 dev:
   rpcs:
-    - chain-name: binance_smart_chain-testnet-opbnb-1
-      url: https://opbnb-testnet-rpc.bnbchain.org
+    - chain-name: binance_smart_chain-testnet
+      url: https://bsc-testnet-dataseed.bnbchain.org

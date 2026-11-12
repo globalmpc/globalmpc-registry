@@ -11,6 +11,7 @@ import { useSession } from "@/lib/session";
 import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
+import { WorkspaceProjectProgress } from "@/components/WorkspaceProjectProgress";
 import { GradeBadge, LifecycleBadge, ReadinessBadge } from "@/components/StatusBadge";
 
 /**
@@ -62,16 +63,19 @@ export default function ProjectListPage() {
       setLoading(false);
       return;
     }
+    let live = true;
     setLoading(true);
     listProjectItems(token, filters)
       .then((data) => {
+        if (!live) return;
         setProjects(data.items);
         setTruncated(data.truncated);
         setError(null);
       })
-      .catch(setError)
-      .finally(() => setLoading(false));
-  }, [token, sessionLoading, filters]);
+      .catch(error => { if (live) setError(error); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [token, sessionLoading, session?.tenantId, session?.subjectId, filters]);
 
   if (!sessionLoading && !token) {
     return (
@@ -211,6 +215,7 @@ export default function ProjectListPage() {
               <tr>
                 <th scope="col">Project key</th>
                 <th scope="col">Name</th>
+                <th scope="col">Stage & evidence progress</th>
                 <th scope="col">Host country</th>
                 <th scope="col">Minerals</th>
                 <th scope="col">Reference</th>
@@ -232,6 +237,7 @@ export default function ProjectListPage() {
                     </Link>
                   </td>
                   <td>{project.name}</td>
+                  <td>{token && session?.actions?.includes("readiness.read") ? <WorkspaceProjectProgress key={`${session.tenantId}:${session.subjectId}:${project.id}`} token={token} projectId={project.id} savedSummary={project.stageProgress} /> : <span className="meta">Progress requires assessment access</span>}</td>
                   <td className="mono">{project.hostCountryIso3}</td>
                   <td>{project.minerals.join(", ") || "—"}</td>
                   <td>{REFERENCE_LABEL[project.referenceStatus]}</td>

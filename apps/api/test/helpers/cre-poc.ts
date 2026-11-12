@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  createPublicClient, createTestClient, createWalletClient, encodeAbiParameters,
+  createPublicClient, createTestClient, createWalletClient, encodeAbiParameters, encodeFunctionData,
   http, keccak256, parseAbiParameters, toBytes, type Abi, type Address, type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -166,7 +166,11 @@ export async function runCreRegistryPoc(): Promise<void> {
     };
     const forwarder = await deploy(forwarderArtifact, []);
     const workflowId = keccak256(toBytes("synthetic-local-registry-workflow"));
-    const receiver = await deploy(receiverArtifact, [forwarder, workflowId, account.address, 3600n]);
+    const implementation = await deploy(receiverArtifact, []);
+    const proxyArtifact = await artifact("ERC1967Proxy.sol/ERC1967Proxy.json");
+    const receiver = await deploy(proxyArtifact, [implementation, encodeFunctionData({
+      abi: receiverArtifact.abi, functionName: "initialize", args: [forwarder, workflowId, account.address, 3600n, account.address],
+    })]);
     const metadata = `${workflowId}${"00".repeat(10)}${account.address.slice(2)}0001` as Hex;
     const report = async () => json(await post(`/api/v1/projects/${fixture.projectA}/cre-reports`,
       { publicKey, chainId: "31337", receiver: receiver.toLowerCase(), ttlSeconds: "300" }));

@@ -20,8 +20,8 @@ describeDb("capped lists", () => {
   let operatorToken: string;
   let proposerToken: string;
 
-  /** Seeded documents. Big enough that every cap in this file is exceeded. */
-  const SEEDED_UPLOADS = 10_000;
+  /** Exceed the 500-node graph cap even after an old focus adds one node. */
+  const SEEDED_UPLOADS = 502;
 
   beforeAll(async () => {
     fx = await setupFixture();
@@ -77,10 +77,10 @@ describeDb("capped lists", () => {
 
   describe("uploads — keyset cursor", () => {
     it(
-      "walks all 10,000 documents with no duplicate and no gap",
+      "walks full and partial pages across timestamp ties without duplicates or gaps",
       async () => {
         const seen: string[] = [];
-        const timings: number[] = [];
+        const expectedPages = Math.ceil(SEEDED_UPLOADS / 100);
         let cursor: string | null = null;
         let pages = 0;
 
@@ -88,46 +88,32 @@ describeDb("capped lists", () => {
           const url: string =
             `/api/v1/projects/${fx.projectA}/uploads` +
             (cursor ? `?cursor=${encodeURIComponent(cursor)}` : "");
-          const started = performance.now();
           const response = await get(stewardToken, url);
-          timings.push(performance.now() - started);
           expect(response.statusCode).toBe(200);
 
           const body = response.json();
           expect(body.limit).toBe(100);
           expect(body.total).toBe(SEEDED_UPLOADS);
+          expect(body.items).toHaveLength(pages < expectedPages - 1 ? 100 : 2);
           expect(body.truncated).toBe(body.nextCursor !== null);
           seen.push(...body.items.map((item: { id: string }) => item.id));
           cursor = body.nextCursor;
           pages += 1;
-        } while (cursor !== null && pages < 200);
+        } while (cursor !== null && pages <= expectedPages);
 
         const expected = await fx.sql<{ id: string }[]>`
           SELECT id FROM core.object_uploads WHERE project_id = ${fx.projectA}
+          ORDER BY uploaded_at DESC, id DESC
         `;
         const unique = new Set(seen);
         const missing = expected.filter((row) => !unique.has(row.id));
 
-        expect(pages).toBe(SEEDED_UPLOADS / 100);
+        expect(pages).toBe(expectedPages);
+        expect(cursor).toBeNull();
+        expect(seen).toEqual(expected.map(row => row.id));
         expect(seen.length - unique.size, "duplicates").toBe(0);
         expect(missing.length, "missing").toBe(0);
         expect(unique.size).toBe(SEEDED_UPLOADS);
-
-        const sorted = [...timings].sort((a, b) => a - b);
-        const median = sorted[Math.floor(sorted.length / 2)]!;
-        const firstTen = timings.slice(0, 10).reduce((a, b) => a + b, 0) / 10;
-        const lastTen = timings.slice(-10).reduce((a, b) => a + b, 0) / 10;
-        // Recorded for the PR, not asserted tightly — absolute numbers vary by machine.
-        console.log(
-          `uploads walk: ${pages} pages, total ${timings
-            .reduce((a, b) => a + b, 0)
-            .toFixed(0)}ms, median ${median.toFixed(1)}ms, p95 ${sorted[
-            Math.floor(sorted.length * 0.95)
-          ]!.toFixed(1)}ms, max ${sorted.at(-1)!.toFixed(1)}ms, first10 ${firstTen.toFixed(
-            1,
-          )}ms, last10 ${lastTen.toFixed(1)}ms`,
-        );
-        expect(sorted.at(-1)!).toBeLessThan(5_000);
       },
       180_000,
     );

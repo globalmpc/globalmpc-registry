@@ -9,10 +9,12 @@ The wordmark is outlined, so it renders without the typeface installed.
 
 | Rule | Value | Why |
 | --- | --- | --- |
-| Clearspace | 0.5× the mark's height on all sides | The crystal's facets are thin lines; anything closer starts competing with them. |
+| Clearspace | 0.5× the mark's height on all sides, except in fixed headers and the compact lockup, which have their own rows below | The crystal's facets are thin lines; anything closer starts competing with them. |
 | Minimum size — mark | 24px digital · 10mm print | Below this the interior facets close up and the mark reads as a solid diamond. |
 | Minimum size — horizontal lockup | 120px wide digital · 32mm print | The wordmark's counters fill in below this width. |
 | Stacked lockup | Use above 96px wide only | Two elements at small sizes lose the relationship the lockup exists to show. |
+| Clearspace — fixed headers | When a header bar shows the horizontal lockup file and is shorter than the lockup plus its clearspace: at least 0.125× the mark's height above and below; 0.5× to the side. Most headers use the compact lockup instead (next row) | A 120px lockup is about 50px high and needs a bar about 100px tall for full clearspace, which would push every page down. The bar's own edge is not competing content; the neighbour that is — the tagline or the menu — keeps the full 0.5× to the side. |
+| Compact lockup — headers and footers | In a header bar or a footer, the mark may stand beside "MPC" set as text instead of the horizontal lockup file: the mark file rendered 24–28px tall, "MPC" in the display face at weight 600 and 16px (or the wordmark file at the same height), 8–14px apart, both centred on one line. 0.5× the mark's height of clearspace to the side. The 120px lockup minimum does not apply to it | At its 120px minimum the horizontal lockup is about 50px high, nearly all of a 64px bar. The product headers were built with the compact form from launch — homepage (28px mark, 16px "MPC", 10px apart), registry (28px, 8px) and Unity (28px, wordmark file) — and it is the approved header and footer logo, not a resized lockup. A 28px mark in a 64px bar keeps 18px above and below, more than its 0.5× clearspace. |
 
 ## Don'ts
 
@@ -21,7 +23,7 @@ The wordmark is outlined, so it renders without the typeface installed.
 - Add shadows, glows, outlines, or bevels.
 - Recolour the mark outside the copper scale.
 - Place the full-colour mark on photography — use a mono variant.
-- Rearrange, resize, or re-space the mark against the wordmark.
+- Rearrange, resize, or re-space the mark against the wordmark — except as the compact lockup in headers and footers.
 - Set the wordmark in a substitute typeface.
 
 ## Typefaces

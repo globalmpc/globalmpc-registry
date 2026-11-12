@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { activateNavigationMenu } from "@/lib/navigation-menus";
 import { useSession } from "@/lib/session";
-import { PUBLIC_NAV } from "@/lib/copy";
+import { PUBLIC_TOOLS } from "@/lib/copy";
+
 
 export function PublicFooter() {
   const { session } = useSession();
@@ -12,12 +13,14 @@ export function PublicFooter() {
       <span>{session?.authenticated ? "MPC Registry workspace" : "Read-only public record"}</span>
       <span>Original evidence stays in the private workspace.</span>
       <details className="footer-navigation">
-        <summary>More</summary>
-        <nav aria-label="Public destinations">
-          {PUBLIC_NAV.map((entry) => <Link key={entry.href} href={entry.href} onClick={(event) => { const menu = event.currentTarget.closest("details"); if (menu) menu.open = false; }}>{entry.label}</Link>)}
-          <Link href="/legal" onClick={(event) => { const menu = event.currentTarget.closest("details"); if (menu) menu.open = false; }}>Terms, data handling, and support</Link>
+        <summary>Search & verification tools</summary>
+        <nav aria-label="Public destinations" onClick={event => { if (event.target instanceof Element && event.target.closest("a")) { const menu = event.currentTarget.closest("details"); if (menu) menu.open = false; } }}>
+          {PUBLIC_TOOLS.map(entry => <Link key={entry.href} href={entry.href}>{entry.label}</Link>)}
+
         </nav>
       </details>
+      <Link href="/disclosures">Disclosures & incidents</Link>
+      <Link href="/legal">Terms, data handling, and support</Link>
     </div>
   </footer>;
 }
