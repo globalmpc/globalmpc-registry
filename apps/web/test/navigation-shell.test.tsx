@@ -183,7 +183,10 @@ it("offers no wallet sign-in, whatever an older server still reports (WP7)", asy
 });
 it("keeps product boundaries and inactive asset gates visible on public informational pages", () => {
   render(<Landing />);
-  expect(screen.getByTestId("landing-boundaries").textContent).toContain("not");
+  const boundaries = screen.getByTestId("landing-boundaries").textContent;
+  expect(boundaries).toContain("Verification is not a guarantee.");
+  expect(boundaries).toContain("Readiness is not a decision.");
+  expect(boundaries).toContain("API success is not verification.");
   expect(screen.getByRole("heading", { name: "Verification Registry" })).toBeDefined();
   cleanup();
   render(<Asset />);
@@ -191,6 +194,13 @@ it("keeps product boundaries and inactive asset gates visible on public informat
   cleanup();
   render(<Legal />);
   expect(screen.getByRole("heading", { level: 1 })).toBeTruthy();
+  const status = screen.getByTestId("legal-status").textContent;
+  expect(status).toContain("no issued Terms of Service or Privacy Policy yet");
+  expect(status).toContain("not open to members of the public");
+  const enforced = screen.getByTestId("legal-enforced").textContent;
+  expect(enforced).toContain("OD-18");
+  expect(enforced).toContain("AC-32");
+  expect(screen.getByTestId("legal-support")).toBeTruthy();
 });
 for (const [Component, label, path] of [
   [DataRoom, "Open Data Room", "data-room"],
@@ -268,11 +278,11 @@ it("keeps anonymous header to brand and sign-in, with secondary destinations in 
   const view = render(<><TopBar /><PublicFooter /></>);
   expect(view.container.querySelector("header nav")?.getAttribute("style")).toContain("display: none");
   expect(screen.getByRole("link", { name: "Sign in →" })).toBeDefined();
-  const more = screen.getByText("More", { exact: true }).closest("details")!;
+  const more = screen.getByText("Search & verification tools", { exact: true }).closest("details")!;
   expect(more.open).toBe(false);
-  fireEvent.click(screen.getByText("More", { exact: true }));
+  fireEvent.click(screen.getByText("Search & verification tools", { exact: true }));
   expect(more.open).toBe(true);
-  expect(screen.getByRole("link", { name: "Proof Verifier" })).toBeDefined();
+  expect(screen.getByRole("link", { name: "Verify a proof" })).toBeDefined();
 });
 
 it("dismisses header menus with Escape or outside interaction and keeps one menu open", async () => {
@@ -296,7 +306,7 @@ it("dismisses header menus with Escape or outside interaction and keeps one menu
 it("switches header and footer menus synchronously without queued toggle races", () => {
   const view = render(<><TopBar /><PublicFooter /></>);
   const account = screen.getByText("Account", { exact: true }).closest("details")!;
-  const footer = screen.getByText("More", { exact: true }).closest("details")!;
+  const footer = screen.getByText("Search & verification tools", { exact: true }).closest("details")!;
   fireEvent.click(account.querySelector("summary")!);
   expect(account.open).toBe(true);
   fireEvent.click(footer.querySelector("summary")!);

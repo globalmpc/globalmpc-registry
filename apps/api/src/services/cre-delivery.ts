@@ -9,15 +9,17 @@ const abi = parseAbi([
 
 /** Read only from the operator-configured RPC; addresses come from authorized stored reports. */
 export async function inspectCreDelivery(
-  config: Pick<AppConfig, "chainId" | "chainRpcUrl">,
+  config: Pick<AppConfig, "chainId" | "chainRpcUrl"> & Partial<Pick<AppConfig, "creChainId" | "creChainRpcUrl">>,
   expected: z.infer<typeof creReport>,
 ): Promise<z.infer<typeof creDelivery>> {
+  const chainId = config.creChainId ?? config.chainId;
+  const rpcUrl = config.creChainRpcUrl !== undefined ? config.creChainRpcUrl : (chainId === config.chainId ? config.chainRpcUrl : null);
   const unknown = { checkedAt: null, report: null, fresh: null };
-  if (!config.chainRpcUrl) return { state: "not_configured", ...unknown };
-  if (expected.chainId !== String(config.chainId)) return { state: "unavailable", ...unknown };
+  if (!rpcUrl) return { state: "not_configured", ...unknown };
+  if (expected.chainId !== String(chainId)) return { state: "unavailable", ...unknown };
   try {
-    const client = createPublicClient({ transport: http(config.chainRpcUrl, { timeout: 5000, retryCount: 0 }) });
-    if (await client.getChainId() !== config.chainId) return { state: "unavailable", ...unknown };
+    const client = createPublicClient({ transport: http(rpcUrl, { timeout: 5000, retryCount: 0 }) });
+    if (await client.getChainId() !== chainId) return { state: "unavailable", ...unknown };
     const block = await client.getBlock();
     const current = await client.readContract({ address: expected.receiver as Address, abi, functionName: "getState",
       args: [expected.recordId as Hex], blockNumber: block.number });

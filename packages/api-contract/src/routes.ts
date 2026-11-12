@@ -1,3 +1,4 @@
+import { readinessPolicyOptions } from "./resources.js";
 import { uploadCreationResult } from "./resources.js";
 import { responseMeta } from "./common.js";
 import { createCreReportRequest, creReport, creWorkspace, creDelivery } from "./cre.js";
@@ -719,6 +720,14 @@ export const ROUTES: readonly RouteDefinition[] = [
   // --- Readiness / Decision -----------------------------------------------
   //
   // No path PATCHes readiness. Only recomputation is possible (§7.2).
+  {
+    method: "get", path: "/api/v1/projects/{projectId}/readiness-policy-options",
+    summary: "List effective policies available for readiness recomputation",
+    operationId: "getReadinessPolicyOptions", public: false, implemented: true,
+    mutation: false, requiresIfMatch: false, action: "readiness.recompute",
+    querySchema: z.object({ gateId: z.string().min(1).max(200).optional() }),
+    responseSchema: readinessPolicyOptions.merge(responseMeta),
+  },
   {
     method: "post",
     path: "/api/v1/projects/{projectId}/readiness-assessments",

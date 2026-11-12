@@ -26,13 +26,11 @@ async function invite(page: Page, email: string): Promise<void> {
   await page.goto("/w/admin");
   const panel = page.getByTestId("admin-invitations");
   await panel.getByLabel("Email address").fill(email);
-  const organisation = panel.getByLabel("Organisation");
-  await expect(organisation).toBeEnabled();
-  if ((await organisation.evaluate((element) => element.tagName)) === "SELECT") {
-    await organisation.selectOption(TENANT_A_ORG);
-  } else {
-    await organisation.fill(TENANT_A_ORG);
-  }
+  // The seeded organisation loads asynchronously; its initial text input is
+  // replaced by a select. Wait for the ready control instead of racing that swap.
+  const organisation = panel.getByRole("combobox", { name: "Organisation", exact: true });
+  await organisation.selectOption(TENANT_A_ORG);
+  await expect(organisation).toHaveValue(TENANT_A_ORG);
   await panel.getByRole("button", { name: "Send invitation" }).click();
   await expect(panel.getByTestId("invitation-list")).toContainText(email);
   await openHeaderMenu(page, "Account");

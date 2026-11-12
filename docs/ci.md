@@ -183,3 +183,27 @@ retain their existing non-cancelling concurrency policy.
 The caller guard takes effect when this workflow revision is used; the durable
 manager guard requires publishing the updated generated workflow to `release`.
 Neither guard retroactively cancels old runs that started without concurrency.
+
+### Coverage lock namespace
+
+`pnpm test:coverage` first runs the real-Vitest lock-isolation regression, then
+preloads `scripts/coverage-temp.mjs`. Coverage uses a stable checkout-local OS temp
+namespace under `node_modules/.cache/vitest-temp`. Vitest 5.1 otherwise stores its
+report-path/PID lock in the runner's global temp directory, which can outlive a
+checkout and encounter reused PIDs. Normal checkout cleanup removes the local
+namespace along with node_modules. A crashed run in a continuing checkout still
+uses Vitest's own dead-owner recovery.
+
+The namespace must not be unique per invocation: concurrent coverage runs in the
+same checkout must still refuse to share the report directory. Do not remove locks
+or bypass that protection. Independent checkouts remain parallel; report paths
+(`coverage/app`), CLI reporter arguments, test scope and coverage thresholds are
+unchanged. No runner change or sequential job execution is needed.
+
+The lock-isolation fixture intentionally targets Vitest 5.1's internal
+ReportsDirectoryLock path hash and owner JSON. Every Vitest/coverage-v8 upgrade
+must inspect the installed implementation and run this fixture against the new
+version; update its protocol assumptions when needed, never skip the negative
+contention assertion. Fixture child startup has a 120-second watchdog for cold or
+loaded runners and reports spawn/timeout errors explicitly. This is separate from
+the unchanged service shutdown/pipe-drain deadlines.

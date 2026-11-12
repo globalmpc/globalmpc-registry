@@ -41,7 +41,7 @@ export default function CrePage({ params }: { params: Promise<{ id: string }> })
     try { await action(); } catch (e) { setError(e); } finally { setBusy(false); }
   }
 
-  const supported = data?.chainId === "5611" || data?.chainId === "31337";
+  const supported = data?.chainId === "97" || data?.chainId === "5611" || data?.chainId === "31337";
   const input = data?.publication ? createCreReportRequest.safeParse({
     publicKey: data.publication.publicKey, chainId: data.chainId, receiver: receiver.toLowerCase(), ttlSeconds: ttl,
   }) : null;
@@ -49,10 +49,10 @@ export default function CrePage({ params }: { params: Promise<{ id: string }> })
   const downloadConfig = () => {
     if (!input?.success || !supported) return;
     const config = { schedule: "0 */5 * * * *", reportUrl: `${window.location.origin}/api/v1/projects/${id}/cre-reports`,
-      ...input.data, chainName: data?.chainId === "5611" ? "binance_smart_chain-testnet-opbnb-1" : "anvil-devnet",
+      ...input.data, chainName: data?.chainId === "97" ? "binance_smart_chain-testnet" : data?.chainId === "5611" ? "binance_smart_chain-testnet-opbnb-1" : "anvil-devnet",
       gasLimit: "500000", allowLocalHttp: data?.chainId === "31337" && ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname) };
     const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2)], { type: "application/json" }));
-    const link = document.createElement("a"); link.href = url; link.download = data?.chainId === "5611" ? "config.dev.json" : "config.local.json";
+    const link = document.createElement("a"); link.href = url; link.download = (data?.chainId === "97" || data?.chainId === "5611") ? "config.dev.json" : "config.local.json";
     link.click(); URL.revokeObjectURL(url);
   };
 
@@ -87,7 +87,7 @@ export default function CrePage({ params }: { params: Promise<{ id: string }> })
     if (!data) return null;
     return <>
       <section className="panel"><h2>2. Prepare a report</h2>
-        <p>Destination chain: <strong>{data.chainId === "5611" ? "opBNB testnet (5611)" : data.chainId}</strong></p>
+        <p>Destination chain: <strong>{data.chainId === "97" ? "BSC Testnet (97)" : data.chainId === "5611" ? "opBNB testnet (5611)" : data.chainId}</strong></p>
         {!supported ? <p role="alert">This chain is not supported by the Registry CRE workflow.</p> : null}
         <label>Receiver contract address<input value={receiver} onChange={e => setReceiver(e.target.value.trim())} placeholder="0x…" autoComplete="off" disabled={busy} /></label>
         <p className="sub">Use the deployed RegistryStatusReceiver address on this chain, with the intended forwarder and workflow identity configured.</p>

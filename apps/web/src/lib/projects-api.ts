@@ -1,4 +1,4 @@
-import { PROJECT_FACT_KEYS } from "@mpc/api-contract";
+import { PROJECT_FACT_KEYS, type ProjectStageProgress } from "@mpc/api-contract";
 import { ApiError, apiFetch, authHeader, newIdempotencyKey, type ApiErrorEnvelope } from "./api";
 
 /**
@@ -71,6 +71,7 @@ export interface StakeholderEvent {
 }
 
 export interface ProjectListItem {
+  stageProgress?: ProjectStageProgress | null;
   id: string;
   projectKey: string;
   name: string;

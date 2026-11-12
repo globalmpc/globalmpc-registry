@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { activateNavigationMenu, NAVIGATION_MENUS } from "@/lib/navigation-menus";
 import { useEffect, type MouseEvent } from "react";
 import { isAccountSession, needsSecondFactor, useSession } from "@/lib/session";
@@ -24,6 +25,7 @@ const FIRST_FACTOR_LABEL: Readonly<Record<string, string>> = {
 
 export function TopBar() {
   const { session, signOut } = useSession();
+  const inWorkspace = usePathname().startsWith("/w/");
   useEffect(() => {
     function dismiss(event: PointerEvent | KeyboardEvent) {
       if (event instanceof KeyboardEvent && event.key !== "Escape") return;
@@ -107,15 +109,17 @@ export function TopBar() {
   return (
     <header className="topbar" onClick={activateNavigationMenu}>
       <div className="row topbar-start" style={{ gap: 20 }}>
-        {/* Official horizontal lockup, used as-is (@mpc/design logo.md). Rendered at 120px wide,
-            the digital minimum for this lockup; the height follows the 152:64 aspect ratio. The
-            product name stays visible beside it, one clearspace (0.5x the 51px mark) away. */}
+        {/* Compact lockup (@mpc/design logo.md, "Compact lockup — headers and footers"): the mark
+            file as-is at 28px, beside "MPC" in the display face (600, 16px), 8px apart. The 120px
+            minimum belongs to the horizontal lockup file and does not apply here. The product name
+            follows on the same line. */}
         <Link href="/" className="brand" style={{ color: "var(--foreground)" }}>
-          <img src="/brand/mpc-lockup-horizontal-on-dark.svg" alt="MPC" width={120} height={51} />
+          <img src="/brand/mpc-mark-on-dark.svg" alt="" width={22} height={28} />
+          <span>MPC</span>
           <span className="brand-context">Verification Registry</span>
         </Link>
         {/* Links come from the single registry, not a local array (@mpc/design "chrome"). */}
-        <nav className="row" style={{ gap: 14, display: authenticated && !pendingFactor ? undefined : "none" }}>
+        <nav className="row" style={{ gap: 14, display: authenticated && !pendingFactor && !inWorkspace ? undefined : "none" }}>
           {authenticated && !pendingFactor ? (
             <>
               {workspace.filter((entry) => entry.href === "/w/projects" || entry.href === "/w/work").map((entry) => <Link key={entry.href} href={entry.href}>{entry.label}</Link>)}

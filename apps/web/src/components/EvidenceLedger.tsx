@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { StageAssessments } from "./StageAssessments";
 import { ErrorNotice } from "./ErrorNotice";
 import {
@@ -207,11 +208,13 @@ export function WorkspaceEvidenceLedger({
   projectId,
   revision = 0,
   browsable = false,
+  mayManagePolicies = false,
 }: {
   readonly token: string;
   readonly projectId: string;
   readonly revision?: number;
   readonly browsable?: boolean;
+  readonly mayManagePolicies?: boolean;
 }) {
   const [summary, setSummary] = useState<LedgerSummary | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -238,7 +241,14 @@ export function WorkspaceEvidenceLedger({
       </section>
     );
   return summary ? (
-    <EvidenceLedger summary={summary} title="Current evidence assessment" browsable={browsable} />
+    <>
+      {summary.stages.length === 0 ? <div className="notice" role="status">
+        <div className="title">Stage progression needs configured policies</div>
+        <p>No effective stage policy was applied to this assessment. Your workspace operator must propose the stage requirements and an independent authorized reviewer must approve them before this project can establish an evidence stage.</p>
+        {mayManagePolicies ? <Link href="/w/registries">Configure policy sets in review registries →</Link> : null}
+      </div> : null}
+      <EvidenceLedger summary={summary} title="Current evidence assessment" browsable={browsable} />
+    </>
   ) : (
     <p role="status">Loading evidence assessment…</p>
   );

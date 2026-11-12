@@ -1,0 +1,35 @@
+{
+  "status": "deployed",
+  "chainId": 97,
+  "network": "BSC Testnet",
+  "proxy": "0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F",
+  "implementation": "0xd85249F6884cDB5884e1aF3CD52D02c3E34aC965",
+  "owner": "0xb4BED63690D1A7DB7E7a1f856eE42F82ECf22D3f",
+  "forwarder": "0x76c9cf548b4179F8901cda1f8623568b58215E62",
+  "maxReportTTL": "3600",
+  "workflowId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "workflowOwner": "0x0000000000000000000000000000000000000000",
+  "workflowConfigured": false,
+  "sourceCommit": "bcfa21f2382b60fe64f51c522a1d87b4b0a79a4d",
+  "compiler": "0.8.28",
+  "openzeppelin": "5.6.1",
+  "transactions": [
+    {
+      "hash": "0x6243c602046e8a22d9353f3175fc37918b448e61e0aa888038fc8c5bfb27a4f9",
+      "blockNumber": "142267843",
+      "gasUsed": "1396515"
+    },
+    {
+      "hash": "0x615bf2cc67dca543c760370eb6eee286251f97264876b8ff5ed6a3a5b02adb09",
+      "blockNumber": "142267850",
+      "gasUsed": "217133"
+    }
+  ],
+  "runtimeHashes": {
+    "0xd85249F6884cDB5884e1aF3CD52D02c3E34aC965": "0xb7c7a6d598f94f7223c95ca4a5bdb5a4f087609827a99979f8204729fb84e941",
+    "0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F": "0xe40314a2c5743a638367b1f9c32a6cd8c626dc4b7bed49598f6b3f560a897a56"
+  },
+  "verifiedAt": "2026-11-12T08:22:28.986Z",
+  "liveCREExecutionVerified": false,
+  "closedBootstrapVerified": true
+}

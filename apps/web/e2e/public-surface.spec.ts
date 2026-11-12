@@ -21,24 +21,12 @@ test.describe("public entry point", () => {
     ).toBeVisible();
   });
 
-  test("what the product does not confirm is stated before sign-in", async ({ page }) => {
+  test("explains integrity and readiness without repeating the destination list", async ({ page }) => {
     await page.goto("/");
 
-    const boundaries = page.getByTestId("landing-boundaries");
-    await expect(boundaries).toContainText("Verification is not a guarantee.");
-    await expect(boundaries).toContainText("Readiness is not a decision.");
-    await expect(boundaries).toContainText("API success is not verification.");
-  });
-
-  test("separates integrity proof from factual truth side by side", async ({ page }) => {
-    await page.goto("/");
-
-    await page.getByText("About these records and how to check them", { exact: true }).click();
-    const separations = page.getByTestId("landing-separations");
-    await expect(separations).toContainText("Integrity proof");
-    await expect(separations).toContainText("Factual truth");
-    await expect(separations).toContainText("Data readiness");
-    await expect(separations).toContainText("Human decision");
+    await page.getByText("About these records", { exact: true }).click();
+    await expect(page.getByText(/Integrity proofs show whether a record has changed/)).toBeVisible();
+    await expect(page.getByText(/Evidence readiness does not authorize/)).toBeVisible();
   });
 
   test("account connection remains available as a link", async ({ page }) => {
@@ -58,21 +46,16 @@ test.describe("public entry point", () => {
 });
 
 test.describe("public navigation (11 §11.2)", () => {
-  test("public destinations are grouped under More", async ({ page }) => {
+  test("keeps important disclosures visible and advanced tools grouped", async ({ page }) => {
     await page.goto("/");
     await openFooterMenu(page);
     const nav = page.getByRole("contentinfo").getByRole("navigation");
 
-    for (const label of [
-      "Explorer",
-      "Verification Records",
-      "Asset Registry",
-      "Proof Verifier",
-      "Governance",
-      "Disclosures & Incidents",
-    ]) {
+    for (const label of ["Advanced record search", "Verification records", "Verify a proof", "Protocol governance"]) {
       await expect(nav.getByRole("link", { name: label, exact: true })).toBeVisible();
     }
+    await expect(page.getByRole("contentinfo").getByRole("link", { name: "Disclosures & incidents", exact: true })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Asset Registry", exact: true })).toHaveCount(0);
   });
 });
 

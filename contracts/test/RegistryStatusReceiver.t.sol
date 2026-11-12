@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.28;
 
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Test} from "forge-std/Test.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {RegistryStatusReceiver, IRegistryStatusReportReceiver} from "../src/RegistryStatusReceiver.sol";
@@ -14,6 +15,7 @@ contract LocalStatusForwarder {
 contract RegistryStatusReceiverTest is Test {
     LocalStatusForwarder private forwarder;
     RegistryStatusReceiver private receiver;
+    RegistryStatusReceiver private implementation;
     bytes32 private constant WORKFLOW = keccak256("test-workflow");
     address private constant OWNER = address(0xA11CE);
     bytes32 private constant RECORD = keccak256("published-record");
@@ -21,8 +23,25 @@ contract RegistryStatusReceiverTest is Test {
 
     function setUp() public {
         vm.warp(1_800_000_000);
+        implementation = new RegistryStatusReceiver();
         forwarder = new LocalStatusForwarder();
-        receiver = new RegistryStatusReceiver(address(forwarder), WORKFLOW, OWNER, 3600);
+        receiver = deployReceiver(address(forwarder), WORKFLOW, OWNER, 3600);
+    }
+
+    function deployReceiver(address trusted, bytes32 workflowId, address workflowOwner, uint64 ttl)
+        internal
+        returns (RegistryStatusReceiver)
+    {
+        return RegistryStatusReceiver(
+            address(
+                new ERC1967Proxy(
+                    address(implementation),
+                    abi.encodeCall(
+                        RegistryStatusReceiver.initialize, (trusted, workflowId, workflowOwner, ttl, address(this))
+                    )
+                )
+            )
+        );
     }
 
     function metadata() private pure returns (bytes memory) {
@@ -191,17 +210,17 @@ contract RegistryStatusReceiverTest is Test {
 
     function testConfigurationCannotDisableAuthenticationOrTTL() public {
         vm.expectRevert(RegistryStatusReceiver.InvalidConfiguration.selector);
-        new RegistryStatusReceiver(address(0), WORKFLOW, OWNER, 3600);
+        deployReceiver(address(0), WORKFLOW, OWNER, 3600);
         vm.expectRevert(RegistryStatusReceiver.InvalidConfiguration.selector);
-        new RegistryStatusReceiver(address(1), WORKFLOW, OWNER, 3600);
+        deployReceiver(address(1), WORKFLOW, OWNER, 3600);
         vm.expectRevert(RegistryStatusReceiver.InvalidConfiguration.selector);
-        new RegistryStatusReceiver(address(forwarder), bytes32(0), OWNER, 3600);
+        deployReceiver(address(forwarder), bytes32(0), OWNER, 3600);
         vm.expectRevert(RegistryStatusReceiver.InvalidConfiguration.selector);
-        new RegistryStatusReceiver(address(forwarder), WORKFLOW, address(0), 3600);
+        deployReceiver(address(forwarder), WORKFLOW, address(0), 3600);
         vm.expectRevert(RegistryStatusReceiver.InvalidConfiguration.selector);
-        new RegistryStatusReceiver(address(forwarder), WORKFLOW, OWNER, 0);
+        deployReceiver(address(forwarder), WORKFLOW, OWNER, 0);
         vm.expectRevert(RegistryStatusReceiver.InvalidConfiguration.selector);
-        new RegistryStatusReceiver(address(forwarder), WORKFLOW, OWNER, 86401);
+        deployReceiver(address(forwarder), WORKFLOW, OWNER, 86401);
     }
 
     function testSupportsReceiverAndERC165Only() public view {

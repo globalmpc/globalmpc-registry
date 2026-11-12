@@ -55,19 +55,21 @@ export const NAV: readonly NavEntry[] = [
 /**
  * The public surface — spec 11 §11.2.
  *
- * These seven are reachable with no account. They are listed here rather than
+ * These destinations are reachable with no account. They are listed here rather than
  * filtered out of `NAV` because they are not a subset of the workspace: the
  * public site answers "what has been published", the workspace answers "what am
  * I working on". Deriving one from the other made the public surface look like
  * a permissions leftover, and for a long time it held exactly one entry.
  */
+export const PUBLIC_TOOLS = [
+  { href: "/explorer", label: "Advanced record search" },
+  { href: "/explorer/verifications", label: "Verification records" },
+  { href: "/verify", label: "Verify a proof" },
+  { href: "/governance", label: "Protocol governance" },
+] as const;
 export const PUBLIC_NAV = [
-  { href: "/explorer", label: "Explorer" },
-  { href: "/explorer/verifications", label: "Verification Records" },
-  { href: "/asset-registry", label: "Asset Registry" },
-  { href: "/verify", label: "Proof Verifier" },
-  { href: "/governance", label: "Governance" },
-  { href: "/disclosures", label: "Disclosures & Incidents" },
+  ...PUBLIC_TOOLS,
+  { href: "/disclosures", label: "Disclosures & incidents" },
 ] as const;
 
 export const COPY = {
@@ -432,21 +434,6 @@ export const AUTH_COPY = {
   } as Record<string, string>,
 } as const;
 
-/** Project navigation shares one registry across overview and every subpage. */
-export const PROJECT_SECTIONS = [
-  ["", "Overview", []],
-  ["data-room", "Documents & evidence", ["documents", "impacts", "claims", "register", "requirements"]],
-  ["verification", "Review evidence", ["readiness", "gates"]],
-  ["publication", "Prepare publication", ["cre"]],
-] as const;
-export const PROJECT_TOOLS = [
-  ["documents", "Document status", "data-room"],
-  ["impacts", "Documents to recheck", "data-room"],
-  ["readiness", "Readiness", "verification"],
-  ["gates/registry_publication", "Gate decision", "verification"],
-  ["cre", "CRE", "publication"],
-] as const;
-
 /** Sidebar destinations use server actions for visibility, never client role guesses. */
 export const WORKSPACE_PROJECT_LINKS = [
   { path: "", label: "Project overview", requires: "project.read" },
@@ -455,7 +442,7 @@ export const WORKSPACE_PROJECT_LINKS = [
   { path: "verification", label: "Review evidence", requires: "verification.read" },
   { path: "impacts", label: "Impact", requires: "evidence.read" },
   { path: "readiness", label: "Readiness", requires: "readiness.read" },
-  { path: "gates/registry_publication", label: "Decision", requires: "readiness.read" },
+  { path: "gates/registry_publication", label: "Publication decision", requires: "readiness.read" },
   { path: "publication", label: "Publication", requires: "registry.read" },
   { path: "team", label: "Team", requires: "admin.read" },
   { path: "audit", label: "Project audit", requires: "audit.read" },

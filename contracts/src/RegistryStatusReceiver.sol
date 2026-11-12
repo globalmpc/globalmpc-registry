@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.28;
 
+import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import {Ownable2StepUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 interface IRegistryStatusReportReceiver {
@@ -10,7 +13,13 @@ interface IRegistryStatusReportReceiver {
 /// @notice Experimental read-only status mirror, not an approval or an anchor verifier.
 /// @dev The pinned forwarder authenticates DON reports; this contract additionally binds
 /// workflow identity, destination, time and ordering. No existing anchor state is touched.
-contract RegistryStatusReceiver is IRegistryStatusReportReceiver, IERC165 {
+contract RegistryStatusReceiver is
+    Initializable,
+    Ownable2StepUpgradeable,
+    UUPSUpgradeable,
+    IRegistryStatusReportReceiver,
+    IERC165
+{
     uint8 public constant CURRENT = 1;
     uint8 public constant NEEDS_RE_REVIEW = 2;
     uint8 public constant REVOKED = 3;
@@ -29,10 +38,10 @@ contract RegistryStatusReceiver is IRegistryStatusReportReceiver, IERC165 {
         uint8 status;
     }
 
-    address public immutable trustedForwarder;
-    bytes32 public immutable expectedWorkflowId;
-    address public immutable expectedWorkflowOwner;
-    uint64 public immutable maxReportTTL;
+    address public trustedForwarder;
+    bytes32 public expectedWorkflowId;
+    address public expectedWorkflowOwner;
+    uint64 public maxReportTTL;
     mapping(bytes32 recordId => Report state) private _states;
 
     error InvalidConfiguration();
@@ -56,16 +65,42 @@ contract RegistryStatusReceiver is IRegistryStatusReportReceiver, IERC165 {
         uint64 validUntil
     );
 
-    constructor(address forwarder, bytes32 workflowId, address workflowOwner, uint64 maxTTL) {
+    event WorkflowConfigured(bytes32 indexed workflowId, address indexed workflowOwner);
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address forwarder, bytes32 workflowId, address workflowOwner, uint64 maxTTL, address admin)
+        external
+        initializer
+    {
         if (
-            forwarder == address(0) || forwarder.code.length == 0 || workflowId == bytes32(0)
-                || workflowOwner == address(0) || maxTTL == 0 || maxTTL > 1 days
+            forwarder == address(0) || forwarder.code.length == 0 || admin == address(0) || maxTTL == 0
+                || maxTTL > 1 days || (workflowId == bytes32(0)) != (workflowOwner == address(0))
         ) revert InvalidConfiguration();
+        __Ownable_init(admin);
+        __Ownable2Step_init();
         trustedForwarder = forwarder;
+        maxReportTTL = maxTTL;
+        // No workflow exists before CRE registration. A zero pair is a closed
+        // bootstrap state, not a wildcard; onReport refuses every report below.
+        if (workflowId != bytes32(0)) _configureWorkflow(workflowId, workflowOwner);
+    }
+
+    function configureWorkflow(bytes32 workflowId, address workflowOwner) external onlyOwner {
+        if (workflowId == bytes32(0) || workflowOwner == address(0)) revert InvalidConfiguration();
+        _configureWorkflow(workflowId, workflowOwner);
+    }
+
+    function _configureWorkflow(bytes32 workflowId, address workflowOwner) private {
         expectedWorkflowId = workflowId;
         expectedWorkflowOwner = workflowOwner;
-        maxReportTTL = maxTTL;
+        emit WorkflowConfigured(workflowId, workflowOwner);
     }
+
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     /// @dev Production KeystoneForwarder metadata has the packed 62-byte identity
     /// followed by a two-byte report ID. Empty simulation metadata is intentionally rejected.
@@ -78,7 +113,10 @@ contract RegistryStatusReceiver is IRegistryStatusReportReceiver, IERC165 {
             workflowId := calldataload(metadata.offset)
             workflowOwner := shr(96, calldataload(add(metadata.offset, 42)))
         }
-        if (workflowId != expectedWorkflowId || workflowOwner != expectedWorkflowOwner) {
+        if (
+            expectedWorkflowId == bytes32(0) || expectedWorkflowOwner == address(0) || workflowId != expectedWorkflowId
+                || workflowOwner != expectedWorkflowOwner
+        ) {
             revert UnauthorizedWorkflow();
         }
         // A static nine-word ABI keeps extra or truncated payloads from being silently accepted.

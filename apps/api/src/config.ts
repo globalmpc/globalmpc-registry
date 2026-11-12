@@ -53,6 +53,9 @@ const schema = z.object({
     .refine((value) => isSupportedChainId(value), {
       message: `CHAIN_ID must be one of ${describeChains(SUPPORTED_CHAIN_IDS)}`,
     }),
+  // CRE delivery may target BSC Testnet while evidence anchoring stays on opBNB.
+  CRE_CHAIN_ID: z.string().regex(/^(97|5611|31337)$/).optional(),
+  CRE_CHAIN_RPC_URL: z.string().url().optional(),
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 
@@ -302,6 +305,8 @@ export interface AppConfig {
   readonly secretAudit: readonly SecretAudit[];
   readonly objectStore: ObjectStoreConfig;
   readonly chainRpcUrl: string | null;
+  readonly creChainId: number;
+  readonly creChainRpcUrl: string | null;
   readonly governanceTokenAddress: string | null;
   readonly governanceConfirmationDepth: number;
   readonly port: number;
@@ -417,6 +422,8 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
     port: value.PORT,
     databaseUrl: value.DATABASE_URL,
     chainId: value.CHAIN_ID,
+    creChainId: Number(value.CRE_CHAIN_ID ?? value.CHAIN_ID),
+    creChainRpcUrl: value.CRE_CHAIN_RPC_URL ?? (Number(value.CRE_CHAIN_ID ?? value.CHAIN_ID) === value.CHAIN_ID ? value.CHAIN_RPC_URL ?? null : null),
     sessionSecret: value.SESSION_SECRET,
     nodeEnv: value.NODE_ENV,
     webOrigin: resolveWebOrigin(value),

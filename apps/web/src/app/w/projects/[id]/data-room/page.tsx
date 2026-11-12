@@ -864,7 +864,7 @@ export default function DataRoomPage({ params }: { params: Promise<{ id: string 
 
       {renderClaim()}
 
-      {token ? <WorkspaceEvidenceLedger token={token} projectId={id} revision={ledgerRevision} /> : null}
+      {token ? <WorkspaceEvidenceLedger mayManagePolicies={session?.actions?.includes("registry.read") ?? false} token={token} projectId={id} revision={ledgerRevision} /> : null}
 
       <p className="meta">
         A successful source lookup is not verification. Each result means something different

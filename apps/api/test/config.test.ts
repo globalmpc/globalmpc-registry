@@ -10,6 +10,16 @@ const VALID = {
 };
 
 describe("loadConfig", () => {
+  it("separates CRE97 from the existing5611 anchor and never reuses its RPC for a different chain", () => {
+    const env = { ...VALID, CHAIN_ID: "5611", CHAIN_RPC_URL: "https://anchor.example" };
+    expect(loadConfig(env)).toMatchObject({ chainId: 5611, creChainId: 5611, creChainRpcUrl: env.CHAIN_RPC_URL });
+    expect(loadConfig({ ...env, CRE_CHAIN_ID: "97" })).toMatchObject({ chainId: 5611, creChainId: 97, creChainRpcUrl: null });
+    expect(loadConfig({ ...env, CRE_CHAIN_ID: "97", CRE_CHAIN_RPC_URL: "https://cre.example" }))
+      .toMatchObject({ chainId: 5611, chainRpcUrl: env.CHAIN_RPC_URL, creChainId: 97, creChainRpcUrl: "https://cre.example" });
+    expect(() => loadConfig({ ...env, CRE_CHAIN_ID: "56" })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...env, CRE_CHAIN_ID: "0x61" })).toThrow(ConfigError);
+  });
+
   it("parses valid environment variables", () => {
     const config = loadConfig(VALID);
     expect(config.port).toBe(3001);

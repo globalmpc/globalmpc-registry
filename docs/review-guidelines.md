@@ -19,6 +19,8 @@ For example, evidence-ledger changes can use the following cases. Adapt the tabl
 | Retained evidence is rejected, stale, and conflicting | Live evidence health | Relevant claims and reviews | Conflict outranks actual invalidation, which outranks rejection |
 | A review covers only excluded historical claims, or also covers a retained claim | Current retained claim scope | Exclude the unrelated review; preserve the full signed scope of a mixed review | An unrelated update preserves the assessment basis and publication eligibility; a relevant update is checked |
 
+When selecting a latest record, compare the complete ordering (including tie-breakers) with every existing consumer of that record. Test equal timestamps, reversed insertion order, and malformed latest records; distinct timestamps alone cannot establish agreement. When scope expands, update earlier unqualified audit/PR claims or explicitly bind them to their historical revision.
+
 Trace the same input boundary through selection, evaluation, snapshot construction, hashing, and publication checks. Verify both relevant and irrelevant mutations, including catalog applicability when no claim exists. Compare private and public results where they represent the same decision; explicitly record the exceptions needed to preserve an approved historical statement.
 
 ## User journeys

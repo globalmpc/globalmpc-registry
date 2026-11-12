@@ -780,3 +780,15 @@ The forwarder, workflow and Registry API remain trusted sources of the reported 
 compromised trusted workflow can lie. Confidential source documents, source-query identifiers,
 tenant IDs and credentials are excluded from the onchain report. Live DON execution, public
 chain deployment and production credential/data handling require separate verification.
+
+## Upgradeable CRE Receiver
+
+The BSC Testnet Receiver uses an atomically initialized ERC-1967 UUPS proxy. Its
+owner (two-step transfer) may bind a workflow and upgrade the implementation; that
+owner is an additional live trust authority. Empty workflow identity is a closed
+bootstrap state, not a wildcard. Only the configured Forwarder and exact nonzero
+workflow ID/owner may deliver reports. Reports bind chain and proxy address, retain
+TTL/sequence/version/hash guards, and do not modify existing anchor state. The
+implementation is initialization-locked; upgrades require reviewed storage-layout
+compatibility. CRE-specific API chain/RPC configuration does not alter the anchor
+chain. RPC tracing also excludes CRE endpoint origins, including credentials.

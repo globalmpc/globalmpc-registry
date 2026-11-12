@@ -3,7 +3,7 @@ import { test, EvmMock, HttpActionsMock, REPORT_METADATA_HEADER_LENGTH } from "@
 import type { CronPayload } from "@chainlink/cre-sdk";
 import { bytesToHex, decodeAbiParameters } from "viem";
 import {
-  OPBNB_TESTNET_SELECTOR, chainSelector, validateConfig, ERRORS, MAX_REPORT_BYTES, executionKey, parseConfig, reportAbi, validateReport, type Config,
+  BSC_TESTNET_SELECTOR, OPBNB_TESTNET_SELECTOR, chainSelector, validateConfig, ERRORS, MAX_REPORT_BYTES, executionKey, parseConfig, reportAbi, validateReport, type Config,
 } from "../src/protocol.js";
 import { initWorkflow, onCron } from "../src/workflow.js";
 import {
@@ -15,6 +15,21 @@ const decodeReport = (rawReport: Uint8Array) =>
   decodeAbiParameters(reportAbi, bytesToHex(rawReport.slice(REPORT_METADATA_HEADER_LENGTH)));
 
 describe("SDKWorkflow", () => {
+  test("routes BSC Testnet reports to97 without accepting another chain name or report domain", () => {
+    const { config, report } = fixture();
+    config.chainId = "97"; config.chainName = "binance_smart_chain-testnet"; report.chainId = "97";
+    expect(chainSelector(validateConfig(config))).toBe(BSC_TESTNET_SELECTOR);
+    respondWith(report);
+    let writes = 0;
+    EvmMock.testInstance(BSC_TESTNET_SELECTOR).writeReport = request => {
+      writes++; expect(decodeReport(request.report!.rawReport)[0]).toBe(97n); return successfulDelivery();
+    };
+    expect(onCron(testRuntime(config), cronPayload())).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(writes).toBe(1);
+    expect(() => validateConfig({ ...config, chainName: "binance_smart_chain-testnet-opbnb-1" })).toThrow(ERRORS.chain);
+    expect(() => validateReport(JSON.stringify({ ...report, chainId: "5611" }), config)).toThrow(ERRORS.identity);
+  });
+
   test("routes dev reports to the opBNB 5611 capability with the same destination domain", () => {
     const { config, report } = fixture();
     config.chainId = "5611"; config.chainName = "binance_smart_chain-testnet-opbnb-1";

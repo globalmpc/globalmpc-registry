@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { use, useState } from "react";
+import { ReadinessPolicySelect, useReadinessPolicies } from "@/components/ReadinessPolicySelect";
+import { use, useEffect, useState } from "react";
 import { newIdempotencyKey, recomputeReadiness, type ReadinessAssessment } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { can } from "@/lib/access";
@@ -22,6 +23,11 @@ import type { ReadinessStatus } from "@mpc/domain";
  */
 export default function ReadinessPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { session } = useSession();
+  return <ReadinessWorkspace key={JSON.stringify([session?.tenantId, session?.subjectId, id])} id={id} />;
+}
+
+function ReadinessWorkspace({ id }: { id: string }) {
   const { token, session } = useSession();
   // Recomputing is `readiness.recompute` (guidance; the server decides).
   const mayRecompute = can(session, "readiness.recompute");
@@ -29,10 +35,13 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
   const [assessment, setAssessment] = useState<ReadinessAssessment | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const [policySetId, setPolicySetId] = useState(DEMO_POLICY_SET_ID);
+  const policies = useReadinessPolicies(token, id, mayRecompute);
+  const policySetId = policies.policySetId;
+  const selectedPolicy = policies.items.find(item => item.id === policySetId);
+  useEffect(() => { setAssessment(null); }, [policySetId]);
 
   async function recompute() {
-    if (!token) return;
+    if (!token || !policySetId || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -71,17 +80,9 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
       {error ? <ErrorNotice error={error} /> : null}
 
       <div className="panel">
-        <div className="field">
-          <label htmlFor="policySet">Rule set ID</label>
-          <input
-            id="policySet"
-            className="mono"
-            value={policySetId}
-            onChange={(event) => setPolicySetId(event.target.value)}
-          />
-        </div>
+        {mayRecompute ? <ReadinessPolicySelect policies={policies} disabled={busy} mayManage={can(session, "registry.read")} /> : <p>Your current session cannot recompute readiness.</p>}
         <div className="row">
-          <button className="primary" onClick={() => void recompute()} disabled={busy || !mayRecompute}>
+          <button className="primary" onClick={() => void recompute()} disabled={busy || !mayRecompute || !policySetId || policies.loading}>
             {busy ? "Evaluating…" : "Recompute"}
           </button>
           <span className="meta">
@@ -165,9 +166,9 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
               <div key={limitation}>{limitation}</div>
             ))}
             <div style={{ marginTop: 8 }}>
-              <Link href={`/w/projects/${id}/gates/registry_publication`}>
+              {selectedPolicy ? <Link href={`/w/projects/${encodeURIComponent(id)}/gates/${encodeURIComponent(selectedPolicy.gateId)}`}>
                 Record the human decision →
-              </Link>
+              </Link> : null}
             </div>
           </div>
 
@@ -180,6 +181,3 @@ export default function ReadinessPage({ params }: { params: Promise<{ id: string
     </>
   );
 }
-
-/** Demo rule set created by seed. In practice the Jurisdiction Profile selects it. */
-const DEMO_POLICY_SET_ID = "dddddddd-0000-0000-0000-000000000001";

@@ -72,6 +72,21 @@ describeDb("destination-bound CRE report observations", () => {
     payload: { publicKey, chainId: String(loadConfig(testEnv()).chainId), receiver, ttlSeconds: "300", ...payload },
   });
 
+  it("uses a separate CRE97 destination without changing the project's anchor chain", async () => {
+    const separate = await buildServer(loadConfig({ ...testEnv(), CRE_CHAIN_ID: "97", CRE_CHAIN_RPC_URL: "https://cre-rpc.example" }), fx.appSql);
+    try {
+      const workspace = await separate.inject({ method: "GET", url: `/api/v1/projects/${fx.projectA}/cre-reports`, headers: { authorization: `Bearer ${token}` } });
+      expect(workspace.statusCode).toBe(200); expect(workspace.json()).toMatchObject({ chainId: "97", rpcConfigured: true });
+      const create = (chainId: string) => separate.inject({ method: "POST", url: `/api/v1/projects/${fx.projectA}/cre-reports`,
+        headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() }, payload: { publicKey, chainId, receiver, ttlSeconds: "300" } });
+      const accepted = await create("97");
+      expect(accepted.statusCode, accepted.body).toBe(200); expect(accepted.json().chainId).toBe("97");
+      expect((await create(String(loadConfig(testEnv()).chainId))).statusCode).toBe(400);
+      const foreign = await separate.inject({ method: "GET", url: `/api/v1/projects/${fx.projectA}/cre-reports`, headers: { authorization: `Bearer ${other}` } });
+      expect(foreign.statusCode).toBe(404);
+    } finally { await separate.close(); }
+  });
+
   it("exposes published prerequisites and bounded history only to this project's authorized actors", async () => {
     await report();
     const get = (project: string, auth?: string, suffix = "") => app.inject({ method: "GET",

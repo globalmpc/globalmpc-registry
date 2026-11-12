@@ -2465,3 +2465,10 @@ export const createDocumentLinkRuleRequest = z
 export const retireDocumentLinkRuleRequest = z
   .object({ note: z.string().trim().min(1).max(500) })
   .strict();
+
+export const readinessPolicyOptions = z.object({
+  items: z.array(z.object({
+    id: z.string().guid(), ruleSetId: z.string(), version: z.string(), gateId: z.string(),
+    jurisdictionProfile: z.string(), effectiveFrom: isoDateTime,
+  })),
+});

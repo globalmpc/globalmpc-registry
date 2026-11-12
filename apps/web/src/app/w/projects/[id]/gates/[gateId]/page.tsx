@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { use, useState } from "react";
+import { ReadinessPolicySelect, useReadinessPolicies } from "@/components/ReadinessPolicySelect";
+import { use, useEffect, useState } from "react";
 import {
   newIdempotencyKey,
   recomputeReadiness,
@@ -38,6 +39,11 @@ export default function GateDecisionPage({
   params: Promise<{ id: string; gateId: string }>;
 }) {
   const { id, gateId } = use(params);
+  const { session } = useSession();
+  return <GateWorkspace key={JSON.stringify([session?.tenantId, session?.subjectId, id, gateId])} id={id} gateId={gateId} />;
+}
+
+function GateWorkspace({ id, gateId }: { id: string; gateId: string }) {
   const { token, session, signTypedData } = useSession();
   // Guidance only — the server refuses either way. Loading readiness recomputes it.
   const mayRecompute = can(session, "readiness.recompute");
@@ -52,13 +58,16 @@ export default function GateDecisionPage({
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
+  const policies = useReadinessPolicies(token, id, mayRecompute, gateId);
+  useEffect(() => { setAssessment(null); setDecision(null); setSignedPayload(null); }, [policies.policySetId]);
+
   async function loadAssessment() {
-    if (!token) return;
+    if (!token || !policies.policySetId || busy) return;
     setBusy(true);
     setError(null);
     try {
       setAssessment(
-        await recomputeReadiness(token, id, DEMO_POLICY_SET_ID, newIdempotencyKey()),
+        await recomputeReadiness(token, id, policies.policySetId, newIdempotencyKey()),
       );
     } catch (caught) {
       setError(caught);
@@ -130,8 +139,9 @@ export default function GateDecisionPage({
         <p className="sub" style={{ marginTop: 0 }}>
           A decision always takes an assessment as its input. There is no deciding without one.
         </p>
+        {mayRecompute ? <ReadinessPolicySelect policies={policies} disabled={busy} mayManage={can(session, "registry.read")} /> : null}
         <div className="row">
-          <button onClick={() => void loadAssessment()} disabled={busy || !mayRecompute}>
+          <button onClick={() => void loadAssessment()} disabled={busy || !mayRecompute || !policies.policySetId || policies.loading}>
             Load current readiness
           </button>
           {assessment ? (
@@ -330,5 +340,3 @@ function lines(value: string): string[] {
     .map((line) => line.trim())
     .filter((line) => line !== "");
 }
-
-const DEMO_POLICY_SET_ID = "dddddddd-0000-0000-0000-000000000001";

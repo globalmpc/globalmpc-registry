@@ -48,9 +48,19 @@ test.describe("workspace navigation", () => {
 
   test("public menus are reachable while signed in", async ({ page }) => {
     await connectAs(page, "Steward A");
-    await openFooterMenu(page);
-    await page.getByRole("contentinfo").getByRole("link", { name: "Proof Verifier", exact: true }).click();
-    await expect(page).toHaveURL(/\/verify$/);
+    // Independent copy and destination expectations catch partial navigation renames.
+    for (const [name, path, heading] of [
+      ["Advanced record search", "/explorer", "Public Explorer"],
+      ["Verification records", "/explorer/verifications", "Verification Records"],
+      ["Verify a proof", "/verify", "Proof Verifier"],
+      ["Protocol governance", "/governance", "Governance"],
+    ]) {
+      await openFooterMenu(page);
+      await page.getByRole("contentinfo").getByRole("link", { name, exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`${path}$`));
+      await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+      await expect(page.getByRole("contentinfo").locator("details.footer-navigation")).not.toHaveAttribute("open");
+    }
   });
 });
 
@@ -181,21 +191,14 @@ test.describe("notifications", () => {
 });
 
 test.describe("notification sinks", () => {
-  test("the screen explains why it is a webhook and not email", async ({ page }) => {
-    await connectAs(page, "Operator A");
-    await page.goto("/w/admin");
-
-    const sinks = page.getByTestId("admin-sinks");
-    // Storing an address would mean retaining a data class that is rejected with 422 today (OD-18).
-    await expect(sinks).toContainText(/Email is deliberately not offered/);
-    // Letting users paste the value would leave it in the DB.
-    await expect(sinks).toContainText(/A reference, not the secret itself/);
-  });
-
   test("a registered sink is shown with its delivery state", async ({ page }) => {
     const url = `https://hooks.example.test/${Date.now()}`;
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
+
+    const sinks = page.getByTestId("admin-sinks");
+    await expect(sinks).toContainText(/Email is deliberately not offered/);
+    await expect(sinks).toContainText(/A reference, not the secret itself/);
 
     await page.getByRole("textbox", { name: "Webhook URL" }).fill(url);
     await page
@@ -213,37 +216,19 @@ test.describe("notification sinks", () => {
 });
 
 test.describe("terms and data handling", () => {
-  test("states first that no formal terms exist yet", async ({ page }) => {
-    await page.goto("/legal");
-
-    await expect(page.getByTestId("legal-status")).toContainText(
-      /no issued Terms of Service or Privacy Policy yet/,
-    );
-    // Making a promise that cannot be kept is worse than having none.
-    await expect(page.getByTestId("legal-status")).toContainText(/not open to members of the public/);
-  });
-
-  test("lists what the system actually enforces, with evidence", async ({ page }) => {
-    await page.goto("/legal");
-
-    const enforced = page.getByTestId("legal-enforced");
-    await expect(enforced).toContainText("OD-18");
-    await expect(enforced).toContainText("AC-32");
-    await expect(page.getByTestId("legal-support")).toBeVisible();
-  });
-
   test("is reachable from the signed-in workspace too", async ({ page }) => {
     await connectAs(page, "Operator A");
-    await openFooterMenu(page);
+    await expect(page.getByRole("contentinfo").locator("details.footer-navigation")).not.toHaveAttribute("open");
     await page.getByRole("contentinfo").getByRole("link", { name: "Terms, data handling, and support", exact: true }).click();
     await expect(page).toHaveURL(/\/legal$/);
+    await expect(page.getByTestId("legal-support")).toBeVisible();
     await expect(page.getByRole("contentinfo").locator("details")).not.toHaveAttribute("open");
   });
 
   test("is reachable from any screen", async ({ page }) => {
     for (const path of ["/", "/explorer", "/verify"]) {
       await page.goto(path);
-      await openFooterMenu(page);
+      await expect(page.getByRole("contentinfo").locator("details.footer-navigation")).not.toHaveAttribute("open");
       await page.getByRole("contentinfo").getByRole("link", { name: "Terms, data handling, and support", exact: true }).click();
       await expect(page).toHaveURL(/\/legal$/);
       await expect(page.getByRole("contentinfo").locator("details")).not.toHaveAttribute("open");

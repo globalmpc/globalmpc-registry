@@ -214,6 +214,7 @@ it("displays project list errors and waits for session hydration", async () => {
 it("recomputes readiness without allowing edits and links to a separate human decision", async () => {
   let fail = false;
   const calls = mockHttp({
+    "GET /api/v1/projects/p1/readiness-policy-options": { items: [{ id: "policy2", ruleSetId: "real-policy", version: "2", gateId: "registry_publication", jurisdictionProfile: "MNG", effectiveFrom: "2026-01-01T00:00:00Z" }] },
     "POST /api/v1/projects/p1/readiness-assessments": () => {
       if (fail) throw new Error("Assessment unavailable");
       return {
@@ -251,12 +252,12 @@ it("recomputes readiness without allowing edits and links to a separate human de
   await act(async () =>
     render(<Readiness params={Promise.resolve({ id: "p1" })} />),
   );
-  fireEvent.change(screen.getByLabelText("Rule set ID"), {
+  fireEvent.change(await screen.findByLabelText("Rule set"), {
     target: { value: "policy2" },
   });
   fireEvent.click(screen.getByText("Recompute"));
   await screen.findByText("Reproducibility");
-  expect(calls[0]?.body).toEqual({ policySetId: "policy2" });
+  expect(calls.find(call => call.method === "POST")?.body).toEqual({ policySetId: "policy2" });
   expect(
     screen
       .getByRole("link", { name: /Record the human decision/ })

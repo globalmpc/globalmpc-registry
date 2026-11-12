@@ -1,15 +1,8 @@
 import type { LedgerSummary } from "@/lib/evidence-ledger-api";
 
-export function readableStage(value: string) {
-  const labels: Record<string, string> = {
-    "stage.exploration": "Exploration",
-    "stage.resource_defined": "Resource definition",
-    "stage.feasibility": "Feasibility",
-    "stage.permitted": "Permitting",
-    "stage.production": "Production",
-  };
-  return labels[value] ?? value.replace(/^stage\./, "").replaceAll("_", " ");
-}
+import { readableStage } from "@/lib/stages";
+export { readableStage } from "@/lib/stages";
+import { ProjectProgress, stageCoverage } from "./ProjectProgress";
 
 /** Only actual assessed gates are displayed: a prototype's position is not stage authority. */
 export function StageAssessments({
@@ -31,15 +24,20 @@ export function StageAssessments({
           uploaded files.
         </p>
       ) : (
-        <div className="stage-assessments">
+        <>
+          <ProjectProgress summary={summary} />
+          <div className="stage-assessments" role="list" aria-label="Configured evidence stages">
           {summary.stages.map((stage) => (
             <details
               key={`${stage.gateId}:${stage.ruleSetVersion}`}
+              role="listitem"
               className={`stage-assessment ${stage.gateId === summary.currentStage ? "is-current" : ""}`}
             >
               <summary>
                 <span className="stage-dot" aria-hidden="true" />
                 <strong>{readableStage(stage.gateId)}</strong>
+                {stage.gateId === summary.currentStage ? <span className="meta">Evidence stage at assessment</span> : null}
+                <span className="meta">{stageCoverage(stage) !== null ? `Reviewed ${stage.reviewedItems} / ${stage.requiredItems} required items` : "Required-item coverage unavailable"}</span>
                 <span className={`state-label state-${stage.status}`}>
                   {(
                     {
@@ -52,12 +50,6 @@ export function StageAssessments({
                 </span>
               </summary>
               <div className="stage-assessment-detail">
-                <p>
-                  {stage.reviewedItems !== undefined &&
-                  stage.requiredItems !== undefined
-                    ? `Reviewed ${stage.reviewedItems} / ${stage.requiredItems} required items`
-                    : "Required-item coverage unavailable"}
-                </p>
                 {stage.gateId === summary.currentStage ? (
                   <p className="meta">Evidence stage at this assessment</p>
                 ) : null}
@@ -79,6 +71,7 @@ export function StageAssessments({
             </details>
           ))}
         </div>
+        </>
       )}
     </section>
   );

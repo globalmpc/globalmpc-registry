@@ -7,7 +7,7 @@ const { getNodeAutoInstrumentations } = require('@opentelemetry/auto-instrumenta
 // service may carry credentials. A failed reference must not open the export boundary.
 const protectedOrigins = new Set();
 let unresolvedEndpoint = false;
-for (const name of ['CHAIN_RPC_URL', 'SAFE_SERVICE_URL']) {
+for (const name of ['CHAIN_RPC_URL', 'CRE_CHAIN_RPC_URL', 'SAFE_SERVICE_URL']) {
   const raw = process.env[name];
   if (!raw) continue;
   try {

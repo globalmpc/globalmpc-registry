@@ -19,6 +19,15 @@ async function mount(routes: Parameters<typeof mockHttp>[0]) {
   return calls;
 }
 describe("CRE workspace", () => {
+  it("generates BSC Testnet97 reports from the server destination", async () => {
+    const data = { ...workspace(), chainId: "97" };
+    const calls = await mount({ [`GET ${url}`]: data, [`POST ${url}`]: { ...report, chainId: "97" } });
+    await screen.findByText("BSC Testnet (97)");
+    fireEvent.change(screen.getByLabelText("Receiver contract address"), { target: { value: report.receiver } });
+    fireEvent.click(screen.getByRole("button", { name: "Generate report" }));
+    await screen.findByText(/Report generated/);
+    expect(calls.find(c => c.method === "POST")?.body).toEqual({ chainId: "97", publicKey: "project-public", receiver: report.receiver, ttlSeconds: "300" });
+  });
   it("guides an unpublished project to separate-person approval and prevents report generation", async () => {
     await mount({ [`GET ${url}`]: { ...workspace(), publication: null } });
     expect(await screen.findByText(/No approved public version/)).toBeDefined();

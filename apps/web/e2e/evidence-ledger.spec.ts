@@ -183,6 +183,20 @@ test.describe("evidence ledger complete journey", () => {
     const privateLedger = (
       await read(page, `/api/v1/projects/${projectId}/evidence-ledger`)
     ).snapshot;
+    const assessedStage = privateLedger.stages.find((stage: {gateId:string}) => stage.gateId === privateLedger.currentStage);
+    await page.goto("/w/projects");
+    const workspaceRow = page.getByTestId("project-list").getByRole("row").filter({has: page.getByRole("link", {name: projectKey, exact: true})});
+    await expect(workspaceRow).toContainText("Exploration");
+    await expect(workspaceRow.getByText("Saved assessment · may be outdated")).toBeVisible();
+    await expect(workspaceRow.getByRole("progressbar")).toHaveAttribute("value", assessedStage.reviewedItems);
+    await expect(workspaceRow.getByRole("progressbar")).toHaveAttribute("max", assessedStage.requiredItems);
+    await page.screenshot({path:test.info().outputPath("workspace-stage-progress.png"),fullPage:true});
+    await page.goto("/");
+    const publicRow = page.locator("article.public-project-row").filter({hasText:projectKey});
+    await expect(publicRow).toContainText("Exploration");
+    await expect(publicRow).toContainText("in this published version");
+    await expect(publicRow.getByRole("progressbar")).toHaveAttribute("value", assessedStage.reviewedItems);
+    await page.screenshot({path:test.info().outputPath("public-stage-progress.png"),fullPage:true});
     await page.goto(`/explorer/projects/${projectKey}`);
     await expect(
       page.getByTestId(`ledger-status-${licence}`),

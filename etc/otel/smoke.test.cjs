@@ -111,6 +111,7 @@ test('protected RPC/Safe origins never export credentials; ordinary requests sti
   writeFileSync(dir+'/endpoint', secretUrl+'\n');
   for (const env of [
     { CHAIN_RPC_URL: secretUrl },
+    { CRE_CHAIN_RPC_URL: secretUrl },
     { SAFE_SERVICE_URL: secretUrl },
     { SAFE_SERVICE_URL: 'env:PROTECTED_SAFE', PROTECTED_SAFE: secretUrl },
     { SAFE_SERVICE_URL: 'file:'+dir+'/endpoint' },

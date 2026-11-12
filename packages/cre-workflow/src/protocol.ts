@@ -4,10 +4,12 @@ import { z } from "zod";
 
 /** Anvil's selector in the official Chainlink chain-selectors registry. */
 export const ANVIL_SELECTOR = 7759470850252068959n;
-/** Official chain-selectors registry: opBNB testnet (5611), not BSC testnet (97). */
+/** Official chain-selectors registry: BSC testnet (97) and opBNB testnet (5611). */
+export const BSC_TESTNET_SELECTOR = 13264668187771770619n;
 export const OPBNB_TESTNET_SELECTOR = 13274425992935471758n;
 export function chainSelector(config: Pick<Config, "chainId" | "chainName">): bigint {
   if (config.chainId === "31337" && config.chainName === "anvil-devnet") return ANVIL_SELECTOR;
+  if (config.chainId === "97" && config.chainName === "binance_smart_chain-testnet") return BSC_TESTNET_SELECTOR;
   if (config.chainId === "5611" && config.chainName === "binance_smart_chain-testnet-opbnb-1") return OPBNB_TESTNET_SELECTOR;
   throw new WorkflowError(ERRORS.chain);
 }
@@ -25,7 +27,7 @@ export const REPORT_ABI_BYTES = 288;
 export const ERRORS = {
   configTooLarge: "configuration too large",
   configInvalid: "invalid workflow configuration",
-  chain: "only configured Anvil (31337) or opBNB testnet (5611) is supported",
+  chain: "only configured Anvil (31337), BSC testnet (97) or opBNB testnet (5611) is supported",
   receiver: "invalid receiver",
   ttl: "invalid report TTL",
   gas: "invalid gas limit",
