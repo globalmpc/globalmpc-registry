@@ -95,7 +95,7 @@ release. It then reuses `~/.cache/javy/<version>/` without checking again. Treat
 `build:wasm` as a local, developer-machine build only; do not run it in CI or use its
 output for deployment without verifying the Javy binary independently.
 
-## Local CRE simulation (not yet performed)
+## Local CRE simulation
 
 Install the [official CRE CLI](https://docs.chain.link/cre/getting-started/cli-installation/macos-linux).
 
@@ -121,8 +121,9 @@ cre workflow simulate . --target local --config config.local.json --non-interact
 Without `--broadcast` no transaction is broadcast. Local-chain broadcast needs the forwarder
 and workflow metadata that the receiver expects; never disable receiver identity checks to
 make a simulation pass. No DON deployment, paid execution or public-chain transaction is part
-of this proof of concept. The CLI layout and command above have not been run against this
-package.
+of this proof of concept. CLI1.39.0 has compiled and initialized this package and created a report through
+an isolated synthetic Registry API. Receiver delivery still failed in that run;
+full CLI simulation is not verified.
 
 ## Report protocol
 
@@ -188,7 +189,7 @@ not relicense upstream code.
 
 Local evidence: SDK-harness tests of the handler and protocol, Go golden vectors, typecheck
 and a local `cre-compile` WASM build. DON consensus, deployed forwarder metadata, external
-chain delivery, CLI simulation and operating costs remain unverified. Report contract checks
+chain delivery, complete CLI simulation and operating costs remain unverified. Report contract checks
 and the SDK test harness separately from any live CRE evidence.
 
 Official references:
