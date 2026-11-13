@@ -1,3 +1,4 @@
+import URL from "core-js-pure/features/url/index.js";
 import { createCreReportRequest, creReport } from "@mpc/api-contract/cre";
 import { encodeAbiParameters, keccak256, parseAbiParameters, stringToHex, type Hex } from "viem";
 import { z } from "zod";
