@@ -14,8 +14,14 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { toHex } from "../lib/color.mjs";
+import { alphaOf, toHex } from "../lib/color.mjs";
 import { loadTokens } from "../lib/tokens.mjs";
+
+/** Hex for the table; translucent colours keep their alpha, or three borders read as one white. */
+const swatch = (token) => {
+  const alpha = alphaOf(token.value);
+  return alpha === 1 ? toHex(token.value) : `${toHex(token.value)} · α ${alpha}`;
+};
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(readFileSync(`${ROOT}/package.json`, "utf8")).version;
@@ -51,7 +57,7 @@ const tokenSections = groups
     const rows = tokens.filter((t) => t.group === id);
     if (rows.length === 0) return null;
     return [
-      `### ${groupTitle[id] ?? id}`,
+      `## ${groupTitle[id] ?? id}`,
       "",
       groupNote[id] ?? "",
       "",
@@ -60,7 +66,7 @@ const tokenSections = groups
         rows.map((t) => [
           t.cssVar ? code(`--${t.name}`) : `${code(t.name)} *`,
           code(t.value),
-          t.type === "color" ? toHex(t.value) : "—",
+          t.type === "color" ? swatch(t) : "—",
           t.note
             ? `${en(t.use) || t.description}<br>**Note:** ${en(t.note)}`
             : en(t.use) || t.description,
@@ -114,7 +120,7 @@ ${patterns.rules.map((r) => `- **${r.rule.en}**\n  - ${r.why.en}`).join("\n")}
 
 ## Component layers
 
-Components fall into six kinds, each bound by one rule. The split holds whatever
+Components fall into seven kinds, each bound by one rule. The split holds whatever
 UI framework is in use.
 
 ${header(["Layer", "Rule"])}
@@ -153,9 +159,14 @@ ${table(voice.boundaries.map((b) => [`**${b.claim.en}**`, b.instead.en]))}
 
 ${voice.tone
   .map((t) =>
-    [`### ${t.rule.en}`, "", t.why.en, t.example ? `\n> Example: ${t.example.en}` : ""].join(
-      "\n",
-    ),
+    [
+      `### ${t.rule.en}`,
+      "",
+      t.why.en,
+      // Spread rather than a ternary: an empty string here joins into a second
+      // blank line, which reads as a missing example rather than none.
+      ...(t.example ? [`\n> Example: ${t.example.en}`] : []),
+    ].join("\n"),
   )
   .join("\n\n")}
 
@@ -197,7 +208,7 @@ buying a license.
 
 ${logo.trademark.en}
 
-_${logo.trademark.status}_
+> _${en(logo.trademark.status)}_
 `,
 );
 
@@ -224,7 +235,7 @@ This project follows the MPC design system. The rules below are mandatory.
 - Radius: ${tokens
     .filter((t) => t.type === "dimension")
     .map((t) => `\`--${t.name}\``)
-    .join(", ")}. Never use a larger value.
+    .join(", ")}. Never use a larger value on a rectangle; a shape that is a circle by meaning (status dot, avatar, radio, switch, diagram ring) stays a circle with \`rounded-full\`.
 - Typefaces: ${tokens
     .filter((t) => t.type === "fontFamily")
     .map((t) => `\`--${t.name}\``)

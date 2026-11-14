@@ -214,6 +214,20 @@
         }
       }
     },
+    "mark": {
+      "$value": "#C2773F",
+      "$type": "color",
+      "$description": "The mark's colour on screen: the mark, icons and social artwork. Not a text colour.",
+      "$extensions": {
+        "mpc.group": "brand",
+        "mpc.use": {
+          "en": "The mark's colour on screen: the mark, icons and social artwork. Not a text colour."
+        },
+        "mpc.note": {
+          "en": "Same value as `print-copper`, published as a CSS variable so screens can reference the mark colour by name instead of copying the hex."
+        }
+      }
+    },
     "gold": {
       "$value": "oklch(0.82 0.11 80)",
       "$type": "color",

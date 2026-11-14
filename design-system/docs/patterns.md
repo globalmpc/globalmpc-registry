@@ -8,27 +8,36 @@ them regardless of framework.
 ## System rules
 
 - **Author colour as a token, never as a literal — with one exception below.**
-  - The published brand kit is derived from `styles.css`. A literal in a component is invisible to that pipeline and cannot be handed to a partner.
+  - The published brand kit is derived from `tokens/*.json`. A literal in a component is invisible to that pipeline and cannot be handed to a partner.
 - **The exception: the whitepaper viewer (`.wp-*`) fixes its colours on purpose.**
   - It renders paper. A white A4 sheet that followed the dark theme would stop being a document.
 - **Every animated utility must have a `prefers-reduced-motion` opt-out, and SSR must render the final state.**
   - Content that only appears after client JS is invisible to crawlers and to anyone with motion disabled. Reveal and CountUp both ship the finished value from the server.
 - **Section rhythm is fixed: `py-24 lg:py-32`, separated by a hairline.**
   - The home page is one continuous argument. Varying the spacing per section reads as unrelated pages stacked together.
-- **Content width is `max-w-7xl px-6 lg:px-10`. Nothing sets its own container.**
+- **Rhythm exceptions — the only places a section may leave `py-24 lg:py-32`: the home hero ends at `lg:pb-12`; logo strips (partners, backers) run `py-10 lg:py-12`; a page head runs `pt-16 pb-14 lg:pt-20 lg:pb-16` with no hairline; the first section after a page head opens at `pt-12`; rows inside a list carry row padding.**
+  - Each of these sits next to something that already supplies the gap — the next section, the page head, the list around it — or is a band rather than an argument. Anything else that departs from the rhythm is a defect, not a new exception.
+- **Content width is `max-w-7xl px-6 lg:px-10`. Nothing sets its own container; a documentation shell divides this one into rails and a column, under the width budget below.**
   - A single measure is what makes the hairlines line up across sections that were written months apart.
+- **A documentation shell with side rails keeps the content edge and a reading column of at least 40rem, even with a classic scrollbar. Inside `max-w-7xl px-6 lg:px-10` that is a width budget with 1rem left for the scrollbar, counting the column's padding on both sides (`lg:px-8` = 4rem): at `lg` (59rem inside the container padding) the left rail plus that padding take at most 18rem; from `xl` up (75rem, the container's cap) both rails plus that padding take at most 34rem. A shell that fits: left rail `14rem` from `lg`, right "on this page" rail `15rem` from `xl`, column `lg:px-8` — 41rem of text at `lg` and 42rem from `xl` up, about 40rem and 41rem behind a 15px scrollbar.**
+  - With `17rem` and `15rem` rails and a `lg:px-8` column the text gets 38rem at `lg` and 39rem from `xl` up — narrower than a comfortable measure for long documents. Showing a rail at a later breakpoint does not help: `max-w-7xl` reaches its 80rem cap at 1280px, so `2xl` adds no width. Only narrower rails or less padding do. Breakpoints match the viewport including a classic scrollbar (about 15px) while the layout gets the width without it, hence the 1rem of headroom.
+- **The radius scale is for rectangles. A shape that is a circle by meaning — a status dot, an avatar, a radio button, a switch, a ring in a diagram — stays a circle, drawn with `rounded-full`; a rectangle never rounds past `--radius-xl`.**
+  - "Never use a larger value" keeps panels and buttons drawn with rules and hairlines. Applied to a dot it turns a status mark into a small square that no longer reads as one.
+- **Status colour is fixed by meaning: complete or confirmed → `--positive`; in progress or provisional → `--alert`; planned or designed → `--muted-foreground`; failed → `--destructive-text`. Copper, gold and steppe never carry a status. Every status also states its word — Completed, In progress, Planned — so colour is never the only channel; each of the four colours clears 4.5:1 on the background, so the word stays readable. The motion utilities follow the same map: `.node-pulse` marks the in-progress stage and takes `--alert`; `.live-dot` (`--positive`) means a system running now, such as a live feed, and is not a completion mark.**
+  - Copper is the colour a visitor can act on, gold marks a figure, and steppe is the green that is not a status. A status painted in any of them says something the token was never meant to say, and a reader comparing two screens gets two different readings of the same stage.
 
 ## Component layers
 
-Components fall into six kinds, each bound by one rule. The split holds whatever
+Components fall into seven kinds, each bound by one rule. The split holds whatever
 UI framework is in use.
 
 | Layer | Rule |
 | --- | --- |
 | **Shells** | Own the LocaleProvider, the Nav/Footer frame, and section order. A route file should render a shell and nothing else. |
 | **Chrome** | Rendered by every shell. Links come from one navigation registry, never from a local list. |
-| **Sections** | One argument each, opened by a `.label-eyebrow`. Carry `py-24 lg:py-32` and a hairline; do not set a custom container. |
+| **Sections** | One argument each, opened by a `.label-eyebrow`. Carry `py-24 lg:py-32` and a hairline, except where the rhythm exceptions rule says otherwise; do not set a custom container. |
 | **Figures** | SVG and CSS only — no charting dependency. Must collapse to a readable static diagram under reduced motion. |
+| **Decorative art** | Carries no information, so it may draw on canvas or WebGL. `aria-hidden`; the copy beside it reads on its own; colours come from tokens at runtime; it pauses off screen, draws one still frame under reduced motion, and draws nothing without WebGL while the layout holds. |
 | **Overlays** | Exactly one may be visible at a time, and each declares how it yields to the others. |
 | **Behaviours** | Wrap content, never replace it. SSR emits the final state so nothing depends on client JS to become visible. |
 
@@ -39,5 +48,5 @@ UI framework is in use.
 - **Support pairs** — Background/foreground pairs for secondary UI. Always used as a pair: a surface token without its -foreground partner is how contrast bugs start.
 - **Signal colours** — Each carries a fixed meaning. Reaching for one because it looks right is the misuse this group exists to prevent.
 - **Lines & inputs** — White at low alpha rather than a solid grey, so a hairline reads consistently on all four surface depths without a per-surface variant.
-- **Geometry** — A deliberately tight radius scale. The largest value is 10px: the visual language is drawn with rules and hairlines, and rounded corners work against it.
+- **Geometry** — A deliberately tight radius scale for rectangles. The largest value is 10px: the visual language is drawn with rules and hairlines, and rounded corners work against it. A shape that is a circle by meaning stays a circle; see the circle rule under Patterns.
 - **Type stacks** — Self-hosted via @fontsource — there is no fonts.googleapis.com request. The fallbacks matter: they are what renders before the webfont resolves.
