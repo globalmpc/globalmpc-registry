@@ -1,4 +1,4 @@
-/* MPC design tokens 0.2.1 — GENERATED from tokens/*.json. Do not edit. */
+/* MPC design tokens 0.3.0 — GENERATED from tokens/*.json. Do not edit. */
 
 import tokens from "./tokens.json" with { type: "json" };
 

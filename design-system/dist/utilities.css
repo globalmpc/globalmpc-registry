@@ -1,4 +1,4 @@
-/* MPC design tokens 0.2.1 — GENERATED from tokens/*.json. Do not edit. */
+/* MPC design tokens 0.3.0 — GENERATED from tokens/*.json. Do not edit. */
 
 /**
  * The MPC utility layer.
@@ -13,6 +13,10 @@
  *   1. Every animated class is disabled by name under prefers-reduced-motion.
  *   2. Nothing here is required for content to be visible. Server-rendered
  *      markup shows the final state; the motion classes are additive.
+ *
+ * Load tokens.css first. Every colour here is a token reference, so without it
+ * the colours drop out; `.copper-gradient` / `.copper-shimmer` then fall back to
+ * the inherited text colour rather than turning invisible.
  *
  * A consumer without Tailwind can import this directly — `@layer utilities`
  * is plain CSS cascade layers, not a Tailwind directive.
@@ -57,7 +61,11 @@
     background: linear-gradient(135deg, var(--copper), var(--gold));
     -webkit-background-clip: text;
     background-clip: text;
-    color: transparent;
+    /* Transparent only when the token resolves: without tokens.css, --_clip-fill is
+       invalid, the gradient drops out, and the text falls back to its inherited colour
+       instead of disappearing. */
+    --_clip-fill: color-mix(in oklch, var(--copper) 0%, transparent);
+    color: var(--_clip-fill, currentColor);
   }
 
   .glow-copper {
@@ -110,7 +118,11 @@
     background-size: 220% 100%;
     -webkit-background-clip: text;
     background-clip: text;
-    color: transparent;
+    /* Transparent only when the token resolves: without tokens.css, --_clip-fill is
+       invalid, the gradient drops out, and the text falls back to its inherited colour
+       instead of disappearing. */
+    --_clip-fill: color-mix(in oklch, var(--copper) 0%, transparent);
+    color: var(--_clip-fill, currentColor);
     animation: shimmer 6.5s ease-in-out infinite;
   }
 

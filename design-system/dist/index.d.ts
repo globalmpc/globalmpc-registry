@@ -1,7 +1,13 @@
-/* MPC design tokens 0.2.1 — GENERATED from tokens/*.json. Do not edit. */
+/* MPC design tokens 0.3.0 — GENERATED from tokens/*.json. Do not edit. */
 
 export interface CopyText {
   en: string;
+}
+
+/** @deprecated Renamed to CopyText in 0.3.0, when the Korean field was removed. Removed in 0.4.0. */
+export interface Bilingual extends CopyText {
+  /** @deprecated No longer emitted since 0.3.0; always undefined. Read `en`. */
+  ko?: string;
 }
 
 export interface Token {
@@ -16,8 +22,9 @@ export interface Token {
   /** False for reference-only values, such as the print stops. */
   cssVar: boolean;
   description: string;
-  use?: CopyText;
-  note?: CopyText;
+  /** Typed as the deprecated Bilingual through 0.3.x so code reading `.ko` still compiles; CopyText from 0.4.0. */
+  use?: Bilingual;
+  note?: Bilingual;
 }
 
 export declare const VERSION: string;

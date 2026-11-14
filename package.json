@@ -16,7 +16,7 @@
     "build:openapi": "pnpm --filter @mpc/api-contract build",
     "check:openapi": "pnpm build:openapi && git diff --exit-code -- packages/api-contract/openapi.json",
     "check:contracts": "cd contracts && forge test",
-    "check:brand": "tsx scripts/check-brand-assets.ts",
+    "check:brand": "node --test scripts/brand-tooling.test.mjs && tsx scripts/check-brand-assets.ts",
     "check:migration-rollback": "pnpm --filter @mpc/db rollback-check",
     "check": "pnpm typecheck && pnpm test && pnpm check:openapi && pnpm check:brand",
     "test:coverage": "node --test scripts/coverage-temp.test.mjs && node --import ./scripts/coverage-temp.mjs ./node_modules/vitest/vitest.mjs run --coverage"

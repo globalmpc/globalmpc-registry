@@ -129,3 +129,7 @@ restore and release rollback procedures.
 - Record the deployed address and verification link above.
 
 Asset token issuance, trading and custody are outside this registry's current functionality.
+
+---
+
+Maintained by [Global MPC (Mineral Project Coin)](https://globalmpc.tech). $MPC remains at the Pre-TGE stage, and no token contract address has been published. Official site: https://globalmpc.tech

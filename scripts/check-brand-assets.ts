@@ -1,17 +1,19 @@
 /**
  * Brand asset sync check.
  *
- * The web app serves the logo as static files (`public/`, `src/app/icon.svg`). It works
+ * The web app serves the mark and multi-size favicon as static files in `public/`. It works
  * without bundler config but **creates copies** — copies silently keep serving old
  * artwork when the original changes.
  *
- * So this checks the copies are byte-identical to the originals in `@mpc/design/assets/logo`.
+ * The TopBar copy stays byte-identical to the original. The favicon must match its
+ * canonical-artwork generator, including size-specific tile clearance.
  * Redrawing the logo fails this check, and the failure is the signal to update the copies.
  *
  * Artwork is not edited here. The source is design-system and the generator lives in the
  * host repository (`design-system/README.md` "To change the logo").
  */
 
+import { brandIcon } from "./brand-icon.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -33,11 +35,6 @@ const COPIES: readonly Copy[] = [
     copy: "apps/web/public/brand/mpc-mark-on-dark.svg",
     why: "TopBar brand mark",
   },
-  {
-    origin: "mpc-mark-on-dark.svg",
-    copy: "apps/web/src/app/icon.svg",
-    why: "favicon (Next app router convention)",
-  },
 ];
 
 const drifted = COPIES.filter((entry) => {
@@ -57,4 +54,13 @@ if (drifted.length > 0) {
   process.exit(1);
 }
 
-console.log(`${COPIES.length} brand assets match the originals.`);
+if (!readFileSync(path.join(DAPP, "apps/web/public/favicon.ico")).equals(await brandIcon())) {
+  throw new Error("Favicon differs from the canonical tile: node scripts/sync-brand-icon.mjs");
+}
+const provenance = JSON.parse(readFileSync(path.join(DAPP, "design-system/SOURCE.json"), "utf8"));
+const { createHash } = await import("node:crypto");
+for (const [file, expected] of Object.entries(provenance.files)) {
+  const actual = createHash("sha256").update(readFileSync(path.join(DAPP, "design-system", file))).digest("hex");
+  if (actual !== (expected as { sha256: string }).sha256) throw new Error(`Pinned design source drift: ${file}`);
+}
+console.log(`Canonical source and generated favicon verified. ${COPIES.length} brand assets match the originals.`);

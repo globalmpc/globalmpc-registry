@@ -5,7 +5,7 @@
       "en": "MPC is the mining RWA issuance standard infrastructure operating on blockchain."
     },
     "expansion": {
-      "en": "It standardises verification across the mining-asset lifecycle: every published record carries its source, its reviewer, that reviewer\u2019s authority scope, and the limitations of the check. Reference cases are not named until the counterparty has agreed to be named."
+      "en": "It standardises verification across the mining-asset lifecycle: every published record carries its source, its reviewer, that reviewer’s authority scope, and the limitations of the check. Reference cases are not named until the counterparty has agreed to be named."
     }
   },
   "boundaries": [
@@ -133,10 +133,10 @@
     },
     {
       "rule": {
-        "en": "Navigation labels come from a single registry that requires a label per locale."
+        "en": "Navigation labels come from a single registry, never from a local list."
       },
       "why": {
-        "en": "A destination cannot ship with one language filled in — the registry type will not allow it."
+        "en": "One source of truth for every destination: a renamed or removed page changes in one place, and no menu keeps a stale label."
       }
     }
   ]

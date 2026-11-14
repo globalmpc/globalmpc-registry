@@ -3,9 +3,16 @@
 Tokens, logos, and rules shared across MPC projects. Stack-agnostic, with no runtime
 dependencies.
 
-This folder is slated to be split into an independent repository, so it does not
-reference files in the host repository. The only exception is `scripts/sync-assets.mjs`;
-the reason is given under "To change the logo" below.
+The canonical source is `mustcompany/globalmpc-designsystem`. `SOURCE.json` pins the
+source commit and checksums. To refresh this consumer copy, use a clean canonical checkout:
+
+```sh
+node scripts/sync-design-system.mjs /path/to/globalmpc-designsystem
+pnpm check:brand
+```
+
+The sync preserves Registry's existing country-neutral reference-case wording,
+local package metadata and artwork-copy infrastructure. Builds do not fetch upstream.
 
 ## 5-minute start
 

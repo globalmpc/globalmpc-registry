@@ -33,21 +33,17 @@ MPC has not issued. A sentence that reads as though it has is a misrepresentatio
 
 The on-chain section's whole value is that a reader can check it on a public explorer. One unverifiable number beside those rows costs the page its function.
 
-
 ### Name risks next to the structure that addresses them.
 
 An institutional reader has already thought of the risk. Omitting it signals either ignorance or concealment.
-
 
 ### Write for allocators: infrastructure vocabulary, not crypto vocabulary.
 
 The audience is institutional capital. 'Issuance standard', 'risk/return profile', 'value chain' land; 'moon', 'gem', 'community' do not.
 
-
 ### No superlatives and no urgency devices.
 
 'Revolutionary', 'don't miss out', countdowns — these read as retail solicitation and undercut the institutional framing everything else is doing.
-
 
 ### Fixed vocabulary: layer names, status words, and asset names are reused verbatim.
 
@@ -59,7 +55,6 @@ The site, the whitepaper, and the brief have to describe one thing. A synonym re
 
 A disclaimer a reader has to look for is a disclaimer that did not disclaim.
 
-
 ## Language policy
 
 - **Copy lives in a `const COPY = { en: {...} } as const` beside its component, read with `useT`.**
@@ -68,5 +63,5 @@ A disclaimer a reader has to look for is a disclaimer that did not disclaim.
   - A hedge that survives on one surface and disappears on another is a different disclosure on each.
 - **Pages render `locale="en"`. English is the product language.**
   - Every surface states the same facts in the same words, so there is no second copy to drift.
-- **Navigation labels come from a single registry that requires a label per locale.**
-  - A destination cannot ship with one language filled in — the registry type will not allow it.
+- **Navigation labels come from a single registry, never from a local list.**
+  - One source of truth for every destination: a renamed or removed page changes in one place, and no menu keeps a stale label.
