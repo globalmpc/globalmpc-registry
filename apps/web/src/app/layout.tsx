@@ -9,6 +9,9 @@ import { StepUpProvider } from "@/components/auth/StepUp";
 
 export const metadata: Metadata = {
   title: "MPC Registry Workspace",
+  icons: {
+    icon: { url: "/favicon.ico", type: "image/x-icon", sizes: "16x16 24x24 32x32 48x48 64x64 128x128 256x256" },
+  },
   description:
     "Mining Compliance Evidence & Registry Infrastructure. Verification is not a guarantee.",
 };

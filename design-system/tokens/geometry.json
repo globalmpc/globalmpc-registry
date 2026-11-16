@@ -1,5 +1,5 @@
 {
-  "$description": "A deliberately tight radius scale. The ceiling is 10px: the visual language is drawn with rules and hairlines.",
+  "$description": "A deliberately tight radius scale for rectangles. The ceiling is 10px: the visual language is drawn with rules and hairlines. Circles by meaning stay circles (see content/patterns.json).",
   "radius": {
     "radius-sm": {
       "$value": "2px",
@@ -37,11 +37,11 @@
     "radius-xl": {
       "$value": "10px",
       "$type": "dimension",
-      "$description": "Dialogs and sheets. The ceiling.",
+      "$description": "Dialogs and sheets. The ceiling for rectangles.",
       "$extensions": {
         "mpc.group": "geometry",
         "mpc.use": {
-          "en": "Dialogs and sheets. The ceiling."
+          "en": "Dialogs and sheets. The ceiling for rectangles."
         }
       }
     },

@@ -1,4 +1,4 @@
-// MPC design tokens 0.2.1 — GENERATED from tokens/*.json. Do not edit.
+// MPC design tokens 0.3.0 — GENERATED from tokens/*.json. Do not edit.
 
 import 'dart:ui';
 
@@ -21,6 +21,7 @@ abstract final class MpcColors {
   static const Color accentForeground = Color(0xFFEFF2F5);
   static const Color copper = Color(0xFFD77E49);
   static const Color copperGlow = Color(0xFFF8A052);
+  static const Color mark = Color(0xFFC2773F);
   static const Color gold = Color(0xFFEABC6E);
   static const Color steppe = Color(0xFF31573F);
   static const Color sand = Color(0xFFD2B285);

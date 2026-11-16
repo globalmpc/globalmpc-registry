@@ -2,13 +2,13 @@
 
 # Design tokens
 
-`@mpc/design` 0.2.1 · 44 tokens (38 CSS variables)
+`@mpc/design` 0.3.0 · 45 tokens (39 CSS variables)
 
 `tokens/*.json` is the only source. This document and the CSS, JSON, SCSS, and
 Dart in `dist/` are all generated from it. `*` marks a reference-only value
 that produces no CSS variable.
 
-### Surfaces
+## Surfaces
 
 Four depths, near-black and cool. Depth is carried by lightness alone — the site has no elevation shadows.
 
@@ -23,7 +23,7 @@ Four depths, near-black and cool. Depth is carried by lightness alone — the si
 | `--popover` | `oklch(0.17 0.018 260)` | #0B1017 | Floating surfaces: dropdown, popover, command, tooltip panels. |
 | `--popover-foreground` | `oklch(0.96 0.005 250)` | #EFF2F5 | Text on floating surfaces. |
 
-### Brand & interactive
+## Brand & interactive
 
 Copper in its interface role: the accent a visitor can act on. Two near-identical values exist here for historical reasons — see the note on --primary.
 
@@ -33,9 +33,10 @@ Copper in its interface role: the accent a visitor can act on. Two near-identica
 | `--primary-foreground` | `oklch(0.13 0.02 265)` | #04070F | Text on a copper fill. Near-black, not white — copper is too light to carry white text at AA. |
 | `--copper` | `oklch(0.68 0.13 50)` | #D77E49 | The brand accent in the interface: eyebrow labels, links, emphasis, primary buttons.<br>**Note:** Published as Copper Light in the media kit. This is the value site components use directly (`bg-copper`, `text-copper`). |
 | `--copper-glow` | `oklch(0.78 0.14 60)` | #F8A052 | Hover and active states only. Never a resting colour and never a large fill. |
+| `--mark` | `#C2773F` | #C2773F | The mark's colour on screen: the mark, icons and social artwork. Not a text colour.<br>**Note:** Same value as `print-copper`, published as a CSS variable so screens can reference the mark colour by name instead of copying the hex. |
 | `--ring` | `oklch(0.72 0.12 55)` | #DE8F57 | Focus ring. Identical to --primary, so keyboard focus is unmistakably the brand accent. |
 
-### Support pairs
+## Support pairs
 
 Background/foreground pairs for secondary UI. Always used as a pair: a surface token without its -foreground partner is how contrast bugs start.
 
@@ -48,7 +49,7 @@ Background/foreground pairs for secondary UI. Always used as a pair: a surface t
 | `--accent` | `oklch(0.25 0.025 260)` | #1B222E | Hover fill for menu and list items.<br>**Note:** Not a brand colour despite the name — it is shadcn's neutral hover slot. Brand accent is --copper. |
 | `--accent-foreground` | `oklch(0.96 0.005 250)` | #EFF2F5 | Text on --accent. |
 
-### Signal colours
+## Signal colours
 
 Each carries a fixed meaning. Reaching for one because it looks right is the misuse this group exists to prevent.
 
@@ -63,29 +64,29 @@ Each carries a fixed meaning. Reaching for one because it looks right is the mis
 | `--destructive-text` | `oklch(0.64 0.15 25)` | #D8625C | Destructive meaning as text on a dark surface.<br>**Note:** A fill colour and a text colour cannot be the same swatch here. `destructive` is dark enough to carry near-white text on top of it (4.72:1), which is exactly why it fails as text on our dark surfaces (3.80:1 on background). This token is the lighter twin, and it is the one to reach for whenever the red is a word rather than a shape. |
 | `--destructive-foreground` | `oklch(0.96 0.005 250)` | #EFF2F5 | Text on a destructive fill. |
 
-### Lines & inputs
+## Lines & inputs
 
 White at low alpha rather than a solid grey, so a hairline reads consistently on all four surface depths without a per-surface variant.
 
 | Token | Value | Hex | Use |
 | --- | --- | --- | --- |
-| `--border` | `oklch(1 0 0 / 8%)` | #FFFFFF | Default hairline. Applied globally to every element in @layer base.<br>**Note:** Alpha-channel white, so it never appeared in the generated hex palette. Use the .hairline-t / .hairline-b utilities rather than a raw border. |
-| `--border-strong` | `oklch(1 0 0 / 16%)` | #FFFFFF | Emphasised divider where the default hairline disappears. |
-| `--input` | `oklch(1 0 0 / 12%)` | #FFFFFF | Form field borders. Brighter than --border so an input reads as interactive. |
+| `--border` | `oklch(1 0 0 / 8%)` | #FFFFFF · α 0.08 | Default hairline. Applied globally to every element in @layer base.<br>**Note:** Alpha-channel white, so it never appeared in the generated hex palette. Use the .hairline-t / .hairline-b utilities rather than a raw border. |
+| `--border-strong` | `oklch(1 0 0 / 16%)` | #FFFFFF · α 0.16 | Emphasised divider where the default hairline disappears. |
+| `--input` | `oklch(1 0 0 / 12%)` | #FFFFFF · α 0.12 | Form field borders. Brighter than --border so an input reads as interactive. |
 
-### Geometry
+## Geometry
 
-A deliberately tight radius scale. The largest value is 10px: the visual language is drawn with rules and hairlines, and rounded corners work against it.
+A deliberately tight radius scale for rectangles. The largest value is 10px: the visual language is drawn with rules and hairlines, and rounded corners work against it. A shape that is a circle by meaning stays a circle; see the circle rule under Patterns.
 
 | Token | Value | Hex | Use |
 | --- | --- | --- | --- |
 | `--radius-sm` | `2px` | — | Badges, tags, inline chips. |
 | `--radius-md` | `4px` | — | Buttons and inputs. The default. |
 | `--radius-lg` | `6px` | — | Cards and panels. |
-| `--radius-xl` | `10px` | — | Dialogs and sheets. The ceiling. |
+| `--radius-xl` | `10px` | — | Dialogs and sheets. The ceiling for rectangles. |
 | `--radius` | `4px` | — | Base radius consumed by shadcn primitives. |
 
-### Type stacks
+## Type stacks
 
 Self-hosted via @fontsource — there is no fonts.googleapis.com request. The fallbacks matter: they are what renders before the webfont resolves.
 
@@ -95,7 +96,7 @@ Self-hosted via @fontsource — there is no fonts.googleapis.com request. The fa
 | `--font-display` | `"Space Grotesk", "Inter", sans-serif` | — | Headlines and figures. Always with -0.02em tracking via .font-display.<br>**Note:** Falls back to Inter, not a system serif — a headline that loses its webfont should still look like this site. |
 | `--font-mono` | `"JetBrains Mono", ui-monospace, monospace` | — | Eyebrow labels and data. Never body copy. |
 
-### Print
+## Print
 
 Reference-only values with no CSS variable. Screen and print surfaces need different coppers, so the two sets are never mixed.
 

@@ -1,0 +1,78 @@
+{
+  "repository": "mustcompany/globalmpc-designsystem",
+  "commit": "4b96172bdb19e2cd67743d88fb6be6530b330f3a",
+  "version": "0.3.0",
+  "scope": "Canonical token/rule sources and generated outputs; local package metadata and artwork infrastructure are preserved.",
+  "localOverride": "Preserve Registry’s existing country-neutral reference-case and steppe-token wording; generated documentation retains those overrides.",
+  "files": {
+    "ai/CLAUDE.md": {
+      "sha256": "8fe6f60ce0caae857689abcd7d85dcc8e6685cb1175f7953758f97497522b42d"
+    },
+    "content/logo.json": {
+      "sha256": "91299ae93ba22a503e1fad6755ff11672ba0df87c6d77aaa7d48686b711337ee"
+    },
+    "content/patterns.json": {
+      "sha256": "f6d182afe9b857737456022f53c7a204bab9b01de1dca3f73a67899fd130ca4c"
+    },
+    "content/voice.json": {
+      "sha256": "3bfefc4b4a19d112baef4531ee60d6c80d5a1ec4acd398684a4e2d3e3481f16c"
+    },
+    "css/utilities.css": {
+      "sha256": "eae941c281e36afa7b5e152f09130a6b7e445617b13983203e1287b978379f34"
+    },
+    "dist/index.d.ts": {
+      "sha256": "e99765965bfe706f9c6ba00ae3c4147d6b07848a31c8702082db1b52f76774b1"
+    },
+    "dist/index.js": {
+      "sha256": "be62ef1b9bf730fadbe08625692fa4b4afe12a2c22dd3fbf2a0cbd452f32055e"
+    },
+    "dist/tokens.css": {
+      "sha256": "2b4c6262576253b08f697a07451016dd26a57bbedc2a1bb6be1a89a0b1477424"
+    },
+    "dist/tokens.dart": {
+      "sha256": "bbc5d3e19906756381503a6227a9995c3b65e34f26bcecdc643ae7cb99652ec6"
+    },
+    "dist/tokens.json": {
+      "sha256": "b2033bde0e1eea1ff78da357858236f43b8638366dc7e375a83db3e6ee8bddb5"
+    },
+    "dist/tokens.scss": {
+      "sha256": "708f78c7966f106dcc42255f0a320beda7de9b7b46ac731c7045a435ff960af6"
+    },
+    "dist/utilities.css": {
+      "sha256": "b15777df7961ccfabf4af191591cb1d71353b7e63f3b9aa9edef8865bdc3c8de"
+    },
+    "docs/logo.md": {
+      "sha256": "03c29b894ea8c44323283760f1935304c85d8bfacb0dde08a6137278f916b1a6"
+    },
+    "docs/patterns.md": {
+      "sha256": "155ded3a4a0f7cc0aaa4fa4b5ec77e0edbabb85b0db6150477eb06dcaee088e1"
+    },
+    "docs/tokens.md": {
+      "sha256": "2619ac5c6380089f3ba551a14b8adf0922d0f98111fd8feecd3143171623aa86"
+    },
+    "docs/voice.md": {
+      "sha256": "fc9146cb6fc27f7fcf400f6ffbcb8a31db1a71593efe0886b63485615822c1a0"
+    },
+    "lib/color.mjs": {
+      "sha256": "4a7802e8454e6bff678e31e446fbc88435cc3ebc0c93656d4c2d6898b2e82622"
+    },
+    "lib/tokens.mjs": {
+      "sha256": "cbb61f5b753acede519a0b19c9d8186dddfb99c705f8c1ea5f8a241d7c8fd6f2"
+    },
+    "scripts/build.mjs": {
+      "sha256": "c5cee0f772ed85e341c0c50f9865939a559ca7217a83fee6b8e93da60710be28"
+    },
+    "scripts/docs.mjs": {
+      "sha256": "f4b1330dc8003b9320e96dc95e71601c347caa0e2f5dae43ebbfbfecbd79db0b"
+    },
+    "tokens/color.json": {
+      "sha256": "b089775d9be203f676d83382fcbf44aa85aa064eb75548c670ca3020b4efbdae"
+    },
+    "tokens/geometry.json": {
+      "sha256": "41da018a0b316d3188b93b6df964ac1e60cfce729f42714952035e63cb990ba7"
+    },
+    "tokens/typography.json": {
+      "sha256": "2a45cad809a294b85c8295f82822c52f16042ec582d7c0b1c1dc708ecf11eddf"
+    }
+  }
+}

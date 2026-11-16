@@ -1,0 +1,111 @@
+[
+  {
+    "size": 16,
+    "bbox": [
+      2,
+      0,
+      15,
+      16
+    ],
+    "markHeight": 16,
+    "clearance": 0
+  },
+  {
+    "size": 24,
+    "bbox": [
+      3,
+      0,
+      22,
+      24
+    ],
+    "markHeight": 24,
+    "clearance": 0
+  },
+  {
+    "size": 32,
+    "bbox": [
+      7,
+      4,
+      26,
+      28
+    ],
+    "markHeight": 24,
+    "clearance": 4
+  },
+  {
+    "size": 48,
+    "bbox": [
+      15,
+      12,
+      34,
+      36
+    ],
+    "markHeight": 24,
+    "clearance": 12
+  },
+  {
+    "size": 64,
+    "bbox": [
+      20,
+      16,
+      45,
+      48
+    ],
+    "markHeight": 32,
+    "clearance": 16
+  },
+  {
+    "size": 128,
+    "bbox": [
+      39,
+      32,
+      90,
+      96
+    ],
+    "markHeight": 64,
+    "clearance": 32
+  },
+  {
+    "size": 256,
+    "bbox": [
+      77,
+      64,
+      179,
+      192
+    ],
+    "markHeight": 128,
+    "clearance": 64
+  },
+  {
+    "viewport": 390,
+    "header": {
+      "gap": -89.90625,
+      "labelVisible": false,
+      "markHeight": 28,
+      "overflow": false,
+      "icons": [
+        {
+          "href": "/favicon.ico",
+          "type": "image/x-icon",
+          "sizes": "16x16 24x24 32x32 48x48 64x64 128x128 256x256"
+        }
+      ]
+    }
+  },
+  {
+    "viewport": 1440,
+    "header": {
+      "gap": 14,
+      "labelVisible": true,
+      "markHeight": 28,
+      "overflow": false,
+      "icons": [
+        {
+          "href": "/favicon.ico",
+          "type": "image/x-icon",
+          "sizes": "16x16 24x24 32x32 48x48 64x64 128x128 256x256"
+        }
+      ]
+    }
+  }
+]
