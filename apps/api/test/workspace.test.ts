@@ -87,7 +87,7 @@ describeDb("workspace aggregation", () => {
       method: "POST",
       url: "/api/v1/admin/role-grants",
       headers: { authorization: `Bearer ${operatorAToken}`, "idempotency-key": idempotencyKey() },
-      payload: { subjectId: subject.id, role: "auditor", reason: "audit duty" },
+      payload: { subjectId: subject.id, role: "administrator", reason: "audit duty" },
     });
 
     const mine = (await get(operatorAToken, "/api/v1/my-work")).json();

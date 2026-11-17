@@ -45,7 +45,7 @@ export function CatalogClaimForm({
     setLoaded(false);
     setEntries([]);
     setEntryId("");
-    void listClaimCatalog(token)
+    void listClaimCatalog(token, undefined, projectId)
       .then((result) => {
         if (live) {
           setEntries(result.items);
@@ -68,7 +68,7 @@ export function CatalogClaimForm({
     if (!cursor) return;
     setBusy(true);
     try {
-      const page = await listClaimCatalog(token, cursor);
+      const page = await listClaimCatalog(token, cursor, projectId);
       setEntries((current) => [...current, ...page.items]);
       setCursor(page.nextCursor);
       setError(null);

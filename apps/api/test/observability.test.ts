@@ -73,7 +73,7 @@ describeDb("observability", () => {
     // Who did what is not for everyone to see.
     const response = await audit(stewardToken);
     expect(response.statusCode).toBe(403);
-    expect(response.json().details.requiredRoles).toContain("auditor");
+    expect(response.json().details.requiredRoles).toContain("administrator");
   });
 
   it("filters by resource type", async () => {

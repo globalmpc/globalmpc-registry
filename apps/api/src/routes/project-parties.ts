@@ -139,7 +139,7 @@ export async function registerProjectPartyRoutes(
             if (data.factScope === "catalog") throw unprocessable("CLAIM_TYPE_RESERVED", "This key belongs only to the legacy confirmation matrix");
             const [collision] = await tx<{ id: string }[]>`
               SELECT id FROM core.claim_types
-              WHERE tenant_id = ${tenantId} AND claim_type = ${factKey} LIMIT 1
+              WHERE tenant_id = ${tenantId} AND core.project_definition_applies(project_id,${projectId}) AND claim_type = ${factKey} LIMIT 1
             `;
             // Older catalog entries may share this URL with a fixed matrix row. Refuse an
             // ambiguous write rather than let a catalog applicability decision alter a gate.
@@ -148,7 +148,7 @@ export async function registerProjectPartyRoutes(
             if (data.factScope === "legacy") throw unprocessable("FACT_SCOPE_INVALID", "This key belongs to the catalog, not the legacy confirmation matrix");
             const [catalog] = await tx<{ id: string }[]>`
               SELECT id FROM core.claim_types
-              WHERE tenant_id = ${tenantId} AND claim_type = ${factKey} AND effective_from <= now()
+              WHERE tenant_id = ${tenantId} AND core.project_definition_applies(project_id,${projectId}) AND claim_type = ${factKey} AND effective_from <= now()
               LIMIT 1
             `;
             if (!catalog) throw badRequest("FACT_KEY_UNKNOWN", "Unknown or not yet effective catalog fact", { factKey });

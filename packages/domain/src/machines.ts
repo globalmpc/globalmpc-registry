@@ -302,7 +302,7 @@ export const attestationMachine: StateMachine<AttestationState> = {
     stale_candidate: ["active", "superseded", "revoked", "disputed"],
     superseded: [],
     revoked: [],
-    disputed: ["active", "superseded", "revoked"],
+    disputed: ["stale_candidate", "active", "superseded", "revoked"],
   },
 };
 

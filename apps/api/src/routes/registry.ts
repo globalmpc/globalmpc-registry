@@ -1,3 +1,4 @@
+import { authorizedProjectLookup } from "../services/authorized-project-lookup.js";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
@@ -19,6 +20,7 @@ import {
   assertAuthorized,
   sessionFacts,
   tenantResource,
+  projectResource,
 } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
@@ -36,12 +38,14 @@ import {
   type PublicationSubject,
   projectionMismatches,
   resolvePublicationSubject,
+  registrySubjectProjectId,
   assertEvidenceLedgerProjection,
   lockEvidenceLedgerPublicationInputs,
 } from "../services/registry-publication.js";
 import {
   type DraftRow,
   lockDraft,
+  draftProjectId,
   parseBody,
   registerRegistryDraftRoutes,
   safeguardsOf,
@@ -103,10 +107,12 @@ export async function registerRegistryRoutes(
       // The approver states which revision of the draft they read.
       const expectedDraftVersion = requireIfMatch(request);
 
+      const projectId = await authorizedProjectLookup(session, "registry.publish",
+        () => draftProjectId(sql, tenantId, request.params.draftId), id => id);
       const effectiveRole = assertAuthorized(
         session,
         "registry.publish",
-        tenantResource(tenantId, {
+        projectResource(tenantId, projectId, {
           sensitivity: "public",
           state: "pending",
           statesAllowingAction: ["pending"],
@@ -391,10 +397,16 @@ export async function registerRegistryRoutes(
       const parsed = z.object({ reasonCode: z.string().min(1) }).safeParse(request.body);
       if (!parsed.success) throw badRequest("REQUEST_INVALID", "reasonCode is required");
 
+      const projectId = await authorizedProjectLookup(session, "registry.revoke", () => withTenant(sql, { tenantId }, async tx => {
+        const [entry] = await tx<{registry_type:"project"|"verification";subject_id:string}[]>`
+          SELECT registry_type,subject_id FROM core.registry_entries WHERE tenant_id=${tenantId} AND id=${request.params.entryId}`;
+        if (!entry) throw notFound("Registry entry not found");
+        return registrySubjectProjectId(tx, tenantId, entry.registry_type, entry.subject_id);
+      }), id => id);
       const effectiveRole = assertAuthorized(
         session,
         "registry.revoke",
-        tenantResource(tenantId, {
+        projectResource(tenantId, projectId, {
           sensitivity: "public",
           state: "published",
           statesAllowingAction: ["published"],
@@ -574,7 +586,7 @@ export async function registerRegistryRoutes(
      */
     assertAuthorized(
       session,
-      "registry.read",
+      "anchor.read",
       tenantResource(tenantId, { sensitivity: "public" }),
       sessionFacts(session),
     );

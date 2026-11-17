@@ -23,14 +23,9 @@ import {
 
 /** What each counted role can do — 02 §2.2, responsibility column. */
 const ROLE_POWERS: Readonly<Record<string, string>> = {
-  mpc_operator: "Operates tenants, workflows and the registry service; administers proposals",
-  security_operator: "Executes pause, incident response and key rotation",
-  protocol_proposer: "Creates allowed protocol proposals",
-  protocol_voter: "Votes on protocol proposals by MPC snapshot",
-  project_proposer: "Creates a project's contractual proposals",
-  project_voter: "Votes on its project's proposals by that project's AT snapshot",
-  execution_recorder: "Records off-chain execution status and evidence",
-  treasury_signer: "Co-signs approved treasury transactions",
+  administrator: "Administers accounts, security and Registry operations; no vote or publication approval",
+  reviewer: "Reviews assigned evidence and approves publication independently",
+  project_member: "Maintains scoped project data and participates in snapshot-weighted governance",
 };
 
 const ANCHOR_NOTE =

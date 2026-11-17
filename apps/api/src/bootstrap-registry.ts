@@ -69,7 +69,7 @@ interface AuditInput {
  * access to the deployment environment, whom the app does not identify — rather than invent an
  * identity, it records that there is none. The `command` prefix `bootstrap.` marks that fact.
  *
- * `effective_role` is not `mpc_operator` for the same reason. No authorization decision was
+ * `effective_role` is not `administrator` for the same reason. No authorization decision was
  * made, so writing a role name there would make the record lie.
  */
 async function recordBootstrapAudit(

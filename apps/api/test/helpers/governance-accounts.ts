@@ -13,6 +13,9 @@ export async function addGovernanceAccount(
   role: string,
   options: {
     readonly projectId?: string;
+    readonly jurisdiction?: string[];
+    readonly scopeKind?: "tenant" | "organization" | "none";
+    readonly governanceScope?: "protocol" | "project" | "none";
     readonly assurance?: "wallet_only" | "identity_bound" | "high_assurance";
   } = {},
 ): Promise<TestAccount> {
@@ -32,9 +35,9 @@ export async function addGovernanceAccount(
   `;
   await syncSubjectAssurance(fx.sql);
   await fx.sql`
-    INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, project_id, role)
+    INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, project_id, role, governance_scope, jurisdiction, scope_kind)
     VALUES (
-      ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, ${options.projectId ?? null}, ${role}
+      ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, ${options.projectId ?? null}, ${role}, ${options.governanceScope ?? null}, ${options.jurisdiction ?? null}, ${options.scopeKind ?? null}
     )
   `;
   return account;

@@ -75,13 +75,13 @@ describeDb("project scope and read authorization", () => {
     // another company's project.
     await fx.sql`
       INSERT INTO core.notifications (tenant_id, kind, audience_role, project_id, summary, link)
-      VALUES (${fx.tenantA}, 'evidence_stale', 'data_steward', ${projectId},
+      VALUES (${fx.tenantA}, 'evidence_stale', 'reviewer', ${projectId},
               'foreign notification', ${`/w/projects/${projectId}`})
     `;
     return { organizationId, projectId };
   }
 
-  /** Organization-level project_sponsor_operator of orgA. A project-party role that can create projects. */
+  /** Organization-level project_member of orgA. A project-party role that can create projects. */
   async function seedSponsor(): Promise<TestAccount> {
     const account = newAccount();
     const subject = randomUUID();
@@ -99,7 +99,7 @@ describeDb("project scope and read authorization", () => {
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'project_sponsor_operator')
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'project_member')
     `;
     // A pending role grant proposal. It must not appear in the work list of a steward without
     // decision authority (admin.role.approve).
@@ -107,7 +107,7 @@ describeDb("project scope and read authorization", () => {
       INSERT INTO core.role_grant_requests (
         id, tenant_id, subject_id, organization_id, role, reason, requested_by_subject_id
       )
-      SELECT ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'data_steward',
+      SELECT ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'reviewer',
              'scope test', w.subject_id
       FROM core.wallet_identities w
       WHERE w.wallet_address = ${fx.operatorA.address}

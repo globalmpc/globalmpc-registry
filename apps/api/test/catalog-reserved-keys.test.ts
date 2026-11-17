@@ -24,7 +24,7 @@ describeDb("catalog keys cannot impersonate the legacy matrix", () => {
   beforeAll(async () => {
     fx = await setupFixture();
     await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.reviewerSubjectA},${fx.reviewOrgA},'reviewer_assurance')`;
+      VALUES(${randomUUID()},${fx.tenantA},${fx.reviewerSubjectA},${fx.reviewOrgA},'reviewer')`;
     // Simulate rows approved/pending before the additive guard migration. Disable only the
     // new guards under transaction locks; all approval, immutability and tenant rules stay on.
     await fx.sql.begin(async (tx) => {

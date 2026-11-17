@@ -1,3 +1,4 @@
+import { openIntegrityProof } from "./disclosures";
 import { openHeaderMenu } from "./header-menu";
 import { expect, test, type Page } from "@playwright/test";
 import { catalogFixtureKey } from "./catalog-fixtures";
@@ -203,6 +204,7 @@ test.describe("evidence ledger broken chain journey", () => {
     for (const claimType of [licence, permit]) {
       await expect(page.getByTestId(`ledger-status-${claimType}`)).toHaveText("Reviewed");
     }
+    await openIntegrityProof(page);
     await expect(page.getByTestId("proof-panel")).toBeVisible();
     await expect(page.getByTestId("proof-included")).toContainText(
       CHAIN_ENABLED ? "Confirmed" : "Not confirmed yet",

@@ -231,6 +231,9 @@ test("visual disclosure preview becomes an anonymous public project without expo
   await page.getByRole("link", { name, exact: true }).click();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   await expect(page.getByTestId("evidence-ledger")).toBeVisible();
+  await expect(page.getByTestId("record-details")).not.toHaveAttribute("open", "");
+  await expect(page.getByTestId("shared-limitations")).toBeVisible();
+  await expect(page.getByTestId("shared-legal-effect")).toBeVisible();
   await page.getByRole("link", { name: "Version history ↓" }).click();
   await expect(page.locator("#record-history")).toBeInViewport();
   expect(

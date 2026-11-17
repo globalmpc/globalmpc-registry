@@ -62,6 +62,7 @@ describeDb("review assignment options", () => {
     readonly label: string;
     readonly assurance: string;
     readonly projectId?: string;
+    readonly scopeKind?: "tenant" | "organization" | "none";
     readonly revoked?: boolean;
     readonly walletDisabled?: boolean;
   }): Promise<void> {
@@ -80,10 +81,10 @@ describeDb("review assignment options", () => {
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (
-        id, tenant_id, subject_id, organization_id, project_id, role, revoked_at
+        id, tenant_id, subject_id, organization_id, project_id, role, revoked_at, scope_kind
       ) VALUES (
         ${randomUUID()}, ${input.tenantId}, ${input.subjectId}, ${input.organizationId},
-        ${input.projectId ?? null}, 'reviewer_lab', ${input.revoked ? new Date() : null}
+        ${input.projectId ?? null}, 'reviewer', ${input.revoked ? new Date() : null}, ${input.scopeKind ?? null}
       )
     `;
   }
@@ -181,13 +182,26 @@ describeDb("review assignment options", () => {
     return value.reviewers.map((reviewer) => reviewer.subjectId);
   }
 
+  it("limits organization-only reviewers to projects owned by that organization", async () => {
+    const subject=randomUUID();
+    await seedReviewer({tenantId:fx.tenantA,organizationId:fx.orgA,subjectId:subject,label:"Organization reviewer",assurance:"high_assurance",scopeKind:"organization"});
+    await seedCredential({id:randomUUID(),tenantId:fx.tenantA,subjectId:subject,status:"valid"});
+    const project=randomUUID();
+    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+      VALUES(${project},${fx.tenantA},${`outside-${project}`},'Other organization','MNG',ARRAY['copper'],${fx.reviewOrgA})`;
+    expect(reviewerIds(await options(fx.projectA))).toContain(subject);
+    const outside=await read(tokens.reviewer,project);
+    expect(outside.statusCode).toBe(200);
+    expect(reviewerIds(outside.json() as Options)).not.toContain(subject);
+  });
+
   it("lists reviewers who can sign here, with only their currently valid credentials", async () => {
     const value = await options(fx.projectA);
 
     const reviewer = value.reviewers.find((item) => item.subjectId === fx.reviewerSubjectA);
     expect(reviewer).toBeDefined();
     expect(reviewer!.displayName).toBe("Reviewer A");
-    expect(reviewer!.roles).toEqual(["reviewer_cp_qp"]);
+    expect(reviewer!.roles).toEqual(["reviewer"]);
     expect(reviewer!.credentials.map((credential) => credential.id)).toEqual([fx.credentialA]);
   });
 
@@ -228,7 +242,7 @@ describeDb("review assignment options", () => {
   it("is read only by someone who can create the assignment", async () => {
     // Same action as creating a case (`claim.curate`). Reviewers and role-less sessions do not
     // assign, so they have no reason to browse other reviewers' credentials.
-    for (const token of [tokens.reviewer, tokens.reader]) {
+    for (const token of [await signIn(app, fx.proposerA), tokens.reader]) {
       const response = await read(token, fx.projectA);
       expect(response.statusCode).toBe(403);
     }

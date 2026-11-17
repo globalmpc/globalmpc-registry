@@ -281,6 +281,9 @@ export async function registerVerificationCorrectionRoutes(
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           const current = await lockAssignment(tx, request.params.assignmentId);
+          if (current.subject_id === session.subjectId) {
+            throw forbidden("ASSIGNMENT_SELF_REASSIGNMENT", "Another reviewer must change your assignment");
+          }
           if (current.revoked_at !== null) {
             throw conflict("ASSIGNMENT_ALREADY_REVOKED", "This assignment is already revoked", {
               revokedAt: current.revoked_at.toISOString(),
@@ -355,6 +358,9 @@ export async function registerVerificationCorrectionRoutes(
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
           const current = await lockAssignment(tx, request.params.assignmentId);
+          if (current.subject_id === session.subjectId) {
+            throw forbidden("ASSIGNMENT_SELF_REASSIGNMENT", "Another reviewer must change your assignment");
+          }
 
           const [latest] = await tx<{ id: string }[]>`
             SELECT id FROM core.assignments WHERE case_id = ${current.case_id}
@@ -442,7 +448,7 @@ export async function registerVerificationCorrectionRoutes(
    * can support from now on changes. Rules the route adds to the transition table:
    *
    * - the holder never changes their own credential's status;
-   * - `security_operator` acts under `break_glass` (02 §2.6), which may revoke or suspend a
+   * - `administrator` may revoke or suspend a
    *   credential but not restore or expire one;
    * - a suspension is lifted by someone other than who imposed it — otherwise it would be one
    *   person's discretion, not a control.
@@ -455,7 +461,7 @@ export async function registerVerificationCorrectionRoutes(
       const parsed = changeCredentialStatusRequest.safeParse(request.body);
       if (!parsed.success) invalidRequest(parsed.error.issues);
 
-      const effectiveRole = assertAuthorized(
+      let effectiveRole = assertAuthorized(
         session,
         "credential.status.change",
         tenantResource(tenantId),
@@ -465,8 +471,14 @@ export async function registerVerificationCorrectionRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const { status: toStatus, reason } = parsed.data;
 
+      if (toStatus !== "revoked" && toStatus !== "suspended" && effectiveRole === "administrator" &&
+        session.roleBindings.some(binding => binding.role === "reviewer")) {
+        effectiveRole = assertAuthorized({ ...session, roleBindings: session.roleBindings.filter(binding => binding.role === "reviewer") },
+          "credential.status.change", tenantResource(tenantId), sessionFacts(session));
+      }
+
       if (
-        effectiveRole === "security_operator" &&
+        effectiveRole === "administrator" &&
         toStatus !== "revoked" &&
         toStatus !== "suspended"
       ) {

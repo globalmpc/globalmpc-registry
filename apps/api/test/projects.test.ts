@@ -74,7 +74,7 @@ describeDb("project routes", () => {
       `;
       expect(audits).toHaveLength(1);
       expect(audits[0]!["command"]).toBe("project.registered");
-      expect(audits[0]!["effective_role"]).toBe("mpc_operator");
+      expect(audits[0]!["effective_role"]).toBe("administrator");
 
       const events = await fx.sql`
         SELECT event_type, published_at FROM core.outbox WHERE aggregate_id = ${created.id}
@@ -86,15 +86,15 @@ describeDb("project routes", () => {
     /**
      * The audited role is the role that granted the action — 02 §2.7.
      *
-     * Adds a second binding. `auditor` cannot perform `project.create`,
-     * so only `mpc_operator` grants it. An implementation that records the session's
+     * Adds a project-scoped reviewer binding. `reviewer` cannot perform `project.create`,
+     * so only `administrator` grants it. An implementation that records the session's
      * first binding breaks this assertion half the time —
      * `core.resolve_role_bindings` has no ORDER BY, so order depends on the plan.
      */
     it("records the role that allowed the action, not the session's first role", async () => {
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (gen_random_uuid(), ${fx.tenantA}, ${fx.operatorSubjectA}, ${fx.orgA}, 'auditor')
+        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, project_id, role)
+        VALUES (gen_random_uuid(), ${fx.tenantA}, ${fx.operatorSubjectA}, ${fx.orgA}, ${fx.projectA}, 'reviewer')
       `;
 
       try {
@@ -104,11 +104,11 @@ describeDb("project routes", () => {
         const [audit] = await fx.sql<{ effective_role: string }[]>`
           SELECT effective_role FROM audit.events WHERE resource_id = ${created.id}
         `;
-        expect(audit!.effective_role).toBe("mpc_operator");
+        expect(audit!.effective_role).toBe("administrator");
       } finally {
         await fx.sql`
           DELETE FROM core.role_bindings
-          WHERE subject_id = ${fx.operatorSubjectA} AND role = 'auditor'
+          WHERE subject_id = ${fx.operatorSubjectA} AND role = 'reviewer' AND project_id = ${fx.projectA}
         `;
       }
     });
@@ -153,7 +153,7 @@ describeDb("project routes", () => {
       const error = response.json();
       expect(error.code).toBe("AUTHORIZATION_DENIED");
       expect(error.details.reason).toBe("ROLE_ACTION_NOT_ALLOWED");
-      expect(error.details.requiredRoles).toContain("mpc_operator");
+      expect(error.details.requiredRoles).toContain("administrator");
       expect(error.details.accessRequestPath).toBeTruthy();
     });
 

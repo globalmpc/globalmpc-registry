@@ -50,11 +50,11 @@ interface Revocation {
 describeDb("role revocation", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
-  /** tenant A · mpc_operator. Proposes. */
+  /** tenant A · administrator. Proposes. */
   let operatorAToken: string;
-  /** tenant A · security_operator. Decides — a different person and a different role. */
+  /** tenant A · administrator. Decides — a different person and a different role. */
   let securityToken: string;
-  /** tenant B · mpc_operator. Must see nothing of tenant A. */
+  /** tenant B · administrator. Must see nothing of tenant A. */
   let operatorBToken: string;
 
   async function seedTenant(label: string): Promise<{ tenantId: string; orgId: string }> {
@@ -77,6 +77,7 @@ describeDb("role revocation", () => {
     label: string,
     role: string,
     assurance = "high_assurance",
+    jurisdiction: string[] | null = null,
   ): Promise<Person> {
     const account = newAccount();
     const subjectId = randomUUID();
@@ -95,15 +96,15 @@ describeDb("role revocation", () => {
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${bindingId}, ${tenantId}, ${subjectId}, ${orgId}, ${role})
+      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role, jurisdiction)
+      VALUES (${bindingId}, ${tenantId}, ${subjectId}, ${orgId}, ${role}, ${jurisdiction}::text[])
     `;
     return { subjectId, bindingId, walletId, account };
   }
 
   /** A tenant-A person with a non-admin role — the usual revocation target. */
   function seedTarget(label: string): Promise<Person> {
-    return seedPerson(fx.tenantA, fx.orgA, label, "auditor", "identity_bound");
+    return seedPerson(fx.tenantA, fx.orgA, label, "administrator", "high_assurance");
   }
 
   beforeAll(async () => {
@@ -111,7 +112,7 @@ describeDb("role revocation", () => {
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     operatorAToken = await signIn(app, fx.operatorA);
     operatorBToken = await signIn(app, fx.operatorB);
-    const security = await seedPerson(fx.tenantA, fx.orgA, "Security Second", "security_operator");
+    const security = await seedPerson(fx.tenantA, fx.orgA, "Security Second", "administrator");
     securityToken = await signIn(app, security.account);
   });
 
@@ -203,9 +204,9 @@ describeDb("role revocation", () => {
   });
 
   it("a revoked binding stops authorizing on the next request, and the row is kept", async () => {
-    const target = await seedTarget("revoked auditor");
+    const target = await seedTarget("revoked administrator");
     const targetToken = await signIn(app, target.account);
-    // Before: the auditor role reads the admin screen.
+    // Before: the administrator role reads the admin screen.
     expect((await get(targetToken, "/api/v1/admin/subjects")).statusCode).toBe(200);
 
     const revocation = await proposed(operatorAToken, target.bindingId);
@@ -283,7 +284,7 @@ describeDb("role revocation", () => {
   describe("the last approver cannot be revoked", () => {
     it("refuses at proposal time when no other approver would remain", async () => {
       const { tenantId, orgId } = await seedTenant("Solo");
-      const solo = await seedPerson(tenantId, orgId, "Solo Operator", "mpc_operator");
+      const solo = await seedPerson(tenantId, orgId, "Solo Operator", "administrator");
       const soloToken = await signIn(app, solo.account);
 
       const response = await propose(soloToken, solo.bindingId);
@@ -294,9 +295,9 @@ describeDb("role revocation", () => {
 
     it("does not count an approver whose subject falls short of the role's assurance", async () => {
       const { tenantId, orgId } = await seedTenant("Weak");
-      const strong = await seedPerson(tenantId, orgId, "Weak Strong", "mpc_operator");
-      // Holds the role, but mpc_operator needs high_assurance: every request would be refused.
-      const weak = await seedPerson(tenantId, orgId, "Weak Bound", "mpc_operator", "identity_bound");
+      const strong = await seedPerson(tenantId, orgId, "Weak Strong", "administrator");
+      // Holds the role, but administrator needs high_assurance: every request would be refused.
+      const weak = await seedPerson(tenantId, orgId, "Weak Bound", "administrator", "identity_bound");
       await signIn(app, weak.account);
       const strongToken = await signIn(app, strong.account);
 
@@ -308,8 +309,8 @@ describeDb("role revocation", () => {
 
     it("keeps counting an account approver after their last wallet is disabled", async () => {
       const { tenantId, orgId } = await seedTenant("Pair");
-      const proposer = await seedPerson(tenantId, orgId, "Pair Proposer", "mpc_operator");
-      const decider = await seedPerson(tenantId, orgId, "Pair Decider", "mpc_operator");
+      const proposer = await seedPerson(tenantId, orgId, "Pair Proposer", "administrator");
+      const decider = await seedPerson(tenantId, orgId, "Pair Decider", "administrator");
       const proposerToken = await signIn(app, proposer.account);
       const deciderToken = await signIn(app, decider.account);
 
@@ -336,7 +337,7 @@ describeDb("role revocation", () => {
     it("walletless email and passkey administrators can revoke another administrator", async () => {
       const { tenantId, orgId } = await seedTenant("Walletless");
       const people = await Promise.all(["Proposer", "Decider", "Target"].map(
-        (label) => seedPerson(tenantId, orgId, label, "mpc_operator"),
+        (label) => seedPerson(tenantId, orgId, label, "administrator"),
       ));
       const tokens: string[] = [];
       for (const person of people) {
@@ -353,8 +354,8 @@ describeDb("role revocation", () => {
 
     it.each([false, true])("counts only live OIDC sign-in methods (revoked: %s)", async (revoked) => {
       const { tenantId, orgId } = await seedTenant("OIDC only");
-      const target = await seedPerson(tenantId, orgId, "Target", "mpc_operator");
-      const other = await seedPerson(tenantId, orgId, "OIDC holder", "mpc_operator");
+      const target = await seedPerson(tenantId, orgId, "Target", "administrator");
+      const other = await seedPerson(tenantId, orgId, "OIDC holder", "administrator");
       const targetToken = await signIn(app, target.account);
       await issueTestSession(fx.appSql, tenantId, other.subjectId, {
         firstFactor: "google", secondFactor: "passkey",
@@ -371,8 +372,8 @@ describeDb("role revocation", () => {
 
     it.each(["no_login", "no_passkey", "suspended", "revoked_passkey"])("does not count a holder with %s", async (missing) => {
       const { tenantId, orgId } = await seedTenant(missing);
-      const target = await seedPerson(tenantId, orgId, "Target", "mpc_operator");
-      const other = await seedPerson(tenantId, orgId, "Unavailable", "mpc_operator");
+      const target = await seedPerson(tenantId, orgId, "Target", "administrator");
+      const other = await seedPerson(tenantId, orgId, "Unavailable", "administrator");
       const token = await signIn(app, target.account);
       if (missing === "no_login") {
         await fx.sql`
@@ -402,8 +403,8 @@ describeDb("role revocation", () => {
 
     it("rechecks the remaining holder's passkey at decision time", async () => {
       const { tenantId, orgId } = await seedTenant("Lost factor");
-      const proposer = await seedPerson(tenantId, orgId, "Proposer", "mpc_operator");
-      const decider = await seedPerson(tenantId, orgId, "Decider", "mpc_operator");
+      const proposer = await seedPerson(tenantId, orgId, "Proposer", "administrator");
+      const decider = await seedPerson(tenantId, orgId, "Decider", "administrator");
       const proposerToken = await signIn(app, proposer.account);
       const deciderToken = await signIn(app, decider.account);
       const revocation = await proposed(proposerToken, decider.bindingId);
@@ -414,12 +415,15 @@ describeDb("role revocation", () => {
       expect(await revokedAt(decider.bindingId)).toBeNull();
     });
 
-    it("two opposite revocations decided at once cannot both pass", async () => {
+    it("two opposite revocations cannot both pass when a third administrator is jurisdiction-limited", async () => {
       const { tenantId, orgId } = await seedTenant("Race");
-      const x = await seedPerson(tenantId, orgId, "Race X", "mpc_operator");
-      const y = await seedPerson(tenantId, orgId, "Race Y", "mpc_operator");
+      const x = await seedPerson(tenantId, orgId, "Race X", "administrator");
+      const y = await seedPerson(tenantId, orgId, "Race Y", "administrator");
       const xToken = await signIn(app, x.account);
       const yToken = await signIn(app, y.account);
+      const regional = await seedPerson(tenantId, orgId, "Regional", "administrator", "high_assurance", ["MNG"]);
+      const regionalToken = await signIn(app, regional.account);
+      expect((await propose(regionalToken,x.bindingId)).statusCode).toBe(403);
 
       // Each proposes revoking the other; each is allowed alone, because the proposer remains.
       const revokeY = await proposed(xToken, y.bindingId);
@@ -487,8 +491,8 @@ describeDb("role revocation", () => {
     `;
 
     expect(events.map((event) => [event.command, event.effective_role])).toEqual([
-      ["admin.role_revocation.proposed", "mpc_operator"],
-      ["admin.role_revocation.approved", "security_operator"],
+      ["admin.role_revocation.proposed", "administrator"],
+      ["admin.role_revocation.approved", "administrator"],
     ]);
     expect(events[0]!.actor_subject_id).toBe(fx.operatorSubjectA);
     expect(events[1]!.actor_subject_id).not.toBe(fx.operatorSubjectA);

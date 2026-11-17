@@ -13,7 +13,7 @@ import { assertVersionMatches, requireIfMatch, requireMutationContext } from "./
  * Source connection security review — spec 02 §2.8.
  *
  * Configuring a connection and clearing it for use are different acts by different people. A
- * `security_operator` reviews **one version** of a connection; activation then requires an
+ * `administrator` reviews **one version** of a connection; activation then requires an
  * approved review of exactly that version, by someone other than whoever activates it.
  *
  * The DB trigger `source_connections_require_security_review` refuses activation without an

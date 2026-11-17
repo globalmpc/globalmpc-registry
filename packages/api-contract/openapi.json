@@ -161,6 +161,22 @@
                               "role": {
                                 "type": "string"
                               },
+                              "governanceScope": {
+                                "type": "string",
+                                "enum": [
+                                  "protocol",
+                                  "project",
+                                  "none"
+                                ]
+                              },
+                              "scopeKind": {
+                                "type": "string",
+                                "enum": [
+                                  "tenant",
+                                  "organization",
+                                  "none"
+                                ]
+                              },
                               "organizationId": {
                                 "type": [
                                   "string",
@@ -669,6 +685,22 @@
                             "properties": {
                               "role": {
                                 "type": "string"
+                              },
+                              "governanceScope": {
+                                "type": "string",
+                                "enum": [
+                                  "protocol",
+                                  "project",
+                                  "none"
+                                ]
+                              },
+                              "scopeKind": {
+                                "type": "string",
+                                "enum": [
+                                  "tenant",
+                                  "organization",
+                                  "none"
+                                ]
                               },
                               "organizationId": {
                                 "type": [
@@ -2647,6 +2679,22 @@
                               "role": {
                                 "type": "string"
                               },
+                              "governanceScope": {
+                                "type": "string",
+                                "enum": [
+                                  "protocol",
+                                  "project",
+                                  "none"
+                                ]
+                              },
+                              "scopeKind": {
+                                "type": "string",
+                                "enum": [
+                                  "tenant",
+                                  "organization",
+                                  "none"
+                                ]
+                              },
                               "organizationId": {
                                 "type": [
                                   "string",
@@ -3616,6 +3664,22 @@
                             "properties": {
                               "role": {
                                 "type": "string"
+                              },
+                              "governanceScope": {
+                                "type": "string",
+                                "enum": [
+                                  "protocol",
+                                  "project",
+                                  "none"
+                                ]
+                              },
+                              "scopeKind": {
+                                "type": "string",
+                                "enum": [
+                                  "tenant",
+                                  "organization",
+                                  "none"
+                                ]
                               },
                               "organizationId": {
                                 "type": [
@@ -16322,6 +16386,22 @@
                             "properties": {
                               "role": {
                                 "type": "string"
+                              },
+                              "governanceScope": {
+                                "type": "string",
+                                "enum": [
+                                  "protocol",
+                                  "project",
+                                  "none"
+                                ]
+                              },
+                              "scopeKind": {
+                                "type": "string",
+                                "enum": [
+                                  "tenant",
+                                  "organization",
+                                  "none"
+                                ]
                               },
                               "organizationId": {
                                 "type": [
@@ -35740,6 +35820,29 @@
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "latestAttestation": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "state": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "state"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "transitions": {
                             "type": "array",
                             "items": {
@@ -36604,6 +36707,29 @@
                           "type": "integer",
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "latestAttestation": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "state": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "state"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "transitions": {
                           "type": "array",
@@ -38355,7 +38481,7 @@
             }
           }
         },
-        "x-mpc-action": "attestation.dispute",
+        "x-mpc-action": "attestation.dispute.resolve",
         "security": [
           {
             "accountSession": []
@@ -48222,6 +48348,7 @@
             }
           }
         },
+        "x-mpc-action": "anchor.read",
         "security": [
           {
             "accountSession": []
@@ -81043,6 +81170,42 @@
                           "role": {
                             "type": "string"
                           },
+                          "organizationId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "governanceScope": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "protocol",
+                                  "project",
+                                  "none"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "scopeKind": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "tenant",
+                                  "organization",
+                                  "none"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "projectId": {
                             "type": [
                               "string",
@@ -81473,6 +81636,42 @@
                         },
                         "role": {
                           "type": "string"
+                        },
+                        "organizationId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "governanceScope": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "protocol",
+                                "project",
+                                "none"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "scopeKind": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "tenant",
+                                "organization",
+                                "none"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "projectId": {
                           "type": [
@@ -81913,6 +82112,22 @@
                         "type": "string",
                         "minLength": 1
                       },
+                      "governanceScope": {
+                        "type": "string",
+                        "enum": [
+                          "protocol",
+                          "project",
+                          "none"
+                        ]
+                      },
+                      "scopeKind": {
+                        "type": "string",
+                        "enum": [
+                          "tenant",
+                          "organization",
+                          "none"
+                        ]
+                      },
                       "projectId": {
                         "type": "string",
                         "format": "uuid",
@@ -82022,6 +82237,42 @@
                         },
                         "role": {
                           "type": "string"
+                        },
+                        "organizationId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "governanceScope": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "protocol",
+                                "project",
+                                "none"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "scopeKind": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "tenant",
+                                "organization",
+                                "none"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "projectId": {
                           "type": [
@@ -87308,6 +87559,12 @@
                                   "ruleSetVersion": {
                                     "type": "string"
                                   },
+                                  "itemClaimTypes": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
                                   "status": {
                                     "type": "string",
                                     "enum": [
@@ -87902,6 +88159,12 @@
                                   "ruleSetVersion": {
                                     "type": "string"
                                   },
+                                  "itemClaimTypes": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
                                   "status": {
                                     "type": "string",
                                     "enum": [
@@ -88101,6 +88364,12 @@
                                   },
                                   "ruleSetVersion": {
                                     "type": "string"
+                                  },
+                                  "itemClaimTypes": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
                                   },
                                   "status": {
                                     "type": "string",
@@ -90473,6 +90742,16 @@
           "workspace"
         ],
         "parameters": [
+          {
+            "name": "projectId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+            }
+          },
           {
             "name": "limit",
             "in": "query",
@@ -101328,6 +101607,12 @@
                                             "ruleSetVersion": {
                                               "type": "string"
                                             },
+                                            "itemClaimTypes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
                                             "status": {
                                               "type": "string",
                                               "enum": [
@@ -102053,6 +102338,12 @@
                                   },
                                   "ruleSetVersion": {
                                     "type": "string"
+                                  },
+                                  "itemClaimTypes": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
                                   },
                                   "status": {
                                     "type": "string",
@@ -102836,6 +103127,12 @@
                                   },
                                   "ruleSetVersion": {
                                     "type": "string"
+                                  },
+                                  "itemClaimTypes": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
                                   },
                                   "status": {
                                     "type": "string",
@@ -105910,6 +106207,12 @@
                                                     },
                                                     "ruleSetVersion": {
                                                       "type": "string"
+                                                    },
+                                                    "itemClaimTypes": {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
                                                     },
                                                     "status": {
                                                       "type": "string",

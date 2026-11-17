@@ -155,7 +155,7 @@ test("replacing an operator-verified wallet marks the reviewer role inactive unt
     const sql = database();
     await sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (gen_random_uuid(), ${session.tenantId}, ${session.subjectId}, ${TENANT_A_ORG}, 'reviewer_cp_qp')
+      VALUES (gen_random_uuid(), ${session.tenantId}, ${session.subjectId}, ${TENANT_A_ORG}, 'reviewer')
     `;
     await sql`
       INSERT INTO core.wallet_identities (
@@ -172,7 +172,7 @@ test("replacing an operator-verified wallet marks the reviewer role inactive unt
 
     const next = await holdWallet(me, generatePrivateKey());
     await me.goto("/w/settings");
-    await expect(me.getByTestId("effective-roles")).toHaveText("reviewer_cp_qp");
+    await expect(me.getByTestId("effective-roles")).toHaveText("reviewer");
     await expect(me.getByTestId("inactive-roles")).toHaveCount(0);
 
     const wallets = me.getByTestId("settings-wallets");
@@ -186,18 +186,18 @@ test("replacing an operator-verified wallet marks the reviewer role inactive unt
     // Right after the replace: what happened and what to do next.
     const done = wallets.getByTestId("replace-done-operator");
     await expect(done).toContainText("your identity assurance is now wallet_only");
-    await expect(done.getByTestId("replace-done-inactive")).toHaveText("reviewer_cp_qp");
+    await expect(done.getByTestId("replace-done-inactive")).toHaveText("reviewer");
     await expect(done).toContainText("Admin → Set assurance");
     // The header no longer lists the role as in effect.
     await expect(me.getByTestId("effective-roles")).toHaveText("");
-    await expect(me.getByTestId("inactive-roles")).toHaveText("reviewer_cp_qp");
+    await expect(me.getByTestId("inactive-roles")).toHaveText("reviewer");
     await expect(me.getByTestId("inactive-roles-reason")).toContainText("Identity verification needed — ask an admin");
     // Every role screen explains the inactive role instead of refusing with ASSURANCE_LEVEL_INSUFFICIENT.
     await me.goto("/w/projects");
     const pending = me.getByTestId("access-pending");
     await expect(pending.getByRole("heading", { name: "Your roles are not in effect" })).toBeVisible();
     await expect(pending.getByTestId("access-pending-inactive-roles")).toContainText(
-      "reviewer_cp_qp — needs high_assurance",
+      "reviewer — needs high_assurance",
     );
     await expect(me.getByTestId("error-notice")).toHaveCount(0);
 
@@ -211,7 +211,7 @@ test("replacing an operator-verified wallet marks the reviewer role inactive unt
     await expect(row.getByTestId("subject-assurance")).toHaveText("high_assurance");
 
     await me.reload();
-    await expect(me.getByTestId("effective-roles")).toHaveText("reviewer_cp_qp");
+    await expect(me.getByTestId("effective-roles")).toHaveText("reviewer");
     await expect(me.getByTestId("inactive-roles")).toHaveCount(0);
     await expect(me.getByRole("heading", { name: "Projects" })).toBeVisible();
   } finally {

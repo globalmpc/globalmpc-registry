@@ -1,11 +1,13 @@
+import { authorizedProjectLookup } from "../src/services/authorized-project-lookup.js";
 import { describe, expect, it } from "vitest";
 import { ACTION_POLICIES, type ResourceContext } from "@mpc/api-contract";
-import { AppError } from "../src/errors.js";
+import { AppError, RegistrySubjectNotFoundError } from "../src/errors.js";
 import {
   assertAuthorized,
   bindingToAuthorizationContext,
   sessionFacts,
   visibleProjectScope,
+  holdsActionRole,
 } from "../src/plugins/authorize.js";
 import type { Session } from "../src/plugins/session.js";
 
@@ -28,7 +30,7 @@ const GATE_APPROVER: Session = {
   ...WALLET_ONLY,
   subjectId: "subject-approver",
   assuranceLevel: "high_assurance",
-  roleBindings: [{ role: "gate_approver", organizationId: "org-1", projectId: "project-1" }],
+  roleBindings: [{ role: "reviewer", scopeKind: "organization", organizationId: "org-1", projectId: "project-1" }],
   projectIds: ["project-1"],
 };
 
@@ -61,6 +63,31 @@ function denialOf(fn: () => void): AppError {
 }
 
 describe("assertAuthorized", () => {
+  it("does not turn project-scoped administration or review into tenant authority", () => {
+    const tenantResource = { ...RESOURCE, projectId: null };
+    for (const [role, action] of [["administrator", "admin.role.approve"], ["administrator", "audit.export"], ["reviewer", "review_registry.approve"], ["reviewer", "authority.review"], ["administrator", "registry.draft"], ["administrator", "registry.revoke"], ["reviewer", "registry.publish"], ["administrator", "anchor.submit"], ["reviewer", "anchor.read"]] as const) {
+      const scoped: Session = { ...GATE_APPROVER, roleBindings: [{ role, scopeKind: "organization", organizationId: "org-1", projectId: "project-1" }] };
+      expect(denialOf(() => assertAuthorized(scoped, action, tenantResource, FACTS)).statusCode).toBe(403);
+      const tenantWide: Session = { ...scoped, roleBindings: [{ role, scopeKind: "tenant", organizationId: "org-1", projectId: null }] };
+      expect(() => assertAuthorized(tenantWide, action, tenantResource, FACTS)).not.toThrow();
+    }
+  });
+
+  it("requires one unrestricted tenant binding for mixed-project operations and their UI action", () => {
+    const scoped:Session={...GATE_APPROVER,roleBindings:[{role:"administrator",scopeKind:"organization",organizationId:"org-1",projectId:"project-1"}]};
+    expect(holdsActionRole(scoped,"anchor.submit")).toBe(false);
+    expect(holdsActionRole(scoped,"anchor.read")).toBe(false);
+    expect(denialOf(()=>assertAuthorized(scoped,"anchor.submit",RESOURCE,FACTS)).statusCode).toBe(403);
+    const regional:Session={...scoped,roleBindings:[{role:"administrator",scopeKind:"tenant",organizationId:"org-1",projectId:null,jurisdiction:["MNG"]}],projectJurisdictions:{"project-1":"MNG"}};
+    expect(holdsActionRole(regional,"anchor.submit")).toBe(false);
+    const mixed:Session={...regional,roleBindings:[...regional.roleBindings,...scoped.roleBindings]};
+    expect(holdsActionRole(mixed,"anchor.submit")).toBe(false);
+    expect(denialOf(()=>assertAuthorized(mixed,"anchor.submit",RESOURCE,FACTS)).statusCode).toBe(403);
+    expect(denialOf(()=>assertAuthorized(regional,"anchor.submit",RESOURCE,FACTS)).statusCode).toBe(403);
+    expect(denialOf(()=>assertAuthorized(scoped,"registry.read",{...RESOURCE,projectId:null,requiresTenantScope:true},FACTS)).statusCode).toBe(403);
+    expect(()=>assertAuthorized(scoped,"registry.draft",RESOURCE,FACTS)).not.toThrow();
+  });
+
   it("passes when the permission is held", () => {
     expect(() => assertAuthorized(GATE_APPROVER, "gate.decide", RESOURCE, FACTS)).not.toThrow();
   });
@@ -72,7 +99,7 @@ describe("assertAuthorized", () => {
     expect(error.statusCode).toBe(403);
     expect(error.code).toBe("AUTHORIZATION_DENIED");
     expect(error.details?.["reason"]).toBe("ROLE_ACTION_NOT_ALLOWED");
-    expect(error.details?.["requiredRoles"]).toContain("gate_approver");
+    expect(error.details?.["requiredRoles"]).toContain("reviewer");
     expect(error.details?.["accessRequestPath"]).toContain("project-1");
   });
 
@@ -140,8 +167,8 @@ describe("assertAuthorized", () => {
     const multiRole: Session = {
       ...GATE_APPROVER,
       roleBindings: [
-        { role: "auditor", organizationId: null, projectId: null },
-        { role: "gate_approver", organizationId: "org-1", projectId: "project-1" },
+        { role: "administrator", organizationId: null, projectId: null },
+        { role: "reviewer", scopeKind: "organization", organizationId: "org-1", projectId: "project-1" },
       ],
     };
     expect(() => assertAuthorized(multiRole, "gate.decide", RESOURCE, FACTS)).not.toThrow();
@@ -152,10 +179,10 @@ describe("bindingToAuthorizationContext", () => {
   it("scopes a project binding to that project only", () => {
     const context = bindingToAuthorizationContext(
       GATE_APPROVER,
-      { role: "gate_approver", organizationId: "org-1", projectId: "project-1" },
+      { role: "reviewer", scopeKind: "organization", organizationId: "org-1", projectId: "project-1" },
       FACTS,
     );
-    expect(context.role).toBe("gate_approver");
+    expect(context.role).toBe("reviewer");
     expect(context.actorProjectIds).toEqual(["project-1"]);
     expect(context.actorTenantId).toBe("tenant-a");
   });
@@ -163,7 +190,7 @@ describe("bindingToAuthorizationContext", () => {
   it("gives an organization binding no project restriction", () => {
     const context = bindingToAuthorizationContext(
       GATE_APPROVER,
-      { role: "gate_approver", organizationId: "org-1", projectId: null },
+      { role: "reviewer", scopeKind: "tenant", organizationId: "org-1", projectId: null },
       FACTS,
     );
     expect(context.actorProjectIds).toBe("all");
@@ -182,15 +209,15 @@ describe("bindingToAuthorizationContext", () => {
 describe("project scope per role binding", () => {
   it("does not let another role's organization binding widen a project binding's scope", () => {
     /**
-     * A session holding both an organization-level `auditor` and a project-level
-     * `gate_approver`. Judging on role names alone would apply auditor's unrestricted scope
-     * to gate_approver too, letting it decide gates on out-of-scope projects.
+     * A session holding both an organization-level `administrator` and a project-level
+     * `reviewer`. Judging on role names alone would apply administrator's unrestricted scope
+     * to reviewer too, letting it decide gates on out-of-scope projects.
      */
     const mixed: Session = {
       ...GATE_APPROVER,
       roleBindings: [
-        { role: "auditor", organizationId: "org-1", projectId: null },
-        { role: "gate_approver", organizationId: "org-1", projectId: "project-1" },
+        { role: "administrator", organizationId: "org-1", projectId: null },
+        { role: "reviewer", scopeKind: "organization", organizationId: "org-1", projectId: "project-1" },
       ],
     };
 
@@ -229,8 +256,8 @@ describe("sessionFacts", () => {
 describe("scope of organization-level bindings", () => {
   const STEWARD_ORG: Session = {
     ...WALLET_ONLY,
-    assuranceLevel: "identity_bound",
-    roleBindings: [{ role: "data_steward", organizationId: "org-1", projectId: null }],
+    assuranceLevel: "high_assurance",
+    roleBindings: [{ role: "reviewer", scopeKind: "organization", organizationId: "org-1", projectId: null }],
     organizationProjectIds: { "org-1": ["project-1"], "org-2": ["project-2"] },
   };
 
@@ -247,7 +274,7 @@ describe("scope of organization-level bindings", () => {
   it("gives a project-party binding without an organization no projects", () => {
     const session: Session = {
       ...STEWARD_ORG,
-      roleBindings: [{ role: "data_steward", organizationId: null, projectId: null }],
+      roleBindings: [{ role: "reviewer", scopeKind: "organization", organizationId: null, projectId: null }],
     };
     expect(visibleProjectScope(session, "project.read")).toEqual([]);
   });
@@ -256,7 +283,7 @@ describe("scope of organization-level bindings", () => {
     const session: Session = {
       ...STEWARD_ORG,
       assuranceLevel: "high_assurance",
-      roleBindings: [{ role: "mpc_operator", organizationId: "org-1", projectId: null }],
+      roleBindings: [{ role: "administrator", organizationId: "org-1", projectId: null }],
     };
     expect(visibleProjectScope(session, "project.read")).toBe("all");
   });
@@ -267,7 +294,7 @@ describe("visibleProjectScope", () => {
     expect(visibleProjectScope(GATE_APPROVER, "project.read")).toEqual(["project-1"]);
     expect(
       visibleProjectScope(
-        { ...GATE_APPROVER, roleBindings: [{ role: "auditor", organizationId: null, projectId: "p1" }] },
+        { ...GATE_APPROVER, roleBindings: [{ role: "administrator", organizationId: null, projectId: "p1" }] },
         "project.read",
       ),
     ).toEqual(["p1"]);
@@ -276,7 +303,7 @@ describe("visibleProjectScope", () => {
   it("is unrestricted when any organization binding exists", () => {
     expect(
       visibleProjectScope(
-        { ...GATE_APPROVER, roleBindings: [{ role: "auditor", organizationId: "org-1", projectId: null }] },
+        { ...GATE_APPROVER, roleBindings: [{ role: "administrator", organizationId: "org-1", projectId: null }] },
         "project.read",
       ),
     ).toBe("all");
@@ -299,15 +326,15 @@ describe("granting role", () => {
     const multiRole: Session = {
       ...GATE_APPROVER,
       roleBindings: [
-        { role: "auditor", organizationId: null, projectId: null },
-        { role: "gate_approver", organizationId: "org-1", projectId: "project-1" },
+        { role: "administrator", organizationId: null, projectId: null },
+        { role: "reviewer", scopeKind: "organization", organizationId: "org-1", projectId: "project-1" },
       ],
     };
-    expect(assertAuthorized(multiRole, "gate.decide", RESOURCE, FACTS)).toBe("gate_approver");
+    expect(assertAuthorized(multiRole, "gate.decide", RESOURCE, FACTS)).toBe("reviewer");
   });
 
   it("returns the first binding when it passes", () => {
-    expect(assertAuthorized(GATE_APPROVER, "gate.decide", RESOURCE, FACTS)).toBe("gate_approver");
+    expect(assertAuthorized(GATE_APPROVER, "gate.decide", RESOURCE, FACTS)).toBe("reviewer");
   });
 
   /**
@@ -319,10 +346,36 @@ describe("granting role", () => {
     const scoped: Session = {
       ...GATE_APPROVER,
       roleBindings: [
-        { role: "gate_approver", organizationId: null, projectId: "other-project" },
-        { role: "gate_approver", organizationId: "org-1", projectId: "project-1" },
+        { role: "reviewer", scopeKind: "organization", organizationId: null, projectId: "other-project" },
+        { role: "reviewer", scopeKind: "organization", organizationId: "org-1", projectId: "project-1" },
       ],
     };
-    expect(assertAuthorized(scoped, "gate.decide", RESOURCE, FACTS)).toBe("gate_approver");
+    expect(assertAuthorized(scoped, "gate.decide", RESOURCE, FACTS)).toBe("reviewer");
   });
+});
+
+describe("authorization before object lookup", () => {
+  it("preserves identity assurance and sign-in step-up guidance without reading a target", async () => {
+    const cases: {session: Session; details: Record<string,unknown>}[] = [
+      {session:{...GATE_APPROVER,assuranceLevel:"wallet_only"},details:{reason:"ASSURANCE_LEVEL_INSUFFICIENT",requiredAssurance:"high_assurance"}},
+      {session:{...GATE_APPROVER,roleBindings:[],narrowedRoles:[{role:"reviewer",requiredAal:"aal3"}]},details:{reason:"AUTHENTICATION_LEVEL_INSUFFICIENT",requiredAal:"aal3"}},
+    ];
+    for (const item of cases) {
+      let reads=0;
+      await expect(authorizedProjectLookup(item.session,"registry.publish",async()=>{reads++;return "project-1";},id=>id))
+        .rejects.toMatchObject({statusCode:403,code:"AUTHORIZATION_DENIED",details:item.details});
+      expect(reads).toBe(0);
+    }
+  });
+});
+
+ it("masks only lookup absence, preserving domain errors instead of suggesting new access", async () => {
+  for (const error of [new AppError("NOT_FOUND", "missing", 404, false), new RegistrySubjectNotFoundError()]) {
+    await expect(authorizedProjectLookup(GATE_APPROVER, "registry.publish", async () => { throw error; }, () => "project-1"))
+      .rejects.toMatchObject({ code: "AUTHORIZATION_DENIED", statusCode: 403 });
+  }
+  for (const error of [new AppError("REGISTRY_SUBJECT_NOT_SIGNED", "unsigned", 422, false), new AppError("PUBLICATION_LEDGER_INVALID", "invalid ledger", 422, false)]) {
+    await expect(authorizedProjectLookup(GATE_APPROVER, "registry.publish", async () => { throw error; }, () => "project-1"))
+      .rejects.toBe(error);
+  }
 });

@@ -23,7 +23,7 @@ describeDb("Authority Registry writes", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operator: string;
-  let auditor: string;
+  let administrator: string;
   let steward: string;
   /** Reviews connections for activation (02 §2.8). Not in the shared fixture. */
   let security: string;
@@ -32,7 +32,7 @@ describeDb("Authority Registry writes", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     operator = await signIn(app, fx.operatorA);
-    auditor = await signIn(app, fx.auditorA);
+    administrator = await signIn(app, fx.reviewerA);
     steward = await signIn(app, fx.stewardA);
 
     const account = newAccount();
@@ -51,7 +51,7 @@ describeDb("Authority Registry writes", () => {
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'security_operator')
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'administrator')
     `;
     security = await signIn(app, account);
   });
@@ -83,7 +83,7 @@ describeDb("Authority Registry writes", () => {
     });
   }
 
-  function setState(id: string, version: number, state: string, token = auditor) {
+  function setState(id: string, version: number, state: string, token = administrator) {
     return app.inject({
       method: "POST",
       url: `/api/v1/authorities/${id}/state`,
@@ -97,7 +97,7 @@ describeDb("Authority Registry writes", () => {
   }
 
   /** proposed → under_review → accepted: the only path to approval (04 §4.9). */
-  async function accept(id: string, version: number, token = auditor) {
+  async function accept(id: string, version: number, token = administrator) {
     const reviewing = await setState(id, version, "under_review", token);
     expect(reviewing.statusCode).toBe(200);
     return setState(id, reviewing.json().version, "accepted", token);
@@ -122,10 +122,10 @@ describeDb("Authority Registry writes", () => {
   it("does not let the registrant approve the same authority", async () => {
     const created = (await register()).json();
 
-    // Add the auditor role to operatorA so that permissions alone would pass.
+    // Add the reviewer role to operatorA so that permissions alone would pass.
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (gen_random_uuid(), ${fx.tenantA}, ${fx.operatorSubjectA}, ${fx.orgA}, 'auditor')
+      VALUES (gen_random_uuid(), ${fx.tenantA}, ${fx.operatorSubjectA}, ${fx.orgA}, 'reviewer')
     `;
     const bothRoles = await signIn(app, fx.operatorA);
 
@@ -138,7 +138,7 @@ describeDb("Authority Registry writes", () => {
 
     await fx.sql`
       DELETE FROM core.role_bindings
-      WHERE subject_id = ${fx.operatorSubjectA} AND role = 'auditor'
+      WHERE subject_id = ${fx.operatorSubjectA} AND role = 'reviewer'
     `;
   });
 
@@ -183,7 +183,7 @@ describeDb("Authority Registry writes", () => {
       method: "POST",
       url: `/api/v1/authorities/${created.id}/state`,
       headers: {
-        authorization: `Bearer ${auditor}`,
+        authorization: `Bearer ${administrator}`,
         "idempotency-key": idempotencyKey(),
         "if-match": `"${created.version}"`,
       },
@@ -198,7 +198,7 @@ describeDb("Authority Registry writes", () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/authorities/${created.id}/state`,
-      headers: { authorization: `Bearer ${auditor}`, "idempotency-key": idempotencyKey() },
+      headers: { authorization: `Bearer ${administrator}`, "idempotency-key": idempotencyKey() },
       payload: { state: "accepted", reason: "reviewed" },
     });
 
@@ -429,7 +429,7 @@ describeDb("Authority Registry writes", () => {
     it("does not let a role without review permission review", async () => {
       const authorityId = await makeAccepted();
       const created = (await createConnection(authorityId)).json();
-      const response = await review(created.id, created.version, "approved", operator);
+      const response = await review(created.id, created.version, "approved", steward);
       expect(response.statusCode).toBe(403);
     });
 

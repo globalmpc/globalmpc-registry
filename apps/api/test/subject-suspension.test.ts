@@ -73,7 +73,7 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     return id;
   }
 
-  async function admin(role: "mpc_operator" | "security_operator" = "security_operator") {
+  async function admin(role: "administrator" | "administrator" = "administrator") {
     const subjectId = randomUUID();
     await fx.sql`
       INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
@@ -110,8 +110,8 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
 
   /** Two admins suspend (or reinstate) the person; returns the decided request. */
   async function decided(subjectId: string, action: "suspend" | "reinstate" = "suspend") {
-    const proposer = await admin("mpc_operator");
-    const decider = await admin("security_operator");
+    const proposer = await admin("administrator");
+    const decider = await admin("administrator");
     const proposed = await propose(proposer.token, subjectId, action);
     expect(proposed.statusCode, proposed.body).toBe(200);
     const approved = await decide(decider.token, proposed.json());
@@ -141,8 +141,8 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     expect(options.statusCode, options.body).toBe(200);
     expect(await live("external_identities", target)).toBe(1);
 
-    const proposer = await admin("mpc_operator");
-    const decider = await admin("security_operator");
+    const proposer = await admin("administrator");
+    const decider = await admin("administrator");
     const proposed = await propose(proposer.token, target);
     expect(proposed.statusCode, proposed.body).toBe(200);
     const request = proposed.json();
@@ -273,11 +273,11 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     await fx.sql`
       INSERT INTO core.compliance_assessments (
         id, tenant_id, project_id, gate_id, policy_set_id, input_snapshot_hash, evaluated_as_of, status,
-        requirement_results, canonical_result_hash
+        requirement_results, canonical_result_hash, evidence_actor_ids
       ) VALUES (
         ${assessmentId}, ${fx.tenantA}, ${fx.projectA}, 'registry_publication', ${policySetId}, ${"0x" + "a1".repeat(32)},
         now(), 'ok', ${fx.sql.json([{ requirementId: "req-0", status: "gap", applicable: true, reasonCode: "REQUIREMENT_SATISFIED", missing: [] }] as never)},
-        ${"0x" + "b2".repeat(32)}
+        ${"0x" + "b2".repeat(32)}, '{}'::uuid[]
       )
     `;
     const signed = await decideSigned(app, await signIn(app, fx.approverA), fx.approverA, fx.projectA, {
@@ -308,14 +308,14 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
 
   it("takes two different people, neither of them the person, also at the database", async () => {
     const target = await person();
-    const proposer = await admin("mpc_operator");
+    const proposer = await admin("administrator");
 
     const own = await propose(proposer.token, proposer.subjectId);
     expect(own.statusCode).toBe(422);
     expect(own.json().code).toBe("SUSPENSION_SELF_TARGET");
 
     // The person, an admin themself, cannot decide their own suspension.
-    const targetAdmin = await admin("security_operator");
+    const targetAdmin = await admin("administrator");
     const proposed = (await propose(proposer.token, targetAdmin.subjectId)).json();
     const selfDecided = await decide(targetAdmin.token, proposed);
     expect(selfDecided.statusCode).toBe(422);
@@ -331,7 +331,7 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     `;
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${aal2Subject}, ${fx.orgA}, 'mpc_operator')
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${aal2Subject}, ${fx.orgA}, 'administrator')
     `;
     const aal2 = await issueTestSession(fx.appSql, fx.tenantA, aal2Subject, { firstFactor: "email_code", secondFactor: "totp" });
     expect((await propose(aal2, target)).statusCode).toBe(403);
@@ -358,7 +358,7 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
       withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`UPDATE core.subjects SET suspended_at = now() WHERE id = ${target}`),
     ).rejects.toThrow(/permission denied/);
     const other = await person();
-    const decider = await admin("security_operator");
+    const decider = await admin("administrator");
     await expect(
       withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
         INSERT INTO core.subject_suspensions (
@@ -374,8 +374,8 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
   it("reinstates with two people: the code signs in again and a first factor can be enrolled for 24 hours", async () => {
     const email = freshEmail("back");
     const target = await person(email);
-    const proposer = await admin("mpc_operator");
-    const decider = await admin("security_operator");
+    const proposer = await admin("administrator");
+    const decider = await admin("administrator");
 
     // Reinstating someone active, or suspending twice, is a state conflict.
     const early = await propose(proposer.token, target, "reinstate");
@@ -414,7 +414,7 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     const target = await person();
     // Proposed before the suspension: a suspended person's address changes by no path (0128), and
     // the suspension closes this request — but the proposer's part in it still counts.
-    const changer = await admin("mpc_operator");
+    const changer = await admin("administrator");
     const change = await adminPost("/api/v1/admin/email-changes", changer.token, {
       subjectId: target,
       newEmail: freshEmail("moved"),
@@ -431,14 +431,14 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     expect(refused.statusCode).toBe(422);
     expect(refused.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
 
-    const proposer = await admin("security_operator");
+    const proposer = await admin("administrator");
     const proposed = (await propose(proposer.token, target, "reinstate")).json();
     const refusedDecision = await decide(changer.token, proposed);
     expect(refusedDecision.statusCode).toBe(422);
     expect(refusedDecision.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
 
     // And the reverse: whoever reinstated the person takes no part in an email change of them.
-    const reinstater = await admin("mpc_operator");
+    const reinstater = await admin("administrator");
     expect((await decide(reinstater.token, proposed)).statusCode).toBe(200);
     const afterwards = await adminPost("/api/v1/admin/email-changes", reinstater.token, {
       subjectId: target,

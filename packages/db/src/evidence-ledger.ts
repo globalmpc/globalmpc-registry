@@ -13,7 +13,7 @@ export interface LedgerItem {
   grade: Grade | null; reviewScope: string[]; reviews: LedgerReview[]; claimIds: string[]; attestationIds: string[]; reasons: string[]; limitations: string[];
 }
 export interface LedgerStage {
-  gateId: string; policySetId: string; ruleSetVersion: string; status: ReadinessStatus; missing: string[]; reviewedItems:string; requiredItems:string;
+  gateId: string; policySetId: string; ruleSetVersion: string; status: ReadinessStatus; itemClaimTypes?: string[]; missing: string[]; reviewedItems:string; requiredItems:string;
 }
 export interface LedgerSnapshot {
   id: string | null; projectId: string; evaluatedAt: string; inputSnapshotHash: string;
@@ -122,9 +122,11 @@ export async function computeEvidenceLedger(
   const catalog = await tx<{ id: string; claim_type: string; catalog_version: number; display_name: string }[]>`
     SELECT ct.id, ct.claim_type, ct.catalog_version, ct.display_name
     FROM core.claim_types ct WHERE ct.tenant_id = ${tenantId} AND ct.effective_from <= ${evaluatedAt}
+      AND core.project_definition_applies(ct.project_id,${projectId})
       AND NOT core.is_reserved_catalog_key(ct.claim_type)
       AND (ct.catalog_version = (SELECT max(latest.catalog_version) FROM core.claim_types latest
-        WHERE latest.tenant_id=ct.tenant_id AND latest.claim_type=ct.claim_type AND latest.effective_from <= ${evaluatedAt})
+        WHERE latest.tenant_id=ct.tenant_id AND latest.claim_type=ct.claim_type AND latest.effective_from <= ${evaluatedAt}
+          AND core.project_definition_applies(latest.project_id,${projectId}))
       OR EXISTS (SELECT 1 FROM core.claims c WHERE c.project_id=${projectId} AND c.catalog_entry_id=ct.id AND c.superseded_by_claim_id IS NULL))
     ORDER BY ct.claim_type, ct.catalog_version
   `;
@@ -175,13 +177,9 @@ export async function computeEvidenceLedger(
   // A policy must be effective, time-valid, and approved through the registry. Bootstrap rules
   // predate proposals and remain usable only when explicitly effective in their own tenant.
   const policies = await tx<{ id: string; gate_id: string; definition: unknown; jurisdiction_profile: string }[]>`
-    SELECT DISTINCT ON (p.gate_id) p.id, p.gate_id, p.definition, p.jurisdiction_profile
-    FROM core.compliance_policy_sets p
-    WHERE p.tenant_id = ${tenantId} AND p.state = 'effective'
-      AND p.effective_from <= ${evaluatedAt} AND p.superseded_by IS NULL
-      AND p.gate_id = ANY(${[...STAGE_GATE_ORDER]}::text[])
-      AND p.jurisdiction_profile = ${project.host_country_iso3}
-    ORDER BY p.gate_id, p.effective_from DESC, p.created_at DESC, p.id
+    SELECT p.id,p.gate_id,p.definition,p.jurisdiction_profile
+    FROM core.effective_stage_policy_sets(${projectId},${evaluatedAt}) p
+    WHERE p.tenant_id=${tenantId}
   `;
   const profile = await tx<{ state: string; environmental_requirement_basis: string | null; profile_version: number }[]>`
     SELECT state, environmental_requirement_basis, profile_version FROM core.jurisdiction_profiles
@@ -226,6 +224,9 @@ export async function computeEvidenceLedger(
     const hasApplicable = assessment.requirementResults.some((r) => r.applicable);
     const status = hasApplicable ? assessment.status : 'not_evaluable';
     stages.push({ gateId, policySetId: policy.id, ruleSetVersion: rule.version, status,
+      // Publish only links to already-public catalog items; no private requirement IDs or facts.
+      itemClaimTypes: [...new Set(rule.requirements.flatMap(r => r.requiredClaimTypes))]
+        .filter(type => items.some(item => item.claimType === type)).sort(),
       ...stageEvidenceCoverage(rule.requirements,assessment.requirementResults,items),
       missing: [...new Set(assessment.requirementResults.flatMap((r) => r.missing))].sort() });
   }
@@ -250,9 +251,17 @@ export function publicLedgerProjection(snapshot: LedgerSnapshot & { id: string }
   };
 }
 /** Publication freshness comparison excludes the clock and provenance hashes, not outcomes. */
-export function evidenceLedgerSemantic(snapshot: LedgerSnapshot) {
+export function evidenceLedgerSemantic(snapshot: LedgerSnapshot, approvedSnapshot?: LedgerSnapshot) {
   const { id: _id, evaluatedAt: _time, inputSnapshotHash: _hash, ...semantic } = snapshot;
-  return JSON.parse(JSON.stringify(semantic, (_key, value: unknown) => typeof value === "number" ? String(value) : value)) as CanonicalValue;
+  // Legacy approvals did not capture display-only stage links. Ignore only that
+  // addition, per matching stage; all recorded links and policy/evidence inputs stay checked.
+  const stages = semantic.stages.map(stage => {
+    const approved = approvedSnapshot?.stages.find(candidate => candidate.gateId === stage.gateId);
+    if (!approved || approved.itemClaimTypes !== undefined) return stage;
+    const { itemClaimTypes: _links, ...legacyStage } = stage;
+    return legacyStage;
+  });
+  return JSON.parse(JSON.stringify({ ...semantic, stages }, (_key, value: unknown) => typeof value === "number" ? String(value) : value)) as CanonicalValue;
 }
 export async function persistEvidenceLedger(tx: postgres.TransactionSql, tenantId: string, snapshot: LedgerSnapshot): Promise<LedgerSnapshot & { id: string }> {
   const id = randomUUID();

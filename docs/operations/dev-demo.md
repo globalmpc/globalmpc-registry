@@ -1,9 +1,11 @@
 # Development demo data
 
 Development deployments run an additive seed task **after** migration and service deployment.
-It supplies three synthetic projects: input pending, reviewed evidence and published evidence.
-Existing completed scenarios are never refreshed, repaired, republished or renamed. A later
-deploy resumes only a seed that did not finish. New demo versions use new project keys.
+It supplies the original three synthetic projects (input pending, reviewed evidence and published evidence),
+plus five published examples with evidence coverage at stages 1–5.
+Existing project data, evidence, reviews and publications are never reset or renamed. After
+migration 0138, a completed v1 demo can receive project-bound coverage definitions and one new
+assessment. A later deploy also resumes an unfinished seed; new demo versions use new keys.
 
 | Case | Authority / time | Input scope | Outcome / priority |
 | --- | --- | --- | --- |
@@ -18,10 +20,13 @@ deploy resumes only a seed that did not finish. New demo versions use new projec
 
 The migration owner creates labelled **fixture records**, not real professional approvals.
 The fixture people have no email, passkey, session or roles. No authentication bypass or test
-support function is installed. No mining policy, claim catalog or existing authority is changed.
+support function is installed. No existing mining policy, claim catalog version or authority is changed. New catalog versions
+and the synthetic stage policies are bound to the exact seed-owned demo project. They
+cannot apply to another demo, a normal project or another tenant.
 The generated document is plain text and still goes through the deployed scan worker.
 
 `DEMO-V1-INPUT-<tenant UUID>`, `DEMO-V1-REVIEW-<tenant UUID>`, and `DEMO-V1-PUBLIC-<tenant UUID>`
+and `DEMO-V1-STAGE-1-<tenant UUID>` through `DEMO-V1-STAGE-5-<tenant UUID>`
 are reserved for this seed. The tenant suffix keeps public keys unique across workspaces. A collision
 with an existing non-seed project is an error. The owner must already exist in the scan worker's
 tenant. Set `DEMO_OWNER_ORGANIZATION_NAME` when there is more than one operator organization.
@@ -41,3 +46,42 @@ guard permits releasing that workflow before rolling out an application version 
 Public publication and blockchain anchoring are separate. A user requests an anchor in the
 workspace; the API creates the Merkle batch, then the anchor worker submits and confirms it.
 The seed does not create batches, move chains, change spend caps or submit transactions.
+
+## Project stages and evidence coverage
+
+The roadmap always shows the five supported stages: Exploration, Resource definition,
+Feasibility, Permitting and Production. Evidence coverage belongs within each stage;
+it is not a signed gate decision or a declaration that the project has reached that
+stage. Stages absent from the assessment show Not assessed. The prototype's eight-stage
+vocabulary is not adopted; the existing evaluator stage IDs and order are preserved.
+
+Migration 0138 keeps normal definitions global and permits project-bound definitions only for
+an original synthetic demo. Their project scope and reviewed catalog content are immutable.
+The private evaluator and public current-warning comparison share the same stage-policy selector.
+Catalog entry selection, claim writes, readiness requests and signing policy versions enforce
+that scope too. General catalog lists do not include demo-only definitions.
+
+The existing dev seed task adds a labelled exploration requirement and computes a new ledger
+assessment using the normal evaluator. Fresh input is `0/1`; fresh reviewed/public fixtures are
+`1/1`. No production-stage rules, gate approval, lifecycle advance or anchor is synthesized.
+The task logs newly assessed project keys in `assessed`, separately from created/skipped projects.
+The coverage seed runs once per project and does not override subsequent human policy changes.
+
+Completed older demos receive numeric coverage without changing their old claims, signatures or
+published versions. Their unstructured claims were never pinned to the new catalog, so they
+remain `0/1` until new catalog-bound evidence is entered and reviewed. The seed does not relabel
+old signatures as approving new evidence. Use the normal **Refresh progress** action after later
+changes. Existing published snapshots remain frozen.
+
+Deploy the matching API/web with migration 0138, then run the existing dev demo task. No new
+GitHub Manager setting or secret is required. Production/staging remain refused by the seed.
+
+Do not seed scoped rows while an old API or worker is still serving. A source-only rollback
+to code that ignores project scope is unsafe; restore the pre-upgrade database or retain
+scope-aware consumers. The seed does not run as part of schema migration or service startup.
+
+The five stage examples use project-bound synthetic requirements and the real evaluator.
+Each has one synthetic reviewed item; later stages require a grade that this item does not
+meet. The resulting public snapshot, not a UI override, supplies the five-segment progress bar.
+These are evidence coverage examples, not real mine progress or signed gate decisions. Existing
+published versions without coverage remain unchanged; the new examples are separate projects.

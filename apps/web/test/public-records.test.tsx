@@ -481,6 +481,19 @@ it("shows the stored anchor contract in the integrity proof", async () => {
   expect(cell.textContent).toBe(contract);
 });
 
+it.each([[false, true], [true, false]])("keeps a negative integrity result visible on compact detail (verified=%s, included=%s)", async (merkleVerified, included) => {
+  mockHttp({ "GET /api/v1/public/proofs/v1": {
+    merkleVerified, included, root: "root", batchId: "batch", leafHash: "leaf",
+    proof: [], chainId: null, proves: [], doesNotProve: [],
+  } });
+  render(<PublicRecord entry={entry} browsableEvidence />);
+  expect(screen.getByTestId("shared-limitations").closest("details")).toBeNull();
+  expect(screen.getByTestId("shared-legal-effect").closest("details")).toBeNull();
+  expect(screen.getByTestId("shared-legal-effect").textContent).toContain("none");
+  await screen.findByTestId("proof-contract");
+  expect((screen.getByTestId("integrity-disclosure") as HTMLDetailsElement).open).toBe(true);
+});
+
 it("lets anonymous visitors discover named project cards with revocation and shareable links", async () => {
   const { PublicProjectDirectory } = await import("../src/components/PublicProjectDirectory");
   const calls = mockHttp({
@@ -491,6 +504,9 @@ it("lets anonymous visitors discover named project cards with revocation and sha
   expect(link.getAttribute("href")).toBe("/explorer/projects/MPC-1");
   expect(screen.getByText(/revoked/)).toBeDefined();
   expect(screen.getByText("v1")).toBeDefined();
+  expect(screen.getByText(/As of/)).toBeDefined();
+  expect(screen.getByText("Not assessed")).toBeDefined();
+  expect(screen.getByRole("link", { name: "Open Copper Hills" }).getAttribute("href")).toBe("/explorer/projects/MPC-1");
   expect(calls.every((call) => call.url.includes("/public/"))).toBe(true);
 });
 
@@ -520,4 +536,14 @@ it("searches the compact project directory while typing without another submit c
   fireEvent.change(screen.getByLabelText("Search"), { target: { value: "Gold" } });
   await screen.findByText("Nothing published matches “Gold”.");
   expect(calls.some((call) => call.url.includes("q=Gold"))).toBe(true);
+});
+
+it("keeps superseded revoked history expanded and labels its retained revocation", async () => {
+  mockHttp({ "GET /api/v1/public/proofs/v1": () => { throw new Error("No proof"); } });
+  render(<PublicRecord entry={{...entry,history:[{entryVersionId:"old",version:"0",status:"superseded",revokedAt:"2026-11-01T00:00:00Z"}]}} browsableEvidence />);
+  const history = document.getElementById("record-history") as HTMLDetailsElement;
+  expect(history.open).toBe(true);
+  expect(history.textContent).toContain("superseded");
+  expect(history.textContent).toContain("Revoked 2026-11-01");
+  await act(async () => {});
 });

@@ -14,7 +14,7 @@ describeDb("deployment under FORCE RLS without BYPASSRLS", () => {
   let sql: postgres.Sql;
   const input = (slug = randomUUID(), email = `${randomUUID()}@example.com`) => ({
     tenantSlug: slug, tenantName: slug, organizationName: "Operator", jurisdiction: "MNG",
-    subjectName: "Operator", email, role: "mpc_operator", assuranceLevel: "high_assurance" as const,
+    subjectName: "Operator", email, role: "administrator", assuranceLevel: "high_assurance" as const,
   });
   beforeAll(async () => {
     admin = postgres(process.env["DATABASE_URL"]!, { max: 1, onnotice: () => {} });

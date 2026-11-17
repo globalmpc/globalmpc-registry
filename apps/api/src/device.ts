@@ -10,7 +10,7 @@ import { matchesCidr, parseCidr, type CidrRange } from "./ip.js";
  * corrected later.
  *
  * The user agent is hashed, not stored. Grouping records by device needs equality only, and the
- * raw string would add a fingerprinting surface to a log every auditor reads.
+ * raw string would add a fingerprinting surface to a log every administrator reads.
  */
 export type IpClass = "loopback" | "private" | "link_local" | "public" | "unknown";
 

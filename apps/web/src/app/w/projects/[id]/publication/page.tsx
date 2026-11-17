@@ -26,11 +26,11 @@ import { BlackoutNotice } from "@/components/BlackoutNotice";
  *
  * Three steps, and the first two are done by **different people**.
  *
- * 1. **Draft** (`mpc_operator`) — only allowlisted fields go out. The server checks the
+ * 1. **Draft** (`administrator`) — only allowlisted fields go out. The server checks the
  *    projection against the project and records the evidence snapshot and source terms it
  *    derived itself. Nothing is public yet. The screen deliberately does not pre-filter —
  *    pre-filtering would obscure where the real control lives.
- * 2. **Publish** (`disclosure_approver`, not the drafter) — makes the draft public. The server
+ * 2. **Publish** (`reviewer`, not the drafter) — makes the draft public. The server
  *    re-checks it against the record as it is now.
  * 3. **anchor batch** — bundles published versions into a Merkle tree. At this point
  *    nothing is on chain yet. `confirmationState` says exactly that.
@@ -81,8 +81,8 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
   }
 
   const roles = session?.roleBindings?.map((binding) => binding.role) ?? [];
-  const canDraft = roles.includes("mpc_operator");
-  const canPublish = roles.includes("disclosure_approver");
+  const canDraft = roles.includes("administrator");
+  const canPublish = roles.includes("reviewer");
   const pending = drafts.find((draft) => draft.state === "pending") ?? null;
   const lastPublished = drafts.find((draft) => draft.state === "published") ?? null;
   const ownDraft = pending !== null && pending.proposedBySubjectId === session?.subjectId;
@@ -91,8 +91,8 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
     return !canDraft && !canPublish ? (
       <div className="notice" style={{ color: "var(--alert)" }}>
         <div className="title">This account cannot draft or publish</div>
-        Drafting requires <span className="mono">mpc_operator</span>. Publishing requires{" "}
-        <span className="mono">disclosure_approver</span>, held by someone other than the drafter.
+        Drafting requires <span className="mono">administrator</span>. Publishing requires{" "}
+        <span className="mono">reviewer</span>, held by someone other than the drafter.
       </div>
     ) : null;
   };

@@ -540,6 +540,29 @@ describeDb("stale propagation", () => {
       expect((await send()).statusCode).toBe(409);
     });
 
+    it("denies signal probes before locking an existing row", async () => {
+      const signalId = await openSignal();
+      const token = await signIn(app,fx.readerA);
+      const send = (id:string) => app.inject({method:"POST",url:`/api/v1/stale-signals/${id}/resolve`,
+        headers:{authorization:`Bearer ${token}`,"idempotency-key":idempotencyKey()},
+        payload:{resolution:"dismissed",note:"Scope check"}});
+      const missing = await send(randomUUID());
+      expect(missing.statusCode).toBe(403);
+      let pending: ReturnType<typeof send> | undefined;
+      try {
+        await fx.sql.begin(async hold => {
+          await hold`SELECT id FROM core.evidence_stale_signals WHERE id=${signalId} FOR UPDATE`;
+          pending = send(signalId);
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const response = await Promise.race([pending,new Promise<null>(resolve => {timer=setTimeout(()=>resolve(null),1500);})]);
+            expect(response?.statusCode,"Unauthorized resolution must not wait for the row lock").toBe(403);
+            expect(response?.json().code).toBe(missing.json().code);
+          } finally { clearTimeout(timer); }
+        });
+      } finally { if (pending) await pending; }
+    });
+
     it("cannot close without the registry.revoke permission", async () => {
       const signalId = await openSignal();
 

@@ -17,7 +17,7 @@ import {
   type VerificationCaseState,
 } from "@mpc/domain";
 import type { AppConfig } from "../config.js";
-import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { badRequest, conflict, forbidden, notFound, unavailable, unprocessable } from "../errors.js";
 import {
   assertAuthorized,
   projectResource,
@@ -37,9 +37,14 @@ import { buildEvidenceSnapshot } from "../services/evidence-snapshot.js";
 import { assignReviewer } from "../services/assignment.js";
 import {
   basisBlockers,
+  attestationRestorationBlockers,
   loadAuthorityBasis,
   loadCredential,
   loadEvidenceSubmitters,
+  loadReviewerOrganizations,
+  reviewerOrganizationsIndependent,
+  loadSchemaActivationEpoch,
+  assertReviewerOrganizationIndependence,
   versionsInForce,
 } from "../services/attestation-basis.js";
 import { reassessClaim, setProvenanceCause } from "../services/claim-state.js";
@@ -67,6 +72,8 @@ import {
  * - If the evidence snapshot changes after the request, the request is void.
  * - Credential status at signing time is preserved (AC-17).
  */
+
+const SIGNABLE_CASE_STATES: readonly string[] = ["assigned", "in_review", "changes_requested"];
 
 const SIGNATURE_REQUEST_TTL_MS = 10 * 60 * 1000;
 
@@ -153,6 +160,16 @@ async function attestationProjectId(
   return row.project_id;
 }
 
+function assertEvidenceIndependence(
+  subjectId: string | null,
+  submitters: Awaited<ReturnType<typeof loadEvidenceSubmitters>>,
+): void {
+  if (!submitters.allKnown) throw unprocessable("ATTESTATION_INDEPENDENCE_NOT_REVIEWED", "Record attributable evidence before reviewing it");
+  if (subjectId !== null && submitters.submitterIds.includes(subjectId)) {
+    throw unprocessable("ATTESTATION_SELF_ASSURANCE", "A different reviewer must review evidence you submitted, confirmed or uploaded");
+  }
+}
+
 /**
  * The drafting checks for a signature request, outside the idempotency block.
  *
@@ -172,18 +189,21 @@ async function authorizeSignatureRequest(
     tx<
       {
         state: string;
+        claim_scope: string[];
+        case_id: string;
         project_id: string;
         case_state: string;
         assignment_subject: string;
         conflict_status: ConflictStatus;
         assignment_revoked: Date | null;
         credential_status: CredentialCurrentStatus;
+        credential_id: string;
       }[]
     >`
-      SELECT a.state, vc.project_id, vc.state AS case_state,
+      SELECT a.state, a.claim_scope, a.case_id, vc.project_id, vc.state AS case_state,
              asg.subject_id AS assignment_subject, asg.conflict_status,
              asg.revoked_at AS assignment_revoked,
-             c.current_status AS credential_status
+             c.current_status AS credential_status, c.id AS credential_id
       FROM core.verification_attestations a
       JOIN core.verification_cases vc ON vc.id = a.case_id
       JOIN core.assignments asg ON asg.id = a.assignment_id
@@ -207,12 +227,12 @@ async function authorizeSignatureRequest(
     throw conflict("ATTESTATION_ALREADY_SIGNED", "Attestation is already signed");
   }
 
-  return assertAuthorized(
+  const effectiveRole = assertAuthorized(
     session,
     "attestation.sign",
     projectResource(tenantId, row.project_id, {
       state: row.case_state,
-      statesAllowingAction: ["assigned", "in_review", "changes_requested"],
+      statesAllowingAction: SIGNABLE_CASE_STATES,
       requiresCredential: true,
       requiresAssignment: true,
       separationSensitive: true,
@@ -223,6 +243,10 @@ async function authorizeSignatureRequest(
       conflictStatus: row.conflict_status,
     }),
   );
+  const submitters = await withTenant(sql, { tenantId }, tx => loadEvidenceSubmitters(tx, row.claim_scope, row.case_id));
+  assertEvidenceIndependence(session.subjectId, submitters);
+  await withTenant(sql, { tenantId }, tx => assertReviewerOrganizationIndependence(tx, row.assignment_subject, row.credential_id, row.project_id));
+  return effectiveRole;
 }
 
 async function disputeProjectId(
@@ -249,6 +273,49 @@ async function disputeProjectId(
  * A correction covers at least what it replaces. A narrower one would leave the uncovered claims
  * resting on a judgment that is about to be marked superseded.
  */
+
+async function lockVerificationEvidence(tx: postgres.TransactionSql, projectId: string, code = "DISPUTE_EVIDENCE_BUSY"): Promise<void> {
+  try {
+    await tx`SELECT core.lock_ledger_publication_inputs(${projectId})`;
+  } catch (error) {
+    if ((error as { code?: string }).code === "55P03") {
+      throw unavailable(code, "Evidence is being updated. Try again.");
+    }
+    throw error;
+  }
+}
+
+/** Administrative resolution is separate from raising an objection or signing a review. */
+async function independentDisputeResolver(
+  tx: postgres.TransactionSql, disputeId: string, subjectId: string | null, lock = false,
+): Promise<{ attestation_id: string; state: string; claim_scope: string[] }> {
+  const [row] = await tx<{
+    attestation_id: string; case_id: string; project_id: string; state: string; claim_scope: string[];
+    reviewer_subject_id: string; is_disputant: boolean;
+  }[]>`
+    SELECT a.id AS attestation_id,a.case_id,vc.project_id,a.state,a.claim_scope,asg.subject_id AS reviewer_subject_id,
+      EXISTS (SELECT 1 FROM core.attestation_disputes other WHERE other.attestation_id=a.id
+        AND other.raised_by_subject_id=${subjectId}) AS is_disputant
+    FROM core.attestation_disputes d JOIN core.verification_attestations a ON a.id=d.attestation_id
+    JOIN core.verification_cases vc ON vc.id=a.case_id
+    JOIN core.assignments asg ON asg.id=a.assignment_id
+    WHERE d.id=${disputeId}
+    ${lock ? tx`FOR UPDATE OF a` : tx``}
+  `;
+  if (!row) throw notFound("Dispute not found");
+  // The nonblocking barrier avoids a row/advisory-lock inversion with evidence writers.
+  if (lock) await lockVerificationEvidence(tx, row.project_id);
+  const contributors = await loadEvidenceSubmitters(tx, [], row.case_id);
+  if (!contributors.allKnown) throw unprocessable("DISPUTE_INDEPENDENCE_NOT_REVIEWED", "The original evidence has incomplete source records. Create a new review after recording its sources.");
+  const organizations = subjectId ? await loadReviewerOrganizations(tx, subjectId) : [];
+  const [project] = await tx<{owner_organization_id:string}[]>`SELECT owner_organization_id FROM core.projects WHERE id=${row.project_id}`;
+  if (subjectId === null || row.is_disputant || subjectId === row.reviewer_subject_id
+    || contributors.submitterIds.includes(subjectId) || !project || !reviewerOrganizationsIndependent(organizations,project.owner_organization_id)) {
+    throw forbidden("DISPUTE_RESOLUTION_NOT_INDEPENDENT", "A different independent reviewer must resolve this dispute");
+  }
+  return row;
+}
+
 async function assertSupersedable(
   tx: postgres.TransactionSql,
   input: {
@@ -377,15 +444,15 @@ export async function registerVerificationRoutes(
 
     return withTenant(sql, { tenantId }, (tx) =>
       withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-        const snapshot = await buildEvidenceSnapshot(tx, data.projectId, data.claimIds);
+        const snapshot = await buildEvidenceSnapshot(tx, data.projectId, data.claimIds, { effectiveReceipts: true });
 
         const caseId = randomUUID();
         await tx`
           INSERT INTO core.verification_cases (
-            id, tenant_id, project_id, schema_id, state, evidence_snapshot_hash
+            id, tenant_id, project_id, schema_id, state, evidence_snapshot_hash, evidence_snapshot
           ) VALUES (
             ${caseId}, ${tenantId}, ${data.projectId}, ${data.schemaId},
-            'assigned', ${snapshot.hash}
+            'assigned', ${snapshot.hash}, ${tx.json(snapshot.manifest)}
           )
         `;
 
@@ -462,7 +529,7 @@ export async function registerVerificationRoutes(
   /**
    * The path by which an assigned reviewer finds their own cases.
    *
-   * The assigner (`data_steward`) and the signer (reviewer) are different people.
+   * The assigner (`reviewer`) and the signer (reviewer) are different people.
    * Without a list the reviewer has no way to reach their assignment. RLS limits reads to the
    * tenant; whether signing is allowed is judged separately when the attestation is created —
    * what one can see and what one can do are different questions.
@@ -496,12 +563,15 @@ export async function registerVerificationRoutes(
             claim_ids: string[] | null;
             version: number;
             transitions: unknown[] | null;
+            latest_attestation_id: string | null;
+            latest_attestation_state: string | null;
           }[]
         >`
           SELECT vc.id, vc.project_id, vc.schema_id, vc.state,
                  vc.evidence_snapshot_hash, vc.version,
                  a.id AS assignment_id, a.subject_id AS reviewer_subject_id,
                  a.assigned_at, a.revoked_at IS NULL AS assignment_active,
+                 latest.id AS latest_attestation_id,latest.state AS latest_attestation_state,
                  (
                    SELECT coalesce(
                      json_agg(
@@ -531,6 +601,11 @@ export async function registerVerificationRoutes(
             ORDER BY (x.revoked_at IS NULL) DESC, x.assigned_at DESC, x.id
             LIMIT 1
           ) a ON true
+          LEFT JOIN LATERAL (
+            SELECT v.id,v.state FROM core.verification_attestations v
+            WHERE v.case_id=vc.id AND v.state <> 'draft'
+            ORDER BY v.created_at DESC,v.id DESC LIMIT 1
+          ) latest ON true
           WHERE vc.project_id = ${request.params.projectId}
           ORDER BY a.assigned_at DESC
         `,
@@ -546,6 +621,7 @@ export async function registerVerificationRoutes(
           evidenceSnapshotHash: row.evidence_snapshot_hash,
           claimIds: row.claim_ids ?? [],
           reviewerSubjectId: row.reviewer_subject_id,
+          latestAttestation: row.latest_attestation_id ? { id: row.latest_attestation_id, state: row.latest_attestation_state! } : null,
           assignedAt: row.assigned_at.toISOString(),
           assignmentActive: row.assignment_active,
           version: row.version,
@@ -610,6 +686,15 @@ export async function registerVerificationRoutes(
             FOR UPDATE
           `;
           if (!current) throw notFound("Verification case not found");
+
+          const [ownAssignment] = await tx`
+            SELECT id FROM core.assignments
+            WHERE case_id = ${current.id} AND subject_id = ${session.subjectId ?? null}
+              AND revoked_at IS NULL
+          `;
+          if (ownAssignment) {
+            throw forbidden("AUTHORIZATION_DENIED", "An assigned reviewer cannot manage their own case");
+          }
 
           assertVersionMatches(expectedVersion, current.version, "verification_case");
 
@@ -722,13 +807,17 @@ export async function registerVerificationRoutes(
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
           const [attestation] = await tx<
-            { id: string; state: AttestationState; payload_hash: string; case_id: string }[]
+            { id: string; state: AttestationState; payload_hash: string; case_id: string; claim_scope: string[] }[]
           >`
-            SELECT id, state, payload_hash, case_id FROM core.verification_attestations
+            SELECT id, state, payload_hash, case_id, claim_scope FROM core.verification_attestations
             WHERE id = ${request.params.attestationId}
             FOR UPDATE
           `;
           if (!attestation) throw notFound("Attestation not found");
+
+          const [reviewCase] = await tx<{ project_id: string }[]>`SELECT project_id FROM core.verification_cases WHERE id=${attestation.case_id}`;
+          if (!reviewCase) throw notFound("Verification case not found");
+          await lockVerificationEvidence(tx, reviewCase.project_id);
 
           // If already disputed, the state stays and only the dispute is added. Others must be
           // able to raise disputes for other reasons; blocking the rest because one is open
@@ -758,6 +847,11 @@ export async function registerVerificationRoutes(
             UPDATE core.verification_attestations SET state = 'disputed'
             WHERE id = ${attestation.id}
           `;
+
+          if (!alreadyDisputed) {
+            await setProvenanceCause(tx, `attestation_disputed:${attestation.id}`, session.subjectId ?? null);
+            for (const claimId of [...attestation.claim_scope].sort()) await reassessClaim(tx, claimId);
+          }
 
           await recordAudit(tx, {
             effectiveRole,
@@ -883,7 +977,7 @@ export async function registerVerificationRoutes(
 
       const effectiveRole = assertAuthorized(
         session,
-        "attestation.dispute",
+        "attestation.dispute.resolve",
         projectResource(
           tenantId,
           await disputeProjectId(sql, tenantId, request.params.disputeId),
@@ -891,12 +985,15 @@ export async function registerVerificationRoutes(
         sessionFacts(session),
       );
 
+      await withTenant(sql, { tenantId }, tx => independentDisputeResolver(tx, request.params.disputeId, session.subjectId));
+
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
       const { outcome, resolution } = parsed.data;
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+          const context = await independentDisputeResolver(tx, request.params.disputeId, session.subjectId, true);
           const [dispute] = await tx<
             { id: string; attestation_id: string; resolved_at: Date | null }[]
           >`
@@ -919,19 +1016,24 @@ export async function registerVerificationRoutes(
           `;
 
           // While unresolved disputes remain, the attestation stays disputed.
-          const [remaining] = await tx<{ count: string }[]>`
-            SELECT count(*)::text AS count FROM core.attestation_disputes
-            WHERE attestation_id = ${dispute.attestation_id} AND resolved_at IS NULL
+          const [remaining] = await tx<{ count: string; blocking: string }[]>`
+            SELECT count(*) FILTER (WHERE resolved_at IS NULL)::text AS count,
+              count(*) FILTER (WHERE resolved_at IS NOT NULL AND (resolution IS NULL OR resolution NOT LIKE 'dismissed:%'))::text AS blocking
+            FROM core.attestation_disputes WHERE attestation_id = ${dispute.attestation_id}
           `;
 
-          let attestationState = "disputed";
-          if (outcome === "dismissed" && Number(remaining?.count ?? "1") === 0) {
-            // The review stands. All disputes are resolved, so it returns to active.
-            await tx`
-              UPDATE core.verification_attestations SET state = 'active'
-              WHERE id = ${dispute.attestation_id} AND state = 'disputed'
-            `;
-            attestationState = "active";
+          let attestationState = context.state;
+          if (outcome === "dismissed" && Number(remaining?.count ?? "1") === 0 && Number(remaining?.blocking ?? "1") === 0) {
+            if (context.state === "disputed") {
+              const blockers=await attestationRestorationBlockers(tx,dispute.attestation_id);
+              const restoredState=blockers.length ? "stale_candidate" : "active";
+              await tx`UPDATE core.verification_attestations SET state=${restoredState},
+                stale_reason=${blockers.length ? `Current review basis changed: ${blockers.join(", ")}` : null}
+                WHERE id=${dispute.attestation_id} AND state='disputed'`;
+              attestationState=restoredState;
+              await setProvenanceCause(tx, `dispute_dismissed:${dispute.id}`, session.subjectId ?? null);
+              for (const claimId of [...context.claim_scope].sort()) await reassessClaim(tx, claimId);
+            }
           }
 
           await recordAudit(tx, {
@@ -1037,7 +1139,7 @@ export async function registerVerificationRoutes(
             "attestation.sign",
             projectResource(tenantId, context.project_id, {
               state: context.case_state,
-              statesAllowingAction: ["assigned", "in_review", "changes_requested"],
+              statesAllowingAction: SIGNABLE_CASE_STATES,
               requiresCredential: true,
               requiresAssignment: true,
               separationSensitive: true,
@@ -1066,7 +1168,9 @@ export async function registerVerificationRoutes(
 
           const credential = (await loadCredential(tx, context.credential_id))!;
           const basis = await loadAuthorityBasis(tx, credential, data.claimScope);
-          const submitters = await loadEvidenceSubmitters(tx, data.claimScope);
+          const submitters = await loadEvidenceSubmitters(tx, data.claimScope, request.params.caseId);
+          assertEvidenceIndependence(session.subjectId, submitters);
+          await assertReviewerOrganizationIndependence(tx, context.assignment_subject, context.credential_id, context.project_id);
 
           // The domain judges whether signing is allowed. The route does not restate the conditions.
           const check = checkAttestationSignable({
@@ -1116,7 +1220,7 @@ export async function registerVerificationRoutes(
           }
 
           // What the review followed, recorded as it stood — not a literal "1".
-          const versions = await versionsInForce(tx, context.schema_id);
+          const versions = await versionsInForce(tx, context.schema_id, context.project_id);
 
           const attestationId = randomUUID();
           const payloadHash = hashAttestationPayload({
@@ -1379,6 +1483,7 @@ export async function registerVerificationRoutes(
               supersedes_id: string | null;
               current_snapshot: string;
               project_id: string;
+              case_state: string;
               reviewer_subject: string;
               assignment_case_id: string;
               assignment_revoked: Date | null;
@@ -1388,7 +1493,7 @@ export async function registerVerificationRoutes(
             SELECT a.id, a.case_id, a.assignment_id, a.credential_id, a.schema_id,
                    a.state, a.claim_scope, a.supersedes_id,
                    vc.evidence_snapshot_hash AS current_snapshot,
-                   vc.project_id, asg.subject_id AS reviewer_subject,
+                   vc.project_id, vc.state AS case_state, asg.subject_id AS reviewer_subject,
                    asg.case_id AS assignment_case_id, asg.revoked_at AS assignment_revoked,
                    c.current_status AS credential_status
             FROM core.verification_attestations a
@@ -1396,9 +1501,11 @@ export async function registerVerificationRoutes(
             JOIN core.assignments asg ON asg.id = a.assignment_id
             JOIN core.credentials c ON c.id = a.credential_id
             WHERE a.id = ${request.params.attestationId}
+            FOR UPDATE OF a, asg, vc
           `;
 
           if (!attestation) throw notFound("Attestation not found");
+          if (attestation.state !== "draft") throw conflict("ATTESTATION_ALREADY_SIGNED", "Attestation is already signed");
 
           // Snapshot substitution defense: if the evidence changed after the signature request,
           // it is void.
@@ -1438,6 +1545,10 @@ export async function registerVerificationRoutes(
             signer,
             message: "Signer is not a wallet of the reviewer assigned to this case",
           });
+          await lockVerificationEvidence(tx, attestation.project_id, "ATTESTATION_EVIDENCE_BUSY");
+          const submitters = await loadEvidenceSubmitters(tx, attestation.claim_scope, attestation.case_id);
+          assertEvidenceIndependence(attestation.reviewer_subject, submitters);
+          await assertReviewerOrganizationIndependence(tx, attestation.reviewer_subject, attestation.credential_id, attestation.project_id);
           const signatureValid = true;
 
           /**
@@ -1455,7 +1566,8 @@ export async function registerVerificationRoutes(
             signatureValid,
             assignedToThisCase:
               attestation.assignment_revoked === null &&
-              attestation.assignment_case_id === attestation.case_id,
+              attestation.assignment_case_id === attestation.case_id &&
+              SIGNABLE_CASE_STATES.includes(attestation.case_state),
           });
           if (blockers.length > 0) {
             throw unprocessable(
@@ -1472,12 +1584,13 @@ export async function registerVerificationRoutes(
 
           const applicability = evaluateCredentialApplicability({
             validAtAttestationTime: true,
-            currentStatus: attestation.credential_status,
+            currentStatus: credential.currentStatus,
           });
 
           // Versions and credential status are recorded as of signing, not as of the draft — the
           // signature is what makes them the record (AC-17, REQ-DAPP-046).
-          const versions = await versionsInForce(tx, attestation.schema_id);
+          const versions = await versionsInForce(tx, attestation.schema_id, attestation.project_id);
+          const schemaEpoch=await loadSchemaActivationEpoch(tx,attestation.schema_id);
 
           await tx`
             UPDATE core.verification_attestations
@@ -1485,6 +1598,7 @@ export async function registerVerificationRoutes(
                 signer_wallet_address = ${signer},
                 signed_at = now(),
                 state = 'signed',
+                schema_activation_epoch = ${schemaEpoch}::bigint,
                 method_version = ${versions.methodVersion},
                 policy_version = ${versions.policyVersion},
                 credential_status_snapshot = ${tx.json({

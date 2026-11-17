@@ -125,6 +125,7 @@ describe("manual second review", () => {
 
   it("passes when another person confirms", () => {
     expect(checkSecondReview({ firstConfirmedBy: "a", secondConfirmedBy: "b" }).ok).toBe(true);
+    expect(checkSecondReview({ firstConfirmedBy: null, secondConfirmedBy: "b" }).ok).toBe(false);
   });
 });
 

@@ -525,10 +525,10 @@ describeDb("uploads", () => {
   });
 
   it("rejects without the source.upload permission", async () => {
-    // mpc_operator lacks this permission (02 §2.3).
+    // administrator lacks this permission (02 §2.3).
     const response = await upload(operatorToken);
     expect(response.statusCode).toBe(403);
-    expect(response.json().details.requiredRoles).toContain("data_steward");
+    expect(response.json().details.requiredRoles).toContain("reviewer");
   });
 
   it("requires If-Match to record a scan result", async () => {

@@ -20,13 +20,13 @@ import { requireReadContext } from "./shared.js";
  * this project can actually use, and nothing an assignee could never sign with:
  *
  * - a reviewer-role binding that is not revoked and reaches this project (organization-level
- *   reviewer bindings reach every project — reviewer roles are tenant-wide; a project-level
+ *   reviewer bindings honor their explicit tenant/owning-organization scope; a project-level
  *   binding reaches only its project);
  * - an active wallet whose assurance meets that role's minimum, or signing is refused later;
  * - credentials that are valid now; schemas that are active.
  *
- * Authorized with `claim.curate`, the action that creates the assignment. Reviewers and
- * role-less sessions do not assign, so they have no reason to browse other reviewers'
+ * Authorized with `claim.curate`, the action that creates the assignment. Role-less
+ * sessions do not assign, so they have no reason to browse reviewers'
  * credentials.
  */
 
@@ -91,11 +91,15 @@ async function readReviewers(tx: Tx, tenantId: string, projectId: string) {
   const bindings = await tx<BindingRow[]>`
     SELECT rb.subject_id, s.display_name, rb.role
     FROM core.role_bindings rb
-    JOIN core.subjects s ON s.id = rb.subject_id
+    JOIN core.subjects s ON s.id = rb.subject_id AND s.tenant_id=rb.tenant_id
+    JOIN core.projects p ON p.id=${projectId} AND p.tenant_id=rb.tenant_id
     WHERE rb.tenant_id = ${tenantId}
       AND rb.revoked_at IS NULL
       AND rb.role = ANY(${[...REVIEWER_ROLES]})
-      AND (rb.project_id IS NULL OR rb.project_id = ${projectId})
+      AND s.kind='person' AND s.suspended_at IS NULL
+      AND (rb.jurisdiction IS NULL OR p.host_country_iso3=ANY(rb.jurisdiction))
+      AND (rb.project_id=p.id OR (rb.project_id IS NULL AND (rb.scope_kind='tenant'
+        OR (rb.scope_kind='organization' AND rb.organization_id=p.owner_organization_id))))
     ORDER BY s.display_name, rb.subject_id
   `;
   const subjectIds = [...new Set(bindings.map((row) => row.subject_id))];

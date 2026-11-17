@@ -377,7 +377,7 @@ describeDb("source lookup", () => {
       method: "POST",
       url: `/api/v1/source-connections/${fx.connectionA}/collect`,
       headers: {
-        authorization: `Bearer ${await signIn(app, fx.reviewerA)}`,
+        authorization: `Bearer ${await signIn(app, fx.proposerA)}`,
         "idempotency-key": idempotencyKey(),
       },
       payload: { projectId: fx.projectA, queryBasis: {} },
@@ -387,7 +387,7 @@ describeDb("source lookup", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("lets mpc_operator call too", async () => {
+  it("lets administrator call too", async () => {
     expect((await collect(operatorToken)).statusCode).toBe(200);
   });
 

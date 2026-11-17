@@ -125,7 +125,7 @@ export interface SessionInfo {
   subjectId?: string | null;
   tenantId?: string | null;
   assuranceLevel?: string;
-  roleBindings?: { role: string; organizationId: string | null; projectId: string | null }[];
+  roleBindings?: { role: string; scopeKind?: "tenant" | "organization" | "none"; governanceScope?: "protocol" | "project" | "none"; organizationId: string | null; projectId: string | null }[];
   projectIds?: string[];
   /** Actions allowed by role. Used only to filter menus — the server makes the decision. */
   actions?: string[];
@@ -1086,7 +1086,9 @@ export interface VerificationCase {
   state: string;
   evidenceSnapshotHash: string;
   claimIds: string[];
+  latestAttestation?: { id: string; state: string } | null;
   reviewerSubjectId?: string;
+  assignmentActive?: boolean;
   assignedAt?: string;
   version?: number;
   transitions?: { fromState: string; toState: string; reason: string; occurredAt: string }[];
@@ -1874,7 +1876,7 @@ export interface PublicProjection {
   disclaimerCodes: string[];
   publishedAt: string | null;
   revokedAt: string | null;
-  history: { entryVersionId: string; version: string; status: string }[];
+  history: { entryVersionId: string; version: string; status: string; revokedAt?: string | null }[];
   [key: string]: unknown;
 }
 
@@ -2251,7 +2253,7 @@ export async function listRoleGrants(token: string): Promise<{ items: RoleGrant[
 export async function createRoleGrant(
   token: string,
   key: string,
-  input: { subjectId: string; role: string; reason: string },
+  input: { subjectId: string; role: string; organizationId?: string; scopeKind?: "tenant" | "organization" | "none"; reason: string },
 ): Promise<RoleGrant> {
   const response = await apiFetch("/api/v1/admin/role-grants", {
     method: "POST",

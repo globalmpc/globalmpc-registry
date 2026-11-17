@@ -38,6 +38,20 @@ describe('ledger publication basis',()=>{
     expect(JSON.stringify(projection)).not.toContain('claimIds');
     expect(JSON.stringify(projection)).not.toContain('attestationIds');
   });
+  it('compares legacy approvals without adding display links to their frozen projection',()=>{
+    const stage = {gateId:'stage.exploration',policySetId:'policy',ruleSetVersion:'1',status:'ok' as const,missing:[],reviewedItems:'1',requiredItems:'1'};
+    const legacy = {...snapshot,stages:[stage]};
+    const current = {...snapshot,stages:[{...stage,itemClaimTypes:['licence']}]};
+    const frozen = JSON.stringify(publicLedgerProjection(legacy));
+    expect(evidenceLedgerSemantic(current,legacy)).toEqual(evidenceLedgerSemantic(legacy));
+    expect(JSON.stringify(publicLedgerProjection(legacy))).toBe(frozen);
+    expect(publicLedgerProjection(legacy).stages[0]).not.toHaveProperty('itemClaimTypes');
+    expect(evidenceLedgerSemantic({...current,stages:[{...current.stages[0]!,status:'gap'}]},legacy)).not.toEqual(evidenceLedgerSemantic(legacy));
+    expect(evidenceLedgerSemantic({...current,inputBasis:{changed:'policy'}},legacy)).not.toEqual(evidenceLedgerSemantic(legacy));
+    const changedLinks = {...current,stages:[{...current.stages[0]!,itemClaimTypes:[]}]};
+    expect(evidenceLedgerSemantic(changedLinks,current)).not.toEqual(evidenceLedgerSemantic(current));
+    expect(evidenceLedgerSemantic(legacy,current)).not.toEqual(evidenceLedgerSemantic(current));
+  });
   it('ignores only evaluation metadata in freshness comparisons',()=>{
     expect(evidenceLedgerSemantic(snapshot)).toEqual(evidenceLedgerSemantic({...snapshot,id:'new',evaluatedAt:'later',inputSnapshotHash:'other'}));
     expect(evidenceLedgerSemantic(snapshot)).not.toEqual(evidenceLedgerSemantic({...snapshot,items:[{...snapshot.items[0]!,claimIds:['corrected']}]}));

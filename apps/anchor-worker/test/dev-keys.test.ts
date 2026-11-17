@@ -105,6 +105,13 @@ describe("public development keys", () => {
     expect(ANVIL_DEV_ADDRESSES).toEqual(derived);
   });
 
+  it("leaves the example signer key empty without committed signing fixtures", () => {
+    const example = readFileSync(join(ROOT, ".env.example"), "utf8");
+    expect(example.split(/\r?\n/).filter((line) => line.startsWith("ANCHOR_SIGNER_PRIVATE_KEY=")))
+      .toEqual(["ANCHOR_SIGNER_PRIVATE_KEY="]);
+    expect(committedFixtureKeys().some((fixture) => fixture.source === ".env.example")).toBe(false);
+  });
+
   it("include every committed key fixture, refused off the local chain", () => {
     const fixtures = committedFixtureKeys();
     // The scan service and anchor signer fixtures at least; an empty scan means the reader broke.
@@ -113,7 +120,6 @@ describe("public development keys", () => {
         "config/local-secrets/anchor_signer_key",
         "config/local-secrets/scan_service_key",
         "docker/docker-compose.yml",
-        ".env.example",
         "apps/api/test/auth.test.ts",
         "apps/anchor-worker/test/safe-client.test.ts",
         "contracts/test/DeployRegistryAnchor.t.sol",

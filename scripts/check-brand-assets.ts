@@ -6,10 +6,10 @@
  * artwork when the original changes.
  *
  * The TopBar copy stays byte-identical to the original. The favicon must match its
- * canonical-artwork generator, including size-specific tile clearance.
- * Redrawing the logo fails this check, and the failure is the signal to update the copies.
+ * homepage-derived SVG source, including its background, scale and spacing.
+ * The generation check detects stale ICO output after the SVG source changes.
  *
- * Artwork is not edited here. The source is design-system and the generator lives in the
+ * Header artwork comes from design-system; the favicon uses the committed homepage SVG. The generator lives in the
  * host repository (`design-system/README.md` "To change the logo").
  */
 
@@ -55,7 +55,7 @@ if (drifted.length > 0) {
 }
 
 if (!readFileSync(path.join(DAPP, "apps/web/public/favicon.ico")).equals(await brandIcon())) {
-  throw new Error("Favicon differs from the canonical tile: node scripts/sync-brand-icon.mjs");
+  throw new Error("Favicon differs from the homepage SVG: node scripts/sync-brand-icon.mjs");
 }
 const provenance = JSON.parse(readFileSync(path.join(DAPP, "design-system/SOURCE.json"), "utf8"));
 const { createHash } = await import("node:crypto");
@@ -63,4 +63,4 @@ for (const [file, expected] of Object.entries(provenance.files)) {
   const actual = createHash("sha256").update(readFileSync(path.join(DAPP, "design-system", file))).digest("hex");
   if (actual !== (expected as { sha256: string }).sha256) throw new Error(`Pinned design source drift: ${file}`);
 }
-console.log(`Canonical source and generated favicon verified. ${COPIES.length} brand assets match the originals.`);
+console.log(`Pinned design source and homepage-derived favicon verified. ${COPIES.length} brand assets match the originals.`);

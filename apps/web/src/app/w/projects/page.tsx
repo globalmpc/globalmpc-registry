@@ -11,6 +11,7 @@ import { useSession } from "@/lib/session";
 import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
+import { ProjectStageRoadmap } from "@/components/ProjectProgress";
 import { WorkspaceProjectProgress } from "@/components/WorkspaceProjectProgress";
 import { GradeBadge, LifecycleBadge, ReadinessBadge } from "@/components/StatusBadge";
 
@@ -237,7 +238,7 @@ export default function ProjectListPage() {
                     </Link>
                   </td>
                   <td>{project.name}</td>
-                  <td>{token && session?.actions?.includes("readiness.read") ? <WorkspaceProjectProgress key={`${session.tenantId}:${session.subjectId}:${project.id}`} token={token} projectId={project.id} savedSummary={project.stageProgress} /> : <span className="meta">Progress requires assessment access</span>}</td>
+                  <td>{token && session?.actions?.includes("readiness.read") ? <WorkspaceProjectProgress key={`${session.tenantId}:${session.subjectId}:${project.id}`} token={token} projectId={project.id} savedSummary={project.stageProgress} /> : <><span className="meta">Progress requires assessment access</span><ProjectStageRoadmap /></>}</td>
                   <td className="mono">{project.hostCountryIso3}</td>
                   <td>{project.minerals.join(", ") || "—"}</td>
                   <td>{REFERENCE_LABEL[project.referenceStatus]}</td>

@@ -77,14 +77,14 @@ export async function resolveCatalogClaim(
   if (catalogEntryId !== null && values !== null) {
     const [catalog] = await tx<{ catalog_version: number; definition: unknown }[]>`
       SELECT catalog_version, definition FROM core.claim_types
-      WHERE id = ${catalogEntryId} AND claim_type = ${claimType} AND effective_from <= now()
+      WHERE id = ${catalogEntryId} AND core.project_definition_applies(project_id,${projectId}) AND claim_type = ${claimType} AND effective_from <= now()
     `;
     if (!catalog) throw unprocessable("CLAIM_CATALOG_UNAVAILABLE", "Select an approved, effective catalog entry for this claim type");
     validateCatalogValues(catalog.definition, values);
     catalogVersion = catalog.catalog_version;
   }
   async function validateEvidenceBindings(): Promise<string[]> {
-    if (catalogEntryId !== null && input.sourceReceiptId) {
+    if (input.sourceReceiptId) {
       const [receipt] = await tx<{ id: string }[]>`
         SELECT id FROM core.source_receipts WHERE id = ${input.sourceReceiptId} AND project_id = ${projectId}
       `;

@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { ProjectStageProgress } from "@mpc/api-contract";
 import { type LedgerSummary } from "@/lib/evidence-ledger-api";
 import { ProgressRateLimited, projectProgressRequests } from "@/lib/project-progress-requests";
-import { ProjectProgress } from "./ProjectProgress";
+import { ProjectProgress, ProjectStageRoadmap } from "./ProjectProgress";
 
 /** Parent keys by tenant/subject; project/token changes also discard in-flight state. */
 export function WorkspaceProjectProgress(props: {
@@ -37,7 +37,7 @@ function ProgressRow({ token, projectId, savedSummary }: Parameters<typeof Works
     {displayed ? <>
       <span className="meta">{summary ? "Last requested assessment · may be outdated" : "Saved assessment · may be outdated"}</span>
       <ProjectProgress summary={displayed} />
-    </> : <span className="meta">No saved assessment available</span>}
+    </> : <><span className="meta">No saved assessment available</span><ProjectStageRoadmap /></>}
     {state === "loading" ? <span role="status">Loading progress…</span> : null}
     {state === "limited" ? <span role="status">Progress loading paused. Wait one minute before retrying.</span> : null}
     {state === "failed" ? <span role="status">Progress unavailable</span> : null}

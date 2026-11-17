@@ -34,7 +34,7 @@ test.describe("Administration", () => {
 
     const row = page.getByTestId("admin-subjects").locator("tr", { hasText: name });
     await row.getByRole("button", { name: "Propose role" }).click();
-    await page.getByRole("textbox", { name: "Role" }).fill("data_steward");
+    await page.getByRole("combobox", { name: "Role", exact: true }).selectOption("reviewer");
     await page.getByRole("textbox", { name: "Why" }).fill("Handles evidence registration");
     await page.getByRole("button", { name: "Propose", exact: true }).click();
 
@@ -85,7 +85,7 @@ test.describe("Administration", () => {
     // A seeded person with one non-admin role. Tenant A has no second operator in the E2E seed,
     // so the proposal stays pending and the role itself is never revoked.
     const row = page.getByTestId("admin-subjects").locator("tr", { hasText: "Voter A" });
-    await expect(row).toContainText("protocol_voter");
+    await expect(row).toContainText("project_member");
 
     // The seed runs once per run and CI retries once. On a retry the first attempt's proposal
     // is already open, and the row shows that instead of the button.

@@ -93,7 +93,7 @@ function overview(): ProjectOverview {
     ],
     stakeholderEventCount: 0,
     activity: [
-      { command: "ProjectRegistered", effectiveRole: "mpc_operator", occurredAt: "2026-01-01" },
+      { command: "ProjectRegistered", effectiveRole: "administrator", occurredAt: "2026-01-01" },
     ],
     requestId: "request-id",
     asOf: "2026-01-01",

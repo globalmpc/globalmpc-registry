@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ProjectStageRoadmap } from "./ProjectProgress";
 import { StageAssessments } from "./StageAssessments";
 import { ErrorNotice } from "./ErrorNotice";
 import {
@@ -44,7 +45,7 @@ function readableLabel(value: string) {
 function stageLabel(stage: string) {
   return STAGE_LABELS[stage] ?? readableLabel(stage);
 }
-function gradeLabel(grade: string | null | undefined) {
+export function gradeLabel(grade: string | null | undefined) {
   return grade ? (GRADE_LABELS[grade] ?? readableLabel(grade)) : "Not graded";
 }
 const REASON_LABELS: Record<string, string> = {
@@ -59,10 +60,10 @@ const REASON_LABELS: Record<string, string> = {
   CURRENT_SCOPED_REVIEW_REQUIRED:
     "A current signed review of the linked evidence is still needed.",
 };
-function statusLabel(status: string) {
+export function statusLabel(status: string) {
   return STATUS_LABELS[status] ?? status;
 }
-function reasonsText(reasons: string[]) {
+export function reasonsText(reasons: string[]) {
   return reasons.map((reason) => REASON_LABELS[reason] ?? reason).join("; ");
 }
 
@@ -107,7 +108,7 @@ export function EvidenceLedger({
           {reviewed} / {summary.items.length} items
         </dd>
       </dl>
-      {browsable ? <StageAssessments summary={summary} /> : null}
+      {browsable ? <StageAssessments summary={summary} /> : <ProjectStageRoadmap stages={summary.stages} />}
       {browsable ? (
         <div className="evidence-browser-controls">
           <label>Search evidence items
@@ -254,17 +255,18 @@ export function WorkspaceEvidenceLedger({
   );
 }
 export function EvidenceLedgerWarnings({
-  current,
+  current, compact = false,
 }: {
+  readonly compact?: boolean;
   readonly current: LedgerCurrent;
 }) {
   return (
-    <section className="panel" data-testid="evidence-ledger-current">
-      <h2>Current evidence warnings</h2>
-      <p className="sub">
+    <section className={compact ? "public-current-warnings" : "panel"} data-testid="evidence-ledger-current">
+      {current.warnings.length > 0 || !compact ? <h2>Current evidence warnings</h2> : null}
+      {!compact ? <p className="sub">
         Checked {current.evaluatedAt}. These warnings are separate from the
         approved record and do not change its hash or proof.
-      </p>
+      </p> : null}
       {current.warnings.length === 0 ? (
         <p>No current warnings reported for published items.</p>
       ) : (

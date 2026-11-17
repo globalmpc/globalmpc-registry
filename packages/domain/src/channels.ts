@@ -147,6 +147,10 @@ export function checkSecondReview(input: {
     };
   }
 
+  if (!input.firstConfirmedBy) {
+    return { ok: false, reason: "The first checker is unknown, so a different second checker cannot be established", nextAction: "Record a new manual confirmation with an attributed first checker" };
+  }
+
   if (input.secondConfirmedBy === input.firstConfirmedBy) {
     return {
       ok: false,
