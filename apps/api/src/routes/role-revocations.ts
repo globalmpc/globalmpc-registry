@@ -166,6 +166,7 @@ async function assertApproverRemains(tx: Tx, tenantId: string, binding: BindingR
     FROM core.role_bindings b
     WHERE b.tenant_id = ${tenantId}
       AND b.id <> ${binding.id}
+      AND b.project_id IS NULL AND COALESCE(b.scope_kind, 'tenant') = 'tenant' AND b.jurisdiction IS NULL
       AND b.revoked_at IS NULL
       AND b.role = ANY(${[...APPROVER_ROLES]})
       AND EXISTS (

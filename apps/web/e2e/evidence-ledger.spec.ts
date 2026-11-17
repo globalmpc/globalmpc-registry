@@ -1,3 +1,4 @@
+import { openIntegrityProof } from "./disclosures";
 import { openHeaderMenu } from "./header-menu";
 import { expect, test } from "@playwright/test";
 import { catalogFixtureKey } from "./catalog-fixtures";
@@ -187,20 +188,28 @@ test.describe("evidence ledger complete journey", () => {
     await page.goto("/w/projects");
     const workspaceRow = page.getByTestId("project-list").getByRole("row").filter({has: page.getByRole("link", {name: projectKey, exact: true})});
     await expect(workspaceRow).toContainText("Exploration");
+    const projectStages = ["Exploration", "Resource definition", "Feasibility", "Permitting", "Production"];
+    await expect(workspaceRow.getByRole("list", { name: "Project stages" }).getByRole("listitem").locator("strong")).toHaveText(projectStages);
     await expect(workspaceRow.getByText("Saved assessment · may be outdated")).toBeVisible();
     await expect(workspaceRow.getByRole("progressbar")).toHaveAttribute("value", assessedStage.reviewedItems);
     await expect(workspaceRow.getByRole("progressbar")).toHaveAttribute("max", assessedStage.requiredItems);
     await page.screenshot({path:test.info().outputPath("workspace-stage-progress.png"),fullPage:true});
     await page.goto("/");
     const publicRow = page.locator("article.public-project-row").filter({hasText:projectKey});
-    await expect(publicRow).toContainText("Exploration");
-    await expect(publicRow).toContainText("in this published version");
-    await expect(publicRow.getByRole("progressbar")).toHaveAttribute("value", assessedStage.reviewedItems);
+    await expect(publicRow.getByText("Stage 1 of 5", { exact: true })).toBeVisible();
+    const publicStages = publicRow.getByRole("list", { name: "Published evidence stages" }).getByRole("listitem");
+    await expect(publicStages).toHaveText(projectStages.map(name => new RegExp(`^${name}: `)));
+    await expect(publicStages.first()).toHaveAttribute("data-status", "ok");
+    const reviewedCount = privateLedger.items.filter((item: {status:string}) => item.status === "reviewed").length;
+    await expect(publicRow.locator(".directory-result-count")).toHaveText(`${reviewedCount} reviewed ${reviewedCount === 1 ? "item" : "items"}`);
+    await expect(publicRow.locator(".directory-evidence")).toHaveAttribute("title", "Evidence progress in the published assessment; not a signed gate decision");
     await page.screenshot({path:test.info().outputPath("public-stage-progress.png"),fullPage:true});
     await page.goto(`/explorer/projects/${projectKey}`);
     await expect(
       page.getByTestId(`ledger-status-${licence}`),
     ).toHaveText("Reviewed");
+    await expect(page.getByRole("list", { name: "Project stages" }).getByRole("listitem").locator("strong")).toHaveText(projectStages);
+    await openIntegrityProof(page);
     await expect(page.getByTestId("proof-panel")).toBeVisible();
     await expect(page.getByText("Path matches")).toBeVisible();
     await expect(page.getByTestId("proof-included")).toContainText(

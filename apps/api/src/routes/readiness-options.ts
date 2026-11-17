@@ -47,7 +47,7 @@ export async function registerReadinessOptionRoutes(
         >`
           SELECT id, rule_set_id, rule_set_version, gate_id, jurisdiction_profile, effective_from
           FROM core.compliance_policy_sets
-          WHERE tenant_id=${tenantId} AND state='effective' AND effective_from <= now()
+          WHERE tenant_id=${tenantId} AND core.project_definition_applies(project_id,${projectId}) AND state='effective' AND effective_from <= now()
             AND jurisdiction_profile=${project.host_country_iso3}
             AND (${query.data.gateId ?? null}::text IS NULL OR gate_id=${query.data.gateId ?? null})
           ORDER BY gate_id, jurisdiction_profile, rule_set_id, effective_from DESC, id

@@ -739,7 +739,9 @@ acquisition.
 
 Database row triggers make API, worker and direct SQL writes participate in the same barrier,
 including inserts. Project inputs acquire the matching exclusive project lock; shared
-definitions acquire an exclusive tenant-configuration lock. Moves lock both old and new scopes
+definitions acquire an exclusive tenant-configuration lock. Authorities, including credential issuers
+without source connections, participate as configuration inputs (0142). Role-binding grants and
+revocations also participate because their organizations affect live review independence (0143). Moves lock both old and new scopes
 in deterministic order. Covered input tables reject `TRUNCATE`, which cannot be scoped by row.
 Plain reads, unrelated projects' evidence writes and other tenants' configuration writes can
 continue. Same-tenant configuration writes wait for publications, while publication fails fast
@@ -792,3 +794,20 @@ TTL/sequence/version/hash guards, and do not modify existing anchor state. The
 implementation is initialization-locked; upgrades require reviewed storage-layout
 compatibility. CRE-specific API chain/RPC configuration does not alter the anchor
 chain. RPC tracing also excludes CRE endpoint origins, including credentials.
+
+### Schema activation chronology (0141)
+
+A schema activation or reactivation advances its tenant/schema-key clock through
+`core.record_schema_activation()`. This narrowly privileged trigger writes only chronology for
+the RLS-authorized schema row; consumers keep ordinary tenant-scoped access. The clock table uses
+FORCE RLS and tenant USING/WITH CHECK, with only SELECT granted to the application role. A signing
+transaction captures the epoch under the configuration/project barrier; the signed epoch is
+immutable and historical NULLs are never backfilled. Coexisting versions active before signing do
+not invalidate a review; later activation requires reassessment. Final dispute dismissal preserves
+its verdict and the original signature but cannot restore support with an invalid current basis.
+
+Restoration also requires the original signer to retain known independent organizational
+provenance, using the same nonempty/non-operator predicate as signing and adjudication. Retained
+uploads use the ledger's UTC-day expiry, replacement, open-impact and upstream invalidation rules,
+including direct catalog attachments that never had a source receipt. A valid document on its
+expiry date remains eligible; an expired retained document cannot renew professional support.

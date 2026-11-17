@@ -421,10 +421,10 @@ describeDb("schema, RLS, guards", () => {
       const [assessment] = await sql<{ id: string }[]>`
         INSERT INTO core.compliance_assessments (
           id, tenant_id, project_id, gate_id, policy_set_id,
-          input_snapshot_hash, evaluated_as_of, status, requirement_results, canonical_result_hash
+          input_snapshot_hash, evaluated_as_of, status, requirement_results, canonical_result_hash, evidence_actor_ids
         ) VALUES (
           gen_random_uuid(), ${TENANT_A}, ${projectId}, 'registry_publication', ${policySetId},
-          ${"0x" + "aa".repeat(32)}, now(), 'gap', '[]'::jsonb, ${"0x" + "bb".repeat(32)}
+          ${"0x" + "aa".repeat(32)}, now(), 'gap', '[]'::jsonb, ${"0x" + "bb".repeat(32)}, '{}'::uuid[]
         ) RETURNING id
       `;
       assessmentId = assessment!.id;

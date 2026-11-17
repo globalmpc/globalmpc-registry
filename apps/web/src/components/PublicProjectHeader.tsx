@@ -72,13 +72,13 @@ export function PublicProjectHeader({
             <button type="button" onClick={() => void copy(true)}>
               Cite
             </button>
-            <a href="#record-history">Version history ↓</a>
+            <a href="#record-history" onClick={() => { const history = document.getElementById("record-history"); if (history instanceof HTMLDetailsElement) history.open = true; }}>Version history ↓</a>
           </div>
         ) : null}
       </div>
       {entry ? (
         <p className="meta">
-          Published {entry.publishedAt ?? "date unavailable"} · Version{" "}
+          Published {entry.publishedAt ? new Date(entry.publishedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }) : "date unavailable"} (UTC) · Version{" "}
           {entry.version}
         </p>
       ) : null}

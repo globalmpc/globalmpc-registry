@@ -13,6 +13,7 @@ export const evidenceLedgerItem = z.object({
 }).strict();
 export const evidenceLedgerStage = z.object({
   gateId: z.string(), policySetId: z.string().guid(), ruleSetVersion: z.string(),
+  itemClaimTypes: z.array(z.string()).optional(),
   status: z.enum(READINESS_STATUSES), missing: z.array(z.string()),
   reviewedItems:z.string().regex(/^(0|[1-9][0-9]*)$/),requiredItems:z.string().regex(/^(0|[1-9][0-9]*)$/),
 }).strict();

@@ -113,7 +113,7 @@ it("gates loading, signed-out and tenantless sessions while always allowing acce
   }
   s.path = "/w/projects";
   s.session.tenantId = "tenant1";
-  s.session.roleBindings = [{ role: "data_steward" }];
+  s.session.roleBindings = [{ role: "reviewer" }];
   view.rerender(
     <WorkspaceGate>
       <p>Private records</p>

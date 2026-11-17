@@ -75,7 +75,7 @@ export function checkProposalSpace(space: GovernanceSpace, type: string): SpaceC
  * Voting eligibility.
  *
  * A project voter votes only on the AT snapshot of **that** project. It cannot vote on other
- * projects or on the protocol (02 §2.2 `project_voter` prohibitions).
+ * projects or on the protocol (02 §2.2 `project_member` prohibitions).
  */
 export function checkVoteEligibility(
   voterSpace: GovernanceSpace,
@@ -92,26 +92,19 @@ export function checkVoteEligibility(
     : { allowed: false, reason: "GOVERNANCE_PROJECT_SCOPE_MISMATCH" };
 }
 
-/**
- * The space a voter role binding votes in — 02 §2.2.
- *
- * `protocol_voter` votes on the protocol with MPC weight. `project_voter` votes on **one**
- * project's AT snapshot, so only a binding that names that project has a space. An
- * organization-level `project_voter` binding names no project; reading it as "every project"
- * would let one binding vote on every project's assets (02 §2.2 `project_voter` prohibitions).
- *
- * Other roles do not vote. The MPC operator administers proposals (02 §2.3) and must not make
- * project asset decisions (02 §2.2), so it has no space here.
- */
+/** A project member votes only in the grant's namespace, never as an administrator.
+ * Migration stores `none` for old non-voting or malformed bindings rather than
+ * deriving new protocol rights from an absent project ID. */
 export function voterSpaceOf(binding: {
   readonly role: string;
+  readonly governanceScope?: "protocol" | "project" | "none";
   readonly projectId: string | null;
 }): GovernanceSpace | null {
-  if (binding.role === "protocol_voter") return "protocol";
-  if (binding.role === "project_voter" && binding.projectId !== null) {
-    return { kind: "project", projectId: binding.projectId };
-  }
-  return null;
+  if (binding.role !== "project_member" || binding.governanceScope === "none") return null;
+  if (binding.governanceScope === "project" && binding.projectId === null) return null;
+  if (binding.governanceScope === "protocol" && binding.projectId !== null) return null;
+  if (binding.projectId === null) return "protocol";
+  return { kind: "project", projectId: binding.projectId };
 }
 
 /**

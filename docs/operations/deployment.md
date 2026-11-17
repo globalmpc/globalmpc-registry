@@ -397,7 +397,7 @@ pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_T
 pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_TENANT_NAME' 'MPC Registry'
 pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_ORG_NAME' '<organization legal name>'
 pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_SUBJECT_NAME' 'First operator'
-# Optional, with the CLI's defaults: BOOTSTRAP_JURISDICTION (MNG), BOOTSTRAP_ROLE (mpc_operator),
+# Optional, with the CLI's defaults: BOOTSTRAP_JURISDICTION (MNG), BOOTSTRAP_ROLE (administrator),
 # BOOTSTRAP_ASSURANCE (high_assurance).
 # Existing legacy operator only: verify the tenant and stable subject UUID before authorizing.
 pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_SUBJECT_ID' '<existing-subject-uuid>'
@@ -490,14 +490,14 @@ On the shared dev deployment **every existing reviewer and approver wallet is op
 wallet from Settings is allowed and keeps the person's sessions, but it is a disable of the
 operator-verified wallet, so the person's identity assurance falls to `wallet_only` (0130). Every
 role whose minimum is above that stops taking effect at once — the `reviewer_*` roles,
-`gate_approver`, `disclosure_approver`, `issuer_officer`, `mpc_operator`, `security_operator` and
-the other `high_assurance` roles; `identity_bound` roles such as `data_steward` too. The roles are
+`reviewer`, `reviewer`, `reviewer`, `administrator`, `administrator` and
+the other `high_assurance` roles; `identity_bound` roles such as `reviewer` too. The roles are
 not revoked, and nothing has to be granted again. The person sees this right after the replace,
 in the header (the roles marked inactive, "identity verification needed — ask an admin") and on
 the verification and gate screens, which say so before anything is signed.
 
 **After every such rotation an administrator restores the level** — someone holding
-`admin.subject.manage` (`mpc_operator` or `security_operator`), and never the person themselves
+`admin.subject.manage` (`administrator` or `administrator`), and never the person themselves
 (the server refuses setting one's own level):
 
 1. Confirm out of band that the new wallet is the person's: they sign in, open Account settings
@@ -1140,3 +1140,18 @@ not alter deployment role attributes or grants. Jobs/anchor worker cross-tenant
 requirements are separate; do not grant BYPASSRLS to an API login to recover scans.
 A successful local regression is not evidence that a previously failed shared-dev
 seed completed; deploy the worker fix and verify the retained demo scan on retry.
+
+### Independent gate decisions (0139)
+
+New readiness assessments freeze the account IDs of the evidence submitters and reviewers
+whose rows supplied their facts and project context. A contributor cannot request or record
+its own gate decision. Both signature endpoints and the database enforce this; subsequent
+evidence does not rewrite the frozen contributor list. No signed format or onchain permission
+changes. Historical assessments and gate decisions are left unchanged. Before making a new
+decision on an old assessment without provenance, recompute readiness in the project workspace.
+Current evidence with an unknown submitter also blocks a new decision: record an attributable
+correction and reassess rather than treating missing authorship as independence.
+
+The role migration also preserves revoked legacy names as bootstrap history. A renamed role
+cannot bypass a previous revocation or create a replacement first holder. Normal two-person
+grant/recovery flows remain the way to restore authority.

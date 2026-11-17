@@ -49,7 +49,7 @@ describeDb("idempotency key scope", () => {
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'mpc_operator')
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'administrator')
     `;
     operatorSecondToken = await signIn(app, second);
   });

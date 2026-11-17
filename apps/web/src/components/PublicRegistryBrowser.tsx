@@ -6,7 +6,7 @@ import {
   listPublicRegistryEntries,
   type PublicRegistryListItem,
 } from "@/lib/api";
-import { DirectoryEvidence } from "./DirectoryEvidence";
+import { DirectoryEvidence, directoryReviewedItemCount } from "./DirectoryEvidence";
 import { ErrorNotice } from "@/components/ErrorNotice";
 
 /**
@@ -41,6 +41,43 @@ function text(projection: Record<string, unknown>, field: string): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.filter((item) => typeof item === "string").join(", ");
   return "—";
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+function PublicProjectRow({ item, hrefFor }: {
+  readonly item: PublicRegistryListItem;
+  readonly hrefFor: PublicRegistryBrowserProps["hrefFor"];
+}) {
+  const count = directoryReviewedItemCount(item.projection.evidenceLedger);
+  const name = text(item.projection, "projectName");
+  const title = name === "—" ? item.publicKey : name;
+  const synthetic = Array.isArray(item.projection.limitations) && item.projection.limitations.some(value => typeof value === "string" && value.includes("SYNTHETIC"));
+  return (
+    <article className="public-project-row">
+      <div>
+        <h2>{hrefFor ? <Link href={hrefFor(item)}>{title}</Link> : item.publicKey}{synthetic ? <span className="directory-test-badge">TEST DATA</span> : null}</h2>
+        <p className="meta">{item.publicKey} · {text(item.projection, "mineral")} · {text(item.projection, "hostCountry")}</p>
+      </div>
+      <DirectoryEvidence value={item.projection.evidenceLedger} />
+      <div className="directory-result-count">{count === null ? "— reviewed items" : `${count} reviewed ${count === 1 ? "item" : "items"}`}</div>
+      <div>
+        <span className={item.revokedAt ? "public-project-status revoked" : "public-project-status"}>{item.status}{item.revokedAt && item.status !== "revoked" ? " · revoked" : ""}</span>
+        <p className="meta"><span>v{item.version}</span> · As of {item.publishedAt ? formatDate(item.publishedAt) : "Date unavailable"}</p>
+      </div>
+      {hrefFor ? <Link className="directory-open" href={hrefFor(item)} aria-label={`Open ${title}`}><span aria-hidden="true">›</span></Link> : null}
+    </article>
+  );
+}
+
+function DirectoryCaption({ items, more }: { readonly items: PublicRegistryListItem[]; readonly more: boolean }) {
+  const dates = items.flatMap(item => item.publishedAt ? [item.publishedAt] : []).sort();
+  const latest = dates.at(-1);
+  const counts = items.map(item => directoryReviewedItemCount(item.projection.evidenceLedger));
+  const total = counts.every(count => count !== null) ? counts.reduce<number>((sum, count) => sum + (count ?? 0), 0) : null;
+  return <p className="meta public-directory-caption">PROJECTS · {items.length}{more ? "+" : ""} projects{more ? " loaded" : ""}{total === null ? "" : ` · ${total} reviewed items`}{latest ? ` · Latest publication ${formatDate(latest)}` : ""}</p>;
 }
 
 export function PublicRegistryBrowser({
@@ -101,17 +138,7 @@ export function PublicRegistryBrowser({
 
           <div className="public-project-list">
             {items.map((item) => (
-              <article className="public-project-row" key={item.entryVersionId}>
-                <div>
-                  <h2>{hrefFor ? <Link href={hrefFor(item)}>{text(item.projection, "projectName") === "—" ? item.publicKey : text(item.projection, "projectName")}</Link> : item.publicKey}</h2>
-                  <p className="meta">{item.publicKey} · {text(item.projection, "mineral")} · {text(item.projection, "hostCountry")}</p>
-                </div>
-                <DirectoryEvidence value={item.projection.evidenceLedger} />
-                <div>
-                  <span className={item.revokedAt ? "public-project-status revoked" : "public-project-status"}>{item.status}{item.revokedAt && item.status !== "revoked" ? " · revoked" : ""}</span>
-                  <p className="meta"><span>v{item.version}</span> · Published {item.publishedAt ? new Date(item.publishedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }) : "Date unavailable"}</p>
-                </div>
-              </article>
+              <PublicProjectRow key={item.entryVersionId} item={item} hrefFor={hrefFor} />
             ))}
           </div>
 
@@ -179,6 +206,7 @@ export function PublicRegistryBrowser({
         >
           <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
             <label htmlFor="public-search" className={cards ? "sr-only" : undefined}>Search</label>
+            {cards ? <svg className="directory-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg> : null}
             <input
               id="public-search"
               value={draft}
@@ -226,7 +254,7 @@ export function PublicRegistryBrowser({
       {error ? <><ErrorNotice error={error} /><button type="button" disabled={busy} onClick={() => void load({ append: false, cursor: null })}>Retry published records</button></> : null}
 
       <div className={cards ? "public-directory-results" : "panel"} data-testid="public-registry-list">
-        {cards ? <p className="meta public-directory-caption">PROJECTS · Published records</p> : null}
+        {cards ? <DirectoryCaption items={items} more={cursor !== null} /> : null}
         {items.length === 0 && !busy && !error ? (
           <p className="sub" style={{ margin: 0 }} data-testid="public-registry-empty">
             {query ? `Nothing published matches “${query}”.` : emptyMessage}

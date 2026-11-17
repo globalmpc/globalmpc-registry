@@ -78,10 +78,10 @@ describeDb("disclosure restrictions", () => {
     const [assessment] = await fx.sql<{ id: string }[]>`
       INSERT INTO core.compliance_assessments (
         id, tenant_id, project_id, gate_id, policy_set_id,
-        input_snapshot_hash, evaluated_as_of, status, requirement_results, canonical_result_hash
+        input_snapshot_hash, evaluated_as_of, status, requirement_results, canonical_result_hash, evidence_actor_ids
       ) VALUES (
         ${randomUUID()}, ${fx.tenantA}, ${projectId}, 'offering_activation', ${policy!.id},
-        ${"0x" + "aa".repeat(32)}, now(), 'ok', '[]'::jsonb, ${"0x" + "bb".repeat(32)}
+        ${"0x" + "aa".repeat(32)}, now(), 'ok', '[]'::jsonb, ${"0x" + "bb".repeat(32)}, '{}'::uuid[]
       ) RETURNING id
     `;
     const [decider] = await fx.sql<{ subject_id: string }[]>`
@@ -341,7 +341,7 @@ describeDb("disclosure restrictions", () => {
 
   it("does not let a role without disclosure.restrict create or release", async () => {
     const projectId = await registeredProject();
-    expect((await create(projectId, {}, steward)).statusCode).toBe(403);
+    expect((await create(projectId, {}, await signIn(app, fx.proposerA))).statusCode).toBe(403);
   });
 
   it("does not replay a stored activation to someone without disclosure.restrict", async () => {
@@ -361,7 +361,7 @@ describeDb("disclosure restrictions", () => {
       });
 
     expect((await send(operator)).statusCode).toBe(200);
-    expect((await send(steward)).statusCode).toBe(403);
+    expect((await send(await signIn(app, fx.proposerA))).statusCode).toBe(403);
   });
 
   it("a guarded action waits for an activation in flight and then sees it", async () => {

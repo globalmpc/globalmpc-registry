@@ -33,6 +33,15 @@ describe("structured evidence snapshot versioning", () => {
   const row = { id: "c", value_text: "Summary", grade: "unverified", catalog_entry_id: "catalog", catalog_version: 1,
     structured_values: { number: "123" }, document_upload_ids: ["doc2", "doc1"] };
   const hash = (input = row) => hashSnapshotInput({ ...legacy, claimFingerprints: [snapshotClaimFingerprint(input)] });
+  it("keeps version 2 bytes reproducible and separates the new effective receipt scope", () => {
+    const input={...legacy,claimFingerprints:[snapshotClaimFingerprint(row)]};
+    const historical={snapshotVersion:"2",claimIds:["c"],artifactIds:[],receiptIds:[],claims:[{
+      id:"c",valueText:"Summary",grade:"unverified",structured:{catalogEntryId:"catalog",catalogVersion:"1",values:{number:"123"},documentUploadIds:["doc1","doc2"]},
+    }]};
+    expect(hashSnapshotInput(input)).toBe(keccak256(canonicalBytes(historical)));
+    expect(hashSnapshotInput({...input,snapshotVersion:"3"})).toBe(keccak256(canonicalBytes({...historical,snapshotVersion:"3"})));
+    expect(hashSnapshotInput({...input,snapshotVersion:"3"})).not.toBe(hashSnapshotInput(input));
+  });
   it("binds catalog identity/version, structured values and documents independently of the summary", () => {
     expect(hash()).not.toBe(hashSnapshotInput(legacy));
     expect(hash({ ...row, catalog_entry_id: "other" })).not.toBe(hash());

@@ -39,7 +39,7 @@ describeDb("project lifecycle", () => {
     operatorToken = await signIn(app, fx.operatorA);
     approverToken = await signIn(app, fx.approverA);
 
-    // issuer_officer is not in the fixture. It is the role that advances the lifecycle, so
+    // reviewer is not in the fixture. It is the role that advances the lifecycle, so
     // it is created here — possible now that the operator screens exist.
     const subject = (
       await app.inject({
@@ -67,7 +67,7 @@ describeDb("project lifecycle", () => {
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject.id}, ${fx.orgA}, 'issuer_officer')
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject.id}, ${fx.orgA}, 'reviewer')
     `;
     issuerToken = await signIn(app, {
       address: account.address.toLowerCase() as `0x${string}`,
@@ -142,10 +142,10 @@ describeDb("project lifecycle", () => {
     const [assessment] = await fx.sql<{ id: string }[]>`
       INSERT INTO core.compliance_assessments (
         id, tenant_id, project_id, gate_id, policy_set_id,
-        input_snapshot_hash, evaluated_as_of, status, requirement_results, canonical_result_hash
+        input_snapshot_hash, evaluated_as_of, status, requirement_results, canonical_result_hash, evidence_actor_ids
       ) VALUES (
         ${randomUUID()}, ${fx.tenantA}, ${projectId}, ${gateId}, ${policy!.id},
-        ${"0x" + "aa".repeat(32)}, now(), 'ok', '[]'::jsonb, ${"0x" + "bb".repeat(32)}
+        ${"0x" + "aa".repeat(32)}, now(), 'ok', '[]'::jsonb, ${"0x" + "bb".repeat(32)}, '{}'::uuid[]
       ) RETURNING id
     `;
     return assessment!.id;
@@ -226,7 +226,7 @@ describeDb("project lifecycle", () => {
 
     // Issuance decisions belong to whoever makes issuance decisions.
     expect(response.statusCode).toBe(403);
-    expect(response.json().details.requiredRoles).toContain("issuer_officer");
+    expect(response.json().details.requiredRoles).toContain("reviewer");
   });
 
   it("rejects a transition without a reason", async () => {
@@ -261,7 +261,7 @@ describeDb("project lifecycle", () => {
     it("does not let whoever suspended resume", async () => {
       const project = await newProject();
       const version = await register(project.id);
-      // issuer_officer holds both the suspend and the advance permission, so only the
+      // reviewer holds both the suspend and the advance permission, so only the
       // separation rule stands between it and resuming its own suspension.
       const suspended = await transition(issuerToken, project.id, version, {
         toState: "suspended",

@@ -115,11 +115,11 @@ describeDb("exports and audit coverage", () => {
       expect(row!.detail.lineCount).toBe(response.manifest.lineCount);
     });
 
-    it("is limited to auditors and security operators", async () => {
-      // mpc_operator may read the trail but not take a copy out.
+    it("is limited to administrators", async () => {
+      // Consolidated administration includes audit exports.
       const operator = await exportAudit(operatorToken);
-      expect(operator.statusCode).toBe(403);
-      expect(operator.json().details.requiredRoles).toEqual(["auditor", "security_operator"]);
+      expect(operator.statusCode).toBe(200);
+
       expect((await exportAudit(stewardToken)).statusCode).toBe(403);
     });
   });
@@ -278,7 +278,7 @@ describeDb("exports and audit coverage", () => {
         (row) => row.resource_id === notification.id,
       );
       expect(rows).toEqual([
-        { effective_role: "data_steward", resource_id: notification.id, project_id: fx.projectA },
+        { effective_role: "reviewer", resource_id: notification.id, project_id: fx.projectA },
       ]);
     });
   });

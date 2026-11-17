@@ -154,13 +154,6 @@ export async function registerStaleSignalRoutes(
        * `dismissed` is the same — it is a decision to do nothing, and that too
        * decides the fate of the public record.
        */
-      const effectiveRole = assertAuthorized(
-        session,
-        "registry.revoke",
-        tenantResource(tenantId, { sensitivity: "public" }),
-        sessionFacts(session),
-      );
-
       const { requestId, asOf, correlationId } = request.context;
 
       return withTenant(sql, { tenantId }, async (tx) => {
@@ -173,6 +166,9 @@ export async function registerStaleSignalRoutes(
           FOR UPDATE
         `;
         if (!current) throw notFound("Signal not found");
+        const effectiveRole = assertAuthorized(session, "registry.revoke",
+          current.project_id ? projectResource(tenantId, current.project_id, {sensitivity:"public"})
+            : tenantResource(tenantId, {sensitivity:"public",requiresTenantScope:true}), sessionFacts(session));
 
         if (current.resolution !== "open") {
           throw conflict("SIGNAL_ALREADY_RESOLVED", `Already closed as ${current.resolution}`);

@@ -180,3 +180,19 @@ and pauser roles by the admin, no admin handover is pending, and the contract is
 pointing at a withdrawn root, and neither A nor B can be linked onward. To correct, submit the
 replacement and supersede the bad head with it first. Revoke a head only when that line should
 end with no replacement.
+
+## Source verification
+
+The deployment above was verified on opBNBScan on 2026-11-13:
+[`RegistryAnchorV1`](https://testnet.opbnbscan.com/address/0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F).
+Its verification API returned `Pass - Verified` with match status `partial`.
+
+The deployed build uses `bytecodeHash: none` and `appendCBOR: false`.
+opBNBScan rejected that input with `Unexpected data: 0x80`; submitting the same
+sources and compiler settings with `appendCBOR: true` succeeded. The submitted
+runtime differs only by the 12-byte compiler metadata trailer; removing that
+trailer reproduces all 5,874 deployed runtime bytes. The deployed contract and
+repository build settings were not changed.
+
+[Sourcify](https://repo.sourcify.dev/5611/0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F)
+verified the original build settings, including creation and runtime matches.

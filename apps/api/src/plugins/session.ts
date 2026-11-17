@@ -6,7 +6,7 @@ import {
   requiredAuthenticationLevel,
   satisfiesAuthenticationLevel,
   SERVICE_ONLY_ROLES,
-  TENANT_WIDE_ROLES,
+  isTenantWideBinding,
   type AssuranceLevel,
   type AuthenticationLevel,
   type FirstFactor,
@@ -18,6 +18,8 @@ import type { ResolvedServiceToken, ResolvedSessionRow } from "./session-token.j
 
 type RoleBinding = {
   readonly role: string;
+  readonly governanceScope?: "protocol" | "project" | "none";
+  readonly scopeKind?: "tenant" | "organization" | "none";
   readonly organizationId: string | null;
   readonly projectId: string | null;
   /**
@@ -165,6 +167,8 @@ async function resolveAuthority(
       organization_id: string | null;
       project_id: string | null;
       jurisdiction: string[] | null;
+      scope_kind: "tenant" | "organization" | "none";
+      governance_scope: "protocol" | "project" | "none";
     }[]
   >`
     SELECT * FROM core.resolve_role_bindings(${subjectId})
@@ -178,11 +182,11 @@ async function resolveAuthority(
     return false;
   });
 
-  // Only a current, effective `security_operator` holder can be elevated. Revoking that role ends
+  // Only a current, effective `administrator` holder can be elevated. Revoking that role ends
   // any elevation with it, and sessions without it skip the lookup. The elevation is itself a role
   // with its own minimum.
   let elevation: string | null = null;
-  if (bindings.some((row) => row.role === "security_operator")) {
+  if (bindings.some((row) => row.role === "administrator" && row.project_id === null && row.scope_kind === "tenant" && row.jurisdiction === null)) {
     const candidate = await resolveBreakGlassElevation(sql, tenantId, subjectId);
     if (candidate !== null) {
       const verdict = meets(BREAK_GLASS_ROLE);
@@ -196,6 +200,8 @@ async function resolveAuthority(
     roleBindings: [
       ...bindings.map((row) => ({
         role: row.role,
+        scopeKind: row.scope_kind,
+        governanceScope: row.governance_scope,
         organizationId: row.organization_id,
         projectId: row.project_id,
         // Only scoped bindings carry the key, so unscoped ones read exactly as before.
@@ -277,7 +283,7 @@ async function resolveProjectJurisdictions(
 async function resolveOrganizationProjects(
   sql: postgres.Sql,
   tenantId: string,
-  bindings: readonly { role: string; organization_id: string | null; project_id: string | null }[],
+  bindings: readonly { role: string; organization_id: string | null; project_id: string | null; scope_kind?: "tenant" | "organization" | "none" }[],
 ): Promise<Readonly<Record<string, readonly string[]>>> {
   const organizations = [
     ...new Set(
@@ -286,7 +292,7 @@ async function resolveOrganizationProjects(
           (row) =>
             row.project_id === null &&
             row.organization_id !== null &&
-            !TENANT_WIDE_ROLES.includes(row.role),
+            !isTenantWideBinding({ role: row.role, scopeKind: row.scope_kind }) && row.scope_kind !== "none",
         )
         .map((row) => row.organization_id as string),
     ),

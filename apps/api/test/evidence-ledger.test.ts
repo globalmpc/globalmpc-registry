@@ -1,3 +1,4 @@
+import { assertEvidenceLedgerProjection } from "../src/services/registry-publication.js";
 import postgres from "postgres";
 import { ROUTES } from "@mpc/api-contract";
 import { randomUUID } from "node:crypto";
@@ -7,7 +8,7 @@ import { buildServer } from "../src/server.js";
 import {loadConfig} from "../src/config.js";
 import { setupFixture, signIn, testEnv, idempotencyKey, type TestFixture } from "./helpers/db.js";
 import { publishProject, projectProjection, draftRegistryEntry, projectKeyOf } from "./helpers/registry.js";
-import { computeEvidenceLedger, publicLedgerProjection, withTenant, type LedgerSnapshot } from "@mpc/db";
+import { computeEvidenceLedger, persistEvidenceLedger, publicLedgerProjection, withTenant, type LedgerSnapshot } from "@mpc/db";
 const describeDb=process.env['DATABASE_URL']?describe:describe.skip;
 
 describeDb('computed ledger API and approved public boundary',()=>{
@@ -98,6 +99,16 @@ describeDb('computed ledger API and approved public boundary',()=>{
     const snapshot=assessed.json().snapshot;
     expect(snapshot.stages[0]).toMatchObject({reviewedItems:'1',requiredItems:'1'});
     expect(snapshot.currentStage).toBe('stage.exploration');expect(snapshot.items[0].status).toBe('reviewed');
+    // Model a pending pre-upgrade assessment without rewriting any recorded snapshot.
+    await withTenant(fx.appSql,{tenantId:fx.tenantA},async tx=>{
+      const legacy = await persistEvidenceLedger(tx,fx.tenantA,{...snapshot,stages:snapshot.stages.map(({itemClaimTypes:_links,...stage}:LedgerSnapshot['stages'][number])=>stage)});
+      const frozen = publicLedgerProjection(legacy);
+      await assertEvidenceLedgerProjection(tx,fx.tenantA,'project',projectId,{evidenceLedger:frozen},new Date());
+      const [retained] = await tx`SELECT snapshot FROM core.evidence_ledger_snapshots WHERE id=${legacy.id}`;
+      expect(retained!.snapshot).toEqual(legacy);
+      expect(frozen.stages[0]).not.toHaveProperty('itemClaimTypes');
+    });
+
     const projection=assessed.json().publicProjection;
     expect(projection.items[0].limitations).toEqual(['Licence number only; no legal validity opinion']);
     const publication=await publishProject(app,fx.sql,{drafter:token,publisher},projectId,{projection:await projectProjection(fx.sql,projectId,{evidenceLedger:projection})});
@@ -182,6 +193,25 @@ describeDb('computed ledger API and approved public boundary',()=>{
     })).rejects.toBe(exclusionRollback);
     // The approved v1 policy remains effective. A newer effective v2 is nevertheless selected
     // by the evaluator, so Explorer must warn without altering the frozen approval/hash.
+    // A newer demo-only policy must not change another project's private stage or public warnings.
+    const isolatedDemo=randomUUID(),scopedPolicy=randomUUID(),scopeProposal=randomUUID();
+    const scopedAt=new Date(Date.now()-1000);
+    const scopedDefinition={...definition,ruleSetId:'isolated-demo-regression',version:'99.0.0',effectiveFrom:scopedAt.toISOString().replace(/\.\d{3}Z$/,'Z')};
+    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id,reference_status)
+      VALUES(${isolatedDemo},${fx.tenantA},${'SCOPE-'+isolatedDemo},'Synthetic isolated demo','MNG',ARRAY['copper'],${fx.orgA},'synthetic_test_project')`;
+    await fx.sql`INSERT INTO audit.events(tenant_id,command,resource_type,resource_id,reason,correlation_id)
+      VALUES(${fx.tenantA},'dev_demo.started','project',${isolatedDemo},'Synthetic regression only',${randomUUID()})`;
+    await fx.sql.begin(async tx=>{
+      await tx`INSERT INTO core.compliance_policy_sets(id,tenant_id,project_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+        VALUES(${scopedPolicy},${fx.tenantA},${isolatedDemo},'isolated-demo-regression','99.0.0','stage.exploration','MNG',${scopedAt},${tx.json(scopedDefinition)},'effective')`;
+      await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+        VALUES(${scopeProposal},${fx.tenantA},'policy_set','isolated-demo-regression',1,${tx.json({definition:scopedDefinition,projectId:isolatedDemo})},'Synthetic regression only',${scopedAt},${fx.operatorSubjectA})`;
+      await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic regression only',materialized_id=${scopedPolicy},version=2 WHERE id=${scopeProposal}`;
+    });
+    expect((await get(projectId)).json().snapshot.stages[0].policySetId).toBe(policyId);
+    const unaffectedPublic=await app.inject({method:'GET',url:`/api/v1/public/registries/project/LED-${projectId.slice(0,8)}`});
+    expect(unaffectedPublic.json().evidenceLedgerCurrent.warnings).toEqual([]);
+    expect(unaffectedPublic.json().evidenceLedger).toEqual(projection);
     for(const ignored of [
       {tenantId:fx.tenantB,jurisdiction:'MNG',version:'90.0.0',effectiveFrom:'2020-01-01T00:00:00Z'},
       {tenantId:fx.tenantA,jurisdiction:'AUS',version:'91.0.0',effectiveFrom:'2020-01-01T00:00:00Z'},

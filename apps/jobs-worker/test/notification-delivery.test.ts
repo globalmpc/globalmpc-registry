@@ -83,7 +83,7 @@ describeDb("notification delivery", () => {
     const id = randomUUID();
     await sql`
       INSERT INTO core.notifications (id, tenant_id, kind, audience_role, summary, link)
-      VALUES (${id}, ${tenantId}, 'registry_revoked', 'mpc_operator', 'Record revoked', '/w/registries')
+      VALUES (${id}, ${tenantId}, 'registry_revoked', 'administrator', 'Record revoked', '/w/registries')
     `;
     return id;
   }

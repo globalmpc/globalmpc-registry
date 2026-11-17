@@ -9,6 +9,8 @@ import {
   type NotificationSink,
   createAdminSubject,
   createRoleGrant,
+  listOrganizations,
+  type OrganizationOption,
   createRoleRevocation,
   decideRoleGrant,
   decideRoleRevocation,
@@ -28,6 +30,7 @@ import {
   type RoleRevocation,
   type RoleRevocationReasonCode,
 } from "@/lib/api";
+import { HUMAN_ROLES, HUMAN_ROLE_LABELS } from "@mpc/api-contract";
 import { KIND_EXPLANATION } from "@/lib/documents";
 import { useSession } from "@/lib/session";
 import { can } from "@/lib/access";
@@ -73,9 +76,9 @@ const REVOCATION_REASONS: readonly { value: RoleRevocationReasonCode; label: str
  * deliberate choice with a stated basis.
  */
 const ASSURANCE_OPTIONS = [
-  { value: "wallet_only", label: "Wallet only — public read and voting" },
-  { value: "identity_bound", label: "Identity bound — steward, proposer, project roles" },
-  { value: "high_assurance", label: "High assurance — reviewer, gate approver, operator roles" },
+  { value: "wallet_only", label: "Wallet only — public read" },
+  { value: "identity_bound", label: "Identity bound — project members" },
+  { value: "high_assurance", label: "High assurance — reviewers and administrators" },
 ] as const;
 
 /** A binding someone is about to propose revoking. */
@@ -87,7 +90,7 @@ interface RevokeTarget {
 
 export default function AdminPage() {
   const { token, session, loading: sessionLoading } = useSession();
-  // `admin.read` reaches this screen (an auditor holds it); each change needs its own action.
+  // `admin.read` reaches this screen (an administrator holds it); each change needs its own action.
   // Controls the session's roles cannot use are not offered. The server decides either way.
   const mayManageSubjects = can(session, "admin.subject.manage");
   const mayManageWallets = can(session, "admin.wallet.manage");
@@ -113,6 +116,8 @@ export default function AdminPage() {
   const [detail, setDetail] = useState("");
   const [grantFor, setGrantFor] = useState<string | null>(null);
   const [grantRole, setGrantRole] = useState("");
+  const [grantOrganization, setGrantOrganization] = useState("");
+  const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
   const [grantReason, setGrantReason] = useState("");
   const [revokeFor, setRevokeFor] = useState<RevokeTarget | null>(null);
   const [revokeCode, setRevokeCode] = useState<RoleRevocationReasonCode>("offboarding");
@@ -148,12 +153,20 @@ export default function AdminPage() {
     } finally {
       setBusy(false);
     }
-  }, [token]);
+  }, [token, mayProposeRoles]);
 
   useEffect(() => {
     if (sessionLoading) return;
     void reload();
   }, [reload, sessionLoading]);
+
+  useEffect(() => {
+    if (!token || !["project_member", "reviewer"].includes(grantRole)) return;
+    let live = true;
+    listOrganizations(token).then(page => { if (live) setOrganizations(page.items); })
+      .catch(caught => { if (live) setError(caught); });
+    return () => { live = false; };
+  }, [token, grantRole]);
 
   async function run(action: () => Promise<unknown>) {
     try {
@@ -266,24 +279,32 @@ export default function AdminPage() {
             void run(async () => {
               await createRoleGrant(token!, newIdempotencyKey(), {
                 subjectId: grantFor,
-                role: grantRole.trim(),
+                role: grantRole,
+                ...(grantOrganization && grantRole !== "administrator" ? { organizationId: grantOrganization } : {}),
+                ...(grantRole === "project_member" || (grantOrganization && grantRole !== "administrator") ? { scopeKind: "organization" as const } : {}),
                 reason: grantReason,
               });
               setGrantFor(null);
               setGrantRole("");
+              setGrantOrganization("");
               setGrantReason("");
             });
           }}
         >
           <div className="field">
             <label htmlFor="grant-role">Role</label>
-            <input
-              id="grant-role"
-              className="mono"
-              value={grantRole}
-              onChange={(event) => setGrantRole(event.target.value)}
-              placeholder="data_steward"
-            />
+            <select id="grant-role" value={grantRole} onChange={event => setGrantRole(event.target.value)}>
+              <option value="">Choose a role</option>
+              {HUMAN_ROLES.map(role => <option key={role} value={role}>{HUMAN_ROLE_LABELS[role]}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="grant-organization">Organization</label>
+            <select id="grant-organization" disabled={grantRole === "administrator"} value={grantOrganization} onChange={event => setGrantOrganization(event.target.value)}>
+              <option value="">No organization</option>
+              {organizations.map(org => <option key={org.id} value={org.id}>{org.legalName}</option>)}
+            </select>
+            <p className="sub">Project members access only the selected organization's projects. Reviewers without an organization cover the tenant. Administrators manage the tenant.</p>
           </div>
           <div className="field">
             <label htmlFor="grant-reason">Why</label>
@@ -762,7 +783,7 @@ export default function AdminPage() {
                     {mayManageSubjects && subject.kind === "person" && subject.id !== session?.subjectId ? (
                       <button onClick={() => setAssuranceFor(subject.id)}>Set assurance</button>
                     ) : null}{" "}
-                    {mayProposeRoles ? <button onClick={() => setGrantFor(subject.id)}>Propose role</button> : null}
+                    {mayProposeRoles ? <button onClick={() => { setGrantFor(subject.id); setGrantRole(""); setGrantOrganization(""); setGrantReason(""); }}>Propose role</button> : null}
                   </td>
                 </tr>
               ))}

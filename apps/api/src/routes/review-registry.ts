@@ -15,7 +15,7 @@ import {
   type REGISTRY_KINDS,
 } from "@mpc/api-contract";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, projectResource, sessionFacts, tenantResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
@@ -424,16 +424,25 @@ function registerCatalogReads(app: FastifyInstance, sql: postgres.Sql): void {
     return result;
   }
   app.get("/api/v1/claim-types", async (request) => {
-    const { tenantId } = context(request);
+    const { tenantId, session } = requireReadContext(request);
     const { requestId, asOf } = request.context;
-    const { limit, cursor } = parseBody(claimTypeCatalogQuery, request.query);
-    const rows = await withTenant(sql, { tenantId }, (tx) => tx<CatalogRow[]>`
+    const { limit, cursor, projectId } = parseBody(claimTypeCatalogQuery, request.query);
+    assertAuthorized(session, "registry.read", projectId ? projectResource(tenantId, projectId) : tenantResource(tenantId), sessionFacts(session));
+    if (projectId) assertAuthorized(session, "evidence.read", projectResource(tenantId, projectId), sessionFacts(session));
+    const rows = await withTenant(sql, { tenantId }, async (tx) => {
+      if (projectId) {
+        const [project] = await tx`SELECT id FROM core.projects WHERE tenant_id=${tenantId} AND id=${projectId}`;
+        if (!project) throw notFound("Project not found");
+      }
+      return tx<CatalogRow[]>`
       SELECT DISTINCT ON (claim_type) * FROM core.claim_types
       WHERE tenant_id = ${tenantId} AND effective_from <= ${new Date(asOf)}
+        AND core.project_definition_applies(project_id,${projectId ?? null})
         AND NOT (claim_type = ANY(${[...PROJECT_FACT_KEYS]}::text[]))
         AND claim_type > ${cursor ?? ""}
       ORDER BY claim_type, catalog_version DESC LIMIT ${limit + 1}
-    `);
+    `;
+    });
     const page = rows.slice(0, limit);
     return { items: page.map(toCatalog), nextCursor: rows.length > limit ? page.at(-1)!.claim_type : null, requestId, asOf };
   });

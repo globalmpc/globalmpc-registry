@@ -29,8 +29,8 @@ import {
 /**
  * Break-glass elevation — spec 02 §2.6, 13 §13.6 "admin JIT elevation expiry".
  *
- * A `security_operator` requests an elevation **for themself** with a purpose, a target and an
- * expiry; a different `security_operator` approves it. While it is effective the session carries
+ * An `administrator` requests an elevation **for themself** with a purpose, a target and an
+ * expiry; a different `administrator` approves it. While it is effective the session carries
  * the `break_glass` role, which holds only `BREAK_GLASS_ACTIONS` — today, access quarantine.
  *
  * **Nothing here extends an elevation.** Expiry is fixed at request time and evaluated on every

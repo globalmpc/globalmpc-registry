@@ -46,6 +46,8 @@ const CROSS_TENANT = [
 
 /** Audited (0112–0130): act inside the tenant context the caller set — see 0131's header. */
 const SAME_TENANT = [
+  // 0141: only chronology writes for the RLS-authorized schema row; retains caller tenant context.
+  "core.record_schema_activation()",
   "core.create_subject_session(uuid,text,uuid,core.session_first_factor,core.session_second_factor,integer)",
   "core.revoke_subject_sessions(uuid,text)",
   "core.session_email_challenge_consumed()",

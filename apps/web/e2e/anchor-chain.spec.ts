@@ -1,3 +1,4 @@
+import { openIntegrityProof } from "./disclosures";
 import { openPublicLookup } from "./disclosures";
 import { openHeaderMenu } from "./header-menu";
 import { expect, test } from "@playwright/test";
@@ -90,6 +91,7 @@ test.describe("chain confirmation", () => {
     await openPublicLookup(page);
     await page.getByRole("button", { name: "Look up", exact: true }).click();
 
+    await openIntegrityProof(page);
     await expect(page.getByTestId("proof-panel")).toBeVisible();
     await expect(page.getByText("Path matches")).toBeVisible();
     // included is true only after confirmation (AC-23).

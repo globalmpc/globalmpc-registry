@@ -300,7 +300,7 @@ describeDb("wallet binding by proof of possession", () => {
       const subjectId = await person();
       await fx.sql`
         INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'data_steward')
+        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'reviewer')
       `;
       const key = newAccount();
       expect((await bindWalletByProof(app, await totpSession(subjectId), key.account)).statusCode).toBe(200);

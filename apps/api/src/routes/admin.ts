@@ -4,6 +4,8 @@ import type postgres from "postgres";
 import { withTenant } from "@mpc/db";
 import {
   ROLE_MINIMUM_ASSURANCE,
+  GRANTABLE_ROLES,
+  SERVICE_ONLY_ROLES,
   createNotificationSinkRequest,
   updateNotificationSinkRequest,
   createRoleGrantRequest,
@@ -31,6 +33,32 @@ import {
   requireMutationContext,
   requireReadContext,
 } from "./shared.js";
+
+async function assertRoleGrantTarget(
+  tx: postgres.TransactionSql,
+  tenantId: string,
+  data: ReturnType<typeof createRoleGrantRequest.parse>,
+): Promise<void> {
+  if (data.role === "project_member" && data.scopeKind === "tenant") {
+    throw unprocessable("ROLE_SCOPE_INVALID", "Project membership cannot grant tenant-wide project access");
+  }
+  if ((data.governanceScope === "project" && !data.projectId) ||
+    (data.governanceScope === "protocol" && data.projectId) ||
+    (data.governanceScope && data.governanceScope !== "none" && data.role !== "project_member")) {
+    throw unprocessable("ROLE_SCOPE_INVALID", "Voting namespace must match the project and role");
+  }
+  if (data.organizationId) {
+    const [organization] = await tx`SELECT id FROM core.organizations WHERE id=${data.organizationId} AND tenant_id=${tenantId}`;
+    if (!organization) throw notFound("Organization not found");
+  }
+  const [subject] = await tx<{ id: string; kind: string }[]>`
+    SELECT id, kind FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${data.subjectId}
+  `;
+  if (!subject) throw notFound("Subject not found");
+  if (SERVICE_ONLY_ROLES.includes(data.role) !== (subject.kind === "service")) {
+    throw unprocessable("ROLE_PRINCIPAL_MISMATCH", "Human and service roles require their matching account kind");
+  }
+}
 
 /**
  * Platform administration — spec 11 §11.2 Administration.
@@ -98,6 +126,9 @@ interface GrantRow {
   subject_id: string;
   subject_name: string;
   role: string;
+  organization_id: string | null;
+  scope_kind: "tenant" | "organization" | "none" | null;
+  governance_scope: "protocol" | "project" | "none" | null;
   project_id: string | null;
   jurisdiction: string[] | null;
   reason: string;
@@ -117,6 +148,9 @@ function toGrant(row: GrantRow, requestId: string, asOf: string) {
     subjectId: row.subject_id,
     subjectName: row.subject_name,
     role: row.role,
+    organizationId: row.organization_id,
+    scopeKind: row.scope_kind,
+    governanceScope: row.governance_scope,
     projectId: row.project_id,
     jurisdiction: row.jurisdiction,
     reason: row.reason,
@@ -592,7 +626,7 @@ export async function registerAdminRoutes(
 
     // A nonexistent role cannot be proposed. If it failed at approval time, the approver could not
     // tell what went wrong.
-    if (ROLE_MINIMUM_ASSURANCE[parsed.data.role] === undefined) {
+    if (!GRANTABLE_ROLES.includes(parsed.data.role)) {
       throw unprocessable("ROLE_UNKNOWN", "Role is not in the permission table", {
         role: parsed.data.role,
       });
@@ -601,22 +635,19 @@ export async function registerAdminRoutes(
     const { requestId, asOf, correlationId } = request.context;
     return withTenant(sql, { tenantId }, (tx) =>
       withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-        const [subject] = await tx<{ id: string }[]>`
-          SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${parsed.data.subjectId}
-        `;
-        if (!subject) throw notFound("Subject not found");
+        await assertRoleGrantTarget(tx, tenantId, parsed.data);
 
         const id = randomUUID();
         try {
           await tx`
             INSERT INTO core.role_grant_requests (
               id, tenant_id, subject_id, organization_id, project_id, role, reason,
-              requested_by_subject_id, jurisdiction
+              requested_by_subject_id, jurisdiction, scope_kind, governance_scope
             ) VALUES (
               ${id}, ${tenantId}, ${parsed.data.subjectId},
               ${parsed.data.organizationId ?? null}, ${parsed.data.projectId ?? null},
               ${parsed.data.role}, ${parsed.data.reason}, ${session.subjectId},
-              ${parsed.data.jurisdiction ?? null}
+              ${parsed.data.jurisdiction ?? null}, ${parsed.data.scopeKind ?? null}, ${parsed.data.governanceScope ?? null}
             )
           `;
         } catch (caught) {
@@ -766,10 +797,10 @@ export async function registerAdminRoutes(
             bindingId = randomUUID();
             await tx`
               INSERT INTO core.role_bindings (
-                id, tenant_id, subject_id, organization_id, project_id, role, jurisdiction
+                id, tenant_id, subject_id, organization_id, project_id, role, jurisdiction, scope_kind, governance_scope
               ) VALUES (
                 ${bindingId}, ${tenantId}, ${grant.subject_id}, ${grant.organization_id},
-                ${grant.project_id}, ${grant.role}, ${grant.jurisdiction}
+                ${grant.project_id}, ${grant.role}, ${grant.jurisdiction}, ${grant.scope_kind}, ${grant.governance_scope}
               )
             `;
           }

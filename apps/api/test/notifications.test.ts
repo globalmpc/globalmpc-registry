@@ -69,7 +69,7 @@ describeDb("notifications", () => {
     // The event is assigned to nobody. Sending it to one person means nobody knows
     // while that person is away.
     expect(found!.audience).toBe("role");
-    expect(found!.audienceRole).toBe("data_steward");
+    expect(found!.audienceRole).toBe("reviewer");
     // A notification with no link forces a search.
     expect(found!.link).toBeTruthy();
     expect(found!.read).toBe(false);
@@ -93,7 +93,7 @@ describeDb("notifications", () => {
     `;
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${secondSubject}, ${fx.orgA}, 'data_steward')
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${secondSubject}, ${fx.orgA}, 'reviewer')
     `;
 
     const mine = ((await list(stewardToken)).json().items as { id: string; summary: string }[]).find(
@@ -207,7 +207,7 @@ describeDb("notifications", () => {
     it("returns 404 for a role notification of a role the caller does not hold", async () => {
       const hidden = await staleNotification(fx.projectA);
 
-      // mpc_operator does not hold data_steward.
+      // administrator does not hold reviewer.
       const response = await markRead(operatorToken, hidden.id);
       expect(response.statusCode).toBe(404);
       expect(response.body).not.toContain(hidden.reason);

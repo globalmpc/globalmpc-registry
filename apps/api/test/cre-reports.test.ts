@@ -360,7 +360,7 @@ describeDb("destination-bound CRE report observations", () => {
 
   it("enforces authorization, tenant and published identity before issuing a report", async () => {
     expect((await report({}, other)).statusCode).toBe(404);
-    expect((await report({}, publisher)).statusCode).toBe(403);
+    expect((await report({}, await signIn(app, fx.proposerA))).statusCode).toBe(403);
     expect([403, 404]).toContain((await report({}, scoped, fx.otherProjectA)).statusCode);
     expect((await report({ publicKey: "not-the-published-key" })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: `/api/v1/projects/${fx.projectA}/cre-reports`, payload: {} })).statusCode).toBe(401);

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,10 +16,10 @@ function fixture(t) {
 
 test('favicon regeneration works in a checkout path containing spaces and URL-sensitive characters', async (t) => {
   const checkout = join(fixture(t), 'Registry Workspace #1')
-  for (const dir of ['scripts', 'apps/web/public', 'design-system/assets/logo/svg']) mkdirSync(join(checkout, dir), { recursive: true })
+  for (const dir of ['scripts', 'apps/web/public']) mkdirSync(join(checkout, dir), { recursive: true })
   for (const file of ['brand-icon.mjs', 'sync-brand-icon.mjs']) cpSync(join(root, 'scripts', file), join(checkout, 'scripts', file))
   cpSync(join(root, 'apps/web/node_modules'), join(checkout, 'apps/web/node_modules'), { recursive: true, verbatimSymlinks: false })
-  cpSync(join(root, 'design-system/assets/logo/svg/mpc-mark-on-dark.svg'), join(checkout, 'design-system/assets/logo/svg/mpc-mark-on-dark.svg'))
+  cpSync(join(root, 'apps/web/public/favicon.svg'), join(checkout, 'apps/web/public/favicon.svg'))
   run(['scripts/sync-brand-icon.mjs'], checkout)
   assert.deepEqual(readFileSync(join(checkout, 'apps/web/public/favicon.ico')), readFileSync(join(root, 'apps/web/public/favicon.ico')))
 })
@@ -58,4 +58,21 @@ test('sync removes deleted canonical sources and generated files while preservin
   const baseline = readFileSync(join(target, 'SOURCE.json'), 'utf8')
   run(['scripts/sync-design-system.mjs', source], checkout)
   assert.equal(readFileSync(join(target, 'SOURCE.json'), 'utf8'), baseline, 'repeat sync must be deterministic')
+  const snapshot = (dir) => Object.fromEntries(readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile()).map(entry => {
+      const path = join(entry.parentPath, entry.name)
+      return [path.slice(dir.length), readFileSync(path).toString('base64')]
+    }))
+  const before = snapshot(target)
+  const tokenFile = join(source, 'tokens/colors.json')
+  const validTokens = readFileSync(tokenFile, 'utf8')
+  writeFileSync(tokenFile, JSON.stringify({ invalid: { $type: 'number', $value: '1' } }))
+  assert.throws(() => run(['scripts/sync-design-system.mjs', source], checkout), /\$type "number" is not one of/)
+  assert.deepEqual(snapshot(target), before, 'invalid tokens must preserve sources, generated files and SOURCE.json')
+  writeFileSync(tokenFile, validTokens)
+  writeFileSync(join(source, 'scripts/docs.mjs'), 'throw new Error("documentation fixture failure")')
+  assert.throws(() => run(['scripts/sync-design-system.mjs', source], checkout))
+  assert.deepEqual(snapshot(target), before, 'second generator failure must also preserve the complete consumer copy')
+  assert.equal(readdirSync(checkout).some(name => name.startsWith('.design-system-sync-')), false)
+
 })

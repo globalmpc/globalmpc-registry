@@ -792,7 +792,7 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
 
   describe("recovery revokes linked identities (M3)", () => {
     /** An aal3 admin of tenant A with `role`. */
-    async function admin(role: "mpc_operator" | "security_operator") {
+    async function admin(role: "administrator" | "administrator") {
       const id = randomUUID();
       await fx.sql`
         INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
@@ -836,8 +836,8 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       expect((await signInWith(attackerSub)).json().subjectId).toBe(victim.id);
       const others = await bystanders();
 
-      const proposer = await admin("mpc_operator");
-      const decider = await admin("security_operator");
+      const proposer = await admin("administrator");
+      const decider = await admin("administrator");
       const proposed = await adminPost("/api/v1/admin/mfa-resets", proposer, { subjectId: victim.id, reason: "Lost every device" });
       expect(proposed.statusCode, proposed.body).toBe(200);
       const approved = await adminPost(
@@ -875,8 +875,8 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       await link("google", victim.token, { sub: attackerSub });
       const others = await bystanders();
 
-      const proposer = await admin("mpc_operator");
-      const approver = await admin("security_operator");
+      const proposer = await admin("administrator");
+      const approver = await admin("administrator");
       const newEmail = `moved-${randomUUID().slice(0, 8)}@example.com`;
       const proposed = await adminPost("/api/v1/admin/email-changes", proposer, {
         subjectId: victim.id, newEmail, reason: "Lost access to the mailbox",
@@ -916,8 +916,8 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
 
     it("a recovery with nothing linked says nothing about sign-ins", async () => {
       const victim = await aal2Person();
-      const proposer = await admin("mpc_operator");
-      const decider = await admin("security_operator");
+      const proposer = await admin("administrator");
+      const decider = await admin("administrator");
       const proposed = await adminPost("/api/v1/admin/mfa-resets", proposer, { subjectId: victim.id, reason: "Lost every device" });
       await adminPost(
         `/api/v1/admin/mfa-resets/${proposed.json().id}/decision`, decider,

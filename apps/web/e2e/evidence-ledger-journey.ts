@@ -173,23 +173,18 @@ export async function expectApprovedLedgerPanel(
   ).toHaveText(`${reviewed} / ${ledger.items.length} items`);
   const stage = ledger.stages.find((candidate) => candidate.gateId === ledger.currentStage)!;
   expect(stage.status).toBe("ok");
-  const stageCard = panel.locator("details.stage-assessment").filter({
-    has: page.locator("summary strong", { hasText: expected.stage }),
-  });
-  if (await stageCard.count()) {
-    await openDisclosure(stageCard);
-    await expect(stageCard.locator("summary")).toContainText("Requirements met");
-    await expect(stageCard).toContainText(`Rule ${stage.ruleSetVersion}`);
-    await expect(stageCard).toContainText(`Reviewed ${stage.reviewedItems} / ${stage.requiredItems} required items`);
-  } else {
-    await expect(panel).toContainText(
-      `${expected.stage}: Requirements met · rule ${stage.ruleSetVersion} · Reviewed ${stage.reviewedItems} / ${stage.requiredItems} required items`,
-    );
-  }
+  const stageButton = panel.getByRole("list", { name: "Project stages" }).getByRole("button", { name: new RegExp(expected.stage) });
+  await stageButton.click();
+  await expect(stageButton).toHaveAttribute("aria-pressed", "true");
+  await expect(panel.getByTestId("selected-stage-summary")).toHaveText(
+    `Requirements met · Rule ${stage.ruleSetVersion} · Reviewed ${stage.reviewedItems} / ${stage.requiredItems} required items`,
+  );
+  await panel.getByRole("button", { name: "All published items", exact: true }).click();
   for (const claimType of expected.reviewedClaimTypes) {
     const item = ledger.items.find((candidate) => candidate.claimType === claimType)!;
     expect(item.limitations.length).toBeGreaterThan(0);
     const entry = panel.locator("li").filter({ has: page.getByTestId(`ledger-status-${claimType}`) });
+    await openDisclosure(entry.locator("details"));
     await expect(entry).toContainText(`Limitations: ${item.limitations.join("; ")}`);
     for (const review of item.reviews) {
       await expect(entry).toContainText(review.limitations);

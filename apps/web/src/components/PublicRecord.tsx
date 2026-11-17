@@ -1,5 +1,7 @@
 "use client";
 
+import { PublicEvidenceLedger } from "./PublicEvidenceLedger";
+import { ProjectStageRoadmap } from "./ProjectProgress";
 import { useEffect, useState } from "react";
 import { EvidenceLedger, EvidenceLedgerWarnings } from "./EvidenceLedger";
 import type { LedgerSummary, LedgerCurrent } from "@/lib/evidence-ledger-api";
@@ -90,7 +92,7 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
   return (
       <>
         {entry.evidenceLedgerCurrent ? <EvidenceLedgerWarnings current={entry.evidenceLedgerCurrent as LedgerCurrent} /> : null}
-        {entry.evidenceLedger ? <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" browsable={browsableEvidence} /> : null}
+        {entry.evidenceLedger ? (browsableEvidence ? <PublicEvidenceLedger key={entry.entryVersionId} summary={entry.evidenceLedger as LedgerSummary} /> : <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" />) : <ProjectStageRoadmap />}
 
         <div className="panel">
           <div className="page-head" style={{ marginBottom: 14 }}>
@@ -208,34 +210,9 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
           ) : null}
         </div>
 
-        <div className="panel" id="record-history">
-            <h2>Earlier versions</h2>
-            {entry.history.length === 0 ? <p className="sub">No earlier versions returned for this record.</p> : null}
-            {/* Do not hide correction/revocation history. Same reason as not making a past
-                state look current (§11.6). */}
-            {entry.history.length > 0 ? <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Version</th>
-                    <th>Status</th>
-                    <th>ID</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {entry.history.map((version) => (
-                    <tr key={version.entryVersionId}>
-                      <td className="mono">v{version.version}</td>
-                      <td className="mono">{version.status}</td>
-                      <td className="mono meta">{version.entryVersionId}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div> : null}
-          </div>
+        <RecordHistory history={entry.history} expanded={!browsableEvidence} />
 
-        <IntegrityProof proof={proof} />
+        <ProofDisclosure proof={proof} expanded={!browsableEvidence} />
 
         <div className="notice" style={{ color: "var(--alert)" }}>
           <div className="title">Integrity and authority are different questions</div>
@@ -262,6 +239,49 @@ function optionalString(entry: PublicProjection, key: string): string | null {
 function optionalStrings(entry: PublicProjection, key: string): readonly string[] {
   const value = entry[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function ProofDisclosure({ proof, expanded }: {
+  readonly proof: InclusionProof | null;
+  readonly expanded: boolean;
+}) {
+  return <details className="public-record-disclosure" open={expanded || Boolean(proof && (!proof.merkleVerified || !proof.included))} data-testid="integrity-disclosure">
+    <summary>Integrity proof</summary><IntegrityProof proof={proof} />
+  </details>;
+}
+
+function RecordHistory({ history, expanded }: {
+  readonly history: PublicProjection["history"];
+  readonly expanded: boolean;
+}) {
+  return (
+        <details className="panel public-record-disclosure" id="record-history" open={expanded || history.some(version => version.status === "revoked" || Boolean(version.revokedAt))}><summary>Version history · {history.length} earlier versions</summary>
+            <h2>Earlier versions</h2>
+            {history.length === 0 ? <p className="sub">No earlier versions returned for this record.</p> : null}
+            {/* Do not hide correction/revocation history. Same reason as not making a past
+                state look current (§11.6). */}
+            {history.length > 0 ? <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Version</th>
+                    <th>Status</th>
+                    <th>ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((version) => (
+                    <tr key={version.entryVersionId}>
+                      <td className="mono">v{version.version}</td>
+                      <td className="mono">{version.status}{version.revokedAt ? <span> · Revoked <time dateTime={version.revokedAt}>{version.revokedAt}</time></span> : null}</td>
+                      <td className="mono meta">{version.entryVersionId}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div> : null}
+          </details>
+  );
 }
 
 /**

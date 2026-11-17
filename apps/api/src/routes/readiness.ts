@@ -1,3 +1,4 @@
+import { loadEvidenceSubmitters } from "../services/attestation-basis.js";
 import { registerReadinessOptionRoutes } from "./readiness-options.js";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
@@ -9,13 +10,14 @@ import { checkGateDecision, type ReadinessStatus } from "@mpc/domain";
 import {
   assessmentHash,
   evaluateAssessment,
+  evaluateRequirement,
   explainRequirementResult,
   parseRuleSet,
   type Requirement,
   type RequirementFacts,
   type RequirementResult,
 } from "@mpc/policy";
-import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
+import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import type { AppConfig } from "../config.js";
 import { newSignatureNonce } from "../services/attestation-signing.js";
 import { assertSubjectSigner } from "../services/signing-wallets.js";
@@ -113,6 +115,7 @@ async function loadDecisionBasis(
   tx: postgres.TransactionSql,
   projectId: string,
   content: DecisionContent,
+  decider: string | null,
 ): Promise<DecisionBasis> {
   const [assessment] = await tx<
     {
@@ -121,9 +124,10 @@ async function loadDecisionBasis(
       status: ReadinessStatus;
       requirement_results: RequirementResult[];
       input_snapshot_hash: string;
+      evidence_actor_ids: string[] | null;
     }[]
   >`
-    SELECT id, gate_id, status, requirement_results, input_snapshot_hash
+    SELECT id, gate_id, status, requirement_results, input_snapshot_hash, evidence_actor_ids
     FROM core.compliance_assessments
     WHERE id = ${content.inputAssessmentId} AND project_id = ${projectId}
   `;
@@ -136,6 +140,13 @@ async function loadDecisionBasis(
       assessmentGateId: assessment.gate_id,
       gateId: content.gateId,
     });
+  }
+
+  if (assessment.evidence_actor_ids === null) {
+    throw conflict("GATE_ASSESSMENT_RECOMPUTE_REQUIRED", "Record attributable evidence and reassess before requesting a gate decision");
+  }
+  if (decider === null || assessment.evidence_actor_ids.includes(decider)) {
+    throw forbidden("GATE_DECISION_NOT_INDEPENDENT", "A different person must decide on evidence you submitted or reviewed");
   }
 
   const applicable = assessment.requirement_results.filter((result) => result.applicable);
@@ -191,6 +202,7 @@ export async function collectRequirementFacts(
   jurisdictionProfile: string,
   requirements: readonly Requirement[],
   evaluatedAsOf: Date,
+  evidenceProvenance?: { actors: Set<string>; complete: boolean },
 ): Promise<Record<string, RequirementFacts>> {
   const claims = await tx<
     {
@@ -200,10 +212,11 @@ export async function collectRequirementFacts(
       as_of: Date | null;
       value_text: string;
       excluded_by_rule: boolean;
+      submitted_by: string | null;
       stale: boolean;
     }[]
   >`
-    SELECT id, claim_type, grade, as_of, value_text, excluded_by_rule,
+    SELECT id, claim_type, grade, as_of, value_text, excluded_by_rule, submitted_by,
            (stale_since IS NOT NULL AND stale_since <= ${evaluatedAsOf}) AS stale
     FROM core.claims WHERE project_id = ${projectId}
       -- A corrected claim keeps its old version as history; only the current one is a fact.
@@ -213,10 +226,11 @@ export async function collectRequirementFacts(
   // Only attestations that still stand at the evaluation time. `stale_candidate` (evidence
   // moved), superseded, revoked and disputed ones are not present, and neither is one whose
   // validity has run out (REQ-DAPP-026).
-  const attestations = await tx<{ attestation_type: string; claim_scope: string[] }[]>`
-    SELECT a.attestation_type, a.claim_scope
+  const attestations = await tx<{ attestation_type: string; claim_scope: string[]; reviewer_subject_id: string; case_id: string }[]>`
+    SELECT a.attestation_type, a.claim_scope, asn.subject_id AS reviewer_subject_id, a.case_id
     FROM core.verification_attestations a
     JOIN core.verification_cases vc ON vc.id = a.case_id
+    JOIN core.assignments asn ON asn.id=a.assignment_id AND asn.tenant_id=a.tenant_id
     WHERE vc.project_id = ${projectId}
       AND a.state IN ('signed', 'active')
       AND (a.valid_until IS NULL OR a.valid_until > ${evaluatedAsOf})
@@ -305,6 +319,25 @@ export async function collectRequirementFacts(
     };
   }
 
+  // These exact rows also feed project context and presence predicates, not only required types.
+  if (evidenceProvenance) {
+    const submitters = await loadEvidenceSubmitters(tx, claims.map(claim => claim.id), null, projectId);
+    evidenceProvenance.complete = submitters.allKnown;
+    for (const subject of submitters.submitterIds) evidenceProvenance.actors.add(subject);
+    const applicable = requirements.filter(requirement => evaluateRequirement(requirement, facts[requirement.requirementId]).applicable);
+    const requiredTypes = new Set(applicable.flatMap(requirement => requirement.requiredClaimTypes));
+    const relevantIds = new Set(claims.filter(claim => requiredTypes.has(claim.claim_type)).map(claim => claim.id));
+    const used = attestations.filter(review => review.claim_scope.some(id => relevantIds.has(id)));
+    for (const review of used) evidenceProvenance.actors.add(review.reviewer_subject_id);
+    // A standing review still commits to its original evidence after revocation. Live-only
+    // provenance would otherwise let its uploader make a gate decision on their own evidence.
+    for (const caseId of new Set(used.map(review => review.case_id))) {
+      const historical = await loadEvidenceSubmitters(tx, [], caseId);
+      evidenceProvenance.complete &&= historical.allKnown;
+      for (const subject of historical.submitterIds) evidenceProvenance.actors.add(subject);
+    }
+  }
+
   return facts;
 }
 
@@ -365,6 +398,7 @@ export async function registerReadinessRoutes(
             SELECT id, definition, gate_id, state, jurisdiction_profile
             FROM core.compliance_policy_sets
             WHERE id = ${parsed.data.policySetId}
+              AND core.project_definition_applies(project_id,${request.params.projectId})
           `;
           if (!policy) throw notFound("Policy set not found");
           if (policy.state !== "effective") {
@@ -379,12 +413,14 @@ export async function registerReadinessRoutes(
           // Fix the assessment reference time first. If time passes mid-assessment, the same input
           // yields a different result.
           const evaluatedAsOf = new Date(asOf);
+          const evidenceProvenance = { actors: new Set<string>(), complete: true };
           const facts = await collectRequirementFacts(
             tx,
             request.params.projectId,
             policy.jurisdiction_profile,
             ruleSet.requirements,
             evaluatedAsOf,
+            evidenceProvenance,
           );
 
           const inputSnapshotHash = keccak256(
@@ -431,12 +467,12 @@ export async function registerReadinessRoutes(
             INSERT INTO core.compliance_assessments (
               id, tenant_id, project_id, gate_id, policy_set_id,
               input_snapshot_hash, evaluated_as_of, status, requirement_results,
-              canonical_result_hash
+              canonical_result_hash, evidence_actor_ids
             ) VALUES (
               ${id}, ${tenantId}, ${request.params.projectId}, ${policy.gate_id},
               ${policy.id}, ${inputSnapshotHash}, ${evaluatedAsOf.toISOString()},
               ${assessment.status}, ${tx.json(assessment.requirementResults as never)},
-              ${canonicalResultHash}
+              ${canonicalResultHash}, ${evidenceProvenance.complete ? [...evidenceProvenance.actors].sort() : null}::uuid[]
             )
           `;
 
@@ -578,7 +614,7 @@ export async function registerReadinessRoutes(
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-          const basis = await loadDecisionBasis(tx, projectId, content);
+          const basis = await loadDecisionBasis(tx, projectId, content, session.subjectId);
 
           const [project] = await tx<{ project_key: string }[]>`
             SELECT project_key FROM core.projects WHERE id = ${projectId}
@@ -685,7 +721,7 @@ export async function registerReadinessRoutes(
 
       return withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-          const basis = await loadDecisionBasis(tx, projectId, data);
+          const basis = await loadDecisionBasis(tx, projectId, data, session.subjectId);
 
           // Consumes the request atomically. A second submission finds no row; a request issued
           // to another approver or another project is not usable here.

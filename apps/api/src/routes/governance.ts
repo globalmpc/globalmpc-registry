@@ -428,26 +428,25 @@ function spaceOfProject(projectId: string | null): "protocol" | "project" {
 /**
  * Voting eligibility by space — 02 §2.2, 09 §9.3, domain `checkVoteEligibility`.
  *
- * Role authorization alone does not say **which project** a `project_voter` may vote on: the
- * role reaches the whole tenant (`TENANT_WIDE_ROLES`), yet a project voter votes only on the AT
- * snapshot of its own project. So every voter binding is mapped to the space it votes in, and
- * the domain rule decides. A session with no voter binding at all falls through to the role
- * check, which names the role it needs.
+ * Role authorization does not establish voting rights. Each project member binding
+ * carries a frozen protocol/project voting namespace independently of its job and
+ * organization reach. The domain rule also verifies the exact project's AT snapshot.
  */
 function assertVoteEligible(
   bindings: Session["roleBindings"],
   proposalProjectIdValue: string | null,
-): void {
+): Session["roleBindings"] {
   const proposalSpace: GovernanceSpace =
     proposalProjectIdValue === null
       ? "protocol"
       : { kind: "project", projectId: proposalProjectIdValue };
 
   const voterBindings = bindings.filter(
-    (binding) => binding.role === "protocol_voter" || binding.role === "project_voter",
+    (binding) => binding.role === "project_member",
   );
-  if (voterBindings.length === 0) return;
+  if (voterBindings.length === 0) return bindings;
 
+  const eligible: Session["roleBindings"][number][] = [];
   let reason: string = "GOVERNANCE_SPACE_MISMATCH";
   for (const binding of voterBindings) {
     const voterSpace = voterSpaceOf(binding);
@@ -456,9 +455,11 @@ function assertVoteEligible(
       continue;
     }
     const check = checkVoteEligibility(voterSpace, proposalSpace);
-    if (check.allowed) return;
-    reason = check.reason;
+    if (check.allowed) eligible.push(binding);
+    else reason = check.reason;
   }
+
+  if (eligible.length > 0) return eligible;
 
   throw forbidden(reason, "Your voting rights do not cover this proposal's space", {
     space: proposalSpace === "protocol" ? "protocol" : "project",
@@ -521,7 +522,7 @@ export async function registerGovernanceRoutes(
      * The list has the same sensitivity as a proposal.
      *
      * This was the only place using the `tenantResource` default (`restricted`). So a
-     * `wallet_only` `protocol_voter` **could vote but could not list what it was voting
+     * former wallet-only voter **could vote but could not list what it was voting
      * on** — the screen showed "no proposals" alongside a 403.
      * A proposal is `public` on every path (`proposalResource` in this file).
      */
@@ -619,13 +620,8 @@ export async function registerGovernanceRoutes(
       throw badRequest("PROPOSAL_PROJECT_FORBIDDEN", "A protocol proposal has no projectId");
     }
 
-    /**
-     * The proposer's role must belong to the proposal's space — 02 §2.2.
-     *
-     * `protocol_proposer` is forbidden to create project asset proposals and
-     * `project_proposer` to change protocol policy. Checking the proposal type against the
-     * space alone let a protocol proposer create a project sale proposal.
-     */
+    // A proposal's project must be within the member's organization/project scope.
+    // Voting eligibility is checked separately against the frozen namespace.
     const effectiveRole = assertAuthorized(
       session,
       governanceAction(data.space, "propose"),
@@ -884,10 +880,10 @@ export async function registerGovernanceRoutes(
       }
 
       const projectId = await proposalProjectId(sql, tenantId, request.params.proposalId);
-      assertVoteEligible(session.roleBindings, projectId);
+      const votingBindings = assertVoteEligible(session.roleBindings, projectId);
 
       const effectiveRole = assertAuthorized(
-        session,
+        { ...session, roleBindings: votingBindings },
         governanceAction(spaceOfProject(projectId), "vote"),
         proposalResource(tenantId, projectId),
         sessionFacts(session),

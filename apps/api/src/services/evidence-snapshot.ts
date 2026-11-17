@@ -20,6 +20,7 @@ export interface EvidenceSnapshot {
   readonly claimIds: readonly string[];
   readonly artifactIds: readonly string[];
   readonly receiptIds: readonly string[];
+  readonly manifest: ReturnType<typeof canonicalForm>;
 }
 
 export interface SnapshotClaimRow {
@@ -36,6 +37,7 @@ export function snapshotClaimFingerprint(claim: SnapshotClaimRow) {
   };
 }
 interface SnapshotInput {
+  readonly snapshotVersion?: "3";
   readonly claimIds: readonly string[];
   readonly artifactIds: readonly string[];
   readonly receiptIds: readonly string[];
@@ -48,7 +50,7 @@ function canonicalForm(input: SnapshotInput) {
     [...values].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
 
   return {
-    snapshotVersion: input.claimFingerprints.some((claim) => claim.structured !== undefined) ? "2" : "1",
+    snapshotVersion: input.snapshotVersion ?? (input.claimFingerprints.some((claim) => claim.structured !== undefined) ? "2" : "1"),
     claimIds: [...input.claimIds].sort(),
     artifactIds: [...input.artifactIds].sort(),
     receiptIds: [...input.receiptIds].sort(),
@@ -74,6 +76,7 @@ export async function buildEvidenceSnapshot(
   tx: postgres.TransactionSql,
   projectId: string,
   claimIds: readonly string[],
+  options: { effectiveReceipts: boolean } = { effectiveReceipts: false },
 ): Promise<EvidenceSnapshot> {
   if (claimIds.length === 0) {
     throw badRequest(
@@ -97,14 +100,25 @@ export async function buildEvidenceSnapshot(
 
   const artifacts = await tx<{ id: string }[]>`
     SELECT id FROM core.artifacts
-    WHERE project_id = ${projectId} AND revoked_at IS NULL
+    WHERE project_id = ${projectId} AND (revoked_at IS NULL OR (${options.effectiveReceipts} AND EXISTS (
+      SELECT 1 FROM core.claims c WHERE c.project_id=${projectId}
+        AND c.id=ANY(${claimIds as string[]}::uuid[]) AND c.source_receipt_id=core.artifacts.source_receipt_id
+    )))
   `;
 
   const receipts = await tx<{ id: string }[]>`
-    SELECT id FROM core.source_receipts WHERE project_id = ${projectId}
+    SELECT r.id FROM core.source_receipts r
+    WHERE (${!options.effectiveReceipts} AND r.project_id = ${projectId})
+      OR (${options.effectiveReceipts} AND (
+        EXISTS (SELECT 1 FROM core.claims c WHERE c.project_id=${projectId}
+          AND c.id=ANY(${claimIds as string[]}::uuid[]) AND c.source_receipt_id=r.id)
+        OR EXISTS (SELECT 1 FROM core.artifacts a WHERE a.project_id=${projectId}
+          AND a.id=ANY(${artifacts.map(a => a.id)}::uuid[]) AND a.source_receipt_id=r.id)
+      ))
   `;
 
   const input: SnapshotInput = {
+    ...(options.effectiveReceipts ? { snapshotVersion: "3" as const } : {}),
     claimIds: claims.map((claim) => claim.id),
     artifactIds: artifacts.map((artifact) => artifact.id),
     receiptIds: receipts.map((receipt) => receipt.id),
@@ -116,5 +130,6 @@ export async function buildEvidenceSnapshot(
     claimIds: input.claimIds,
     artifactIds: input.artifactIds,
     receiptIds: input.receiptIds,
+    manifest: canonicalForm(input),
   };
 }

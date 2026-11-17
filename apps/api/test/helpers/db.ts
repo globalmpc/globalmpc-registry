@@ -26,22 +26,22 @@ export interface TestFixture {
   readonly tenantB: string;
   readonly orgA: string;
   readonly orgB: string;
-  /** tenant A · mpc_operator · high_assurance */
+  /** tenant A · administrator · high_assurance */
   readonly operatorA: TestAccount;
-  /** tenant B · mpc_operator · high_assurance */
+  /** tenant B · administrator · high_assurance */
   readonly operatorB: TestAccount;
   /** tenant A · no role · wallet_only */
   readonly readerA: TestAccount;
   /** A key bound to no subject. `signIn` refuses it: a wallet alone signs nobody in (WP7). */
   readonly unknownWallet: TestAccount;
-  /** tenant A · reviewer_cp_qp · high_assurance */
+  /** tenant A · reviewer · high_assurance */
   readonly reviewerA: TestAccount;
-  /** tenant A · gate_approver · high_assurance */
+  /** tenant A · reviewer · high_assurance */
   readonly approverA: TestAccount;
-  /** tenant A · data_steward · identity_bound. handles evidence and claims (02 §2.3) */
+  /** tenant A · reviewer · identity_bound. handles evidence and claims (02 §2.3) */
   readonly stewardA: TestAccount;
   /**
-   * tenant A · data_steward · **binding scoped to projectA only**.
+   * tenant A · reviewer · **binding scoped to projectA only**.
    *
    * Both are needed to test organization-level versus project-level bindings.
    * This account is a steward in `projectA` but nothing in `otherProjectA`.
@@ -55,13 +55,13 @@ export interface TestFixture {
   /** Service token of the scan service, scoped to `scan_result`. */
   readonly scanServiceToken: string;
   readonly scanServiceSubjectA: string;
-  /** tenant A · protocol_proposer. Creates governance proposals */
+  /** tenant A · project_member. Creates governance proposals */
   readonly proposerA: TestAccount;
-  /** tenant A · protocol_voter. Only votes */
+  /** tenant A · project_member. Only votes */
   readonly voterA: TestAccount;
-  /** tenant A · auditor. Decides authority approval (02 §2.8) */
+  /** tenant A · administrator. Decides authority approval (02 §2.8) */
   readonly auditorA: TestAccount;
-  /** tenant A · disclosure_approver. Publishes what an operator drafted (02 §2.8) */
+  /** tenant A · reviewer. Publishes what an operator drafted (02 §2.8) */
   readonly disclosureApproverA: TestAccount;
   /** operatorA's subject id. Used to check whether registrant and approver are the same */
   readonly operatorSubjectA: string;
@@ -489,8 +489,8 @@ export async function setupFixture(): Promise<TestFixture> {
   let operatorSubjectA = "";
 
   for (const [tenant, org, wallet, label, role] of [
-    [tenantA, orgA, operatorA, "Operator A", "mpc_operator"],
-    [tenantB, orgB, operatorB, "Operator B", "mpc_operator"],
+    [tenantA, orgA, operatorA, "Operator A", "administrator"],
+    [tenantB, orgB, operatorB, "Operator B", "administrator"],
   ] as const) {
     await sql`
       INSERT INTO core.tenants (id, slug, display_name)
@@ -569,21 +569,21 @@ export async function setupFixture(): Promise<TestFixture> {
   `;
 
   for (const [subject, wallet, label, role, assurance] of [
-    [reviewerSubjectA, reviewerA, "Reviewer A", "reviewer_cp_qp", "high_assurance"],
-    [approverSubject, approverA, "Approver A", "gate_approver", "high_assurance"],
-    // 02 §2.3: stewards handle sources and claims. mpc_operator only reads metadata.
-    [stewardSubject, stewardA, "Steward A", "data_steward", "identity_bound"],
+    [reviewerSubjectA, reviewerA, "Reviewer A", "reviewer", "high_assurance"],
+    [approverSubject, approverA, "Approver A", "reviewer", "high_assurance"],
+    // 02 §2.3: stewards handle sources and claims. administrator only reads metadata.
+    [stewardSubject, stewardA, "Steward A", "reviewer", "high_assurance"],
     [scanServiceSubject, scanServiceA, "Scan Service", "scan_service", "high_assurance"],
-    [proposerSubject, proposerA, "Proposer A", "protocol_proposer", "identity_bound"],
+    [proposerSubject, proposerA, "Proposer A", "project_member", "identity_bound"],
     // Voting power comes from holdings, not identity (02 §2.3).
-    [voterSubject, voterA, "Voter A", "protocol_voter", "wallet_only"],
+    [voterSubject, voterA, "Voter A", "project_member", "identity_bound"],
     // Trusting an authority is a review outcome, not an operations task (02 §2.8).
-    [auditorSubject, auditorA, "Auditor A", "auditor", "high_assurance"],
+    [auditorSubject, auditorA, "Auditor A", "administrator", "high_assurance"],
     [
       disclosureApproverSubject,
       disclosureApproverA,
       "Disclosure Approver A",
-      "disclosure_approver",
+      "reviewer",
       "high_assurance",
     ],
   ] as const) {
@@ -604,8 +604,9 @@ export async function setupFixture(): Promise<TestFixture> {
     }
     const organization = subject === reviewerSubjectA ? reviewOrgA : orgA;
     await sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${tenantA}, ${subject}, ${organization}, ${role})
+      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role, scope_kind)
+      VALUES (${randomUUID()}, ${tenantA}, ${subject}, ${organization}, ${role},
+        ${subject === stewardSubject || role === "project_member" ? "organization" : "tenant"})
     `;
   }
 
@@ -658,7 +659,7 @@ export async function setupFixture(): Promise<TestFixture> {
   // Project-level binding. With `project_id` set, it has no effect outside that project.
   await sql`
     INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-    VALUES (${scopedStewardSubject}, ${tenantA}, 'person', 'Scoped Steward A', 'identity_bound')
+    VALUES (${scopedStewardSubject}, ${tenantA}, 'person', 'Scoped Steward A', 'high_assurance')
   `;
   await sql`
     INSERT INTO core.wallet_identities (
@@ -672,7 +673,7 @@ export async function setupFixture(): Promise<TestFixture> {
     INSERT INTO core.role_bindings (
       id, tenant_id, subject_id, organization_id, project_id, role
     ) VALUES (
-      ${randomUUID()}, ${tenantA}, ${scopedStewardSubject}, ${orgA}, ${projectA}, 'data_steward'
+      ${randomUUID()}, ${tenantA}, ${scopedStewardSubject}, ${orgA}, ${projectA}, 'reviewer'
     )
   `;
 

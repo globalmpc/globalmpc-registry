@@ -49,7 +49,7 @@ export function AccountAdmin({
   readonly onChanged: () => Promise<void> | void;
 }) {
   const { token, session } = useSession();
-  // An auditor reads these lists (`admin.read`) but changes nothing: each control needs its own
+  // Reading these lists (`admin.read`) does not authorize a change: each control needs its own
   // action. Guidance only; the server decides.
   const mayInvite = can(session, "admin.invitation.manage");
   const mayProposeEmail = can(session, "admin.email_change.propose");

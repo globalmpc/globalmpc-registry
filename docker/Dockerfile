@@ -17,7 +17,7 @@
 #
 # Alpine (musl) keeps the base small. The lockfile already carries the `*-musl` optional
 # binaries (Next SWC, sharp, rollup, esbuild); a new native dependency must ship one too.
-FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS deps
+FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS deps
 
 WORKDIR /repo
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
@@ -55,7 +55,7 @@ FROM deps AS web-build
 RUN pnpm --filter @mpc/web build
 
 # Keep the LGTM SDK pinned and isolated from pnpm workspace dependencies.
-FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS otel
+FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS otel
 WORKDIR /opt/otel
 COPY etc/otel/package.json etc/otel/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
@@ -64,7 +64,7 @@ RUN chmod -R a+rX,go-w /opt/otel && chmod 755 /opt/otel/otel-wrapper.sh \
  && node --check runtime.cjs && node --check otel-console-bridge.cjs && node --check register.mjs && sh -n otel-wrapper.sh
 
 # --- Runtime --------------------------------------------------------------------
-FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS runtime
+FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS runtime
 
 WORKDIR /repo
 ENV NODE_ENV=production
