@@ -79,6 +79,7 @@ export async function assignReviewer(tx: Tx, input: AssignReviewerInput): Promis
   }
 
   const independence = await reviewAssignmentIndependence(tx, {
+    caseId: input.caseId,
     projectId: input.projectId,
     claimIds: input.claimIds,
     reviewerSubjectId: input.reviewerSubjectId,

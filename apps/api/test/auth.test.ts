@@ -57,7 +57,7 @@ describeDb("account sessions", () => {
     expect(body.subjectId).toBe(fx.operatorSubjectA);
     expect(body.assuranceLevel).toBe("high_assurance");
     expect(body.firstFactor).toBe("email_code");
-    expect(body.roleBindings.map((b: { role: string }) => b.role)).toContain("mpc_operator");
+    expect(body.roleBindings.map((b: { role: string }) => b.role)).toContain("administrator");
     // The wallet a SIWE session signed with was the only reason for these fields (WP7).
     expect(body).not.toHaveProperty("walletAddress");
     expect(body).not.toHaveProperty("chainId");

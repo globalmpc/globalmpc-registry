@@ -1,5 +1,6 @@
 "use client";
 
+import { publicDate } from "@/lib/public-date";
 import { useState } from "react";
 import Link from "next/link";
 import type { PublicProjection } from "@/lib/api";
@@ -72,13 +73,13 @@ export function PublicProjectHeader({
             <button type="button" onClick={() => void copy(true)}>
               Cite
             </button>
-            <a href="#record-history">Version history ↓</a>
+            <a href="#record-history" onClick={() => { const history = document.getElementById("record-history"); if (history instanceof HTMLDetailsElement) history.open = true; }}>Version history ↓</a>
           </div>
         ) : null}
       </div>
       {entry ? (
         <p className="meta">
-          Published {entry.publishedAt ?? "date unavailable"} · Version{" "}
+          Published {entry.publishedAt ? publicDate(entry.publishedAt) : "date unavailable"} · Version{" "}
           {entry.version}
         </p>
       ) : null}

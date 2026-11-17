@@ -34,7 +34,7 @@ describe("claim type catalog contract", () => {
   it("keeps catalog reading separate from sensitive proposal reading", () => {
     expect(ROUTES.find((route) => route.operationId === "listClaimTypes")?.action).toBe("registry.read");
     expect(ROUTES.find((route) => route.operationId === "listClaimTypeProposals")?.action).toBe("review_registry.read");
-    expect(ACTION_POLICIES["registry.read"]!.allowedRoles).toContain("data_steward");
-    expect(ACTION_POLICIES["review_registry.read"]!.allowedRoles).not.toContain("data_steward");
+    expect(ACTION_POLICIES["registry.read"]!.allowedRoles).toContain("project_member");
+    expect(ACTION_POLICIES["review_registry.read"]!.allowedRoles).not.toContain("project_member");
   });
 });

@@ -22,7 +22,7 @@ import { requireReadContext } from "./shared.js";
  *
  * - **`detail` is not exposed as-is.** Event payloads are agreed to carry no PII, but if that
  *   promise breaks, this screen becomes the first leak path.
- * - **Reading also requires permission.** Only auditor·security_operator·mpc_operator hold
+ * - **Reading also requires permission.** Only administrators hold
  *   `audit.read`. Who did what is not for everyone to see.
  */
 

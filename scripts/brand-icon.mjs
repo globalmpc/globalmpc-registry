@@ -6,14 +6,12 @@ const require = createRequire(import.meta.url)
 const sharp = createRequire(require.resolve('next/package.json', { paths: [fileURLToPath(new URL('../apps/web', import.meta.url))] }))('sharp')
 export const iconSizes = [16, 24, 32, 48, 64, 128, 256]
 export async function brandIcon() {
-  const mark = readFileSync(new URL('../design-system/assets/logo/svg/mpc-mark-on-dark.svg', import.meta.url))
+  // Pinned copy of https://globalmpc.tech/favicon.svg (2026-11-16).
+  // Keep the homepage background, mark scale and spacing at every ICO size.
+  const tile = readFileSync(new URL('../apps/web/public/favicon.svg', import.meta.url))
   const images = []
   for (const size of iconSizes) {
-    // Canonical icon-tile rule: half-height clear space >=48px, >=24px mark below48.
-    // A tile smaller than24px cannot contain a24px mark; preserve all available height.
-    const height = size >= 48 ? size / 2 : Math.min(size, 24)
-    const artwork = await sharp(mark, { density: 384 }).resize({ height }).png().toBuffer()
-    images.push(await sharp({ create: { width: size, height: size, channels: 4, background: '#00000000' } }).composite([{ input: artwork, gravity: 'centre' }]).png().toBuffer())
+    images.push(await sharp(tile, { density: 384 }).resize(size, size).png().toBuffer())
   }
   const header = Buffer.alloc(6 + images.length * 16)
   header.writeUInt16LE(1, 2)

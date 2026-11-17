@@ -69,6 +69,7 @@ describeDb("Readiness and Gate Decision", () => {
   /** An assessment with the given requirement statuses, stored as the engine would store it. */
   async function storedAssessment(
     statuses: readonly ("ok" | "watch" | "gap" | "not_evaluable")[],
+    actors: string[] | null = [],
   ): Promise<string> {
     const id = randomUUID();
     const results = statuses.map((status, index) => ({
@@ -82,15 +83,22 @@ describeDb("Readiness and Gate Decision", () => {
     await fx.sql`
       INSERT INTO core.compliance_assessments (
         id, tenant_id, project_id, gate_id, policy_set_id, input_snapshot_hash,
-        evaluated_as_of, status, requirement_results, canonical_result_hash
+        evaluated_as_of, status, requirement_results, canonical_result_hash, evidence_actor_ids
       ) VALUES (
         ${id}, ${fx.tenantA}, ${fx.projectA}, 'registry_publication', ${policySetId},
         ${"0x" + "a1".repeat(32)}, now(), ${overall}, ${fx.sql.json(results as never)},
-        ${"0x" + "b2".repeat(32)}
+        ${"0x" + "b2".repeat(32)}, ${actors}::uuid[]
       )
     `;
     return id;
   }
+
+  it("requires reassessment when a historical basis has no contributor provenance", async () => {
+    const legacy = await storedAssessment(["ok"], null);
+    const result = await decide(tokens.approverA,{decision:"go",inputAssessmentId:legacy,rationale:"Independent decision"});
+    expect(result.statusCode).toBe(409);
+    expect(result.json().code).toBe("GATE_ASSESSMENT_RECOMPUTE_REQUIRED");
+  });
 
   it("runs an evaluation and records a canonical hash", async () => {
     const response = await recompute(tokens.operatorA);
@@ -228,13 +236,13 @@ describeDb("Readiness and Gate Decision", () => {
 
     it("rejects a decision from a non-gate-approver", async () => {
       const assessment = (await recompute(tokens.operatorA)).json();
-      const response = await decide(tokens.stewardA, {
+      const response = await decide(tokens.operatorA, {
         decision: "hold",
         inputAssessmentId: assessment.id,
         rationale: "unauthorized attempt",
       });
       expect(response.statusCode).toBe(403);
-      expect(response.json().details.requiredRoles).toContain("gate_approver");
+      expect(response.json().details.requiredRoles).toContain("reviewer");
     });
 
     it("rejects a decision on a nonexistent assessment", async () => {

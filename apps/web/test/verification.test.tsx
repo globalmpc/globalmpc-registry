@@ -6,8 +6,8 @@ import { mockHttp } from "./support/http";
 const auth = vi.hoisted(() => ({
   token: "token" as string | null,
   session: {
-    actions: ["claim.curate", "attestation.sign", "attestation.dispute"],
-    roleBindings: [{ role: "reviewer_cp_qp" }],
+    actions: ["claim.curate", "attestation.sign", "attestation.dispute", "attestation.dispute.resolve"],
+    roleBindings: [{ role: "reviewer" }],
   },
   signTypedData: vi.fn(),
 }));
@@ -40,7 +40,7 @@ function routes(): Record<string, unknown> {
         {
           subjectId: "reviewer",
           displayName: "Independent reviewer",
-          roles: ["reviewer_cp_qp"],
+          roles: ["reviewer"],
           credentials: [{ id: "credential", credentialType: "QP", issuerReference: "authority" }],
         },
       ],
@@ -66,6 +66,7 @@ function routes(): Record<string, unknown> {
       humanReadablePayload: "Scope: MV-123; limited to submitted evidence",
       expiresAt: "2030-01-01",
     },
+    "GET /api/v1/attestations/draft/disputes": { items: [] },
     "POST /api/v1/attestations/draft/signatures": {
       id: "draft",
       state: "valid",
@@ -101,7 +102,7 @@ async function sign() {
 }
 beforeEach(() => {
   auth.token = "token";
-  auth.session.actions = ["claim.curate", "attestation.sign", "attestation.dispute"];
+  auth.session.actions = ["claim.curate", "attestation.sign", "attestation.dispute", "attestation.dispute.resolve"];
   auth.signTypedData.mockReset().mockResolvedValue("0xsigned");
 });
 afterEach(() => {
@@ -118,6 +119,7 @@ describe("independent verification", () => {
   });
   it("requires evidence, credential and schema before assigning a review", async () => {
     const calls = await mount();
+    expect(screen.queryByText("This account cannot sign")).toBeNull();
     const assign = screen.getByRole("button", { name: "Assign the review" });
     expect(assign.hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("checkbox"));
@@ -155,7 +157,7 @@ describe("independent verification", () => {
     const saved = auth.session;
     auth.session = {
       actions: ["claim.curate"],
-      roleBindings: [{ role: "reviewer_cp_qp" }],
+      roleBindings: [{ role: "reviewer" }],
       authenticated: true,
       assuranceLevel: "wallet_only",
     } as typeof saved;
@@ -163,7 +165,7 @@ describe("independent verification", () => {
       await mount();
       const notice = screen.getByTestId("assurance-notice");
       expect(notice.textContent).toContain("Identity verification needed — ask an admin");
-      expect(notice.textContent).toContain("reviewer_cp_qp");
+      expect(notice.textContent).toContain("reviewer");
       // Not the generic "cannot sign" notice: the role is held, the assurance is short.
       expect(screen.queryByText("This account cannot sign")).toBeNull();
       fireEvent.click(screen.getByTestId("select-case-case"));
@@ -248,6 +250,98 @@ describe("independent verification", () => {
     expect(calls.find((call) => call.method === "POST")?.headers.get("if-match")).toBe('"3"');
     expect(screen.getByTestId("transition-history").textContent).toContain("Missing citation");
   });
+  it("clears the previous signature and dispute target when assigning a new case", async () => {
+    const data=routes(), next={...reviewCase,id:"fresh-case",assignmentId:"fresh-assignment"};
+    data["POST /api/v1/verification-cases"]=()=>{
+      data[`GET ${root}/verification-cases`]={items:[next]};return next;
+    };
+    await mount(data);await sign();
+    expect(screen.getByTestId("signed-result")).toBeDefined();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button",{name:"Assign the review"}));
+    await screen.findByTestId("select-case-fresh-case");
+    expect(screen.queryByTestId("signed-result")).toBeNull();
+    expect(screen.queryByTestId("dispute-attestation-state")).toBeNull();
+    expect(screen.getByRole("button",{name:"Create a signature request"}).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("opens a persisted dispute after reload and keeps resolution disabled for a creation-only role", async () => {
+    auth.session.actions=["attestation.dispute"];
+    const data=routes();
+    data[`GET ${root}/verification-cases`]={items:[{...reviewCase,latestAttestation:{id:"stored",state:"disputed"}}]};
+    data["GET /api/v1/attestations/stored/disputes"]={items:[{id:"objection",reasonCode:"X",detail:"Question",resolvedAt:null}]};
+    const calls=mockHttp(data);
+    let view!:ReturnType<typeof render>;
+    await act(async()=>{view=render(<Verification params={Promise.resolve({id:"p1"})} />);});
+    await screen.findByTestId("select-case-case");
+    expect(calls.some(call=>call.url.endsWith("/disputes"))).toBe(false);
+    fireEvent.click(screen.getByTestId("select-case-case"));
+    await screen.findByTestId("dispute-table");
+    expect(screen.getByTestId("dispute-attestation-state").textContent).toBe("disputed");
+    expect(screen.queryByTestId("signed-result")).toBeNull();
+    expect(screen.getByTestId("dispute-attestation").hasAttribute("disabled")).toBe(false);
+    fireEvent.change(screen.getByLabelText("Basis for resolution (required)"),{target:{value:"Not my authority"}});
+    const resolve=screen.getByTestId("resolve-dismissed-objection");
+    expect(resolve.hasAttribute("disabled")).toBe(true);fireEvent.click(resolve);
+    expect(calls.some(call=>call.url.endsWith("/resolution"))).toBe(false);
+    auth.token="different-account";
+    await act(async()=>{view.rerender(<Verification params={Promise.resolve({id:"p1"})} />);});
+    await screen.findByTestId("select-case-case");
+    expect(screen.queryByTestId("dispute-table")).toBeNull();
+    expect(screen.queryByTestId("dispute-attestation-state")).toBeNull();
+  });
+
+  it("retains signed and dispute dispositions when switching away and reopening the same case", async () => {
+    const data=routes(), second={...reviewCase,id:"second-case"};
+    data[`GET ${root}/verification-cases`]={items:[reviewCase,second]};
+    let raised=false,resolved=false;
+    data["GET /api/v1/attestations/draft/disputes"]=()=>({items:raised ? [{id:"saved-dispute",reasonCode:"X",detail:"Check",resolvedAt:resolved ? "2030-01-01" : null,outcome:resolved ? "dismissed" : null,resolution:resolved ? "Checked" : null}] : []});
+    data["POST /api/v1/attestations/draft/disputes"]=()=>{raised=true;return {state:"disputed"};};
+    data["POST /api/v1/disputes/saved-dispute/resolution"]=()=>{resolved=true;return {attestationState:"active"};};
+    await mount(data);await sign();
+    const reopen=async()=>{
+      await waitFor(()=>expect(screen.getByTestId("select-case-second-case").hasAttribute("disabled")).toBe(false));
+      fireEvent.click(screen.getByTestId("select-case-second-case"));
+      fireEvent.click(screen.getByTestId("select-case-case"));
+      await screen.findByTestId("dispute-attestation-state");
+      expect(screen.queryByTestId("signed-result")).toBeNull();
+    };
+    await reopen();expect(screen.getByTestId("dispute-attestation-state").textContent).toBe("valid");
+    expect(screen.getByTestId("selected-case").textContent).toContain("signed");
+    fireEvent.click(screen.getByTestId("dispute-attestation"));
+    await screen.findByTestId("resolve-dismissed-saved-dispute");
+    await reopen();expect(screen.getByTestId("dispute-attestation-state").textContent).toBe("disputed");
+    await screen.findByTestId("resolve-dismissed-saved-dispute");
+    fireEvent.change(screen.getByLabelText("Basis for resolution (required)"),{target:{value:"Checked"}});
+    fireEvent.click(screen.getByTestId("resolve-dismissed-saved-dispute"));
+    await screen.findByText("Checked");
+    await reopen();expect(screen.getByTestId("dispute-attestation-state").textContent).toBe("active");
+    await screen.findByText("Checked");
+  });
+
+  it("keeps the selected case fixed while a saved dispute resolution is pending", async () => {
+    const data=routes(), second={...reviewCase,id:"second-case"};
+    data[`GET ${root}/verification-cases`]={items:[{...reviewCase,latestAttestation:{id:"stored",state:"disputed"}},second]};
+    let resolved=false;
+    data["GET /api/v1/attestations/stored/disputes"]=()=>({items:[{id:"pending",reasonCode:"X",detail:"Question",resolvedAt:resolved ? "2030-01-01" : null}]});
+    let finish!:(value:unknown)=>void;
+    data["POST /api/v1/disputes/pending/resolution"]=()=>new Promise(done=>{finish=done;});
+    await mount(data);
+    fireEvent.click(screen.getByTestId("select-case-case"));
+    await screen.findByTestId("dispute-table");
+    fireEvent.change(screen.getByLabelText("Basis for resolution (required)"),{target:{value:"Checked"}});
+    fireEvent.click(screen.getByTestId("resolve-dismissed-pending"));
+    const chooseSecond=screen.getByTestId("select-case-second-case");
+    expect(chooseSecond.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(chooseSecond);
+    expect(screen.getByTestId("select-case-case").textContent).toBe("Selected");
+    await act(async()=>{resolved=true;finish({attestationState:"active"});});
+    await waitFor(()=>expect(chooseSecond.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(chooseSecond);
+    expect(screen.getByTestId("select-case-second-case").textContent).toBe("Selected");
+    expect(screen.queryByTestId("dispute-attestation-state")).toBeNull();
+  });
+
   it.each(["dismissed", "upheld"])(
     "appends a %s dispute outcome without deleting the signature",
     async (outcome) => {
@@ -258,13 +352,14 @@ describe("independent verification", () => {
         detail: "Date unclear",
         resolvedAt: null,
       };
-      data["POST /api/v1/attestations/draft/disputes"] = { state: "disputed" };
-      data["GET /api/v1/attestations/draft/disputes"] = { items: [dispute] };
+      let raised=false;
+      data["POST /api/v1/attestations/draft/disputes"] = () => { raised=true; return { state: "disputed" }; };
+      data["GET /api/v1/attestations/draft/disputes"] = () => ({ items: raised ? [dispute] : [] });
       data["POST /api/v1/disputes/dispute/resolution"] = () => {
         data["GET /api/v1/attestations/draft/disputes"] = {
           items: [{ ...dispute, resolvedAt: "2030-01-01", outcome, resolution: "Checked source" }],
         };
-        return { attestationState: "disputed", outcome };
+        return { attestationState: outcome === "dismissed" ? "stale_candidate" : "disputed", outcome };
       };
       const calls = await mount(data);
       await sign();
@@ -276,6 +371,8 @@ describe("independent verification", () => {
       });
       fireEvent.click(resolve);
       await screen.findByText("Checked source");
+      if(outcome === "dismissed") expect(screen.getByTestId("review-needs-reassessment").textContent).toContain("create a new review");
+      expect(screen.getByText("Credential applicability at signing")).toBeDefined();
       expect(calls.find((call) => call.url.endsWith("/resolution"))?.body).toEqual({
         outcome,
         resolution: "Checked source",

@@ -1,3 +1,4 @@
+import { openIntegrityProof } from "./disclosures";
 import { openPublicLookup } from "./disclosures";
 import { randomUUID } from "node:crypto";
 import { database } from "./mailbox";
@@ -57,7 +58,7 @@ test.describe("golden path", () => {
     const projectKey = `GOLD-${Date.now()}`;
     const sourceConnectionId = await createSourceFixture();
 
-    // --- 1. Registration (mpc_operator) -----------------------------------
+    // --- 1. Registration (administrator) -----------------------------------
     await connectAs(page, "Operator A");
     await page.goto("/w/projects/new");
     await page.getByRole("textbox", { name: "Project key" }).fill(projectKey);
@@ -82,7 +83,7 @@ test.describe("golden path", () => {
       page.getByRole("button", { name: /subscribe|buy|purchase|transfer/i }),
     ).toHaveCount(0);
 
-    // --- 2. Evidence and claim (data_steward) -----------------------------
+    // --- 2. Evidence and claim (reviewer) -----------------------------
     // The registering account cannot go on to handle evidence. The role differs.
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/data-room`);
@@ -169,7 +170,7 @@ test.describe("golden path", () => {
     await page.getByTestId(`conflict-${claimId}`).click();
     await expect(legacyClaimRow.getByRole("cell", { name: "v2", exact: true })).toBeVisible();
 
-    // --- 3. Review assignment (data_steward) ------------------------------
+    // --- 3. Review assignment (reviewer) ------------------------------
     await page.goto(`/w/projects/${projectId}/verification`);
     // Reviewer, credential, and schema come from this tenant's rows, not fixed ids.
     // The seed has one reviewer with one valid credential and one active schema, so each is
@@ -191,14 +192,14 @@ test.describe("golden path", () => {
     await page.getByRole("button", { name: "Assign the review" }).click();
     await expect(page.getByTestId("selected-case")).toContainText("assigned");
 
-    // --- 4. Signature (reviewer_cp_qp) ------------------------------------
+    // --- 4. Signature (reviewer) ------------------------------------
     // The assigner cannot sign. The reviewer finds their assignment in the list.
     await connectAs(page, "Reviewer A");
     await page.goto(`/w/projects/${projectId}/verification`);
 
     // The header shows the connected person's role. Signing is an act of a qualified person.
     await openHeaderMenu(page, "Account");
-    await expect(page.getByTestId("effective-roles")).toContainText("reviewer_cp_qp");
+    await expect(page.getByTestId("effective-roles")).toContainText("reviewer");
     await expect(page.getByTestId("effective-roles")).toBeVisible();
     await page.locator("header details.nav-account > summary").click();
 
@@ -218,7 +219,7 @@ test.describe("golden path", () => {
     await page.getByTestId("sign-attestation").click();
     await expect(page.getByTestId("signed-result")).toContainText("signed");
 
-    // --- 5. Readiness assessment (data_steward) ---------------------------
+    // --- 5. Readiness assessment (reviewer) ---------------------------
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/readiness`);
     // Other complete specs install additional policies in the shared E2E tenant.
@@ -230,7 +231,7 @@ test.describe("golden path", () => {
     // The readiness screen has no path to alter values (REQ-DAPP-017).
     await expect(page.getByRole("button", { name: /override|force|ignore/i })).toHaveCount(0);
 
-    // --- 6. Gate decision (gate_approver) ---------------------------------
+    // --- 6. Gate decision (reviewer) ---------------------------------
     await connectAs(page, "Approver A");
     await page.goto(`/w/projects/${projectId}/gates/registry_publication`);
     await page.getByRole("combobox", { name: "Rule set" }).selectOption("dddddddd-0000-0000-0000-000000000001");
@@ -264,7 +265,7 @@ test.describe("golden path", () => {
     await expect(recorded).toContainText("Re-assess once the jurisdiction profile");
     await expect(recorded).toContainText("not a legal approval");
 
-    // --- 7. Draft (mpc_operator) → publish (disclosure_approver) → anchor --
+    // --- 7. Draft (administrator) → publish (reviewer) → anchor --
     // 02 §2.8: the person who drafts a public projection does not publish it.
     await connectAs(page, "Operator A");
     await page.goto(`/w/projects/${projectId}/publication`);
@@ -337,6 +338,7 @@ test.describe("golden path", () => {
      * factual truth or legal validity true. AC-28: this whole flow passes without a
      * DID method or a ZK prover.
      */
+    await openIntegrityProof(page);
     await expect(page.getByTestId("proof-panel")).toBeVisible();
     // The Merkle path matches, but before chain confirmation included is not yet true (AC-23).
     await expect(page.getByText("Path matches")).toBeVisible();

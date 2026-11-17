@@ -26,7 +26,7 @@ import {
 import { useSession } from "@/lib/session";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { AssuranceNotice } from "@/components/AssuranceNotice";
-import { assuranceNarrowedFor, can, effectiveRoles } from "@/lib/access";
+import { assuranceNarrowedFor, can } from "@/lib/access";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
 import { Address } from "@/components/Address";
 
@@ -47,6 +47,11 @@ import { Address } from "@/components/Address";
  */
 export default function VerificationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { token } = useSession();
+  return <VerificationWorkbench key={`${token ?? "anonymous"}:${id}`} id={id} />;
+}
+
+function VerificationWorkbench({ id }: { readonly id: string }) {
   const { token, session, signTypedData } = useSession();
 
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -58,6 +63,9 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
   const [attestation, setAttestation] = useState<AttestationDraft | null>(null);
   const [signatureRequest, setSignatureRequest] = useState<SignatureRequest | null>(null);
   const [signed, setSigned] = useState<SignedAttestation | null>(null);
+  const [savedAttestation, setSavedAttestation] = useState<{ id: string; state: string } | null>(null);
+  const [disputeRevision, setDisputeRevision] = useState(0);
+  const disputeTarget = signed ?? savedAttestation;
   const [transitionReason, setTransitionReason] = useState("");
   const [disputes, setDisputes] = useState<AttestationDispute[]>([]);
   const [resolution, setResolution] = useState("");
@@ -75,6 +83,17 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
   // The same guidance for signing and disputes: a button whose action the session lacks is off.
   const canSign = can(session, "attestation.sign");
   const canDispute = can(session, "attestation.dispute");
+  const canResolve = can(session, "attestation.dispute.resolve") &&
+    !(session?.subjectId && verificationCase?.reviewerSubjectId === session.subjectId);
+
+  useEffect(() => {
+    setDisputes([]);
+    if (!token || !disputeTarget?.id) return;
+    let active = true;
+    listDisputes(token, disputeTarget.id).then(value => { if (active) setDisputes(value.items); })
+      .catch(caught => { if (active) setError(caught); });
+    return () => { active = false; };
+  }, [token, disputeTarget?.id, disputeRevision]);
 
   const load = useCallback(async (): Promise<VerificationCase[]> => {
     if (!token) return [];
@@ -123,6 +142,22 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
     };
   }, [token, id, canAssign]);
 
+  function openCase(item: VerificationCase) {
+    setVerificationCase(item);
+    setAttestation(null);setSignatureRequest(null);setSigned(null);
+    setSavedAttestation(item.latestAttestation ?? null);
+    setDisputes([]);setResolution("");
+  }
+
+  function rememberAttestation(latest: { id: string; state: string }, justSigned = false) {
+    if (!verificationCase) return;
+    const remember = (item: VerificationCase) => item.id === verificationCase.id
+      ? { ...item, ...(justSigned ? {state:"signed"} : {}), latestAttestation:latest } : item;
+    setCases(items => items.map(remember));
+    setVerificationCase(remember(verificationCase));
+    setSavedAttestation(latest);
+  }
+
   async function run(step: () => Promise<void>) {
     setBusy(true);
     setError(null);
@@ -145,7 +180,6 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
 
   // Roles in effect, not merely held: a reviewer below the assurance minimum cannot sign, and
   // AssuranceNotice says why instead of the "cannot sign" notice.
-  const isReviewer = effectiveRoles(session).some((role) => role.startsWith("reviewer_"));
   const signerInactive = assuranceNarrowedFor(session, ["attestation.sign"]).length > 0;
   const chosenReviewer = options?.reviewers.find((item) => item.subjectId === reviewerId);
 
@@ -318,7 +352,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
                 },
                 newIdempotencyKey(),
               );
-              setVerificationCase(created);
+              openCase(created);
               await load();
             })
           }
@@ -351,8 +385,8 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
                   <td>
                     <button
                       data-testid={`select-case-${item.id}`}
-                      onClick={() => setVerificationCase(item)}
-                      disabled={verificationCase?.id === item.id}
+                      onClick={() => openCase(item)}
+                      disabled={busy || verificationCase?.id === item.id}
                     >
                       {verificationCase?.id === item.id ? "Selected" : "Open this case"}
                     </button>
@@ -428,7 +462,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
             <button
               key={state}
               data-testid={`transition-${state}`}
-              disabled={busy || !canAssign || transitionReason.trim().length === 0}
+              disabled={busy || !canAssign || (verificationCase.assignmentActive && verificationCase.reviewerSubjectId === session?.subjectId) || transitionReason.trim().length === 0}
               onClick={() =>
                 void run(async () => {
                   await transitionCase(
@@ -597,14 +631,14 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
             void run(async () => {
               if (!signatureRequest || !attestation) return;
               const signature = await signTypedData(signatureRequest.typedData);
-              setSigned(
-                await submitSignature(
-                  token,
-                  attestation.id,
-                  { signatureRequestId: signatureRequest.signatureRequestId, signature },
-                  newIdempotencyKey(),
-                ),
+              const result=await submitSignature(
+                token,
+                attestation.id,
+                { signatureRequestId: signatureRequest.signatureRequestId, signature },
+                newIdempotencyKey(),
               );
+              setSigned(result);
+              rememberAttestation(result,true);
             })
           }
         >
@@ -619,7 +653,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
             <dd>
               <Address value={signed.signerWalletAddress} label="signer address" />
             </dd>
-            <dt>Current applicability of the credential</dt>
+            <dt>Credential applicability at signing</dt>
             <dd className="mono">{signed.ongoingApplicability}</dd>
             <dt>Validity of past signatures</dt>
             <dd>
@@ -633,9 +667,15 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
   };
 
   const renderDisputes = () => {
-    return signed ? (
+    return disputeTarget ? (
       <div className="panel">
         <h2>5. Dispute</h2>
+        <p className="mono" data-testid="dispute-attestation-state">{disputeTarget.state}</p>
+        {disputeTarget.state === "stale_candidate" ? (
+          <p className="notice" data-testid="review-needs-reassessment">
+            This review needs reassessment. Check its evidence, credential and review requirements, then create a new review.
+          </p>
+        ) : null}
         <p className="sub" style={{ marginTop: 0 }}>
           {/* Deleting a signature is indistinguishable from hiding a bad review. */}
           The signature is not deleted. The judgement made at signing time stands, and the dispute is
@@ -647,18 +687,18 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
           disabled={busy || !canDispute}
           onClick={() =>
             void run(async () => {
-              if (!attestation) return;
               const result = await disputeAttestation(
                 token,
-                attestation.id,
+                disputeTarget.id,
                 {
                   reasonCode: "EVIDENCE_QUESTIONED",
                   detail: "The as-of date of the registry lookup used as evidence is unclear",
                 },
                 newIdempotencyKey(),
               );
-              setSigned({ ...signed, state: result.state });
-              setDisputes((await listDisputes(token, attestation.id)).items);
+              if (signed) setSigned({ ...signed, state: result.state });
+              rememberAttestation({ id: disputeTarget.id, state: result.state });
+              setDisputeRevision(value => value + 1);
             })
           }
         >
@@ -706,7 +746,7 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
                               <button
                                 key={outcome}
                                 data-testid={`resolve-${outcome}-${item.id}`}
-                                disabled={busy || !canDispute || resolution.trim().length === 0}
+                                disabled={busy || !canResolve || resolution.trim().length === 0}
                                 onClick={() =>
                                   void run(async () => {
                                     const result = await resolveDispute(
@@ -715,12 +755,9 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
                                       { outcome, resolution: resolution.trim() },
                                       newIdempotencyKey(),
                                     );
-                                    if (attestation) {
-                                      setDisputes((await listDisputes(token, attestation.id)).items);
-                                    }
-                                    if (signed) {
-                                      setSigned({ ...signed, state: result.attestationState });
-                                    }
+                                    if (signed) setSigned({ ...signed, state: result.attestationState });
+                                    rememberAttestation({ id: disputeTarget.id, state: result.attestationState });
+                                    setDisputeRevision(value => value + 1);
                                   })
                                 }
                               >
@@ -738,7 +775,8 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
 
             <p className="meta" style={{ marginTop: 10 }}>
               {/* A review confirmed wrong cannot be shown as valid. */}
-              Upholding a dispute does not return the review to valid. Correcting it is a separate
+              A different reviewer, independent of the signer, disputants and evidence contributors,
+              records the outcome. Upholding a dispute does not return the review to valid. Correcting it is a separate
               decision — supersede it with a new signature, or revoke it.
             </p>
           </>
@@ -762,15 +800,13 @@ export default function VerificationPage({ params }: { params: Promise<{ id: str
 
       {error ? <ErrorNotice error={error} context="signing" /> : null}
 
-      <AssuranceNotice actions={["attestation.sign", "attestation.dispute", "claim.curate"]} />
+      <AssuranceNotice actions={["attestation.sign", "attestation.dispute", "attestation.dispute.resolve", "claim.curate"]} />
 
-      {!isReviewer && !signerInactive ? (
+      {!canSign && !signerInactive ? (
         <div className="notice" style={{ color: "var(--alert)" }}>
           <div className="title">This account cannot sign</div>
-          Signing an attestation requires one of <span className="mono">reviewer_cp_qp</span>·
-          <span className="mono">reviewer_lab</span>·<span className="mono">reviewer_legal</span>·
-          <span className="mono">reviewer_assurance</span>. Assignments are created by a
-          <span className="mono"> data_steward</span>.
+          Signing an attestation requires the <span className="mono">reviewer</span> role. Assignments are created by a
+          <span className="mono"> reviewer</span>.
         </div>
       ) : null}
 

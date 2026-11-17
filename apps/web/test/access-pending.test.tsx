@@ -73,12 +73,12 @@ const pending = base;
 const inactive = {
   ...base,
   assuranceLevel: "wallet_only",
-  roleBindings: [binding("reviewer_assurance"), binding("reviewer_cp_qp")],
+  roleBindings: [binding("reviewer"), binding("administrator")],
 } as SessionInfo;
 const steward = {
   ...base,
   assuranceLevel: "identity_bound",
-  roleBindings: [binding("data_steward")],
+  roleBindings: [binding("project_member")],
   actions: ["project.read", "source.upload", "claim.curate"],
 } as SessionInfo;
 
@@ -103,13 +103,13 @@ describe("what the session can use", () => {
 
   it("separates roles in effect from roles below their assurance minimum", () => {
     expect(assuranceNarrowedRoles(inactive)).toEqual([
-      { role: "reviewer_assurance", requiredAssurance: "high_assurance" },
-      { role: "reviewer_cp_qp", requiredAssurance: "high_assurance" },
+      { role: "reviewer", requiredAssurance: "high_assurance" },
+      { role: "administrator", requiredAssurance: "high_assurance" },
     ]);
     expect(effectiveRoles(inactive)).toEqual([]);
-    const mixed = { ...inactive, roleBindings: [binding("project_voter"), binding("data_steward")] } as SessionInfo;
-    expect(effectiveRoles(mixed)).toEqual(["project_voter"]);
-    expect(assuranceNarrowedRoles(mixed).map((entry) => entry.role)).toEqual(["data_steward"]);
+    const mixed = { ...inactive, assuranceLevel: "identity_bound", roleBindings: [binding("project_member"), binding("reviewer")] } as SessionInfo;
+    expect(effectiveRoles(mixed)).toEqual(["project_member"]);
+    expect(assuranceNarrowedRoles(mixed).map((entry) => entry.role)).toEqual(["reviewer"]);
     // An unknown role needs the highest level, as on the server.
     expect(assuranceNarrowedRoles({ ...steward, roleBindings: [binding("made_up")] })).toEqual([
       { role: "made_up", requiredAssurance: "high_assurance" },
@@ -121,10 +121,9 @@ describe("what the session can use", () => {
 
   it("names only the inactive roles an action would use", () => {
     expect(assuranceNarrowedFor(inactive, ["attestation.sign"]).map((entry) => entry.role)).toEqual([
-      "reviewer_assurance",
-      "reviewer_cp_qp",
+      "reviewer",
     ]);
-    expect(assuranceNarrowedFor(inactive, ["gate.decide"])).toEqual([]);
+    expect(assuranceNarrowedFor(inactive, ["gate.decide"]).map(entry => entry.role)).toEqual(["reviewer"]);
     expect(assuranceNarrowedFor(inactive, ["no.such.action"])).toEqual([]);
   });
 
@@ -135,14 +134,14 @@ describe("what the session can use", () => {
     expect(accessPending({ ...pending, recoveryLimited: true })).toBe(false);
     expect(accessPending({ ...pending, tenantId: null })).toBe(false);
     expect(accessPending({ ...pending, authenticated: false })).toBe(false);
-    expect(accessPending({ ...pending, narrowedRoles: [{ role: "reviewer_lab", requiredAal: "aal3" }] })).toBe(
+    expect(accessPending({ ...pending, narrowedRoles: [{ role: "reviewer", requiredAal: "aal3" }] })).toBe(
       false,
     );
     expect(rolesAllInactive(inactive)).toBe(true);
     expect(rolesAllInactive(pending)).toBe(false);
     expect(rolesAllInactive(steward)).toBe(false);
     expect(
-      rolesAllInactive({ ...inactive, narrowedRoles: [{ role: "gate_approver", requiredAal: "aal3" }] }),
+      rolesAllInactive({ ...inactive, narrowedRoles: [{ role: "reviewer", requiredAal: "aal3" }] }),
     ).toBe(false);
   });
 });
@@ -226,7 +225,7 @@ describe("the access-pending state", () => {
     expect(panel.textContent).toContain("Your roles are not in effect");
     expect(panel.textContent).toContain("Admin → Set assurance");
     expect(screen.getByTestId("access-pending-inactive-roles").textContent).toContain(
-      "reviewer_assurance — needs high_assurance",
+      "reviewer — needs high_assurance",
     );
   });
 
@@ -289,7 +288,7 @@ describe("refusals as the flow should say them", () => {
           {
             reason: "ASSURANCE_LEVEL_INSUFFICIENT",
             requiredAssurance: "high_assurance",
-            requiredRoles: ["reviewer_cp_qp", "reviewer_lab"],
+            requiredRoles: ["reviewer", "reviewer"],
           },
           403,
         )}
@@ -305,10 +304,10 @@ describe("refusals as the flow should say them", () => {
     const view = render(<AssuranceNotice actions={["attestation.sign"]} />);
     const notice = screen.getByTestId("assurance-notice");
     expect(notice.textContent).toContain("Identity verification needed — ask an admin");
-    expect(notice.textContent).toContain("reviewer_assurance");
+    expect(notice.textContent).toContain("reviewer");
     view.unmount();
     // Nothing to say when the screen's roles are in effect or are not the person's.
-    render(<AssuranceNotice actions={["gate.decide"]} />);
+    render(<AssuranceNotice actions={["governance.protocol.vote"]} />);
     expect(screen.queryByTestId("assurance-notice")).toBeNull();
     s.session = steward;
     render(<AssuranceNotice actions={["attestation.sign", "claim.curate"]} />);

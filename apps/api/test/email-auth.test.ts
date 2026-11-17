@@ -76,8 +76,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
     return id;
   }
 
-  /** An admin (mpc_operator or security_operator) session at aal3 in tenant A. */
-  async function admin(role: "mpc_operator" | "security_operator" = "security_operator") {
+  /** An admin (administrator or administrator) session at aal3 in tenant A. */
+  async function admin(role: "administrator" | "administrator" = "administrator") {
     const subjectId = randomUUID();
     await fx.sql`
       INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
@@ -222,7 +222,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       const subjectId = await person(email);
       await fx.sql`
         INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'data_steward')
+        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'reviewer')
       `;
       await start(email);
       const { sessionToken } = (await verify(email, await mailedCode(email))).json();
@@ -533,7 +533,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       const subjectId = await person(email);
       await fx.sql`
         INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'security_operator')
+        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'administrator')
       `;
       await start(email);
       const { sessionToken } = (await verify(email, await mailedCode(email))).json();
@@ -556,8 +556,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
     }
 
     it("takes a second admin and a code at the new address, then ends every session", async () => {
-      const proposer = await admin("mpc_operator");
-      const approver = await admin("security_operator");
+      const proposer = await admin("administrator");
+      const approver = await admin("administrator");
       const oldEmail = freshEmail("old");
       const subjectId = await person(oldEmail);
       await start(oldEmail);
@@ -620,8 +620,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
     });
 
     it("the person whose address changes cannot decide it, and nobody proposes their own", async () => {
-      const proposer = await admin("mpc_operator");
-      const target = await admin("security_operator");
+      const proposer = await admin("administrator");
+      const target = await admin("administrator");
       // Only an address can be changed (0118); the admin fixture has none of its own.
       await fx.sql`UPDATE core.subjects SET email = ${freshEmail("target")} WHERE id = ${target.subjectId}`;
       const own = await propose(target.token, target.subjectId, freshEmail());
@@ -635,8 +635,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
     });
 
     it("a person without an address cannot be given one by an email change", async () => {
-      const proposer = await admin("mpc_operator");
-      const walletOnly = await admin("security_operator"); // the fixture has no address
+      const proposer = await admin("administrator");
+      const walletOnly = await admin("administrator"); // the fixture has no address
       const res = await propose(proposer.token, walletOnly.subjectId, freshEmail("attach"));
       expect(res.statusCode, res.body).toBe(422);
       expect(res.json().code).toBe("EMAIL_CHANGE_NO_ADDRESS");
@@ -644,8 +644,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
     });
 
     it("a rejected change sends no code and changes nothing", async () => {
-      const proposer = await admin("mpc_operator");
-      const approver = await admin("security_operator");
+      const proposer = await admin("administrator");
+      const approver = await admin("administrator");
       const email = freshEmail("keep");
       const subjectId = await person(email);
       const newEmail = freshEmail("rejected");
@@ -657,7 +657,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
     });
 
     it("lists this tenant's invitations and email changes to an admin", async () => {
-      const proposer = await admin("mpc_operator");
+      const proposer = await admin("administrator");
       const subjectId = await person(freshEmail());
       const change = (await propose(proposer.token, subjectId, freshEmail("listed"))).json();
       const invited = (await adminPost("/api/v1/admin/invitations", proposer.token, { email: freshEmail("listed"), organizationId: fx.orgA })).json();
@@ -672,7 +672,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       // A stale version is refused.
       const stale = await adminPost(
         `/api/v1/admin/email-changes/${change.id}/decision`,
-        (await admin("security_operator")).token,
+        (await admin("administrator")).token,
         { decision: "approve", reason: "Confirmed by phone" },
         { "if-match": `"${change.version + 1}"` },
       );
@@ -680,7 +680,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
     });
 
     it("refuses an address already in use, audited", async () => {
-      const proposer = await admin("mpc_operator");
+      const proposer = await admin("administrator");
       const subjectId = await person(freshEmail());
       const taken = freshEmail("taken");
       await person(taken, fx.tenantB);

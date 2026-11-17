@@ -35,7 +35,7 @@ test.describe("review lifecycle", () => {
   await expect(page.locator(".page-head").first()).toContainText(projectKey);
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;
 
-    // --- Claim and assignment (data_steward) ------------------------------
+    // --- Claim and assignment (reviewer) ------------------------------
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/data-room`);
     await page.getByRole("button", { name: "Add a mining right claim" }).click();
@@ -70,14 +70,14 @@ test.describe("review lifecycle", () => {
     await expect(history).toContainText("assigned → in_review");
     await expect(history).toContainText("The registry lookup has no as-of date");
 
-    // --- Back to review after changes (data_steward) ---------------------
+    // --- Back to review after changes (reviewer) ---------------------
     // Moving the state back is the job of whoever handles evidence. The reviewer does not
     // have the claim.curate permission (02 §2.3).
     await page.getByLabel("Reason (required)").fill("The as-of date has been supplied");
     await page.getByTestId("transition-in_review").click();
     await expect(page.getByTestId("selected-case")).toContainText("in_review");
 
-    // --- The reviewer signs (reviewer_cp_qp) ------------------------------
+    // --- The reviewer signs (reviewer) ------------------------------
     await connectAs(page, "Reviewer A");
     await page.goto(`/w/projects/${projectId}/verification`);
     const open = page.getByRole("button", { name: "Open this case" }).first();
@@ -122,11 +122,18 @@ test.describe("review lifecycle", () => {
     const resolveButton = page.locator('[data-testid^="resolve-dismissed-"]').first();
     await expect(resolveButton).toBeDisabled();
 
+    await page.getByLabel("Basis for resolution (required)").fill("The signer cannot resolve their own review");
+    await expect(resolveButton).toBeDisabled();
+    await connectAs(page, "Dispute Reviewer A");
+    await page.goto(`/w/projects/${projectId}/verification`);
+    await page.locator('[data-testid^="select-case-"]').first().click();
+    await expect(page.getByTestId("dispute-attestation-state")).toHaveText("disputed");
+    await expect(disputes).toContainText("unresolved");
     await page.getByLabel("Basis for resolution (required)").fill("The as-of date was checked and is sound");
     await resolveButton.click();
 
     // Dismissal makes the review valid again, and the dispute record remains.
-    await expect(page.getByTestId("signed-result")).toContainText("active");
+    await expect(page.getByTestId("dispute-attestation-state")).toHaveText("active");
     await expect(disputes).toContainText("dismissed");
     await expect(disputes).toContainText("The as-of date was checked and is sound");
   });

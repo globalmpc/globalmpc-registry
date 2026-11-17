@@ -6,7 +6,7 @@ import { mockHttp } from "./support/http";
 const auth = vi.hoisted(() => ({
   token: "token" as string | null,
   loading: false,
-  session: { roleBindings: [{ role: "protocol_proposer" }] },
+  session: { roleBindings: [{ role: "project_member" }] },
 }));
 vi.mock("../src/lib/session", () => ({ useSession: () => auth }));
 const root = "/api/v1/governance/proposals";
@@ -39,7 +39,7 @@ function routes(): Record<string, unknown> {
     "GET /api/v1/public/governance/centralization": {
       currentStage: "G0",
       centralizedPowers: ["pause"],
-      governanceRoles: [{ role: "mpc_operator", power: "administer", activeHolders: 1 }],
+      governanceRoles: [{ role: "administrator", power: "administer", activeHolders: 1 }],
       anchor: { contracts: [], note: "No deployment" },
       stages: [{ stage: "G0", current: true, description: "Initial operation" }],
       transitionCriteria: { note: "Not yet met", candidates: ["independent review"] },
@@ -57,7 +57,7 @@ const change = (label: string, value: string) =>
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 beforeEach(() => {
   auth.token = "token";
-  auth.session.roleBindings = [{ role: "protocol_proposer" }];
+  auth.session.roleBindings = [{ role: "project_member" }];
 });
 afterEach(() => {
   cleanup();
@@ -96,10 +96,11 @@ describe("governance authority and evidence", () => {
     );
   });
   it("requires a project scope for a project proposer", async () => {
-    auth.session.roleBindings = [{ role: "project_proposer" }];
+    auth.session.roleBindings = [{ role: "project_member" }];
     const data = routes();
     data[`POST ${root}`] = proposal("draft", "project");
     const calls = await mount(data);
+    change("Space", "project");
     change("Title", "Project valuation");
     change("Rationale (required)", "Independent valuation needed");
     change("Eligible weight (required)", "1000");
@@ -116,7 +117,7 @@ describe("governance authority and evidence", () => {
     );
   });
   it("does not offer voting or proposing to an operator", async () => {
-    auth.session.roleBindings = [{ role: "mpc_operator" }];
+    auth.session.roleBindings = [{ role: "administrator" }];
     await mount();
     expect(screen.queryByTestId("create-proposal")).toBeNull();
     expect(screen.queryByTestId("vote-for-proposal")).toBeNull();
@@ -124,7 +125,7 @@ describe("governance authority and evidence", () => {
   it.each(["for", "against", "abstain"])(
     "records a %s vote only in the voter's space",
     async (choice) => {
-      auth.session.roleBindings = [{ role: "protocol_voter" }];
+      auth.session.roleBindings = [{ role: "project_member" }];
       const data = routes();
       data[`POST ${root}/proposal/votes`] = proposal();
       const calls = await mount(data);
@@ -136,11 +137,11 @@ describe("governance authority and evidence", () => {
           weight: "25",
         }),
       );
-      expect(screen.queryByTestId("create-proposal")).toBeNull();
+      expect(screen.queryByTestId("create-proposal")).not.toBeNull();
     },
   );
   it("does not let a protocol voter vote on a project proposal", async () => {
-    auth.session.roleBindings = [{ role: "protocol_voter" }];
+    auth.session.roleBindings = [{ role: "project_member" }];
     const data = routes();
     data[`GET ${root}`] = { items: [proposal("voting", "project")] };
     await mount(data);
@@ -172,7 +173,7 @@ describe("governance authority and evidence", () => {
     expect(calls.find((call) => call.method === "POST")?.headers.get("if-match")).toBe('"4"');
   });
   it("binds an execution record to one selected proposal and its evidence hash", async () => {
-    auth.session.roleBindings = [{ role: "execution_recorder" }];
+    auth.session.roleBindings = [{ role: "project_member" }];
     const data = routes();
     data[`GET ${root}`] = { items: [proposal("execution_pending")], truncated: false };
     data[`POST ${root}/proposal/execution-records`] = proposal("executed");

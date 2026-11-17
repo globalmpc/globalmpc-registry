@@ -93,10 +93,10 @@ describeDb("review registry proposals", () => {
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
     const approver = newAccount();
-    approverSubject = await addPerson("Assurance Reviewer A", ["reviewer_assurance"], approver);
+    approverSubject = await addPerson("Assurance Reviewer A", ["reviewer"], approver);
     // One person holding both roles. Only the person check can stop them approving their own work.
     const dual = newAccount();
-    await addPerson("Operator and Reviewer A", ["mpc_operator", "reviewer_assurance"], dual);
+    await addPerson("Operator and Reviewer A", ["administrator", "reviewer"], dual);
 
     operatorToken = await signIn(app, fx.operatorA);
     approverToken = await signIn(app, approver);
@@ -446,8 +446,8 @@ describeDb("review registry proposals", () => {
       const response = await decide(operatorToken, "policy-sets", proposal);
 
       expect(response.statusCode).toBe(403);
-      expect(response.json().details.requiredRoles).toContain("reviewer_assurance");
-      expect(response.json().details.requiredRoles).not.toContain("mpc_operator");
+      expect(response.json().details.requiredRoles).toContain("reviewer");
+      expect(response.json().details.requiredRoles).not.toContain("administrator");
     });
 
     it("a data steward cannot propose", async () => {
@@ -457,7 +457,7 @@ describeDb("review registry proposals", () => {
       });
 
       expect(response.statusCode).toBe(403);
-      expect(response.json().details.requiredRoles).toContain("mpc_operator");
+      expect(response.json().details.requiredRoles).toContain("administrator");
     });
 
     it("a steward cannot read proposals either", async () => {
@@ -634,8 +634,8 @@ describeDb("review registry proposals", () => {
       `;
       const byCommand = Object.fromEntries(events.map((event) => [event.command, event]));
 
-      expect(byCommand["review_registry.policy_set.proposed"]?.effective_role).toBe("mpc_operator");
-      expect(byCommand["review_registry.policy_set.approved"]?.effective_role).toBe("reviewer_assurance");
+      expect(byCommand["review_registry.policy_set.proposed"]?.effective_role).toBe("administrator");
+      expect(byCommand["review_registry.policy_set.approved"]?.effective_role).toBe("reviewer");
       expect(byCommand["review_registry.policy_set.materialized"]?.resource_id).toBe(
         decided.materializedId,
       );
@@ -755,7 +755,7 @@ describeDb("review registry proposals", () => {
         jurisdiction: "MNG",
         subjectName: "Parity reviewer",
         email: bootstrapEmail,
-        role: "reviewer_cp_qp",
+        role: "reviewer",
         assuranceLevel: "high_assurance",
       });
     });

@@ -77,23 +77,23 @@ describe("voting eligibility", () => {
 
 describe("the space a voter binding votes in — 02 §2.2", () => {
   it("a protocol voter binding votes in the protocol space", () => {
-    expect(voterSpaceOf({ role: "protocol_voter", projectId: null })).toBe("protocol");
+    expect(voterSpaceOf({ role: "project_member", projectId: null })).toBe("protocol");
   });
 
   it("a project voter binding votes only in the project it is bound to", () => {
-    expect(voterSpaceOf({ role: "project_voter", projectId: "01JZPROJECTA" })).toEqual(PROJECT_A);
+    expect(voterSpaceOf({ role: "project_member", projectId: "01JZPROJECTA" })).toEqual(PROJECT_A);
   });
 
   it("a project voter binding without a project has no space", () => {
     // It names no AT snapshot, so reading it as "every project" would let one binding vote on
     // every project's assets.
-    expect(voterSpaceOf({ role: "project_voter", projectId: null })).toBeNull();
+    expect(voterSpaceOf({ role: "project_member", projectId: null, governanceScope: "project" })).toBeNull();
   });
 
   it("roles that do not vote have no space", () => {
     // 02 §2.3: the MPC operator administers proposals; it does not vote on them.
-    expect(voterSpaceOf({ role: "mpc_operator", projectId: null })).toBeNull();
-    expect(voterSpaceOf({ role: "protocol_proposer", projectId: null })).toBeNull();
+    expect(voterSpaceOf({ role: "administrator", projectId: null })).toBeNull();
+    expect(voterSpaceOf({ role: "project_member", projectId: null, governanceScope: "none" })).toBeNull();
   });
 });
 

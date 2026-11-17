@@ -1,3 +1,4 @@
+import { authorizedProjectLookup } from "../services/authorized-project-lookup.js";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
@@ -11,7 +12,7 @@ import {
   rejectRegistryDraftRequest,
 } from "@mpc/api-contract";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, tenantResource, projectResource, visibleProjectScope } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import {
@@ -26,6 +27,7 @@ import {
   type PublicationSubject,
   projectionMismatches,
   resolvePublicationSubject,
+  registrySubjectProjectId,
   assertEvidenceLedgerProjection,
 } from "../services/registry-publication.js";
 
@@ -37,6 +39,19 @@ import {
  * and recorded. It is not public, not anchorable, and not a registry version. Publication
  * (`registry.ts`) is done by a different person.
  */
+
+/** Immutable draft subject resolves scope before an idempotency response can be replayed. */
+export async function draftProjectId(sql: postgres.Sql, tenantId: string, draftId: string): Promise<string> {
+  const [row] = await withTenant(sql, { tenantId }, tx => tx<{project_id: string | null}[]>`
+    SELECT CASE WHEN d.registry_type='project' THEN d.subject_id ELSE vc.project_id END AS project_id
+    FROM core.registry_publication_drafts d
+    LEFT JOIN core.verification_attestations a ON d.registry_type='verification' AND a.id=d.subject_id
+    LEFT JOIN core.verification_cases vc ON vc.id=a.case_id
+    WHERE d.id=${draftId}
+  `);
+  if (!row?.project_id) throw notFound("Draft not found");
+  return row.project_id;
+}
 
 export interface DraftRow {
   id: string;
@@ -183,11 +198,13 @@ export async function registerRegistryDraftRoutes(
       );
     }
     const registryType = data.registryType;
+    const projectId = await authorizedProjectLookup(session, "registry.draft",
+      () => withTenant(sql, { tenantId }, tx => registrySubjectProjectId(tx, tenantId, registryType, data.subjectId)), id => id);
 
     const effectiveRole = assertAuthorized(
       session,
       "registry.draft",
-      tenantResource(tenantId, { sensitivity: "public" }),
+      projectResource(tenantId, projectId, { sensitivity: "public" }),
       sessionFacts(session),
     );
     const proposer = subjectOf(session);
@@ -343,15 +360,19 @@ export async function registerRegistryDraftRoutes(
       throw badRequest("REQUEST_INVALID", "Query is invalid", { issues: query.error.issues });
     }
     const { subjectId, state } = query.data;
+    const scope = visibleProjectScope(session, "registry.read");
     const { requestId, asOf } = request.context;
 
     const rows = await withTenant(sql, { tenantId }, (tx) =>
       tx<DraftRow[]>`
-        SELECT * FROM core.registry_publication_drafts
-        WHERE tenant_id = ${tenantId}
-          ${subjectId ? tx`AND subject_id = ${subjectId}` : tx``}
-          ${state ? tx`AND state = ${state}::core.registry_draft_state` : tx``}
-        ORDER BY proposed_at DESC
+        SELECT d.* FROM core.registry_publication_drafts d
+        LEFT JOIN core.verification_attestations a ON d.registry_type='verification' AND a.id=d.subject_id
+        LEFT JOIN core.verification_cases vc ON vc.id=a.case_id
+        WHERE d.tenant_id = ${tenantId}
+          AND ${scope === "all" ? tx`TRUE` : tx`(CASE WHEN d.registry_type='project' THEN d.subject_id ELSE vc.project_id END) = ANY(${scope as string[]}::uuid[])`}
+          ${subjectId ? tx`AND d.subject_id = ${subjectId}` : tx``}
+          ${state ? tx`AND d.state = ${state}::core.registry_draft_state` : tx``}
+        ORDER BY d.proposed_at DESC
         LIMIT 100
       `,
     );
@@ -363,10 +384,12 @@ export async function registerRegistryDraftRoutes(
     async (request, reply) => {
       const { session, tenantId, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
+      const projectId = await authorizedProjectLookup(session, "registry.publish",
+        () => draftProjectId(sql, tenantId, request.params.draftId), id => id);
       const effectiveRole = assertAuthorized(
         session,
         "registry.publish",
-        tenantResource(tenantId, {
+        projectResource(tenantId, projectId, {
           sensitivity: "public",
           state: "pending",
           statesAllowingAction: ["pending"],

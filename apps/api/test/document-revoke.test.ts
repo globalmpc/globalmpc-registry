@@ -756,14 +756,15 @@ describeDb("document revocation", () => {
   });
 
   describe("who may revoke", () => {
-    it("is refused to roles that may read the document but not revoke it", async () => {
-      const certificate = await promoted();
-      for (const token of [operator, reviewer]) {
+    it("allows scoped project members to revoke uploads while administration alone cannot", async () => {
+      const protectedCertificate = await promoted();
+      expect((await revoke(protectedCertificate, undefined, { token: operator })).statusCode).toBe(403);
+      for (const token of [await signIn(app, fx.proposerA)]) {
+        const certificate = await promoted();
         const response = await revoke(certificate, undefined, { token });
-        expect(response.statusCode).toBe(403);
-        expect(response.json().code).toBe("AUTHORIZATION_DENIED");
+        expect(response.statusCode).toBe(200);
+        expect((await current(certificate)).version).toBeGreaterThan(certificate.version);
       }
-      expect((await current(certificate)).version).toBe(certificate.version);
     });
 
     it("answers 404 where the document is not visible: project out of scope, no role, another tenant, no such id", async () => {

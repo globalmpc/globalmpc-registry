@@ -2,7 +2,7 @@
 # WORKER must be jobs-worker, anchor-worker, or scan-worker.
 # Keep the default final-stage reference valid; Compose explicitly selects each worker.
 ARG WORKER=jobs-worker
-FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS dependencies
+FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS dependencies
 WORKDIR /repo
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable pnpm && corepack prepare pnpm@10.33.0 --activate
@@ -33,7 +33,7 @@ RUN rm -rf /worker/node_modules/.pnpm/typescript@* /worker/node_modules/.pnpm/@t
       catch (error) { if (error.code !== "MODULE_NOT_FOUND") throw error; }'
 
 # Keep the LGTM SDK pinned and isolated from pnpm workspace dependencies.
-FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS otel
+FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS otel
 WORKDIR /opt/otel
 COPY etc/otel/package.json etc/otel/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
@@ -41,7 +41,7 @@ COPY etc/otel/otel-console-bridge.cjs etc/otel/runtime.cjs etc/otel/register.mjs
 RUN chmod -R a+rX,go-w /opt/otel && chmod 755 /opt/otel/otel-wrapper.sh \
  && node --check runtime.cjs && node --check otel-console-bridge.cjs && node --check register.mjs && sh -n otel-wrapper.sh
 
-FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS runtime
+FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 # Workers run `node` directly, so every package manager (npm, npx, yarn, corepack) is removed.

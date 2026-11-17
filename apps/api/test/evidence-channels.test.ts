@@ -1,3 +1,7 @@
+import { withTenant } from "@mpc/db";
+import { loadEvidenceSubmitters } from "../src/services/attestation-basis.js";
+import { randomUUID } from "node:crypto";
+import { addGovernanceAccount } from "./helpers/governance-accounts.js";
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
@@ -48,11 +52,11 @@ describeDb("Evidence channel", () => {
   });
 
   /** Uploads a file and passes its scan. An unscanned file is not confirmed evidence. */
-  async function uploadClean(content: Buffer, contentType: string): Promise<string> {
+  async function uploadClean(content: Buffer, contentType: string, uploader = steward): Promise<string> {
     const created = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${fx.projectA}/uploads`,
-      headers: { authorization: `Bearer ${steward}`, "idempotency-key": idempotencyKey() },
+      headers: { authorization: `Bearer ${uploader}`, "idempotency-key": idempotencyKey() },
       payload: {
         contentBase64: content.toString("base64"),
         contentType,
@@ -112,6 +116,35 @@ describeDb("Evidence channel", () => {
       },
     });
   }
+
+  it.each(["verifiable_signed_document","official_bulk_export"])("includes an unpromoted %s file uploader and fails closed on unknown attribution", async (channel) => {
+    const reviewer=await signIn(app,fx.reviewerA);
+    const document=Buffer.from(`licenseId,holder,expiresAt\nMN-${randomUUID()},Mining LLC,2027-01-01\n`);
+    await fx.sql`UPDATE core.source_connections SET schema_fingerprint=ARRAY['licenseId','holder','expiresAt'] WHERE id=${fx.connectionA}`;
+    const uploadId=await uploadClean(document,"text/csv",reviewer);
+    const receipt=await createReceipt(steward,{collectionMethod:channel,documentUploadId:uploadId,
+      ...(channel === "verifiable_signed_document" ? {signatureBase64:cryptoSign(null,document,authorityKeys.privateKey).toString("base64")} : {})});
+    expect(receipt.statusCode,receipt.body).toBe(200);
+    const [upload]=await fx.sql`SELECT state,promoted_artifact_id FROM core.object_uploads WHERE id=${uploadId}`;
+    expect(upload).toMatchObject({state:"scanned_clean",promoted_artifact_id:null});
+    const claim=await app.inject({method:"POST",url:`/api/v1/projects/${fx.projectA}/claims`,
+      headers:{authorization:`Bearer ${steward}`,"idempotency-key":idempotencyKey()},
+      payload:{claimType:"mining_right_registration",valueText:`Source ${uploadId}`,sourceReceiptId:receipt.json().id,sourceCoordinate:{page:"1"}}});
+    expect(claim.statusCode,claim.body).toBe(200);
+    const provenance=()=>withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[claim.json().id]));
+    expect(await provenance()).toMatchObject({allKnown:true,submitterIds:expect.arrayContaining([fx.reviewerSubjectA,fx.stewardSubjectA])});
+    const assign=()=>app.inject({method:"POST",url:"/api/v1/verification-cases",
+      headers:{authorization:`Bearer ${steward}`,"idempotency-key":idempotencyKey()},
+      payload:{projectId:fx.projectA,schemaId:fx.schemaA,claimIds:[claim.json().id],reviewerSubjectId:fx.reviewerSubjectA,credentialId:fx.credentialA,conflictStatus:"none"}});
+    const own=await assign();expect(own.statusCode,own.body).toBe(409);expect(own.json().code).toBe("ASSIGNMENT_INDEPENDENCE_VIOLATION");
+    await fx.sql`UPDATE core.object_uploads SET uploaded_by=NULL WHERE id=${uploadId}`;
+    expect((await provenance()).allKnown).toBe(false);
+    const unknown=await assign();expect(unknown.statusCode,unknown.body).toBe(200);
+    const draft=await app.inject({method:"POST",url:`/api/v1/verification-cases/${unknown.json().id}/attestations`,
+      headers:{authorization:`Bearer ${reviewer}`,"idempotency-key":idempotencyKey()},
+      payload:{assignmentId:unknown.json().assignmentId,attestationType:"professional_signoff",claimScope:[claim.json().id],findings:[],citations:[],limitations:"Source scope only"}});
+    expect(draft.statusCode,draft.body).toBe(422);expect(draft.json().code).toBe("ATTESTATION_INDEPENDENCE_NOT_REVIEWED");
+  });
 
   /**
    * Signed document.
@@ -405,6 +438,23 @@ describeDb("Evidence channel", () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.json().result).toBe("confirmed_from_source");
+    });
+
+    it("requires tenant authority to second-review a projectless source receipt", async () => {
+      const receipt=randomUUID();
+      const insert=(id:string,first:string|null)=>fx.sql`INSERT INTO core.source_receipts(id,tenant_id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id,first_confirmed_by)
+        VALUES(${id},${fx.tenantA},${fx.connectionA},${fx.authorityA},'manual_official_registry_confirmation','manual_review_required','{}','Synthetic tenant record','none',${`0x${"ac".repeat(32)}`},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test',${first})`;
+      await insert(receipt,fx.stewardSubjectA);
+      const scoped=await signIn(app,await addGovernanceAccount(fx,"reviewer",{assurance:"high_assurance",scopeKind:"organization"}));
+      const review=(token:string)=>app.inject({method:"POST",url:`/api/v1/source-receipts/${receipt}/second-review`,headers:{authorization:`Bearer ${token}`,"idempotency-key":idempotencyKey()},payload:{observation:"Independent review",confirmed:true}});
+      expect((await review(scoped)).statusCode).toBe(403);
+      const allowed=await review(operator);
+      expect(allowed.statusCode,allowed.body).toBe(200);
+      const unknown=randomUUID();await insert(unknown,null);
+      const missing=await app.inject({method:"POST",url:`/api/v1/source-receipts/${unknown}/second-review`,headers:{authorization:`Bearer ${operator}`,"idempotency-key":idempotencyKey()},payload:{observation:"Cannot establish first reviewer",confirmed:true}});
+      expect(missing.statusCode,missing.body).toBe(403);
+      expect(missing.json().code).toBe("SECOND_REVIEW_AUTHOR_UNKNOWN");
+      expect(await fx.sql`SELECT id FROM core.source_receipts WHERE supersedes_receipt_id=${unknown}`).toHaveLength(0);
     });
 
     it("the first checker cannot perform the second review", async () => {

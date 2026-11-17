@@ -54,7 +54,7 @@ test.describe("document status", () => {
   await expect(page.locator(".page-head").first()).toContainText(projectKey);
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;
 
-    // --- Declare the type (data_steward) -----------------------------------
+    // --- Declare the type (reviewer) -----------------------------------
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}`);
     await page.getByRole("link", { name: "Requirements", exact: true }).click();

@@ -142,7 +142,7 @@ test.describe("Integrations", () => {
 
 test.describe("Claim Detail", () => {
   test("a single claim has its own URL", async ({ page }) => {
-    // Registration is mpc_operator, claims are data_steward — different roles (02 §2.3).
+    // Registration is administrator, claims are reviewer — different roles (02 §2.3).
     // Skipping on runs without a claim would make this test guard nothing, so it creates
     // what it needs here.
     const projectKey = `CLAIM-${Date.now()}`;

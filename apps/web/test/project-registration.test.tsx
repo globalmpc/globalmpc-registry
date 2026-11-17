@@ -19,8 +19,9 @@ const state = vi.hoisted(() => ({
   session: {
     authenticated: true,
     tenantId: "tenant1",
-    roleBindings: [{ role: "mpc_operator" }],
-    actions: ["project.create", "readiness.recompute", "anchor.submit"] as string[],
+    subjectId: "subject1",
+    roleBindings: [{ role: "administrator" }],
+    actions: ["project.create", "readiness.recompute", "anchor.read", "anchor.submit"] as string[],
   },
   push: vi.fn(),
 }));
@@ -28,6 +29,9 @@ vi.mock("../src/lib/session", () => ({ useSession: () => state }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: state.push }) }));
 beforeEach(() => {
   state.token = "token";
+  state.session.tenantId = "tenant1";
+  state.session.subjectId = "subject1";
+  state.session.actions = ["project.create", "readiness.recompute", "anchor.read", "anchor.submit"];
   state.loading = false;
   state.push.mockReset();
 });
@@ -340,4 +344,25 @@ it("renders chain states distinctly, resubmits manually, and refreshes the batch
   fail = true;
   fireEvent.click(screen.getByRole("button", { name: "Resubmit" }));
   await screen.findByRole("alert");
+});
+
+it("does not poll anchor operations without tenant access or retain another account's response", async () => {
+  vi.useFakeTimers();
+  const releases:((value:Response)=>void)[]=[];
+  const fetchMock=vi.fn(()=>new Promise<Response>(resolve=>{releases.push(resolve)}));
+  vi.stubGlobal("fetch",fetchMock);
+  const view=render(<Anchors />);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  state.session={...state.session,tenantId:"tenant2",subjectId:"subject2"};
+  view.rerender(<Anchors />);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  await act(async()=>{releases[0]!(new Response(JSON.stringify({items:[],truncated:false}),{status:200}));});
+  expect(screen.getByText("Loading…")).toBeTruthy();
+  state.session={...state.session,actions:["registry.read"]};
+  view.rerender(<Anchors />);
+  expect(screen.getByText(/You do not have access to anchor operations/)).toBeTruthy();
+  await act(async()=>{releases[1]!(new Response(JSON.stringify({items:[],truncated:false}),{status:200}));});
+  await act(async()=>{await vi.advanceTimersByTimeAsync(15000)});
+  expect(screen.queryByTestId("anchor-table")).toBeNull();
+  expect(fetchMock).toHaveBeenCalledTimes(2);
 });

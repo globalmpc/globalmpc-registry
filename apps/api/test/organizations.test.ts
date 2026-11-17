@@ -46,7 +46,7 @@ describeDb("organization lookup", () => {
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'project_sponsor_operator')
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'project_member')
     `;
     return account;
   }
@@ -136,7 +136,7 @@ describeDb("organization lookup", () => {
       const response = await list(token);
       expect(response.statusCode).toBe(403);
       expect(response.json().details.reason).toBe("ROLE_ACTION_NOT_ALLOWED");
-      expect(response.json().details.requiredRoles).toContain("mpc_operator");
+      expect(response.json().details.requiredRoles).toContain("administrator");
     }
   });
 });

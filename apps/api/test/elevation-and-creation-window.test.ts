@@ -67,7 +67,7 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
     return id;
   }
 
-  async function admin(role: "mpc_operator" | "security_operator" = "security_operator") {
+  async function admin(role: "administrator" | "administrator" = "administrator") {
     const subjectId = await subject({ email: freshEmail("admin"), role });
     const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, { firstFactor: "email_code", secondFactor: "passkey" });
     return { subjectId, token };
@@ -102,7 +102,7 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
   /** A security operator with an approved elevation, and a session that holds it. */
   async function elevated() {
     const email = freshEmail("responder");
-    const responderId = await subject({ email, role: "security_operator" });
+    const responderId = await subject({ email, role: "administrator" });
     const token = await issueTestSession(fx.appSql, fx.tenantA, responderId, { firstFactor: "email_code", secondFactor: "passkey" });
     const asked = await app.inject({
       method: "POST",
@@ -111,7 +111,7 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
       payload: { purpose: "Incident", target: "subject", expiresAt: new Date(Date.now() + 3600_000).toISOString() },
     });
     expect(asked.statusCode, asked.body).toBe(201);
-    const approver = await admin("security_operator");
+    const approver = await admin("administrator");
     const approved = await post(
       `/api/v1/admin/break-glass/${asked.json().id}/decision`,
       approver.token,
@@ -124,8 +124,8 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
   }
 
   async function suspension(subjectId: string, action: "suspend" | "reinstate") {
-    const proposer = await admin("mpc_operator");
-    const decider = await admin("security_operator");
+    const proposer = await admin("administrator");
+    const decider = await admin("administrator");
     const proposed = await post("/api/v1/admin/subject-suspensions", proposer.token, {
       subjectId,
       action,
@@ -170,7 +170,7 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
       const token = await signIn(email);
       await enrolPasskey(token);
       const after = await roles(token);
-      expect(after).toContain("security_operator");
+      expect(after).toContain("administrator");
       expect(after).not.toContain("break_glass");
       // The person can ask for a new one, which two people approve as before.
       const again = await app.inject({
@@ -185,8 +185,8 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
 
     it("ends with an approved MFA reset", async () => {
       const { responderId, elevationId } = await elevated();
-      const proposer = await admin("mpc_operator");
-      const decider = await admin("security_operator");
+      const proposer = await admin("administrator");
+      const decider = await admin("administrator");
       const proposed = await post("/api/v1/admin/mfa-resets", proposer.token, {
         subjectId: responderId,
         reason: "Lost every factor",
@@ -214,13 +214,13 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
 
     it("is left alone by a rejected reset, and an expired one is not rewritten", async () => {
       const { responderId, elevationId } = await elevated();
-      const proposed = await post("/api/v1/admin/mfa-resets", (await admin("mpc_operator")).token, {
+      const proposed = await post("/api/v1/admin/mfa-resets", (await admin("administrator")).token, {
         subjectId: responderId,
         reason: "Lost every factor",
       });
       const rejected = await post(
         `/api/v1/admin/mfa-resets/${proposed.json().id}/decision`,
-        (await admin("security_operator")).token,
+        (await admin("administrator")).token,
         { decision: "reject", reason: "Not verified" },
         ifMatch(proposed.json().version),
       );
@@ -228,9 +228,9 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
       expect((await elevation(elevationId))!.state).toBe("active");
 
       // Expired already: its history stays as it ended, at its expiry.
-      const lapsedOwner = await subject({ role: "security_operator" });
+      const lapsedOwner = await subject({ role: "administrator" });
       const lapsedId = randomUUID();
-      const approver = await admin("security_operator");
+      const approver = await admin("administrator");
       await fx.sql`
         INSERT INTO core.break_glass_elevations (
           id, tenant_id, subject_id, purpose, target, requested_at, expires_at, state,
@@ -248,8 +248,8 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
   describe("L-2: the creation window", () => {
     it("closes once the address of a new account changed: the reviewer's repro", async () => {
       const victim = await subject({ ageHours: 1 });
-      const a = await admin("mpc_operator");
-      const b = await admin("security_operator");
+      const a = await admin("administrator");
+      const b = await admin("administrator");
       const attackerEmail = freshEmail("attacker");
       const proposed = await post("/api/v1/admin/email-changes", a.token, {
         subjectId: victim,

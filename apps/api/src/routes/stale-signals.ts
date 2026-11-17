@@ -1,3 +1,4 @@
+import { authorizedProjectLookup } from "../services/authorized-project-lookup.js";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
@@ -154,14 +155,16 @@ export async function registerStaleSignalRoutes(
        * `dismissed` is the same — it is a decision to do nothing, and that too
        * decides the fate of the public record.
        */
-      const effectiveRole = assertAuthorized(
-        session,
-        "registry.revoke",
-        tenantResource(tenantId, { sensitivity: "public" }),
-        sessionFacts(session),
-      );
-
       const { requestId, asOf, correlationId } = request.context;
+
+      const target = await authorizedProjectLookup(session, "registry.revoke", () => withTenant(sql, { tenantId }, async tx => {
+        const [signal] = await tx<{project_id: string | null}[]>`SELECT project_id FROM core.evidence_stale_signals WHERE id=${request.params.signalId}`;
+        if (!signal) throw notFound("Signal not found");
+        return signal;
+      }), signal => signal.project_id);
+      assertAuthorized(session, "registry.revoke",
+        target.project_id ? projectResource(tenantId, target.project_id, {sensitivity:"public"})
+          : tenantResource(tenantId, {sensitivity:"public",requiresTenantScope:true}), sessionFacts(session));
 
       return withTenant(sql, { tenantId }, async (tx) => {
         const [current] = await tx<SignalRow[]>`
@@ -173,6 +176,9 @@ export async function registerStaleSignalRoutes(
           FOR UPDATE
         `;
         if (!current) throw notFound("Signal not found");
+        const effectiveRole = assertAuthorized(session, "registry.revoke",
+          current.project_id ? projectResource(tenantId, current.project_id, {sensitivity:"public"})
+            : tenantResource(tenantId, {sensitivity:"public",requiresTenantScope:true}), sessionFacts(session));
 
         if (current.resolution !== "open") {
           throw conflict("SIGNAL_ALREADY_RESOLVED", `Already closed as ${current.resolution}`);

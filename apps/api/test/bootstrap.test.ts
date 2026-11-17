@@ -1,3 +1,5 @@
+import postgres from "postgres";
+import { listMigrations, runMigrations } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
@@ -50,11 +52,44 @@ describeDb("production bootstrap", () => {
       jurisdiction: "MNG",
       subjectName: "First Operator",
       email: address(),
-      role: "mpc_operator",
+      role: "administrator",
       assuranceLevel: "high_assurance",
       ...overrides,
     } as Parameters<typeof bootstrapOperator>[1];
   }
+
+  it("recognizes revoked legacy roles after a real upgrade before regranting or adding a first holder", async () => {
+    const database=`bootstrap_history_${process.pid}_${Date.now()}`;
+    await fx.sql.unsafe(`CREATE DATABASE ${database}`);
+    const url=new URL(process.env["DATABASE_URL"]!);url.pathname=database;
+    const isolated=postgres(url.toString(),{onnotice:()=>{},max:1});
+    try {
+      const migrations=listMigrations(), boundary=migrations.findIndex(m=>m.name==='0137_unified_roles.sql');
+      await runMigrations(isolated,migrations.slice(0,boundary));
+      const cases=[];
+      for(const [legacy,role] of [["reviewer_legal","reviewer"],["mpc_operator","administrator"],["protocol_voter","project_member"]]) {
+        const tenant=randomUUID(),org=randomUUID(),subject=randomUUID(),email=`history-${subject}@example.test`;
+        const options=input({tenantSlug:tenant,organizationName:'Historical organization',email,role});
+        await isolated`INSERT INTO core.tenants(id,slug,display_name) VALUES(${tenant},${tenant},'Historical tenant')`;
+        await isolated`INSERT INTO core.organizations(id,tenant_id,legal_name,jurisdiction) VALUES(${org},${tenant},'Historical organization','MNG')`;
+        await isolated`INSERT INTO core.subjects(id,tenant_id,kind,display_name,email,assurance_level) VALUES(${subject},${tenant},'person','Historical holder',${email},'high_assurance')`;
+        await isolated`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role,revoked_at) VALUES(${randomUUID()},${tenant},${subject},${org},${legacy!},now())`;
+        cases.push(options);
+      }
+      await runMigrations(isolated,migrations);
+      const before=await isolated`SELECT * FROM core.role_bindings ORDER BY id`;
+      const people=await isolated`SELECT id,email FROM core.subjects ORDER BY id`;
+      for(const options of cases) {
+        await expect(bootstrapOperator(isolated,options)).rejects.toThrow('binding was revoked');
+        await expect(bootstrapOperator(isolated,{...options,email:address()})).rejects.toThrow('already has (or had)');
+      }
+      expect(await isolated`SELECT * FROM core.role_bindings ORDER BY id`).toEqual(before);
+      expect(await isolated`SELECT id,email FROM core.subjects ORDER BY id`).toEqual(people);
+    } finally {
+      await isolated.end();
+      await fx.sql.unsafe(`DROP DATABASE ${database} WITH (FORCE)`);
+    }
+  });
 
   async function signInByEmail(email: string): Promise<string> {
     const remoteAddress = `100.${64 + Math.floor(Math.random() * 64)}.${Math.floor(Math.random() * 256)}.${1 + Math.floor(Math.random() * 254)}`;
@@ -102,7 +137,7 @@ describeDb("production bootstrap", () => {
     expect(body.subjectId).toBe(result.subjectId);
     expect(body.assuranceLevel).toBe("high_assurance");
     expect(body.roleBindings).toEqual([
-      { role: "mpc_operator", organizationId: result.organizationId, projectId: null },
+      { role: "administrator", organizationId: result.organizationId, projectId: null, scopeKind: "tenant", governanceScope: "none" },
     ]);
   });
 
@@ -125,7 +160,7 @@ describeDb("production bootstrap", () => {
   });
 
   it("rejects assurance below what the role requires", async () => {
-    // mpc_operator requires high_assurance. With a lower value the row is inserted,
+    // administrator requires high_assurance. With a lower value the row is inserted,
     // but every request gets 403 and the UI never shows why.
     await expect(
       bootstrapOperator(fx.sql, input({ assuranceLevel: "wallet_only" })),
@@ -187,7 +222,7 @@ describeDb("production bootstrap", () => {
       const [wallet] = await fx.sql<{ wallet_address: string }[]>`SELECT wallet_address FROM core.wallet_identities WHERE id = ${walletId}`;
       await fx.sql`INSERT INTO core.sessions (id, token_hash, tenant_id, subject_id, first_factor, wallet_address, chain_id, expires_at, revoked_at, revoked_reason) VALUES (${randomUUID()}, ${hashToken(oldToken)}, ${first.tenantId}, ${first.subjectId}, 'siwe_legacy', ${wallet!.wallet_address}, 31337, now() + interval '1 hour', now(), 'legacy_wallet_login_removed')`;
       const historicalSessions = await fx.sql`SELECT * FROM core.sessions WHERE subject_id = ${first.subjectId}`;
-      const [history] = await fx.sql`INSERT INTO audit.events (tenant_id, actor_subject_id, actor_wallet, effective_role, command, resource_type, resource_id, correlation_id) VALUES (${first.tenantId}, ${first.subjectId}, ${wallet!.wallet_address}, 'mpc_operator', 'fixture.legacy_action', 'subject', ${first.subjectId}, ${randomUUID()}) RETURNING *`;
+      const [history] = await fx.sql`INSERT INTO audit.events (tenant_id, actor_subject_id, actor_wallet, effective_role, command, resource_type, resource_id, correlation_id) VALUES (${first.tenantId}, ${first.subjectId}, ${wallet!.wallet_address}, 'administrator', 'fixture.legacy_action', 'subject', ${first.subjectId}, ${randomUUID()}) RETURNING *`;
       await fx.sql`UPDATE core.wallet_identities SET disabled_at = now() WHERE id = ${walletId}`;
       const [before] = await snapshot(first.subjectId);
       const result = await bootstrapOperator(fx.sql, args);
@@ -239,7 +274,7 @@ describeDb("production bootstrap", () => {
       if (condition === "suspended") await fx.sql`UPDATE core.subjects SET suspended_at = now() WHERE id = ${first.subjectId}`;
       if (condition === "weak") await fx.sql`UPDATE core.subjects SET assurance_level = 'wallet_only' WHERE id = ${first.subjectId}`;
       if (condition === "revoked_role") await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${first.subjectId}`;
-      if (condition === "wrong_role") attempt.role = "reviewer_cp_qp";
+      if (condition === "wrong_role") attempt.role = "reviewer";
       if (condition === "wrong_organization") attempt.organizationName = "A different organization";
       if (condition === "no_legacy_wallet") await fx.sql`UPDATE core.wallet_identities SET bound_via = 'proof' WHERE id = ${walletId}`;
       if (condition === "different_email") await fx.sql`UPDATE core.subjects SET email = ${address().toLowerCase()} WHERE id = ${first.subjectId}`;
@@ -455,7 +490,7 @@ describeDb("production bootstrap", () => {
       await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${first.subjectId}`;
 
       await expect(bootstrapOperator(fx.sql, args)).rejects.toThrow(
-        /mpc_operator binding was revoked\. Bootstrap does not grant it again/,
+        /administrator binding was revoked\. Bootstrap does not grant it again/,
       );
       const renamed = { ...args, organizationName: `${args.organizationName} (renamed)` };
       await expect(bootstrapOperator(fx.sql, renamed)).rejects.toThrow(BootstrapError);
@@ -466,7 +501,7 @@ describeDb("production bootstrap", () => {
       // An admin granting it again (through the API) is what brings it back; the next deploy is a no-op.
       await fx.sql`
         INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${first.tenantId}, ${first.subjectId}, ${first.organizationId}, 'mpc_operator')
+        VALUES (${randomUUID()}, ${first.tenantId}, ${first.subjectId}, ${first.organizationId}, 'administrator')
       `;
       expect(await bootstrapOperator(fx.sql, args)).toMatchObject({ created: false, roleGranted: false });
     });
@@ -553,9 +588,9 @@ describeDb("production bootstrap", () => {
         await moveAddress(first, args.email, address());
         const [before] = await tenantCounts(first.tenantId);
 
-        // Nobody in the tenant ever held reviewer_cp_qp, so only the moved-address rule refuses.
+        // Nobody in the tenant ever held reviewer, so only the moved-address rule refuses.
         await expect(
-          bootstrapOperator(fx.sql, { ...args, role: "reviewer_cp_qp", subjectName: "Old Mailbox" }),
+          bootstrapOperator(fx.sql, { ...args, role: "reviewer", subjectName: "Old Mailbox" }),
         ).rejects.toThrow(/moved off a person in this tenant by a completed email change/);
         expect((await tenantCounts(first.tenantId))[0]).toEqual(before);
         expect(await fx.sql`SELECT 1 FROM core.subjects WHERE email = ${args.email.toLowerCase()}`).toHaveLength(0);
@@ -568,7 +603,7 @@ describeDb("production bootstrap", () => {
         const [before] = await tenantCounts(first.tenantId);
 
         await expect(bootstrapOperator(fx.sql, other)).rejects.toThrow(
-          /already has \(or had\) a mpc_operator.*Remove BOOTSTRAP_EMAIL/,
+          /already has \(or had\) a administrator.*Remove BOOTSTRAP_EMAIL/,
         );
         await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${first.subjectId}`;
         await expect(bootstrapOperator(fx.sql, other)).rejects.toThrow(/already has \(or had\)/);
@@ -576,7 +611,7 @@ describeDb("production bootstrap", () => {
         expect(await fx.sql`SELECT 1 FROM core.subjects WHERE email = ${other.email.toLowerCase()}`).toHaveLength(0);
       });
 
-      it.each(["mpc_operator", "reviewer_cp_qp"])("refuses a reused moved address on an existing account for %s", async (role) => {
+      it.each(["administrator", "reviewer"])("refuses a reused moved address on an existing account for %s", async (role) => {
         const args = input();
         const first = await bootstrapOperator(fx.sql, args);
         await moveAddress(first, args.email, address());
@@ -604,7 +639,7 @@ describeDb("production bootstrap", () => {
         `;
         if (revoked) await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${first.subjectId}`;
         const [before] = await tenantCounts(first.tenantId);
-        await expect(bootstrapOperator(fx.sql, { ...args, email })).rejects.toThrow(/already has \(or had\) a mpc_operator/);
+        await expect(bootstrapOperator(fx.sql, { ...args, email })).rejects.toThrow(/already has \(or had\) a administrator/);
         expect((await tenantCounts(first.tenantId))[0]).toEqual(before);
         expect(await fx.sql`SELECT 1 FROM core.role_bindings WHERE subject_id = ${otherId}`).toHaveLength(0);
       });
@@ -612,7 +647,7 @@ describeDb("production bootstrap", () => {
       it("concurrent bootstrap calls cannot both create the first role holder", async () => {
         const args = input();
         const first = await bootstrapOperator(fx.sql, args);
-        const role = "reviewer_cp_qp";
+        const role = "reviewer";
         let pending!: Promise<PromiseSettledResult<Awaited<ReturnType<typeof bootstrapOperator>>>[]>;
         await fx.sql.begin(async (hold) => {
           // Both calls must reach a blocking boundary before either can commit a grant.
@@ -645,7 +680,7 @@ describeDb("production bootstrap", () => {
       it("can create the first binding for an existing account when the role was never held", async () => {
         const args = input();
         const first = await bootstrapOperator(fx.sql, args);
-        expect(await bootstrapOperator(fx.sql, { ...args, role: "reviewer_cp_qp" })).toMatchObject({
+        expect(await bootstrapOperator(fx.sql, { ...args, role: "reviewer" })).toMatchObject({
           subjectId: first.subjectId, created: false, roleGranted: true,
         });
       });
@@ -715,7 +750,7 @@ describeDb("production bootstrap", () => {
       ...args,
       subjectName: "First Reviewer",
       email: address(),
-      role: "reviewer_cp_qp",
+      role: "reviewer",
     });
 
     expect(second.tenantId).toBe(first.tenantId);
@@ -732,6 +767,6 @@ describeDb("production bootstrap", () => {
       headers: bearer(token),
     });
     const body = session.json() as { roleBindings: { role: string }[] };
-    expect(body.roleBindings.map((binding) => binding.role)).toEqual(["reviewer_cp_qp"]);
+    expect(body.roleBindings.map((binding) => binding.role)).toEqual(["reviewer"]);
   });
 });

@@ -54,9 +54,15 @@ async function seed(sql: postgres.Sql): Promise<void> {
     INSERT INTO core.subjects (id, tenant_id, kind, display_name)
     VALUES (${subject}, ${tenant}, 'person', 'Rollback check person')
   `;
+  const [schema] = await sql<{ unified: boolean }[]>`
+    SELECT EXISTS(SELECT 1 FROM information_schema.columns
+      WHERE table_schema='core' AND table_name='role_bindings' AND column_name='scope_kind') AS unified
+  `;
+  // Seed the role understood by the previous release; upgrading must exercise its real conversion.
+  const role = schema!.unified ? "administrator" : "mpc_operator";
   await sql`
     INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-    VALUES (${randomUUID()}, ${tenant}, ${subject}, ${org}, 'mpc_operator')
+    VALUES (${randomUUID()}, ${tenant}, ${subject}, ${org}, ${role})
   `;
   await sql`
     INSERT INTO core.projects (

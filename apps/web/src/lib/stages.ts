@@ -1,10 +1,12 @@
+/** Show every supported stage even when the assessment has no policy for it yet. */
+export const PROJECT_STAGES = [
+  { gateId: "stage.exploration", label: "Exploration" },
+  { gateId: "stage.resource_defined", label: "Resource definition" },
+  { gateId: "stage.feasibility", label: "Feasibility" },
+  { gateId: "stage.permitted", label: "Permitting" },
+  { gateId: "stage.production", label: "Production" },
+] as const;
+
 export function readableStage(value: string) {
-  const labels: Record<string, string> = {
-    "stage.exploration": "Exploration",
-    "stage.resource_defined": "Resource definition",
-    "stage.feasibility": "Feasibility",
-    "stage.permitted": "Permitting",
-    "stage.production": "Production",
-  };
-  return labels[value] ?? value.replace(/^stage\./, "").replaceAll("_", " ");
+  return PROJECT_STAGES.find(stage => stage.gateId === value)?.label ?? value.replace(/^stage\./, "").replaceAll("_", " ");
 }

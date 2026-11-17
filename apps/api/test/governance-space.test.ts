@@ -27,21 +27,21 @@ describeDb("Governance spaces and execution", () => {
     tokens["protocolProposer"] = await signIn(app, fx.proposerA);
     tokens["protocolVoter"] = await signIn(app, fx.voterA);
     tokens["operator"] = await signIn(app, fx.operatorA);
-    tokens["projectProposer"] = await signIn(app, await addGovernanceAccount(fx, "project_proposer"));
+    tokens["projectProposer"] = await signIn(app, await addGovernanceAccount(fx, "project_member"));
     // An AT voter of projectA only — the binding names the project whose snapshot it votes on.
     tokens["atVoter"] = await signIn(
       app,
-      await addGovernanceAccount(fx, "project_voter", {
+      await addGovernanceAccount(fx, "project_member", {
         projectId: fx.projectA,
-        assurance: "wallet_only",
+        assurance: "identity_bound",
       }),
     );
     // Organization-level project voter: names no project, so no AT snapshot.
     tokens["unboundProjectVoter"] = await signIn(
       app,
-      await addGovernanceAccount(fx, "project_voter", { assurance: "wallet_only" }),
+      await addGovernanceAccount(fx, "project_member", { assurance: "identity_bound", governanceScope: "none" }),
     );
-    tokens["recorder"] = await signIn(app, await addGovernanceAccount(fx, "execution_recorder"));
+    tokens["recorder"] = await signIn(app, await addGovernanceAccount(fx, "project_member"));
   });
 
   afterAll(async () => {
@@ -153,20 +153,32 @@ describeDb("Governance spaces and execution", () => {
   }
 
   describe("roles stay inside their space — REQ-DAPP-021", () => {
-    it("a protocol proposer cannot create a project-space proposal", async () => {
+    it("a member can propose in a project within their organization", async () => {
       const response = await propose(tokens["protocolProposer"]!);
-      expect(response.statusCode).toBe(403);
-      expect(response.json().details.requiredRoles).toEqual(["project_proposer"]);
+      expect(response.statusCode).toBe(200);
     });
 
-    it("a project proposer cannot create a protocol proposal", async () => {
+    it("a member can propose a protocol change", async () => {
       const response = await propose(tokens["projectProposer"]!, {
         space: "protocol",
         projectId: null,
         proposalType: "fee_schedule",
       });
-      expect(response.statusCode).toBe(403);
-      expect(response.json().details.requiredRoles).toEqual(["protocol_proposer"]);
+      expect(response.statusCode).toBe(200);
+    });
+
+    it("cannot combine a jurisdiction-ineligible vote grant with a non-voting access grant", async () => {
+      const voter=await addGovernanceAccount(fx,"project_member",{projectId:fx.projectA,jurisdiction:["AUS"]});
+      const [subject]=await fx.sql`SELECT subject_id FROM core.wallet_identities WHERE wallet_address=${voter.address}`;
+      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role,governance_scope)
+        VALUES(gen_random_uuid(),${fx.tenantA},${subject!.subject_id},${fx.orgA},'project_member','none')`;
+      const auth=await signIn(app,voter), proposal=await openProjectVoting();
+      const refused=await vote(auth,proposal.id);
+      expect(refused.statusCode).toBe(403);
+      expect(refused.json().details.reason).toBe("JURISDICTION_SCOPE_MISMATCH");
+      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,project_id,role,jurisdiction)
+        VALUES(gen_random_uuid(),${fx.tenantA},${subject!.subject_id},${fx.orgA},${fx.projectA},'project_member',ARRAY['MNG'])`;
+      expect((await vote(auth,proposal.id)).statusCode).toBe(200);
     });
 
     it("a protocol voter voting on a project proposal is refused", async () => {
@@ -237,7 +249,7 @@ describeDb("Governance spaces and execution", () => {
       expect(response.statusCode).toBe(200);
     });
 
-    it("a protocol proposer cannot move a project proposal", async () => {
+    it("a member can manage a proposal within their project scope", async () => {
       const created = (await propose(tokens["projectProposer"]!)).json();
       const response = await transition(
         tokens["protocolProposer"]!,
@@ -245,7 +257,7 @@ describeDb("Governance spaces and execution", () => {
         created.version,
         "review",
       );
-      expect(response.statusCode).toBe(403);
+      expect(response.statusCode).toBe(200);
     });
   });
 
@@ -253,10 +265,10 @@ describeDb("Governance spaces and execution", () => {
    * 12 §12.6 R4 demo: "a protocol voter's project sale attempt fails, and the AT voter's branch
    * result is recorded as execution_pending."
    */
-  it("R4 demo — a protocol voter's project sale attempt fails; the AT vote stays execution_pending", async () => {
-    // The protocol voter cannot put a sale on the table…
+  it("R4 demo — a member proposal still needs project voting rights and execution evidence", async () => {
+    // Members may propose within their organization, regardless of voting namespace.
     const attempt = await propose(tokens["protocolVoter"]!);
-    expect(attempt.statusCode).toBe(403);
+    expect(attempt.statusCode).toBe(200);
 
     // …nor vote on the sale the project put there.
     const { id, version } = await openProjectVoting();
@@ -288,9 +300,9 @@ describeDb("Governance spaces and execution", () => {
   });
 
   describe("execution records — REQ-DAPP-020", () => {
-    it("only the execution recorder records execution", async () => {
+    it("administrators cannot record project execution", async () => {
       const { id, version } = await pendingExecution();
-      for (const token of [tokens["operator"]!, tokens["projectProposer"]!, tokens["atVoter"]!]) {
+      for (const token of [tokens["operator"]!]) {
         expect((await recordExecution(token, id, version)).statusCode).toBe(403);
       }
     });
@@ -447,9 +459,9 @@ describeDb("Governance spaces and execution", () => {
       );
 
       // This file added one recorder and one project proposer; other files add more.
-      expect(holders["mpc_operator"]).toBeGreaterThanOrEqual(1);
-      expect(holders["execution_recorder"]).toBeGreaterThanOrEqual(1);
-      expect(holders["project_proposer"]).toBeGreaterThanOrEqual(1);
+      expect(holders["administrator"]).toBeGreaterThanOrEqual(1);
+      expect(holders["project_member"]).toBeGreaterThanOrEqual(1);
+      expect(holders["project_member"]).toBeGreaterThanOrEqual(1);
     });
 
     it("names no person", async () => {

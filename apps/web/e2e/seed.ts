@@ -163,7 +163,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
         wallet: OPERATOR_A,
         label: "Operator A",
         assurance: "high_assurance",
-        role: "mpc_operator",
+        role: "administrator",
       },
       {
         tenant: E2E_TENANT_B,
@@ -173,7 +173,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
         wallet: OPERATOR_B,
         label: "Operator B",
         assurance: "high_assurance",
-        role: "mpc_operator",
+        role: "administrator",
       },
       // An account with permission but no data. To check that the screen distinguishes
       // "empty list" from "no permission", this state must not be affected by other tests.
@@ -185,7 +185,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
         wallet: OPERATOR_C,
         label: "Operator C",
         assurance: "high_assurance",
-        role: "mpc_operator",
+        role: "administrator",
       },
     ] as const;
 
@@ -211,9 +211,10 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
         )
       `;
       await sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
+        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role, scope_kind)
         VALUES (
-          gen_random_uuid(), ${account.tenant}, ${account.subject}, ${account.org}, ${account.role}
+          gen_random_uuid(), ${account.tenant}, ${account.subject}, ${account.org}, ${account.role},
+          ${"tenant"}
         )
       `;
     }
@@ -279,13 +280,14 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     // steward, gate approver, reviewer. Checking role separation on screen needs separate
     // accounts. In particular, the reviewer must not be the same person as the gate decider (02 §2.4).
     for (const extra of [
-      { subject: "aaaaaaaa-0000-0000-0000-000000000004", wallet: STEWARD_A, label: "Steward A", role: "data_steward", assurance: "identity_bound" },
-      { subject: "aaaaaaaa-0000-0000-0000-000000000005", wallet: APPROVER_A, label: "Approver A", role: "gate_approver", assurance: "high_assurance" },
-      { subject: E2E_REVIEWER_SUBJECT, wallet: REVIEWER_A, label: "Reviewer A", role: "reviewer_cp_qp", assurance: "high_assurance" },
-      { subject: "aaaaaaaa-0000-0000-0000-000000000008", wallet: PROPOSER_A, label: "Proposer A", role: "protocol_proposer", assurance: "identity_bound" },
+      { subject: "aaaaaaaa-0000-0000-0000-000000000004", wallet: STEWARD_A, label: "Steward A", role: "reviewer", assurance: "high_assurance" },
+      { subject: "aaaaaaaa-0000-0000-0000-000000000005", wallet: APPROVER_A, label: "Approver A", role: "reviewer", assurance: "high_assurance" },
+      { subject: E2E_REVIEWER_SUBJECT, wallet: REVIEWER_A, label: "Reviewer A", role: "reviewer", assurance: "high_assurance" },
+      { subject: "aaaaaaaa-0000-0000-0000-00000000000b", wallet: addressOfLabel("Dispute Reviewer A"), label: "Dispute Reviewer A", role: "reviewer", assurance: "high_assurance" },
+      { subject: "aaaaaaaa-0000-0000-0000-000000000008", wallet: PROPOSER_A, label: "Proposer A", role: "project_member", assurance: "identity_bound" },
       // Voting rights come from holdings, not from identity (02 §2.3).
-      { subject: "aaaaaaaa-0000-0000-0000-000000000009", wallet: VOTER_A, label: "Voter A", role: "protocol_voter", assurance: "wallet_only" },
-      { subject: "aaaaaaaa-0000-0000-0000-00000000000a", wallet: DISCLOSURE_APPROVER_A, label: "Publisher A", role: "disclosure_approver", assurance: "high_assurance" },
+      { subject: "aaaaaaaa-0000-0000-0000-000000000009", wallet: VOTER_A, label: "Voter A", role: "project_member", assurance: "identity_bound" },
+      { subject: "aaaaaaaa-0000-0000-0000-00000000000a", wallet: DISCLOSURE_APPROVER_A, label: "Publisher A", role: "reviewer", assurance: "high_assurance" },
     ]) {
       await sql`
         INSERT INTO core.subjects (id, tenant_id, kind, display_name)
@@ -300,10 +302,11 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
         )
       `;
       await sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
+        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role, scope_kind)
         VALUES (
           gen_random_uuid(), ${E2E_TENANT_A}, ${extra.subject},
-          ${extra.subject === E2E_REVIEWER_SUBJECT ? E2E_ORG_REVIEW : E2E_ORG_A}, ${extra.role}
+          ${extra.subject === E2E_REVIEWER_SUBJECT || extra.label === "Dispute Reviewer A" ? E2E_ORG_REVIEW : E2E_ORG_A}, ${extra.role},
+          ${extra.label === "Steward A" || extra.role === "project_member" ? "organization" : "tenant"}
         )
       `;
     }
@@ -368,7 +371,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     // from Operator A, who proposes them. No application approval path is bypassed.
     await sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (gen_random_uuid(), ${E2E_TENANT_A}, ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_REVIEW}, 'reviewer_assurance')
+      VALUES (gen_random_uuid(), ${E2E_TENANT_A}, ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_REVIEW}, 'reviewer')
     `;
 
     // An unintegrated authority and a planned-stage authority. Leaving them out of the list

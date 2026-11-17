@@ -37,10 +37,15 @@ can be published. A public Explorer lets readers inspect published records and t
 |---|---|---|
 | BNB Smart Chain Mainnet | RegistryAnchorV1 | Not deployed |
 | BSC Testnet (97) | CRE Receiver proxy | [`0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F`](https://testnet.bscscan.com/address/0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F) |
-| opBNB Testnet (5611) | RegistryAnchorV1 | [`0x40197aff5a3db7542ceff4198fc52dc730a6c39f`](https://testnet.opbnbscan.com/address/0x40197aff5a3db7542ceff4198fc52dc730a6c39f) |
+| BSC Testnet (97) | RegistryStatusReceiver implementation | [`0xd85249F6884cDB5884e1aF3CD52D02c3E34aC965`](https://testnet.bscscan.com/address/0xd85249F6884cDB5884e1aF3CD52D02c3E34aC965) |
+| opBNB Testnet (5611) | RegistryAnchorV1 | [`0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F`](https://testnet.opbnbscan.com/address/0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F) |
 
-The Receiver proxy on97 and anchor on5611 share the same hexadecimal address
-but are separate contracts on separate networks.
+The same deployer used nonce `1` on both chains, producing the same address.
+These are separate contracts; identify each by its chain ID and address.
+
+Source verification on Sourcify: [anchor](https://repo.sourcify.dev/5611/0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F),
+[receiver implementation](https://repo.sourcify.dev/97/0xd85249F6884cDB5884e1aF3CD52D02c3E34aC965)
+and [receiver proxy](https://repo.sourcify.dev/97/0x40197afF5a3DB7542ceFF4198FC52DC730A6C39F).
 
 The opBNB testnet deployment, its roles and transaction are recorded in
 [`docs/operations/testnet-contract.md`](docs/operations/testnet-contract.md#deployment-record).
@@ -65,6 +70,25 @@ BNB Smart Chain is set as the target network in these files:
 - [`docs/operations/mainnet-contract.md`](docs/operations/mainnet-contract.md) — the BSC mainnet (Chain ID 56)
   deployment procedure and the decisions it waits on.
 - [`.env.example`](.env.example) — defaults to the local chain (31337) for development.
+
+## Workspace roles
+
+- **Project member** (`project_member`): project data and governance within its assigned scope.
+- **Reviewer and approver** (`reviewer`): curation, qualified review and independent approval.
+- **Platform administrator** (`administrator`): accounts, security and Registry operations.
+
+`scan_service` and `cre_reporter` are service-only identities. Anonymous public
+reading needs no grant; temporary break-glass access is separate. Role membership
+never replaces credentials, review assignment, project scope or person separation.
+Migration137 preserves live project reach and historical audit/signature data;
+unapproved requests for old roles are withdrawn and must be proposed again.
+Reviewers/administrators need verified identity and a passkey. Existing stewards
+and voter-only accounts may need an assurance/MFA step-up; the migration does not
+increase anyone's identity assurance. No contract upgrade is involved.
+
+Development demo coverage is seeded from project-bound synthetic requirements and the real
+evaluator. Existing demo data and signed/public history are preserved; see
+[development demo data](docs/operations/dev-demo.md).
 
 ## CRE Receiver
 

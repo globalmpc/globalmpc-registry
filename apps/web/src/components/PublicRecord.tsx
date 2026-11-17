@@ -1,5 +1,8 @@
 "use client";
 
+import { publicDate } from "@/lib/public-date";
+import { PublicEvidenceLedger } from "./PublicEvidenceLedger";
+import { ProjectStageRoadmap } from "./ProjectProgress";
 import { useEffect, useState } from "react";
 import { EvidenceLedger, EvidenceLedgerWarnings } from "./EvidenceLedger";
 import type { LedgerSummary, LedgerCurrent } from "@/lib/evidence-ledger-api";
@@ -89,10 +92,23 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
 
   return (
       <>
-        {entry.evidenceLedgerCurrent ? <EvidenceLedgerWarnings current={entry.evidenceLedgerCurrent as LedgerCurrent} /> : null}
-        {entry.evidenceLedger ? <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" browsable={browsableEvidence} /> : null}
+        {entry.evidenceLedgerCurrent ? <EvidenceLedgerWarnings current={entry.evidenceLedgerCurrent as LedgerCurrent} compact={browsableEvidence} /> : null}
+        {entry.evidenceLedger ? (browsableEvidence ? <PublicEvidenceLedger key={entry.entryVersionId} summary={entry.evidenceLedger as LedgerSummary} /> : <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" />) : <ProjectStageRoadmap />}
 
-        <div className="panel">
+        <section className="meta" aria-label="Review limitations">
+          <h2 style={{ marginTop: 18 }}>Limits of this review</h2>
+          <ul
+            style={{ margin: 0, paddingLeft: 18, color: "var(--muted-foreground)" }}
+            data-testid="shared-limitations"
+          >
+            {view.shared.limitations.map((limitation) => (
+              <li key={limitation}>{limitation}</li>
+            ))}
+          </ul>
+          <p data-testid="shared-legal-effect">Legal effect: {String(entry.legalEffect)}</p>
+        </section>
+
+        <details className="panel public-record-disclosure" open={!browsableEvidence} data-testid="record-details"><summary>Publication details and limitations</summary>
           <div className="page-head" style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0 }}>Published record</h2>
             {/*
@@ -130,15 +146,13 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
             </dd>
             <dt>As of</dt>
             <dd className="mono" data-testid="shared-as-of">
-              {view.shared.asOf}
+              <time dateTime={view.shared.asOf} title={view.shared.asOf}>{publicDate(view.shared.asOf)}</time>
             </dd>
-            <dt>Legal effect</dt>
-            <dd className="mono">{String(entry.legalEffect)}</dd>
             {entry.revokedAt ? (
               <>
                 <dt>Revoked at</dt>
                 <dd className="mono" style={{ color: "var(--destructive-text)" }}>
-                  {entry.revokedAt}
+                  <time dateTime={entry.revokedAt} title={entry.revokedAt}>{publicDate(entry.revokedAt)}</time>
                 </dd>
               </>
             ) : null}
@@ -156,15 +170,7 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
             )}
           </ul>
 
-          <h2 style={{ marginTop: 18 }}>Limits of this review</h2>
-          <ul
-            style={{ margin: 0, paddingLeft: 18, color: "var(--muted-foreground)" }}
-            data-testid="shared-limitations"
-          >
-            {view.shared.limitations.map((limitation) => (
-              <li key={limitation}>{limitation}</li>
-            ))}
-          </ul>
+
 
           {renderExplanation()}
           {"rawHashReference" in shown ? (
@@ -206,43 +212,18 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
               </dl>
             </div>
           ) : null}
-        </div>
+        </details>
 
-        <div className="panel" id="record-history">
-            <h2>Earlier versions</h2>
-            {entry.history.length === 0 ? <p className="sub">No earlier versions returned for this record.</p> : null}
-            {/* Do not hide correction/revocation history. Same reason as not making a past
-                state look current (§11.6). */}
-            {entry.history.length > 0 ? <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Version</th>
-                    <th>Status</th>
-                    <th>ID</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {entry.history.map((version) => (
-                    <tr key={version.entryVersionId}>
-                      <td className="mono">v{version.version}</td>
-                      <td className="mono">{version.status}</td>
-                      <td className="mono meta">{version.entryVersionId}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div> : null}
-          </div>
+        <RecordHistory history={entry.history} expanded={!browsableEvidence} />
 
-        <IntegrityProof proof={proof} />
+        <ProofDisclosure proof={proof} expanded={!browsableEvidence} />
 
-        <div className="notice" style={{ color: "var(--alert)" }}>
-          <div className="title">Integrity and authority are different questions</div>
+        <details className="public-record-disclosure" open={!browsableEvidence}>
+          <summary>Integrity and authority are different questions</summary>
           The proof confirms that this record has not changed. It does not judge whether the
           source is factually accurate or whether the reviewer was qualified. Those are
           established on separate grounds.
-        </div>
+        </details>
       </>
   );
 }
@@ -262,6 +243,49 @@ function optionalString(entry: PublicProjection, key: string): string | null {
 function optionalStrings(entry: PublicProjection, key: string): readonly string[] {
   const value = entry[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function ProofDisclosure({ proof, expanded }: {
+  readonly proof: InclusionProof | null;
+  readonly expanded: boolean;
+}) {
+  return <details className="public-record-disclosure" open={expanded || Boolean(proof && (!proof.merkleVerified || !proof.included))} data-testid="integrity-disclosure">
+    <summary>Integrity proof</summary><IntegrityProof proof={proof} />
+  </details>;
+}
+
+function RecordHistory({ history, expanded }: {
+  readonly history: PublicProjection["history"];
+  readonly expanded: boolean;
+}) {
+  return (
+        <details className="panel public-record-disclosure" id="record-history" open={expanded || history.some(version => version.status === "revoked" || Boolean(version.revokedAt))}><summary>Version history · {history.length} earlier versions</summary>
+            <h2>Earlier versions</h2>
+            {history.length === 0 ? <p className="sub">No earlier versions returned for this record.</p> : null}
+            {/* Do not hide correction/revocation history. Same reason as not making a past
+                state look current (§11.6). */}
+            {history.length > 0 ? <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Version</th>
+                    <th>Status</th>
+                    <th>ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((version) => (
+                    <tr key={version.entryVersionId}>
+                      <td className="mono">v{version.version}</td>
+                      <td className="mono">{version.status}{version.revokedAt ? <span> · Revoked <time dateTime={version.revokedAt} title={version.revokedAt}>{publicDate(version.revokedAt)}</time></span> : null}</td>
+                      <td className="mono meta">{version.entryVersionId}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div> : null}
+          </details>
+  );
 }
 
 /**

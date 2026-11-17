@@ -100,9 +100,9 @@ describeDb("break-glass elevation", () => {
 
   async function team() {
     const tenant = await newTenant();
-    const responder = await person(tenant, "security_operator");
-    const approver = await person(tenant, "security_operator");
-    const target = await person(tenant, "mpc_operator");
+    const responder = await person(tenant, "administrator");
+    const approver = await person(tenant, "administrator");
+    const target = await person(tenant, "project_member");
     return { tenant, responder, approver, target };
   }
 
@@ -139,7 +139,7 @@ describeDb("break-glass elevation", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("is not available to roles other than security_operator", async () => {
+  it("is not available to roles other than administrator", async () => {
     const t = await team();
     const response = await post(t.target.token, "/api/v1/admin/break-glass", {
       purpose: "Try",
@@ -312,6 +312,18 @@ describeDb("break-glass elevation", () => {
       expiresAt: inOneHour(),
     });
     expect(next.statusCode).toBe(201);
+  });
+
+  it.each(["organization", "jurisdiction"])("ends an elevation when tenant authority is replaced by a %s-limited grant", async (limit) => {
+    const t = await team();
+    await activeElevation(t);
+    const readSession = () => app.inject({ method: "GET", url: "/api/v1/auth/session", headers: { authorization: `Bearer ${t.responder.token}` } });
+    expect((await readSession()).json().roleBindings.map((b: { role: string }) => b.role)).toContain("break_glass");
+    await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE subject_id=${t.responder.subjectId} AND role='administrator'`;
+    await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role,scope_kind,jurisdiction)
+      VALUES(${randomUUID()},${t.tenant.tenantId},${t.responder.subjectId},${t.tenant.orgId},'administrator',${limit === "organization" ? "organization" : "tenant"},${limit === "jurisdiction" ? ["MNG"] : null}::text[])`;
+    expect((await readSession()).json().roleBindings.map((b: { role: string }) => b.role)).not.toContain("break_glass");
+    expect((await quarantine(t.responder.token, t.target.subjectId)).statusCode).toBe(403);
   });
 
   it("keeps purpose, target and expiry as written", async () => {

@@ -401,6 +401,8 @@ export const verificationCaseSummary = z.object({
   assignmentActive: z.boolean(),
   /** Incremented on every state transition. If-Match checks this value. */
   version: z.number().int().positive(),
+  /** Latest persisted non-draft review, so another reviewer can inspect its disputes. */
+  latestAttestation: z.object({ id: z.string(), state: z.string() }).nullable().optional(),
   /** Past states and reasons. The path persists even after going back. */
   transitions: z.array(
     z.object({
@@ -1730,6 +1732,9 @@ export const roleGrantRequest = z.object({
   subjectId: z.string(),
   subjectName: z.string(),
   role: z.string(),
+  organizationId: z.string().nullable().optional(),
+  governanceScope: z.enum(["protocol", "project", "none"]).nullable().optional(),
+  scopeKind: z.enum(["tenant", "organization", "none"]).nullable().optional(),
   projectId: z.string().nullable(),
   /** Jurisdictions the granted binding is limited to (02 §2.5). Null: not scoped. */
   jurisdiction: z.array(z.string()).nullable(),
@@ -1748,6 +1753,8 @@ export const roleGrantRequest = z.object({
 export const createRoleGrantRequest = z.object({
   subjectId: z.string().guid(),
   role: z.string().min(1),
+  governanceScope: z.enum(["protocol", "project", "none"]).optional(),
+  scopeKind: z.enum(["tenant", "organization", "none"]).optional(),
   projectId: z.string().guid().optional(),
   organizationId: z.string().guid().optional(),
   /**
@@ -1951,6 +1958,7 @@ export const proposeClaimTypeRequest = z.object({
 }).strict();
 
 export const claimTypeCatalogQuery = z.object({
+  projectId: z.string().guid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/).optional(),
 }).strict();

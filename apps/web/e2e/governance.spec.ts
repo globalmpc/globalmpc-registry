@@ -79,7 +79,7 @@ test.describe("Governance", () => {
     await expect(page.getByTestId(`quorum-${proposalId}`)).toContainText("of 100");
     await expect(page.getByTestId(`quorum-${proposalId}`)).toContainText("entered manually");
 
-    // --- Vote (protocol_voter) --------------------------------------------
+    // --- Vote (project_member) --------------------------------------------
     await connectAs(page, "Voter A");
     await page.goto("/w/governance");
     await page.getByLabel("Vote weight").fill("100");
@@ -113,14 +113,15 @@ test.describe("Governance", () => {
     await expect(page.getByTestId("governance-centralization")).toContainText("treasury");
   });
 
-  test("voters cannot propose and proposers cannot vote", async ({ page }) => {
+  test("members can propose and administrators cannot participate", async ({ page }) => {
     await connectAs(page, "Voter A");
     await page.goto("/w/governance");
     // The proposal form itself is not shown.
-    await expect(page.getByTestId("create-proposal")).toHaveCount(0);
+    await expect(page.getByTestId("create-proposal")).toBeVisible();
 
-    await connectAs(page, "Proposer A");
+    await connectAs(page, "Operator A");
     await page.goto("/w/governance");
+    await expect(page.getByTestId("create-proposal")).toHaveCount(0);
     await expect(page.getByLabel("Vote weight")).toHaveCount(0);
   });
 });

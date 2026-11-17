@@ -3,7 +3,7 @@ import {
   ROLE_MINIMUM_ASSURANCE,
   satisfiesAssurance,
   authorize,
-  TENANT_WIDE_ROLES,
+  isTenantWideBinding,
   type AuthorizationContext,
   type ProjectScope,
   type ResourceContext,
@@ -70,7 +70,8 @@ function scopeOf(session: Session, binding: Binding): ProjectScope {
 
 function baseScopeOf(session: Session, binding: Binding): ProjectScope {
   if (binding.projectId !== null) return [binding.projectId];
-  if (TENANT_WIDE_ROLES.includes(binding.role)) return "all";
+  if (isTenantWideBinding(binding)) return "all";
+  if (binding.scopeKind === "none") return [];
   if (binding.organizationId === null) return [];
   return session.organizationProjectIds?.[binding.organizationId] ?? [];
 }
@@ -107,6 +108,7 @@ function usableBindings(session: Session, action: string): readonly Binding[] {
   return session.roleBindings.filter(
     (binding) =>
       policy.allowedRoles.includes(binding.role) &&
+      (!policy.requiresTenantScope || (binding.projectId === null && isTenantWideBinding(binding) && binding.jurisdiction == null)) &&
       satisfiesAssurance(
         session.assuranceLevel,
         ROLE_MINIMUM_ASSURANCE[binding.role] ?? "high_assurance",
@@ -148,10 +150,10 @@ export function canActForOrganization(
  */
 export function actableOrganizations(session: Session, action: string): "all" | readonly string[] {
   const bindings = usableBindings(session, action);
-  if (bindings.some((binding) => TENANT_WIDE_ROLES.includes(binding.role))) return "all";
+  if (bindings.some(binding => binding.projectId === null && isTenantWideBinding(binding))) return "all";
   return [
     ...new Set(
-      bindings.flatMap((binding) => (binding.organizationId === null ? [] : [binding.organizationId])),
+      bindings.flatMap((binding) => (binding.scopeKind === "none" || binding.organizationId === null ? [] : [binding.organizationId])),
     ),
   ];
 }

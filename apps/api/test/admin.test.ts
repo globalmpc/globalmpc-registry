@@ -31,7 +31,7 @@ function newAccount(): TestAccount {
 describeDb("platform administration", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
-  /** Both are mpc_operator. Checks that the two-person rule splits by person, not by role. */
+  /** Both are administrator. Checks that the two-person rule splits by person, not by role. */
   let operatorAToken: string;
   let operatorBToken: string;
   let stewardToken: string;
@@ -65,7 +65,7 @@ describeDb("platform administration", () => {
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'mpc_operator')
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'administrator')
     `;
     operatorBToken = await signIn(app, second);
   });
@@ -163,7 +163,7 @@ describeDb("platform administration", () => {
     });
 
     expect(response.statusCode).toBe(403);
-    expect(response.json().details.requiredRoles).toContain("mpc_operator");
+    expect(response.json().details.requiredRoles).toContain("administrator");
   });
 
   it("does not let the proposer approve their own proposal", async () => {
@@ -174,7 +174,7 @@ describeDb("platform administration", () => {
     const grant = (
       await post(operatorAToken, "/api/v1/admin/role-grants", {
         subjectId: subject.id,
-        role: "data_steward",
+        role: "reviewer",
         reason: "handles evidence registration",
       })
     ).json();
@@ -197,7 +197,7 @@ describeDb("platform administration", () => {
     const grant = (
       await post(operatorAToken, "/api/v1/admin/role-grants", {
         subjectId: operatorSubjectB,
-        role: "auditor",
+        role: "administrator",
         reason: "audit duty for the second operator",
       })
     ).json();
@@ -218,7 +218,7 @@ describeDb("platform administration", () => {
     const grant = (
       await post(operatorAToken, "/api/v1/admin/role-grants", {
         subjectId: operatorSubjectB,
-        role: "data_steward",
+        role: "reviewer",
         reason: "evidence duty for the second operator",
       })
     ).json();
@@ -305,7 +305,7 @@ describeDb("platform administration", () => {
 
     it("refuses approving a second-person role", async () => {
       const subjectId = await uiBoundSubject("bound then promoted");
-      const decided = await proposeAndApprove(subjectId, "disclosure_approver");
+      const decided = await proposeAndApprove(subjectId, "reviewer");
 
       expect(decided.statusCode).toBe(422);
       expect(decided.json().code).toBe("ROLE_GRANT_UI_BOUND_SUBJECT");
@@ -313,7 +313,7 @@ describeDb("platform administration", () => {
 
     it("still grants a role outside the second-person set", async () => {
       const subjectId = await uiBoundSubject("bound then voter");
-      const decided = await proposeAndApprove(subjectId, "protocol_voter");
+      const decided = await proposeAndApprove(subjectId, "project_member");
 
       expect(decided.statusCode).toBe(200);
       expect(decided.json().state).toBe("approved");
@@ -330,7 +330,7 @@ describeDb("platform administration", () => {
       const bound = await bindWalletByProof(app, own, newAccount().account);
       expect(bound.statusCode, bound.body).toBe(200);
 
-      const decided = await proposeAndApprove(subject.id, "disclosure_approver");
+      const decided = await proposeAndApprove(subject.id, "reviewer");
       expect(decided.statusCode, decided.body).toBe(200);
     });
   });
@@ -348,7 +348,7 @@ describeDb("platform administration", () => {
       const grant = (
         await post(operatorAToken, "/api/v1/admin/role-grants", {
           subjectId: subject.id,
-          role: "disclosure_approver",
+          role: "reviewer",
           reason: "racing a bind",
         })
       ).json();
@@ -398,7 +398,7 @@ describeDb("platform administration", () => {
     const grant = (
       await post(operatorAToken, "/api/v1/admin/role-grants", {
         subjectId: subject.id,
-        role: "data_steward",
+        role: "reviewer",
         reason: "handles evidence registration",
       })
     ).json();
@@ -415,7 +415,7 @@ describeDb("platform administration", () => {
 
     const listed = (await get(operatorAToken, "/api/v1/admin/subjects")).json();
     const target = listed.items.find((item: { id: string }) => item.id === subject.id);
-    expect(target.roles.map((role: { role: string }) => role.role)).toContain("data_steward");
+    expect(target.roles.map((role: { role: string }) => role.role)).toContain("reviewer");
   });
 
   it("rejects a role outside the permission table at proposal time", async () => {
@@ -438,7 +438,7 @@ describeDb("platform administration", () => {
     const subject = (
       await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "grant target D" })
     ).json();
-    const body = { subjectId: subject.id, role: "auditor", reason: "audit duty" };
+    const body = { subjectId: subject.id, role: "administrator", reason: "audit duty" };
 
     expect((await post(operatorAToken, "/api/v1/admin/role-grants", body)).statusCode).toBe(200);
     const second = await post(operatorAToken, "/api/v1/admin/role-grants", body);

@@ -231,16 +231,16 @@ export const emailChangeVerifyResponse = z.object({
 export const ACCOUNT_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   "admin.invitation.manage": {
     action: "admin.invitation.manage",
-    allowedRoles: ["mpc_operator", "security_operator"],
+    allowedRoles: ["administrator"],
   },
   "admin.email_change.propose": {
     action: "admin.email_change.propose",
-    allowedRoles: ["mpc_operator", "security_operator"],
+    allowedRoles: ["administrator"],
   },
   "admin.email_change.approve": {
     action: "admin.email_change.approve",
     secondPerson: "proposer ≠ decider ≠ subject (email_change_two_person, email_change_not_own_decision 0113)",
-    allowedRoles: ["mpc_operator", "security_operator"],
+    allowedRoles: ["administrator"],
   },
 };
 

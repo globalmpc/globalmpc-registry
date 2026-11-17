@@ -513,7 +513,7 @@ export async function registerSecondReviewRoute(
           session,
           "source.collect",
           receipt.project_id === null
-            ? tenantResource(tenantId, reviewResource)
+            ? tenantResource(tenantId, { ...reviewResource, requiresTenantScope: true })
             : projectResource(tenantId, receipt.project_id, reviewResource),
           sessionFacts(session),
         );
@@ -545,7 +545,7 @@ export async function registerSecondReviewRoute(
           secondConfirmedBy: session.subjectId,
         });
         if (!check.ok) {
-          throw forbidden("SECOND_REVIEW_SAME_PERSON", check.reason, {
+          throw forbidden(receipt.first_confirmed_by === null ? "SECOND_REVIEW_AUTHOR_UNKNOWN" : "SECOND_REVIEW_SAME_PERSON", check.reason, {
             nextAction: check.nextAction,
           });
         }

@@ -62,7 +62,7 @@ const account = {
   secondFactor: "passkey",
   aal: "aal3",
   mfaSatisfied: true,
-  roleBindings: [{ role: "reviewer_cp_qp", organizationId: null, projectId: null }],
+  roleBindings: [{ role: "reviewer", organizationId: null, projectId: null }],
   assuranceLevel: "high_assurance",
 } as SessionInfo;
 const passkey = {
@@ -565,7 +565,7 @@ describe("account settings", () => {
     expect(done.textContent).toContain("Your new signing wallet is bound");
     const operator = within(done).getByTestId("replace-done-operator");
     expect(operator.textContent).toContain("your identity assurance is now wallet_only");
-    expect(within(operator).getByTestId("replace-done-inactive").textContent).toBe("reviewer_cp_qp");
+    expect(within(operator).getByTestId("replace-done-inactive").textContent).toBe("reviewer");
     expect(operator.textContent).toContain("Admin → Set assurance");
     expect(s.signOut).not.toHaveBeenCalled();
   });
@@ -786,7 +786,7 @@ describe("top bar for account sessions", () => {
       ...account,
       aal: "aal2",
       secondFactor: "totp",
-      narrowedRoles: [{ role: "reviewer_cp_qp", requiredAal: "aal3" }],
+      narrowedRoles: [{ role: "reviewer", requiredAal: "aal3" }],
     } as SessionInfo;
     mockHttp({ "GET /api/v1/auth/mfa": status() });
     render(
@@ -805,15 +805,15 @@ describe("top bar for account sessions", () => {
   it("marks roles below their assurance minimum inactive, with the reason, apart from roles in effect", () => {
     s.session = {
       ...account,
-      assuranceLevel: "wallet_only",
+      assuranceLevel: "identity_bound",
       roleBindings: [
-        { role: "reviewer_cp_qp", organizationId: null, projectId: null },
-        { role: "project_voter", organizationId: null, projectId: null },
+        { role: "reviewer", organizationId: null, projectId: null },
+        { role: "project_member", organizationId: null, projectId: null },
       ],
     } as SessionInfo;
     render(<TopBar />);
-    expect(screen.getByTestId("effective-roles").textContent).toBe("project_voter");
-    expect(screen.getByTestId("inactive-roles").textContent).toBe("reviewer_cp_qp");
+    expect(screen.getByTestId("effective-roles").textContent).toBe("project_member");
+    expect(screen.getByTestId("inactive-roles").textContent).toBe("reviewer");
     expect(screen.getByTestId("inactive-roles-reason").textContent).toContain(
       "Identity verification needed — ask an admin",
     );
@@ -821,7 +821,7 @@ describe("top bar for account sessions", () => {
 
   it("lists every role as in effect when the assurance meets them", () => {
     render(<TopBar />);
-    expect(screen.getByTestId("effective-roles").textContent).toBe("reviewer_cp_qp");
+    expect(screen.getByTestId("effective-roles").textContent).toBe("reviewer");
     expect(screen.queryByTestId("inactive-roles")).toBeNull();
   });
 

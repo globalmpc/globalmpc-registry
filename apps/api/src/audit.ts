@@ -24,7 +24,7 @@ export const ROLE_ASSIGNMENT_BOUND = "assignment_bound";
  * Path run in the deployment environment without a session.
  *
  * The runner is an operator with deployment environment access; the app does not identify them.
- * Leaving `actor_subject_id` empty while writing only the role as `mpc_operator` would look like
+ * Leaving `actor_subject_id` empty while writing only the role as `administrator` would look like
  * an authorization decision that was never made — for the same reason no identity is invented,
  * no authorization decision is invented either.
  */

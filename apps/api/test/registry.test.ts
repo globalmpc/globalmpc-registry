@@ -1,3 +1,4 @@
+import { addGovernanceAccount } from "./helpers/governance-accounts.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
@@ -91,6 +92,33 @@ describeDb("Registry publication and public lookup", () => {
     if (drafted.statusCode !== 200) return drafted;
     return publishDraft(app, tokens.disclosureApproverA, drafted.json());
   }
+
+  it("does not distinguish missing registry targets from targets outside an actor's scope", async () => {
+    const prepared = await draft(tokens.operatorA);
+    expect(prepared.statusCode,prepared.body).toBe(200);
+    const published = await publishDraft(app,tokens.disclosureApproverA,prepared.json());
+    expect(published.statusCode,published.body).toBe(200);
+    const subjectId = prepared.json().subjectId;
+    const reader = await signIn(app,fx.readerA);
+    const scoped = await signIn(app,await addGovernanceAccount(fx,"administrator",{projectId:fx.projectA,assurance:"high_assurance"}));
+    for (const token of [reader,scoped]) {
+      for (const existing of [true,false]) {
+        const key = existing ? prepared.json().id : randomUUID();
+        const headers = {authorization:`Bearer ${token}`,"idempotency-key":idempotencyKey(),"if-match":'"1"'};
+        const requests = [
+          {url:"/api/v1/registry-entries",payload:{registryType:"project",subjectId:existing ? subjectId : randomUUID(),publicKey:"SCOPE-PROBE",projection:validProjection(),policyVersion:"1",schemaVersion:"1"}},
+          {url:`/api/v1/registry-entries/drafts/${key}/publish`,payload:{}},
+          {url:`/api/v1/registry-entries/drafts/${key}/reject`,payload:{reason:"Scope check"}},
+          {url:`/api/v1/registry-entries/${existing ? published.json().entryId : randomUUID()}/revoke`,payload:{reasonCode:"Scope check"}},
+        ];
+        for (const request of requests) {
+          const response = await app.inject({method:"POST",headers,...request});
+          expect(response.statusCode,response.body).toBe(403);
+          expect(response.json()).toMatchObject({code:"AUTHORIZATION_DENIED",message:"You do not have permission to perform this action"});
+        }
+      }
+    }
+  });
 
   /**
    * 04 §4.3 — the guard for `draft→registered` is "Project Registry minimum fields
@@ -416,11 +444,76 @@ describeDb("Registry publication and public lookup", () => {
       expect(versions).toHaveLength(0);
     });
 
+    it("enforces project scope before publish/reject and cached decision replay", async () => {
+      const scoped = await signIn(app, await addGovernanceAccount(fx, "reviewer", { assurance: "high_assurance", scopeKind: "organization" }));
+      for (const action of ["publish", "reject"] as const) {
+        const projectId=randomUUID(), publicKey=`SCOPE-${projectId}`;
+        await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+          VALUES(${projectId},${fx.tenantA},${publicKey},'Other organization','MNG',ARRAY['copper'],${fx.reviewOrgA})`;
+        const drafted=await draft(tokens.operatorA,{subjectId:projectId,publicKey});
+        expect(drafted.statusCode,drafted.body).toBe(200);
+        const hidden=await app.inject({method:"GET",url:`/api/v1/registry-entries/drafts?subjectId=${projectId}`,headers:{authorization:`Bearer ${scoped}`}});
+        expect(hidden.statusCode,hidden.body).toBe(200);
+        expect(hidden.json().items).toEqual([]);
+        const key=idempotencyKey();
+        const decide=(token:string)=>app.inject({method:"POST",url:`/api/v1/registry-entries/drafts/${drafted.json().id}/${action}`,
+          headers:{authorization:`Bearer ${token}`,"idempotency-key":key,"if-match":`"${drafted.json().version}"`},
+          payload:action==="publish"?{irreversibilityAcknowledged:true}:{reason:"Independent rejection"}});
+        expect((await decide(scoped)).statusCode).toBe(403);
+        const allowed=await decide(tokens.disclosureApproverA);
+        expect(allowed.statusCode,allowed.body).toBe(200);
+        expect((await decide(scoped)).statusCode).toBe(403);
+        expect((await decide(tokens.disclosureApproverA)).statusCode).toBe(200);
+      }
+      const own=await draft(tokens.operatorA);
+      const allowed=await publishDraft(app,scoped,own.json());
+      expect(allowed.statusCode,allowed.body).toBe(200);
+    });
+
+    it("keeps scoped administrators inside their projects and out of tenant anchor operations", async () => {
+      const scoped=await signIn(app,await addGovernanceAccount(fx,"administrator",{assurance:"high_assurance",scopeKind:"organization"}));
+      const foreign=randomUUID(), publicKey=`ADMIN-SCOPE-${foreign}`;
+      await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+        VALUES(${foreign},${fx.tenantA},${publicKey},'Other organization','MNG',ARRAY['copper'],${fx.reviewOrgA})`;
+      const payload={registryType:"project",subjectId:foreign,publicKey,projection:await projectProjection(fx.sql,foreign),policyVersion:"mn-core-1.0.0",schemaVersion:"project-registry-1"};
+      const draftKey=idempotencyKey();
+      const create=(token:string)=>app.inject({method:"POST",url:"/api/v1/registry-entries",headers:{authorization:`Bearer ${token}`,"idempotency-key":draftKey},payload});
+      expect((await create(scoped)).statusCode).toBe(403);
+      const allowedDraft=await create(tokens.operatorA);
+      expect(allowedDraft.statusCode,allowedDraft.body).toBe(200);
+      expect((await create(scoped)).statusCode).toBe(403);
+      const publishedResponse=await publishDraft(app,tokens.disclosureApproverA,allowedDraft.json());
+      expect(publishedResponse.statusCode,publishedResponse.body).toBe(200);
+      const published=publishedResponse.json(), revokeKey=idempotencyKey();
+      const revoke=(token:string)=>app.inject({method:"POST",url:`/api/v1/registry-entries/${published.entryId}/revoke`,headers:{authorization:`Bearer ${token}`,"idempotency-key":revokeKey,"if-match":`"${published.version}"`},payload:{reasonCode:"SOURCE_CORRECTION"}});
+      expect((await revoke(scoped)).statusCode).toBe(403);
+      expect((await revoke(tokens.operatorA)).statusCode).toBe(200);
+      expect((await revoke(scoped)).statusCode).toBe(403);
+      expect((await revoke(tokens.operatorA)).statusCode).toBe(200);
+      const ownDraft=await draft(scoped);
+      expect(ownDraft.statusCode,ownDraft.body).toBe(200);
+      const ownPublished=await publishDraft(app,tokens.disclosureApproverA,ownDraft.json());
+      expect(ownPublished.statusCode,ownPublished.body).toBe(200);
+      const ownRevoke=await app.inject({method:"POST",url:`/api/v1/registry-entries/${ownPublished.json().entryId}/revoke`,headers:{authorization:`Bearer ${scoped}`,"idempotency-key":idempotencyKey(),"if-match":`"${ownPublished.json().version}"`},payload:{reasonCode:"SOURCE_CORRECTION"}});
+      expect(ownRevoke.statusCode,ownRevoke.body).toBe(200);
+      for(const [project,target,expected] of [[foreign,published.id,403],[ownDraft.json().subjectId,ownPublished.json().id,200]] as const){
+        const signal=randomUUID();
+        await fx.sql`INSERT INTO core.evidence_stale_signals(id,tenant_id,project_id,target_type,target_id,reason)
+          VALUES(${signal},${fx.tenantA},${project},'registry_entry_version',${target},'Synthetic scope regression')`;
+        const result=await app.inject({method:"POST",url:`/api/v1/stale-signals/${signal}/resolve`,headers:{authorization:`Bearer ${scoped}`,"idempotency-key":idempotencyKey()},payload:{resolution:"dismissed",note:"Scope checked"}});
+        expect(result.statusCode,result.body).toBe(expected);
+      }
+      for(const [method,url] of [["POST","/api/v1/anchor-batches"],["POST",`/api/v1/anchor-batches/${randomUUID()}/resubmit`],["GET","/api/v1/anchor-batches"]] as const){
+        const result=await app.inject({method,url,headers:{authorization:`Bearer ${scoped}`,"idempotency-key":idempotencyKey()}});
+        expect(result.statusCode,result.body).toBe(403);
+      }
+    });
+
     it("the drafting role cannot publish", async () => {
       const drafted = await draft(tokens.operatorA);
       const response = await publishDraft(app, tokens.operatorA, drafted.json());
       expect(response.statusCode).toBe(403);
-      expect(response.json().details.requiredRoles).toContain("disclosure_approver");
+      expect(response.json().details.requiredRoles).toContain("reviewer");
     });
 
     it("a person holding both roles cannot publish their own draft", async () => {
@@ -430,7 +523,7 @@ describeDb("Registry publication and public lookup", () => {
       `;
       await fx.sql`
         INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${approver!.subject_id}, ${fx.orgA}, 'mpc_operator')
+        VALUES (${randomUUID()}, ${fx.tenantA}, ${approver!.subject_id}, ${fx.orgA}, 'administrator')
       `;
       try {
         const both = await signIn(app, fx.disclosureApproverA);
@@ -443,7 +536,7 @@ describeDb("Registry publication and public lookup", () => {
       } finally {
         await fx.sql`
           UPDATE core.role_bindings SET revoked_at = now()
-          WHERE subject_id = ${approver!.subject_id} AND role = 'mpc_operator'
+          WHERE subject_id = ${approver!.subject_id} AND role = 'administrator'
         `;
       }
     });
@@ -1216,7 +1309,7 @@ describeDb("Registry publication and public lookup", () => {
   it("an account without permission cannot publish", async () => {
     const response = await publish(tokens.stewardA);
     expect(response.statusCode).toBe(403);
-    expect(response.json().details.requiredRoles).toContain("mpc_operator");
+    expect(response.json().details.requiredRoles).toContain("administrator");
   });
 
   describe("public lookup (unauthenticated)", () => {

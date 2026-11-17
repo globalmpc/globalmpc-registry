@@ -54,7 +54,7 @@ if (missing.length > 0) {
       "  BOOTSTRAP_SUBJECT_ID      exact existing legacy subject UUID (migration-only email initialization)",
       "                            never grants a role or upgrades stored assurance",
       "  BOOTSTRAP_JURISDICTION    3 uppercase ISO3 letters (default MNG)",
-      "  BOOTSTRAP_ROLE            role (default mpc_operator)",
+      "  BOOTSTRAP_ROLE            role (default administrator)",
       "  BOOTSTRAP_ASSURANCE       wallet_only·identity_bound·high_assurance",
       "                            (default high_assurance)",
       "",
@@ -80,7 +80,7 @@ const input: BootstrapInput = {
   subjectName: process.env["BOOTSTRAP_SUBJECT_NAME"] as string,
   email: process.env["BOOTSTRAP_EMAIL"] as string,
   ...(process.env["BOOTSTRAP_SUBJECT_ID"] === undefined ? {} : { subjectId: process.env["BOOTSTRAP_SUBJECT_ID"] }),
-  role: process.env["BOOTSTRAP_ROLE"] ?? "mpc_operator",
+  role: process.env["BOOTSTRAP_ROLE"] ?? "administrator",
   assuranceLevel: (process.env["BOOTSTRAP_ASSURANCE"] ??
     "high_assurance") as BootstrapInput["assuranceLevel"],
 };
