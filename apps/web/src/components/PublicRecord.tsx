@@ -1,5 +1,7 @@
 "use client";
 
+import { PublicEvidenceLedger } from "./PublicEvidenceLedger";
+import { ProjectStageRoadmap } from "./ProjectProgress";
 import { useEffect, useState } from "react";
 import { EvidenceLedger, EvidenceLedgerWarnings } from "./EvidenceLedger";
 import type { LedgerSummary, LedgerCurrent } from "@/lib/evidence-ledger-api";
@@ -90,7 +92,7 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
   return (
       <>
         {entry.evidenceLedgerCurrent ? <EvidenceLedgerWarnings current={entry.evidenceLedgerCurrent as LedgerCurrent} /> : null}
-        {entry.evidenceLedger ? <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" browsable={browsableEvidence} /> : null}
+        {entry.evidenceLedger ? (browsableEvidence ? <PublicEvidenceLedger key={entry.entryVersionId} summary={entry.evidenceLedger as LedgerSummary} /> : <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" />) : <ProjectStageRoadmap />}
 
         <div className="panel">
           <div className="page-head" style={{ marginBottom: 14 }}>
@@ -208,7 +210,7 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
           ) : null}
         </div>
 
-        <div className="panel" id="record-history">
+        <details className="panel public-record-disclosure" id="record-history" open={!browsableEvidence || entry.history.some(version => version.status === "revoked" || Boolean(version.revokedAt))}><summary>Version history · {entry.history.length} earlier versions</summary>
             <h2>Earlier versions</h2>
             {entry.history.length === 0 ? <p className="sub">No earlier versions returned for this record.</p> : null}
             {/* Do not hide correction/revocation history. Same reason as not making a past
@@ -226,16 +228,16 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
                   {entry.history.map((version) => (
                     <tr key={version.entryVersionId}>
                       <td className="mono">v{version.version}</td>
-                      <td className="mono">{version.status}</td>
+                      <td className="mono">{version.status}{version.revokedAt ? <span> · Revoked <time dateTime={version.revokedAt}>{version.revokedAt}</time></span> : null}</td>
                       <td className="mono meta">{version.entryVersionId}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div> : null}
-          </div>
+          </details>
 
-        <IntegrityProof proof={proof} />
+        <details className="public-record-disclosure" open={!browsableEvidence || Boolean(proof && (!proof.merkleVerified || !proof.included))} data-testid="integrity-disclosure"><summary>Integrity proof</summary><IntegrityProof proof={proof} /></details>
 
         <div className="notice" style={{ color: "var(--alert)" }}>
           <div className="title">Integrity and authority are different questions</div>

@@ -81,7 +81,7 @@ afterEach(() => {
 describe("catalog claim and evidence assessment", () => {
   it("pins chosen definition, preserves false and decimal precision, and only offers scanned documents", async () => {
     const calls = mockHttp({
-      "GET /api/v1/claim-types": { items: [entry], nextCursor: null },
+      "GET /api/v1/claim-types?projectId=p1": { items: [entry], nextCursor: null },
       "POST /api/v1/projects/p1/claims": { id: "claim-1" },
     });
     const saved = vi.fn(async () => {});
@@ -156,7 +156,7 @@ describe("catalog claim and evidence assessment", () => {
   });
   it("requires a new document choice if the selected upload is revoked on refresh", async () => {
     const calls = mockHttp({
-      "GET /api/v1/claim-types": { items: [entry], nextCursor: null },
+      "GET /api/v1/claim-types?projectId=p1": { items: [entry], nextCursor: null },
       "POST /api/v1/projects/p1/claims": { id: "claim-1" },
     });
     const saved = vi.fn(async () => {});
@@ -180,7 +180,7 @@ describe("catalog claim and evidence assessment", () => {
   it("retains entered values and retries an uncertain save with the same idempotency key", async () => {
     let attempt = 0;
     const calls = mockHttp({
-      "GET /api/v1/claim-types": { items: [entry], nextCursor: null },
+      "GET /api/v1/claim-types?projectId=p1": { items: [entry], nextCursor: null },
       "POST /api/v1/projects/p1/claims": () => {
         attempt += 1;
         if (attempt === 1)
@@ -244,7 +244,7 @@ describe("catalog claim and evidence assessment", () => {
     "rejects invalid or future claim date %s before sending",
     async (date) => {
       const calls = mockHttp({
-        "GET /api/v1/claim-types": { items: [entry], nextCursor: null },
+        "GET /api/v1/claim-types?projectId=p1": { items: [entry], nextCursor: null },
         "POST /api/v1/projects/p1/claims": { id: "claim-1" },
       });
       render(
@@ -307,7 +307,7 @@ describe("catalog claim and evidence assessment", () => {
     ).toBeDefined();
     expect(screen.getByText("Reviewed item scope: Licence")).toBeDefined();
     expect(screen.queryByText("stage.exploration")).toBeNull();
-    expect(screen.getAllByText("Exploration")).toHaveLength(2);
+    expect(screen.getAllByText("Exploration")).toHaveLength(3);
     expect(screen.getByText(/Reviewed 1 \/ 2 required items/)).toBeDefined();
     expect(
       screen.getByRole("list", { name: "Scoped reviews for Licence" })
@@ -339,8 +339,8 @@ describe("catalog claim and evidence assessment", () => {
   });
   it("supports paginated definitions without silently truncating the selector", async () => {
     mockHttp({
-      "GET /api/v1/claim-types": { items: [entry], nextCursor: "licence" },
-      "GET /api/v1/claim-types?cursor=licence": {
+      "GET /api/v1/claim-types?projectId=p1": { items: [entry], nextCursor: "licence" },
+      "GET /api/v1/claim-types?cursor=licence&projectId=p1": {
         items: [
           {
             ...entry,

@@ -52,7 +52,7 @@ describeDb("review registry bootstrap", () => {
       jurisdiction: "MNG",
       subjectName: "Reviewer",
       email,
-      role: "reviewer_cp_qp",
+      role: "reviewer",
       assuranceLevel: "high_assurance",
     });
     seeded = email;

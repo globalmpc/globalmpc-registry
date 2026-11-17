@@ -40,7 +40,7 @@ test.describe("document relations", () => {
   }) => {
     const projectKey = `DOCS-${Date.now()}`;
 
-    // --- Project (mpc_operator) ------------------------------------------
+    // --- Project (administrator) ------------------------------------------
     await connectAs(page, "Operator A");
     await page.goto("/w/projects/new");
     await page.getByRole("textbox", { name: "Project key" }).fill(projectKey);
@@ -55,7 +55,7 @@ test.describe("document relations", () => {
   await expect(page.locator(".page-head").first()).toContainText(projectKey);
     const projectId = new URL(page.url()).pathname.split("/").pop() as string;
 
-    // --- Two documents (data_steward) --------------------------------------
+    // --- Two documents (reviewer) --------------------------------------
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/data-room`);
 

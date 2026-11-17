@@ -82,7 +82,11 @@ test.describe("project registration", () => {
     await expect(page.getByText("draft")).toBeVisible();
 
     // Distinguishes no assessment from a pass.
-    await expect(page.getByText("Not assessed")).toBeVisible();
+    const stages=page.getByRole("list",{name:"Project stages"}).getByRole("listitem");
+    await expect(stages).toHaveCount(5);
+    await expect(stages).toContainText(["Exploration","Resource definition","Feasibility","Permitting","Production"]);
+    // Tenant definitions may already yield an incomplete evidence assessment; that is not a gate decision.
+    await expect(page.getByTestId("readiness-card")).toContainText("No gate has an assessment on record.");
     await expect(page.getByText(/No assessment has run yet. This is not a pass./)).toBeVisible();
   });
 
@@ -172,7 +176,7 @@ test.describe("permission denial", () => {
     await expect(alert).toContainText("403");
     await expect(alert).toContainText("AUTHORIZATION_DENIED");
     await expect(alert).toContainText("ROLE_ACTION_NOT_ALLOWED");
-    await expect(alert).toContainText("mpc_operator");
+    await expect(alert).toContainText("administrator");
     // Offers a path to the next action (§11.7).
     await expect(alert.getByRole("link", { name: /Request access/ })).toBeVisible();
     // States whether retrying helps.
@@ -231,7 +235,7 @@ test.describe("session", () => {
     await connectAs(page, "Operator A");
 
     const header = page.getByRole("banner");
-    await expect(header).toContainText("mpc_operator");
+    await expect(header).toContainText("administrator");
     await expect(header).toContainText("high_assurance");
   });
 });

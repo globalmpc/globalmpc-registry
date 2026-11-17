@@ -22,13 +22,13 @@ describeDb("change propagation", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operator: string;
-  let auditor: string;
+  let reviewer: string;
 
   beforeAll(async () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     operator = await signIn(app, fx.operatorA);
-    auditor = await signIn(app, fx.auditorA);
+    reviewer = await signIn(app, fx.reviewerA);
   });
 
   afterAll(async () => {
@@ -296,12 +296,12 @@ describeDb("change propagation", () => {
       await fx.sql`
         INSERT INTO core.compliance_assessments (
           id, tenant_id, project_id, gate_id, policy_set_id, input_snapshot_hash,
-          evaluated_as_of, status, requirement_results, canonical_result_hash, generated_at
-        ) VALUES (
+          evaluated_as_of, status, requirement_results, canonical_result_hash, generated_at, evidence_actor_ids
+      ) VALUES (
           ${id}, ${fx.tenantA}, ${project}, 'registry_publication', ${policy},
           ${`0x${"aa".repeat(32)}`}, now(), 'ok', '[]'::jsonb, ${`0x${"bb".repeat(32)}`},
-          now() - make_interval(mins => ${ageMinutes})
-        )
+          now() - make_interval(mins => ${ageMinutes}), '{}'::uuid[]
+      )
       `;
       return id;
     }
@@ -390,7 +390,7 @@ describeDb("change propagation", () => {
 
       const notes = await fx.sql<{ audience_role: string; summary: string }[]>`
         SELECT audience_role, summary FROM core.notifications
-        WHERE project_id = ${project} AND audience_role = 'issuer_officer'
+        WHERE project_id = ${project} AND audience_role = 'reviewer'
       `;
       expect(notes).toHaveLength(1);
       expect(notes[0]?.summary).toMatch(/^Suspension to consider/);
@@ -509,7 +509,7 @@ describeDb("change propagation", () => {
       method: "POST",
       url: `/api/v1/authorities/${authority}/state`,
       headers: {
-        authorization: `Bearer ${auditor}`,
+        authorization: `Bearer ${reviewer}`,
         "idempotency-key": idempotencyKey(),
         "if-match": `"${authorityRow!.version}"`,
       },

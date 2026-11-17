@@ -37,7 +37,7 @@ import {
  *
  * - Entering `suspended` is **one-person**. It is urgent; requiring two people would keep a
  *   problematic project running while waiting for the second (same logic as wallet deactivation).
- * - Other transitions are done by `issuer_officer`/`gate_approver`. An operator alone cannot
+ * - Other transitions are done by `reviewer`. An operator alone cannot
  *   open an offering.
  * - **Whoever suspended cannot reinstate.** If the same person suspends and reverts, suspension
  *   becomes personal discretion rather than a control.

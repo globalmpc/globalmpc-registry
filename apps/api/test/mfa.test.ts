@@ -687,7 +687,7 @@ describeDb("second factors (WP3)", () => {
 
   describe("recovery codes", () => {
     it("works once, ends every other session, and limits its own to re-enrolment", async () => {
-      const subject = await person({ role: "data_steward" });
+      const subject = await person({ role: "project_member" });
       const enrolled = await enrolPasskey(await login(subject), authenticator());
       const [code] = enrolled.recoveryCodes as string[];
 
@@ -925,7 +925,7 @@ describeDb("second factors (WP3)", () => {
 
   describe("role assurance", () => {
     it("an aal2 session does not reach an aal3 role; a passkey step-up on it does", async () => {
-      const operator = await person({ role: "mpc_operator" });
+      const operator = await person({ role: "administrator" });
       const key = authenticator();
       const first = await login(operator);
       await enrolPasskey(first, key);
@@ -937,7 +937,7 @@ describeDb("second factors (WP3)", () => {
       ).toBe(200);
       const view = await session(token);
       expect(view.aal).toBe("aal2");
-      expect(view.narrowedRoles).toEqual([expect.objectContaining({ role: "mpc_operator", requiredAal: "aal3" })]);
+      expect(view.narrowedRoles).toEqual([expect.objectContaining({ role: "administrator", requiredAal: "aal3" })]);
       expect((await get("/api/v1/admin/mfa-resets", token)).statusCode).toBe(403);
 
       await stepUp(token, key);
@@ -971,8 +971,8 @@ describeDb("second factors (WP3)", () => {
       await fx.sql`UPDATE core.subjects SET created_at = now() - interval '72 hours' WHERE id = ${target}`;
       const held = await login(target);
 
-      const proposer = await adminSession(await person({ role: "mpc_operator" }));
-      const decider = await adminSession(await person({ role: "security_operator" }));
+      const proposer = await adminSession(await person({ role: "administrator" }));
+      const decider = await adminSession(await person({ role: "administrator" }));
 
       const proposed = await propose(proposer, target);
       expect(proposed.statusCode, proposed.body).toBe(200);
@@ -1007,8 +1007,8 @@ describeDb("second factors (WP3)", () => {
     });
 
     it("the person reset cannot decide their own reset", async () => {
-      const targetAdmin = await person({ role: "security_operator" });
-      const proposer = await adminSession(await person({ role: "mpc_operator" }));
+      const targetAdmin = await person({ role: "administrator" });
+      const proposer = await adminSession(await person({ role: "administrator" }));
       const reset = (await propose(proposer, targetAdmin)).json();
       const res = await decide(await adminSession(targetAdmin), reset.id, 1, "approve");
       expect(res.statusCode).toBe(422);
@@ -1017,9 +1017,9 @@ describeDb("second factors (WP3)", () => {
 
     it("needs an admin role at aal3", async () => {
       const target = await person();
-      const plain = await adminSession(await person({ role: "data_steward" }));
+      const plain = await adminSession(await person({ role: "reviewer" }));
       expect((await propose(plain, target)).statusCode).toBe(403);
-      const aal2 = await issueTestSession(fx.appSql, fx.tenantA, await person({ role: "mpc_operator" }), {
+      const aal2 = await issueTestSession(fx.appSql, fx.tenantA, await person({ role: "administrator" }), {
         firstFactor: "email_code",
         secondFactor: "totp",
       });
@@ -1028,7 +1028,7 @@ describeDb("second factors (WP3)", () => {
 
     it("the database refuses one person deciding, whatever the API checks", async () => {
       const target = await person();
-      const admin = await person({ role: "mpc_operator" });
+      const admin = await person({ role: "administrator" });
       const id = randomUUID();
       await fx.sql`
         INSERT INTO core.mfa_reset_requests (id, tenant_id, subject_id, reason, requested_by_subject_id)
@@ -1048,7 +1048,7 @@ describeDb("second factors (WP3)", () => {
 
     it("the application role cannot insert a reset that is already decided", async () => {
       const target = await person();
-      const [requester, decider] = [await person({ role: "mpc_operator" }), await person({ role: "security_operator" })];
+      const [requester, decider] = [await person({ role: "administrator" }), await person({ role: "administrator" })];
       await expect(
         withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) =>
           tx`
@@ -1090,8 +1090,8 @@ describeDb("second factors (WP3)", () => {
       );
     const freshAddress = (label: string) => `${label}-${randomUUID().slice(0, 8)}@example.test`;
     async function adminPair() {
-      const a = await person({ role: "mpc_operator" });
-      const b = await person({ role: "security_operator" });
+      const a = await person({ role: "administrator" });
+      const b = await person({ role: "administrator" });
       return { a, b, aToken: await adminSession(a), bToken: await adminSession(b) };
     }
     /** A 72-hour-old person who holds a passkey, signed in with their address. */
@@ -1136,7 +1136,7 @@ describeDb("second factors (WP3)", () => {
       expect((await proposeReset(bToken, subject)).json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
 
       // An uninvolved proposer: neither A nor B may approve it.
-      const c = await adminSession(await person({ role: "mpc_operator" }));
+      const c = await adminSession(await person({ role: "administrator" }));
       const proposed = await proposeReset(c, subject);
       expect(proposed.statusCode, proposed.body).toBe(200);
       const reset = proposed.json();
@@ -1172,7 +1172,7 @@ describeDb("second factors (WP3)", () => {
 
       // A fourth, uninvolved admin approves — and the reset is told to both addresses, the old
       // one included, since the owner may no longer read the new one.
-      const d = await adminSession(await person({ role: "security_operator" }));
+      const d = await adminSession(await person({ role: "administrator" }));
       const approved = await decideReset(d, reset.id, 1, "approve");
       expect(approved.statusCode, approved.body).toBe(200);
       const notices = await fx.sql<{ recipient: string; params: unknown }[]>`
@@ -1196,7 +1196,7 @@ describeDb("second factors (WP3)", () => {
       expect(byProposer.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
 
       // ...nor approve one somebody else proposed; rejecting it is fine.
-      const e = await adminSession(await person({ role: "mpc_operator" }));
+      const e = await adminSession(await person({ role: "administrator" }));
       const change = await proposeChange(e, subject, freshAddress("moved"));
       expect(change.statusCode, change.body).toBe(200);
       const approve = await decideChange(aToken, change.json().id, 1, "approve");
@@ -1301,7 +1301,7 @@ describeDb("second factors (WP3)", () => {
       // locks while session 2's call starts, then session 1 spends the code — which revokes
       // session 2. Locking session before subject (0116) deadlocked here; subject first (0118)
       // makes session 2 wait, then find its session revoked.
-      const subject = await person({ role: "data_steward" });
+      const subject = await person({ role: "reviewer" });
       const codes = (await enrolPasskey(await login(subject), authenticator())).recoveryCodes as string[];
       await login(subject);
       await login(subject);

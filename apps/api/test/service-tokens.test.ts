@@ -61,7 +61,7 @@ describeDb("service tokens", () => {
     `;
     expect(roles.map((row) => row.role)).toEqual(["cre_reporter"]);
 
-    for (const role of ["mpc_operator", "data_steward", "public_reader"]) {
+    for (const role of ["administrator", "reviewer", "public_reader"]) {
       await expect(
         createServiceSubject(fx.sql, { tenantId: fx.tenantA, displayName: "x", role }),
       ).rejects.toBeInstanceOf(ServiceTokenError);

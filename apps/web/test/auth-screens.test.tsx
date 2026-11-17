@@ -207,7 +207,7 @@ describe("sign-in screen", () => {
       "POST /api/v1/auth/email/start": { accepted: true, message: "m", expiresInMinutes: 10 },
       "POST /api/v1/auth/email/verify": { expiresAt: "2030-01-01T00:00:00Z", aal: "aal2", subjectId: "person" },
     });
-    s.refresh.mockResolvedValue({ ...aal2, roleBindings: [{ role: "data_steward", organizationId: "o", projectId: null }], assuranceLevel: "identity_bound" });
+    s.refresh.mockResolvedValue({ ...aal2, roleBindings: [{ role: "reviewer", organizationId: "o", projectId: null }], assuranceLevel: "identity_bound" });
     render(<Connect />);
     type("Email address", "person@example.test");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
@@ -431,7 +431,7 @@ describe("second-factor screen", () => {
     expect(s.replace).toHaveBeenCalledWith("/w/access-pending");
     cleanup();
     s.replace.mockReset();
-    s.session = { ...aal2, roleBindings: [{ role: "data_steward", organizationId: "o", projectId: null }], assuranceLevel: "identity_bound" };
+    s.session = { ...aal2, roleBindings: [{ role: "project_member", organizationId: "o", projectId: null }], assuranceLevel: "identity_bound" };
     render(<SecondFactorPage />);
     expect(s.replace).toHaveBeenCalledWith("/w/projects");
   });

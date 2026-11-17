@@ -75,14 +75,14 @@ describe("administration safety workflows", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("offers an auditor the records but none of the changes", async () => {
+  it("offers an administrator the records but none of the changes", async () => {
     const saved = session.session.actions;
     session.session.actions = ["admin.read", "audit.read"];
     try {
       const data = routes();
-      data["GET /api/v1/admin/subjects"] = { items: [{ ...person, roles: [{ id: "b1", role: "data_steward", revokedAt: null }] }] };
+      data["GET /api/v1/admin/subjects"] = { items: [{ ...person, roles: [{ id: "b1", role: "reviewer", revokedAt: null }] }] };
       await mount(data);
-      await screen.findByText("data_steward", { exact: false });
+      expect(await screen.findAllByText("reviewer", { exact: false })).not.toHaveLength(0);
       for (const name of ["Set assurance", "Propose role", "Propose revocation", "Disable"]) {
         expect(screen.queryByRole("button", { name })).toBeNull();
       }
@@ -146,13 +146,15 @@ describe("administration safety workflows", () => {
     data["POST /api/v1/admin/role-grants"] = {};
     const calls = await mount(data);
     fireEvent.click(await screen.findByRole("button", { name: "Propose role" }));
-    change("Role", " data_steward ");
+    expect(Array.from((screen.getByLabelText("Role") as HTMLSelectElement).options).map(option => option.value))
+      .toEqual(["", "project_member", "reviewer", "administrator"]);
+    change("Role", "reviewer");
     change("Why", "Handles source records");
     fireEvent.submit(screen.getByLabelText("Role").closest("form")!);
     await waitFor(() =>
       expect(calls.find((call) => call.method === "POST")?.body).toEqual({
         subjectId: "person",
-        role: "data_steward",
+        role: "reviewer",
         reason: "Handles source records",
       }),
     );
@@ -166,7 +168,7 @@ describe("administration safety workflows", () => {
         {
           id: "own",
           subjectName: "Reviewer",
-          role: "reviewer_cp_qp",
+          role: "reviewer",
           state: "pending",
           requestedBySubjectId: "admin",
           reason: "Independent review",
@@ -184,7 +186,7 @@ describe("administration safety workflows", () => {
     const data = routes();
     const closed = {
       subjectName: "Reviewer",
-      role: "reviewer_cp_qp",
+      role: "reviewer",
       state: "pending",
       requestedBySubjectId: "other",
       reason: "Independent review",
@@ -194,7 +196,7 @@ describe("administration safety workflows", () => {
     data["GET /api/v1/admin/role-grants"] = {
       items: [
         { ...closed, id: "closed-grant" },
-        { ...closed, id: "open-grant", role: "reviewer_lab", closedReason: null },
+        { ...closed, id: "open-grant", role: "project_member", closedReason: null },
       ],
     };
     data["GET /api/v1/admin/role-revocations"] = {
@@ -202,9 +204,9 @@ describe("administration safety workflows", () => {
     };
     await mount(data);
     const grants = await screen.findByTestId("admin-role-grants");
-    expect(grants.textContent).toContain("reviewer_lab");
-    expect(grants.textContent).not.toContain("reviewer_cp_qp");
-    expect(screen.queryByTestId("admin-role-revocations")?.textContent ?? "").not.toContain("reviewer_cp_qp");
+    expect(grants.textContent).toContain("project_member");
+    expect(grants.textContent).not.toContain("reviewer");
+    expect(screen.queryByTestId("admin-role-revocations")?.textContent ?? "").not.toContain("reviewer");
   });
 
   it.each(["Approve", "Reject"])(
@@ -216,7 +218,7 @@ describe("administration safety workflows", () => {
           {
             id: "grant",
             subjectName: "Reviewer",
-            role: "reviewer_cp_qp",
+            role: "reviewer",
             state: "pending",
             requestedBySubjectId: "someone-else",
             reason: "Independent review",
@@ -347,7 +349,7 @@ describe("append-only administration records", () => {
   it("proposes revocation without removing the original role binding", async () => {
     const data = routes();
     data["GET /api/v1/admin/subjects"] = {
-      items: [{ ...person, roles: [{ id: "binding", role: "data_steward", revokedAt: null }] }],
+      items: [{ ...person, roles: [{ id: "binding", role: "reviewer", revokedAt: null }] }],
     };
     data["POST /api/v1/admin/role-revocations"] = {};
     const calls = await mount(data);
@@ -374,7 +376,7 @@ describe("append-only administration records", () => {
             id: "revoke",
             roleBindingId: "binding",
             subjectName: "Reviewer",
-            role: "data_steward",
+            role: "reviewer",
             reasonCode: "offboarding",
             reason: "Changed responsibilities",
             state: "pending",

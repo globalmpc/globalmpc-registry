@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
-import { normalizeEmail, ROLE_MINIMUM_ASSURANCE, satisfiesAssurance } from "@mpc/api-contract";
+import { normalizeEmail, HUMAN_ROLES, ROLE_MINIMUM_ASSURANCE, satisfiesAssurance } from "@mpc/api-contract";
 import type { AssuranceLevel } from "@mpc/api-contract";
 import { requireDeploymentOwner } from "./deploy-authority.js";
 import { ROLE_DEPLOY_BOUND } from "./audit.js";
@@ -107,6 +107,14 @@ export interface BootstrapResult {
   readonly enrolmentWindowOpened: boolean;
 }
 
+/** History aliases only; never accepted as new standing roles. */
+const LEGACY_ROLE_HISTORY: Readonly<Record<string, readonly string[]>> = {
+  administrator: ["mpc_operator", "security_operator", "auditor", "treasury_signer"],
+  reviewer: ["data_steward", "reviewer_cp_qp", "reviewer_lab", "reviewer_legal", "reviewer_assurance", "disclosure_approver", "gate_approver", "issuer_officer", "external_regulated_service_provider"],
+  project_member: ["project_admin", "project_sponsor_operator", "spv_representative", "execution_recorder", "protocol_proposer", "protocol_voter", "project_proposer", "project_voter"],
+};
+function roleHistory(role: string): string[] { return [role, ...(LEGACY_ROLE_HISTORY[role] ?? [])]; }
+
 const ASSURANCE_LEVELS: readonly AssuranceLevel[] = [
   "wallet_only",
   "identity_bound",
@@ -147,8 +155,8 @@ function validate(input: BootstrapInput): { email: string } {
   }
 
   const required = ROLE_MINIMUM_ASSURANCE[input.role];
-  if (required === undefined) {
-    const known = Object.keys(ROLE_MINIMUM_ASSURANCE).sort().join(", ");
+  if (required === undefined || !(HUMAN_ROLES as readonly string[]).includes(input.role)) {
+    const known = [...HUMAN_ROLES].sort().join(", ");
     throw new BootstrapError(`Unknown role — ${input.role}. Allowed values: ${known}`);
   }
 
@@ -399,7 +407,7 @@ async function refuseNewHolder(
     );
   }
   const [held] = await tx`
-    SELECT 1 FROM core.role_bindings WHERE tenant_id = ${tenantId} AND role = ${role} LIMIT 1
+    SELECT 1 FROM core.role_bindings WHERE tenant_id = ${tenantId} AND role = ANY(${roleHistory(role)}) LIMIT 1
   `;
   if (held) {
     throw new BootstrapError(
@@ -490,7 +498,7 @@ async function grantRole(
     SELECT count(*)::int AS count FROM core.role_bindings
     WHERE tenant_id = ${args.tenantId}
       AND subject_id = ${args.subjectId}
-      AND role = ${args.role}
+      AND role = ANY(${roleHistory(args.role)})
       AND revoked_at IS NOT NULL
   `;
   if (revoked!.count > 0) {

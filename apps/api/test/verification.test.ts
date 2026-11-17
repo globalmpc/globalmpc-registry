@@ -1,3 +1,4 @@
+import { withTenant } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
@@ -74,6 +75,9 @@ describeDb("Verification and EIP-712 signature", () => {
   let claimId: string;
   let stewardToken: string;
   let reviewerToken: string;
+  let resolverToken: string;
+  let resolverSubjectId: string;
+  let memberToken: string;
 
   // Generates a new key per run. wallet_address is globally UNIQUE on (address, chain_id),
   // so a fixed key collides with rows from earlier runs.
@@ -99,6 +103,15 @@ describeDb("Verification and EIP-712 signature", () => {
     stewardToken = await signIn(app, fx.stewardA);
     // The reviewer's DB address was changed, so it logs in directly with that key.
     reviewerToken = await signIn(app, { address: reviewerWallet as `0x${string}`, account: reviewerAccount });
+    for (const role of ["reviewer", "project_member"]) {
+      const subject=randomUUID();
+      await fx.sql`INSERT INTO core.subjects(id,tenant_id,kind,display_name,assurance_level)
+        VALUES(${subject},${fx.tenantA},'person',${`Dispute ${role}`},'high_assurance')`;
+      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
+        VALUES(${randomUUID()},${fx.tenantA},${subject},${role === "reviewer" ? fx.reviewOrgA : fx.orgA},${role})`;
+      const token=await issueTestSession(fx.appSql,fx.tenantA,subject,{firstFactor:"email_code",secondFactor:"passkey"});
+      if(role === "reviewer") {resolverToken=token;resolverSubjectId=subject;} else memberToken=token;
+    }
 
     const claim = await app.inject({
       method: "POST",
@@ -119,18 +132,18 @@ describeDb("Verification and EIP-712 signature", () => {
     await fx.close();
   });
 
-  async function createCase() {
+  async function createCase(evidenceClaimId = claimId, options: {credentialId?:string;schemaId?:string;conflictStatus?:"none"|"disclosed_resolved"} = {}) {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/verification-cases",
       headers: { authorization: `Bearer ${stewardToken}`, "idempotency-key": idempotencyKey() },
       payload: {
         projectId: fx.projectA,
-        schemaId: fx.schemaA,
-        claimIds: [claimId],
+        schemaId: options.schemaId ?? fx.schemaA,
+        claimIds: [evidenceClaimId],
         reviewerSubjectId: fx.reviewerSubjectA,
-        credentialId: fx.credentialA,
-        conflictStatus: "none",
+        credentialId: options.credentialId ?? fx.credentialA,
+        conflictStatus: options.conflictStatus ?? "none",
       },
     });
     return response.json() as { id: string; assignmentId: string; evidenceSnapshotHash: string };
@@ -347,9 +360,9 @@ describeDb("Verification and EIP-712 signature", () => {
   });
 
   describe("attestation disputes", () => {
-    async function signOne() {
-      const created = await createCase();
-      const draft = (await draftAttestation(created.id, created.assignmentId)).json();
+    async function signOne(evidenceClaimId = claimId, options: {credentialId?:string;schemaId?:string;conflictStatus?:"none"|"disclosed_resolved"} = {}) {
+      const created = await createCase(evidenceClaimId, options);
+      const draft = (await draftAttestation(created.id, created.assignmentId, {claimScope:[evidenceClaimId]})).json();
       const signatureRequest = (await requestSignature(draft.id)).json();
       const signature = await signTypedData(signatureRequest.typedData);
       await submitSignature(draft.id, {
@@ -359,12 +372,12 @@ describeDb("Verification and EIP-712 signature", () => {
       return draft.id as string;
     }
 
-    function dispute(attestationId: string, body: Record<string, unknown>) {
+    function dispute(attestationId: string, body: Record<string, unknown>, token = stewardToken) {
       return app.inject({
         method: "POST",
         url: `/api/v1/attestations/${attestationId}/disputes`,
         headers: {
-          authorization: `Bearer ${stewardToken}`,
+          authorization: `Bearer ${token}`,
           "idempotency-key": idempotencyKey(),
         },
         payload: body,
@@ -418,13 +431,13 @@ describeDb("Verification and EIP-712 signature", () => {
       expect(response.statusCode).toBe(400);
     });
 
-    function resolve(disputeId: string, body: Record<string, unknown>) {
+    function resolve(disputeId: string, body: Record<string, unknown>, token = resolverToken, key = idempotencyKey()) {
       return app.inject({
         method: "POST",
         url: `/api/v1/disputes/${disputeId}/resolution`,
         headers: {
-          authorization: `Bearer ${stewardToken}`,
-          "idempotency-key": idempotencyKey(),
+          authorization: `Bearer ${token}`,
+          "idempotency-key": key,
         },
         payload: body,
       });
@@ -438,6 +451,355 @@ describeDb("Verification and EIP-712 signature", () => {
       });
       return response.json().items as { id: string; resolvedAt: string | null }[];
     }
+
+    it.each(["none","disclosed_resolved"] as const)("restores standing only after every objection is dismissed (conflict=%s)", async (conflictStatus) => {
+      const created=await app.inject({method:"POST",url:`/api/v1/projects/${fx.projectA}/claims`,
+        headers:{authorization:`Bearer ${stewardToken}`,"idempotency-key":idempotencyKey()},
+        payload:{claimType:"mining_right_registration",valueText:"dispute standing",sourceCoordinate:{document:"extract",page:"2"},evidenceTier:"P1"}});
+      expect(created.statusCode,created.body).toBe(200);
+      const evidenceClaimId=created.json().id;
+      const standing=async()=> (await fx.sql`SELECT verification_state,grade FROM core.claims WHERE id=${evidenceClaimId}`)[0];
+      const attestationId=await signOne(evidenceClaimId,{conflictStatus}), before=await standing();
+      expect(before!.verification_state).toBe("analyst_checked");
+      expect((await dispute(attestationId,{reasonCode:"A",detail:"first"})).statusCode).toBe(200);
+      expect((await standing())!.verification_state).toBe("unreviewed");
+      expect((await standing())!.grade).not.toBe(before!.grade);
+      await dispute(attestationId,{reasonCode:"B",detail:"second"});
+      const objections=await disputeOf(attestationId);
+      expect((await resolve(objections[0]!.id,{outcome:"dismissed",resolution:"Checked first"})).statusCode).toBe(200);
+      expect((await standing())!.verification_state).toBe("unreviewed");
+      expect((await resolve(objections[1]!.id,{outcome:"dismissed",resolution:"Checked second"})).statusCode).toBe(200);
+      expect(await standing()).toEqual(before);
+    });
+
+    it("members can raise objections but only a separate independent reviewer can resolve them, including replays", async () => {
+      const attestationId=await signOne();
+      expect((await dispute(attestationId,{reasonCode:"X",detail:"Needs review"},memberToken)).statusCode).toBe(200);
+      const [raised]=await disputeOf(attestationId), key=idempotencyKey();
+      const body={outcome:"dismissed",resolution:"Independent source check"};
+      expect((await resolve(raised!.id,body,memberToken)).statusCode).toBe(403);
+      for(const token of [stewardToken,reviewerToken]) {
+        const denied=await resolve(raised!.id,body,token);
+        expect(denied.statusCode,denied.body).toBe(403);
+        expect(denied.json().code).toBe("DISPUTE_RESOLUTION_NOT_INDEPENDENT");
+      }
+      const accepted=await resolve(raised!.id,body,resolverToken,key);
+      expect(accepted.statusCode,accepted.body).toBe(200);
+      expect(accepted.json().attestationState).toBe("active");
+      expect((await resolve(raised!.id,body,memberToken,key)).statusCode).toBe(403);
+      const [saved]=await fx.sql`SELECT signature,state FROM core.verification_attestations WHERE id=${attestationId}`;
+      expect(saved!.signature).not.toBe("");expect(saved!.state).toBe("active");
+      const listed=await app.inject({method:"GET",url:`/api/v1/projects/${fx.projectA}/verification-cases`,headers:{authorization:`Bearer ${resolverToken}`}});
+      expect(listed.json().items).toEqual(expect.arrayContaining([expect.objectContaining({latestAttestation:{id:attestationId,state:"active"}})]));
+    });
+
+    it.each([false,true])("restores the same latest signed metadata with tied times and reversed insertion (reverse=%s)", async (reverse) => {
+      const original=await signOne(), ids=[randomUUID(),randomUUID()].sort(), newerDraft=randomUUID();
+      const [clock]=await fx.sql`SELECT now()+interval '1 second' AS at`;
+      for(const id of reverse ? [...ids].reverse() : ids) await fx.sql`
+        INSERT INTO core.verification_attestations
+        SELECT (jsonb_populate_record(NULL::core.verification_attestations,to_jsonb(a)||jsonb_build_object('id',${id}::text,'created_at',${clock!.at}::timestamptz))).*
+        FROM core.verification_attestations a WHERE a.id=${original}`;
+      await fx.sql`INSERT INTO core.verification_attestations
+        SELECT (jsonb_populate_record(NULL::core.verification_attestations,to_jsonb(a)||jsonb_build_object('id',${newerDraft}::text,'state','draft','signature','','created_at',${clock!.at}::timestamptz+interval '1 second'))).*
+        FROM core.verification_attestations a WHERE a.id=${original}`;
+      const list=await app.inject({method:"GET",url:`/api/v1/projects/${fx.projectA}/verification-cases`,headers:{authorization:`Bearer ${resolverToken}`}});
+      const [source]=await fx.sql`SELECT case_id FROM core.verification_attestations WHERE id=${original}`;
+      expect(list.json().items.find((row:{id:string})=>row.id===source!.case_id).latestAttestation).toEqual({id:ids[1],state:"signed"});
+    });
+
+    it.each(["revoked credential","expired credential","retired schema","new schema version","older activated schema","stale claim","new policy"])(
+      "records dismissal without restoring invalid support after %s", async (change) => {
+        const credentialId=randomUUID(), schemaId=randomUUID();
+        await fx.sql`INSERT INTO core.credentials SELECT (jsonb_populate_record(NULL::core.credentials,
+          to_jsonb(c)||jsonb_build_object('id',${credentialId}::text))).* FROM core.credentials c WHERE id=${fx.credentialA}`;
+        await fx.sql`INSERT INTO core.attestation_schemas SELECT (jsonb_populate_record(NULL::core.attestation_schemas,
+          to_jsonb(s)||jsonb_build_object('id',${schemaId}::text,'schema_key',${`restore-${schemaId}`}::text))).* FROM core.attestation_schemas s WHERE id=${fx.schemaA}`;
+        const created=await app.inject({method:"POST",url:`/api/v1/projects/${fx.projectA}/claims`,
+          headers:{authorization:`Bearer ${stewardToken}`,"idempotency-key":idempotencyKey()},
+          payload:{claimType:"mining_right_registration",valueText:`Restoration ${change}`,sourceCoordinate:{document:"extract",page:"3"},evidenceTier:"P1"}});
+        expect(created.statusCode,created.body).toBe(200);
+        const evidenceClaimId=created.json().id;
+        const attestationId=await signOne(evidenceClaimId,{credentialId,schemaId});
+        const [before]=await fx.sql`SELECT signature,payload_hash,credential_status_snapshot FROM core.verification_attestations WHERE id=${attestationId}`;
+        expect((await dispute(attestationId,{reasonCode:"DATE",detail:"Check the reference date"})).statusCode).toBe(200);
+        if(change === "revoked credential") await fx.sql`UPDATE core.credentials SET current_status='revoked',revoked_at=now() WHERE id=${credentialId}`;
+        if(change === "expired credential") await fx.sql`UPDATE core.credentials SET expires_at=now()-interval '1 hour' WHERE id=${credentialId}`;
+        if(change === "retired schema") await fx.sql`UPDATE core.attestation_schemas SET state='retired' WHERE id=${schemaId}`;
+        if(change === "new schema version" || change === "older activated schema") await fx.sql`INSERT INTO core.attestation_schemas SELECT (jsonb_populate_record(NULL::core.attestation_schemas,
+          to_jsonb(s)||jsonb_build_object('id',${randomUUID()}::text,'schema_version','2','created_at',now()-CASE WHEN ${change === "older activated schema"} THEN interval '1 year' ELSE interval '0' END))).* FROM core.attestation_schemas s WHERE id=${schemaId}`;
+        if(change === "stale claim") await fx.sql`UPDATE core.claims SET stale_since=now(),stale_reason='Source withdrawn during dispute' WHERE id=${evidenceClaimId}`;
+        if(change === "new policy") await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+          VALUES(${randomUUID()},${fx.tenantA},${`restore-${schemaId}`},'1','registry_publication','MNG',now()-interval '1 minute','{}','effective')`;
+        const [objection]=await disputeOf(attestationId);
+        const response=await resolve(objection!.id,{outcome:"dismissed",resolution:"Date checked; current review basis still needs attention"});
+        expect(response.statusCode,response.body).toBe(200);
+        expect(response.json().attestationState).toBe("stale_candidate");
+        const [after]=await fx.sql`SELECT signature,payload_hash,credential_status_snapshot,state,stale_reason FROM core.verification_attestations WHERE id=${attestationId}`;
+        expect(after).toMatchObject(before!);expect(after!.stale_reason).toContain("Current review basis changed");
+        const [claim]=await fx.sql`SELECT verification_state FROM core.claims WHERE id=${evidenceClaimId}`;
+        expect(claim!.verification_state).toBe("unreviewed");
+        expect((await disputeOf(attestationId))[0]!.resolvedAt).not.toBeNull();
+      },
+    );
+
+    it("requires known resolver organization and accepts current credential provenance", async () => {
+      const attestationId=await signOne();await dispute(attestationId,{reasonCode:"X",detail:"Check"});
+      const [objection]=await disputeOf(attestationId), key=idempotencyKey(), body={outcome:"dismissed",resolution:"Checked"};
+      const unknownBinding=randomUUID();
+      await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE subject_id=${resolverSubjectId} AND revoked_at IS NULL`;
+      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,role) VALUES(${unknownBinding},${fx.tenantA},${resolverSubjectId},'reviewer')`;
+      const credential=randomUUID();
+      try {
+        const unknown=await resolve(objection!.id,body,resolverToken,key);
+        expect(unknown.statusCode,unknown.body).toBe(403);expect(unknown.json().code).toBe("DISPUTE_RESOLUTION_NOT_INDEPENDENT");
+        expect((await disputeOf(attestationId))[0]!.resolvedAt).toBeNull();
+        await fx.sql`INSERT INTO core.credentials(id,tenant_id,subject_id,organization_id,issuer_reference,credential_type,issued_at)
+          VALUES(${credential},${fx.tenantA},${resolverSubjectId},${fx.reviewOrgA},'Independent organization','competent_person',now()-interval '1 day')`;
+        const known=await resolve(objection!.id,body,resolverToken,key);
+        expect(known.statusCode,known.body).toBe(200);expect(known.json().attestationState).toBe("active");
+      } finally {
+        await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE id=${unknownBinding}`;
+        await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role) VALUES(${randomUUID()},${fx.tenantA},${resolverSubjectId},${fx.reviewOrgA},'reviewer')`;
+      }
+    });
+
+    it.each(["before","after","reactivated"])("tracks actual schema activation %s signing, independently of creation order", async (timing) => {
+      const first=randomUUID(),second=randomUUID(),family=`epoch-${first}`;
+      await fx.sql`INSERT INTO core.attestation_schemas SELECT (jsonb_populate_record(NULL::core.attestation_schemas,
+        to_jsonb(s)||jsonb_build_object('id',${first}::text,'schema_key',${family}::text))).* FROM core.attestation_schemas s WHERE id=${fx.schemaA}`;
+      await fx.sql`INSERT INTO core.attestation_schemas SELECT (jsonb_populate_record(NULL::core.attestation_schemas,
+        to_jsonb(s)||jsonb_build_object('id',${second}::text,'schema_version','2','state',${timing === "after" ? "draft" : "active"}::text,'created_at',now()-interval '1 year'))).* FROM core.attestation_schemas s WHERE id=${first}`;
+      const attestationId=await signOne(claimId,{schemaId:timing === "after" ? first : second});
+      const [before]=await fx.sql`SELECT signature,payload_hash,schema_activation_epoch FROM core.verification_attestations WHERE id=${attestationId}`;
+      expect(before!.schema_activation_epoch).not.toBeNull();
+      await dispute(attestationId,{reasonCode:"X",detail:"Check"});
+      if(timing === "after") await fx.sql`UPDATE core.attestation_schemas SET state='active' WHERE id=${second}`;
+      if(timing === "reactivated") {
+        await fx.sql`UPDATE core.attestation_schemas SET state='retired' WHERE id=${first}`;
+        await fx.sql`UPDATE core.attestation_schemas SET state='active' WHERE id=${first}`;
+      }
+      const [objection]=await disputeOf(attestationId);
+      const dismissed=await resolve(objection!.id,{outcome:"dismissed",resolution:"Checked original finding"});
+      expect(dismissed.statusCode,dismissed.body).toBe(200);
+      expect(dismissed.json().attestationState).toBe(timing === "before" ? "active" : "stale_candidate");
+      const [after]=await fx.sql`SELECT signature,payload_hash,schema_activation_epoch FROM core.verification_attestations WHERE id=${attestationId}`;
+      expect(after).toEqual(before);
+    });
+
+    it("keeps activation clocks tenant scoped, read only and frozen after signing", async () => {
+      const attestationId=await signOne();
+      const foreignSchema=randomUUID();
+      await fx.sql`INSERT INTO core.attestation_schemas SELECT (jsonb_populate_record(NULL::core.attestation_schemas,
+        to_jsonb(s)||jsonb_build_object('id',${foreignSchema}::text,'tenant_id',${fx.tenantB}::text))).* FROM core.attestation_schemas s WHERE id=${fx.schemaA}`;
+      await fx.sql`UPDATE core.attestation_schemas SET state='retired' WHERE id=${foreignSchema}`;
+      await fx.sql`UPDATE core.attestation_schemas SET state='active' WHERE id=${foreignSchema}`;
+      const foreign=await fx.sql`SELECT * FROM core.schema_activation_clocks WHERE tenant_id=${fx.tenantB}`;
+      expect(foreign.length).toBeGreaterThan(0);
+      const own=await withTenant(fx.appSql,{tenantId:fx.tenantA},async tx=>{
+        const [role]=await tx`SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user`;
+        expect(role).toMatchObject({rolsuper:false,rolbypassrls:false});
+        expect(await tx`SELECT * FROM core.schema_activation_clocks WHERE tenant_id=${fx.tenantB}`).toEqual([]);
+        return tx`SELECT * FROM core.schema_activation_clocks WHERE tenant_id=${fx.tenantA}`;
+      });
+      expect(own.length).toBeGreaterThan(0);
+      expect(await fx.appSql`SELECT * FROM core.schema_activation_clocks`).toEqual([]);
+      await expect(withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>tx`UPDATE core.schema_activation_clocks SET epoch=epoch+1`)).rejects.toMatchObject({code:"42501"});
+      await expect(withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>tx`INSERT INTO core.schema_activation_clocks(tenant_id,schema_key,epoch) VALUES(${fx.tenantA},'forged',999)`)).rejects.toMatchObject({code:"42501"});
+      await expect(fx.sql`UPDATE core.verification_attestations SET schema_activation_epoch=schema_activation_epoch+1 WHERE id=${attestationId}`).rejects.toMatchObject({code:"42501"});
+      await dispute(attestationId,{reasonCode:"X",detail:"Check source"});
+      const [objection]=await disputeOf(attestationId);
+      const restored=await resolve(objection!.id,{outcome:"dismissed",resolution:"Other-tenant schema activation is unrelated"});
+      expect(restored.statusCode,restored.body).toBe(200);expect(restored.json().attestationState).toBe("active");
+    });
+
+    it("blocks a resolver whose current credential belongs to the operator, including cached replays", async () => {
+      const attestationId=await signOne();
+      await dispute(attestationId,{reasonCode:"X",detail:"Check scope"});
+      const [objection]=await disputeOf(attestationId), credential=randomUUID();
+      await fx.sql`INSERT INTO core.credentials(id,tenant_id,subject_id,organization_id,issuer_reference,credential_type,issued_at,expires_at)
+        VALUES(${credential},${fx.tenantA},${resolverSubjectId},${fx.orgA},'Operator affiliation','competent_person',now()-interval '1 day',now()+interval '1 day')`;
+      const body={outcome:"dismissed",resolution:"Review by an independent person"}, key=idempotencyKey();
+      const denied=await resolve(objection!.id,body,resolverToken,key);
+      expect(denied.statusCode,denied.body).toBe(403);
+      expect(denied.json().code).toBe("DISPUTE_RESOLUTION_NOT_INDEPENDENT");
+      expect((await disputeOf(attestationId))[0]!.resolvedAt).toBeNull();
+      // Expiry is checked live even before a background job refreshes current_status.
+      await fx.sql`UPDATE core.credentials SET expires_at=now()-interval '1 hour' WHERE id=${credential}`;
+      expect((await resolve(objection!.id,body,resolverToken,key)).statusCode).toBe(200);
+      await fx.sql`UPDATE core.credentials SET expires_at=now()+interval '1 day' WHERE id=${credential}`;
+      expect((await resolve(objection!.id,body,resolverToken,key)).statusCode).toBe(403);
+      await fx.sql`UPDATE core.credentials SET expires_at=now()-interval '1 hour' WHERE id=${credential}`;
+    });
+
+    it("a reviewer cannot resolve an objection they raised", async () => {
+      const attestationId=await signOne();
+      expect((await dispute(attestationId,{reasonCode:"X",detail:"Independent concern"},resolverToken)).statusCode).toBe(200);
+      const [raised]=await disputeOf(attestationId);
+      const denied=await resolve(raised!.id,{outcome:"dismissed",resolution:"Self dismissal"});
+      expect(denied.statusCode,denied.body).toBe(403);
+      expect(denied.json().code).toBe("DISPUTE_RESOLUTION_NOT_INDEPENDENT");
+    });
+
+    it.each([["upheld","dismissed"],["dismissed","upheld"]])("an upheld outcome outranks a later or earlier dismissal (%s then %s)", async (first,second) => {
+      const attestationId=await signOne();
+      await dispute(attestationId,{reasonCode:"A",detail:"First"});await dispute(attestationId,{reasonCode:"B",detail:"Second"});
+      const raised=await disputeOf(attestationId);
+      expect((await resolve(raised[0]!.id,{outcome:first,resolution:"Checked first"})).statusCode).toBe(200);
+      const last=await resolve(raised[1]!.id,{outcome:second,resolution:"Checked second"});
+      expect(last.statusCode,last.body).toBe(200);expect(last.json().attestationState).toBe("disputed");
+      const [saved]=await fx.sql`SELECT state FROM core.verification_attestations WHERE id=${attestationId}`;expect(saved!.state).toBe("disputed");
+    });
+
+    it("leaves resolution pending while evidence is locked and retries with the same key", async () => {
+      const attestationId=await signOne();
+      await dispute(attestationId,{reasonCode:"X",detail:"Check source"});
+      const [raised]=await disputeOf(attestationId), key=idempotencyKey(), body={outcome:"dismissed",resolution:"Checked"};
+      const signingCase=await createCase(), draft=(await draftAttestation(signingCase.id,signingCase.assignmentId)).json();
+      const request=(await requestSignature(draft.id)).json(), signingKey=idempotencyKey();
+      const signature={signatureRequestId:request.signatureRequestId,signature:await signTypedData(request.typedData)};
+      await fx.sql.begin(async hold=>{
+        await hold`SELECT pg_advisory_xact_lock(hashtextextended(${`ledger-project:${fx.tenantA}:${fx.projectA}`},0))`;
+        const busy=await resolve(raised!.id,body,resolverToken,key);
+        expect(busy.statusCode,busy.body).toBe(503);expect(busy.json().code).toBe("DISPUTE_EVIDENCE_BUSY");
+        expect((await disputeOf(attestationId))[0]!.resolvedAt).toBeNull();
+        const signing=await submitSignature(draft.id,signature,reviewerToken,signingKey);
+        expect(signing.statusCode,signing.body).toBe(503);expect(signing.json().code).toBe("ATTESTATION_EVIDENCE_BUSY");
+      });
+      expect((await resolve(raised!.id,body,resolverToken,key)).statusCode).toBe(200);
+      expect((await submitSignature(draft.id,signature,reviewerToken,signingKey)).statusCode).toBe(200);
+    });
+
+    it("serializes issuer suspension against both restoration and final signing", async () => {
+      const issuer=randomUUID(),credentialId=randomUUID();
+      await fx.sql`INSERT INTO core.authorities SELECT (jsonb_populate_record(NULL::core.authorities,
+        to_jsonb(a)||jsonb_build_object('id',${issuer}::text,'name',${`race-${issuer}`}::text))).* FROM core.authorities a WHERE id=${fx.issuerAuthorityA}`;
+      await fx.sql`INSERT INTO core.credentials SELECT (jsonb_populate_record(NULL::core.credentials,
+        to_jsonb(c)||jsonb_build_object('id',${credentialId}::text,'issuer_authority_id',${issuer}::text))).* FROM core.credentials c WHERE id=${fx.credentialA}`;
+      expect(await fx.sql`SELECT id FROM core.source_connections WHERE authority_id=${issuer}`).toEqual([]);
+      const claim=await app.inject({method:"POST",url:`/api/v1/projects/${fx.projectA}/claims`,
+        headers:{authorization:`Bearer ${stewardToken}`,"idempotency-key":idempotencyKey()},
+        payload:{claimType:"mining_right_registration",valueText:`Issuer ${issuer}`,sourceCoordinate:{document:"registry",page:"1"},evidenceTier:"P1"}});
+      expect(claim.statusCode,claim.body).toBe(200);
+      const evidenceClaimId=claim.json().id, attestationId=await signOne(evidenceClaimId,{credentialId});
+      await dispute(attestationId,{reasonCode:"X",detail:"Check original evidence"});
+      const [objection]=await disputeOf(attestationId), key=idempotencyKey(), body={outcome:"dismissed",resolution:"Finding checked"};
+      const next=await createCase(evidenceClaimId,{credentialId});
+      const draft=(await draftAttestation(next.id,next.assignmentId,{claimScope:[evidenceClaimId]})).json();
+      const request=(await requestSignature(draft.id)).json(), signingKey=idempotencyKey();
+      const signature={signatureRequestId:request.signatureRequestId,signature:await signTypedData(request.typedData)};
+      await fx.sql.begin(async writer=>{
+        await writer`UPDATE core.authorities SET state='suspended',state_reason='Issuer review' WHERE id=${issuer}`;
+        const restoration=await resolve(objection!.id,body,resolverToken,key);
+        expect(restoration.statusCode,restoration.body).toBe(503);expect(restoration.json().code).toBe("DISPUTE_EVIDENCE_BUSY");
+        const signing=await submitSignature(draft.id,signature,reviewerToken,signingKey);
+        expect(signing.statusCode,signing.body).toBe(503);expect(signing.json().code).toBe("ATTESTATION_EVIDENCE_BUSY");
+        expect((await disputeOf(attestationId))[0]!.resolvedAt).toBeNull();
+      });
+      const restoration=await resolve(objection!.id,body,resolverToken,key);
+      expect(restoration.statusCode,restoration.body).toBe(200);expect(restoration.json().attestationState).toBe("stale_candidate");
+      const signing=await submitSignature(draft.id,signature,reviewerToken,signingKey);
+      expect(signing.statusCode,signing.body).toBe(422);expect(signing.json().code).toBe("ATTESTATION_ACCEPTANCE_BLOCKED");
+      const [standing]=await fx.sql`SELECT verification_state FROM core.claims WHERE id=${evidenceClaimId}`;
+      expect(standing!.verification_state).toBe("unreviewed");
+    });
+
+    it("serializes operator-affiliation grants for the signer and dispute resolver", async () => {
+      const created=await app.inject({method:"POST",url:`/api/v1/projects/${fx.projectA}/claims`,
+        headers:{authorization:`Bearer ${stewardToken}`,"idempotency-key":idempotencyKey()},
+        payload:{claimType:"mining_right_registration",valueText:"Affiliation race",sourceCoordinate:{page:"1"},evidenceTier:"P1"}});
+      expect(created.statusCode,created.body).toBe(200);const evidenceClaimId=created.json().id;
+      const attestationId=await signOne(evidenceClaimId);
+      await dispute(attestationId,{reasonCode:"X",detail:"Check"});
+      const [objection]=await disputeOf(attestationId), key=idempotencyKey(), body={outcome:"dismissed",resolution:"Finding checked"};
+      const next=await createCase(evidenceClaimId), draft=(await draftAttestation(next.id,next.assignmentId,{claimScope:[evidenceClaimId]})).json();
+      const request=(await requestSignature(draft.id)).json(), signingKey=idempotencyKey();
+      const signature={signatureRequestId:request.signatureRequestId,signature:await signTypedData(request.typedData)};
+      const signerGrant=randomUUID(),resolverGrant=randomUUID();
+      try {
+        await fx.sql.begin(async writer=>{
+          await writer`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
+            VALUES(${signerGrant},${fx.tenantA},${fx.reviewerSubjectA},${fx.orgA},'project_member'),
+              (${resolverGrant},${fx.tenantA},${resolverSubjectId},${fx.orgA},'project_member')`;
+          const signing=await submitSignature(draft.id,signature,reviewerToken,signingKey);
+          expect(signing.statusCode,signing.body).toBe(503);expect(signing.json().code).toBe("ATTESTATION_EVIDENCE_BUSY");
+          const resolution=await resolve(objection!.id,body,resolverToken,key);
+          expect(resolution.statusCode,resolution.body).toBe(503);expect(resolution.json().code).toBe("DISPUTE_EVIDENCE_BUSY");
+          expect((await disputeOf(attestationId))[0]!.resolvedAt).toBeNull();
+        });
+        const signing=await submitSignature(draft.id,signature,reviewerToken,signingKey);
+        expect(signing.statusCode,signing.body).toBe(422);expect(signing.json().code).toBe("ATTESTATION_OPERATOR_NOT_INDEPENDENT");
+        const resolution=await resolve(objection!.id,body,resolverToken,key);
+        expect(resolution.statusCode,resolution.body).toBe(403);expect(resolution.json().code).toBe("DISPUTE_RESOLUTION_NOT_INDEPENDENT");
+        expect((await disputeOf(attestationId))[0]!.resolvedAt).toBeNull();
+        await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE id=${resolverGrant}`;
+        const checked=await resolve(objection!.id,body,resolverToken,key);
+        expect(checked.statusCode,checked.body).toBe(200);expect(checked.json().attestationState).toBe("stale_candidate");
+        const [claim]=await fx.sql`SELECT verification_state FROM core.claims WHERE id=${evidenceClaimId}`;
+        expect(claim!.verification_state).toBe("unreviewed");
+      } finally {
+        await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE id=ANY(${[signerGrant,resolverGrant]}::uuid[]) AND revoked_at IS NULL`;
+      }
+      expect((await submitSignature(draft.id,signature,reviewerToken,signingKey)).statusCode).toBe(200);
+    });
+
+    it("observes assignment revocation committed while final signing waits", async () => {
+      const opened=await createCase(), drafted=(await draftAttestation(opened.id,opened.assignmentId)).json();
+      const request=(await requestSignature(drafted.id)).json();
+      const body={signatureRequestId:request.signatureRequestId,signature:await signTypedData(request.typedData)};
+      let pending!:ReturnType<typeof submitSignature>;
+      await fx.sql.begin(async writer=>{
+        // Same row scope and lock order as the curator assignment-revocation route.
+        await writer`SELECT asg.id FROM core.assignments asg JOIN core.verification_cases vc ON vc.id=asg.case_id
+          WHERE asg.id=${opened.assignmentId} FOR UPDATE OF asg,vc`;
+        await writer`UPDATE core.assignments SET revoked_at=now(),revoke_reason='Reviewer withdrawn' WHERE id=${opened.assignmentId}`;
+        pending=submitSignature(drafted.id,body);
+        const deadline=Date.now()+3000;let waiting=false;
+        while(Date.now()<deadline) {
+          const [row]=await fx.sql`SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+            WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%core.verification_%') AS waiting`;
+          if(row!.waiting){waiting=true;break;}
+          await new Promise(done=>setTimeout(done,10));
+        }
+        expect(waiting).toBe(true);
+      });
+      const denied=await pending;
+      expect(denied.statusCode,denied.body).toBe(422);expect(denied.json().code).toBe("ATTESTATION_ACCEPTANCE_BLOCKED");
+      const [saved]=await fx.sql`SELECT state,signature FROM core.verification_attestations WHERE id=${drafted.id}`;
+      expect(saved).toMatchObject({state:"draft",signature:""});
+    });
+
+    it("does not resurrect a cancelled case using a previously issued signature request", async () => {
+      const opened=await createCase(), drafted=(await draftAttestation(opened.id,opened.assignmentId)).json();
+      const request=(await requestSignature(drafted.id)).json();
+      const cancelled=await app.inject({method:"POST",url:`/api/v1/verification-cases/${opened.id}/transitions`,headers:{authorization:`Bearer ${stewardToken}`,"idempotency-key":idempotencyKey(),"if-match":'"2"'},payload:{toState:"cancelled",reason:"Curator withdrew this review"}});
+      expect(cancelled.statusCode,cancelled.body).toBe(200);
+      const denied=await submitSignature(drafted.id,{signatureRequestId:request.signatureRequestId,signature:await signTypedData(request.typedData)});
+      expect(denied.statusCode,denied.body).toBe(422);expect(denied.json().code).toBe("ATTESTATION_ACCEPTANCE_BLOCKED");
+      const [saved]=await fx.sql`SELECT state FROM core.verification_cases WHERE id=${opened.id}`;
+      expect(saved!.state).toBe("cancelled");
+    });
+
+    it("concurrent dismissals serialize on their attestation and restore it exactly once", async () => {
+      const attestationId=await signOne();
+      await dispute(attestationId,{reasonCode:"A",detail:"First"});await dispute(attestationId,{reasonCode:"B",detail:"Second"});
+      const raised=await disputeOf(attestationId);
+      let pending!:Promise<Awaited<ReturnType<typeof resolve>>[]>;
+      await fx.sql.begin(async hold=>{
+        await hold`SELECT id FROM core.verification_attestations WHERE id=${attestationId} FOR UPDATE`;
+        pending=Promise.all(raised.map(row=>resolve(row.id,{outcome:"dismissed",resolution:"Checked"})));
+        const deadline=Date.now()+3000;
+        while(Date.now()<deadline) {
+          const [waiting]=await fx.sql`SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FOR UPDATE OF a%'`;
+          if(waiting!.n>=2) return;
+          await new Promise(done=>setTimeout(done,10));
+        }
+        throw new Error("Both dispute resolutions did not wait for their attestation lock");
+      });
+      const results=await pending;expect(results.map(r=>r.statusCode)).toEqual([200,200]);
+      const [saved]=await fx.sql`SELECT state FROM core.verification_attestations WHERE id=${attestationId}`;expect(saved!.state).toBe("active");
+    });
 
     it("dismissing restores the review to valid", async () => {
       const attestationId = await signOne();
@@ -486,7 +848,12 @@ describeDb("Verification and EIP-712 signature", () => {
       const attestationId = await signOne();
       await dispute(attestationId, { reasonCode: "X", detail: "please check" });
       const [raised] = await disputeOf(attestationId);
-      await resolve(raised!.id, { outcome: "dismissed", resolution: "no issue" });
+      await fx.sql`UPDATE core.verification_attestations SET state='stale_candidate' WHERE id=${attestationId}`;
+      const resolved=await resolve(raised!.id, { outcome: "dismissed", resolution: "no issue" });
+      expect(resolved.statusCode,resolved.body).toBe(200);
+      expect(resolved.json().attestationState).toBe("stale_candidate");
+      const [stored]=await fx.sql`SELECT state FROM core.verification_attestations WHERE id=${attestationId}`;
+      expect(stored!.state).toBe("stale_candidate");
 
       const after = await disputeOf(attestationId);
       // Deleting it would erase the fact that "an issue was once raised".
@@ -594,17 +961,18 @@ describeDb("Verification and EIP-712 signature", () => {
     expect(response.json().code).toBe("SIGNATURE_SIGNER_MISMATCH");
   });
 
-  it("invalidates the signature request when evidence changes", async () => {
+  it("freezes the evidence manifest and hash after requesting a signature", async () => {
     const created = await createCase();
     const draft = (await draftAttestation(created.id, created.assignmentId)).json();
     const signatureRequest = (await requestSignature(draft.id)).json();
 
-    // Changes evidence after the request.
-    await fx.sql`
-      UPDATE core.verification_cases
-      SET evidence_snapshot_hash = ${"0x" + "ff".repeat(32)}
+    await expect(fx.sql`
+      UPDATE core.verification_cases SET evidence_snapshot_hash = ${"0x" + "ff".repeat(32)}
       WHERE id = ${created.id}
-    `;
+    `).rejects.toThrow("immutable");
+    await expect(fx.sql`
+      UPDATE core.verification_cases SET evidence_snapshot = NULL WHERE id = ${created.id}
+    `).rejects.toThrow("immutable");
 
     const signature = await signTypedData(signatureRequest.typedData);
     const response = await submitSignature(draft.id, {
@@ -612,8 +980,7 @@ describeDb("Verification and EIP-712 signature", () => {
       signature,
     });
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json().code).toBe("EVIDENCE_SNAPSHOT_CHANGED");
+    expect(response.statusCode, response.body).toBe(200);
   });
 
   it("cannot modify the body after signing", async () => {
@@ -753,7 +1120,7 @@ describeDb("Verification and EIP-712 signature", () => {
         INSERT INTO core.role_bindings (
           id, tenant_id, subject_id, organization_id, project_id, role
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, ${fx.otherProjectA}, 'reviewer_cp_qp'
+          ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, ${fx.otherProjectA}, 'reviewer'
         )
       `;
       return signIn(app, account);
@@ -940,7 +1307,7 @@ describeDb("Verification and EIP-712 signature", () => {
       }
     });
 
-    it("finishes an already-locked acceptance before suspension and preserves that signed history", async () => {
+    it("observes suspension committed while waiting for the attestation lock", async () => {
       const prepared = await pending();
       const locked = deferred();
       const release = deferred();
@@ -954,18 +1321,20 @@ describeDb("Verification and EIP-712 signature", () => {
       let suspension: Promise<unknown> | undefined;
       try {
         submitted = submitSignature(prepared.attestationId, prepared.body, stewardToken);
-        await waitForBlocked("UPDATE core.verification_attestations");
+        await waitForBlocked("FOR UPDATE OF a, asg, vc");
         suspension = fx.sql.begin(async (tx) => {
           await tx`UPDATE core.subjects SET suspended_at = now() WHERE id = ${fx.reviewerSubjectA}`;
         });
-        await waitForBlocked("UPDATE core.subjects SET suspended_at");
+        await suspension;
         release.resolve();
         await heldAttestation;
         const accepted = await submitted;
-        expect(accepted.statusCode, accepted.body).toBe(200);
+        expect(accepted.statusCode, accepted.body).toBe(422);
+        expect(accepted.json().code).toBe("SUBJECT_SUSPENDED");
+        await expectPending(prepared.attestationId, prepared.body.signatureRequestId);
         await suspension;
         const [signed] = await fx.sql`SELECT state, signature, signer_wallet_address FROM core.verification_attestations WHERE id = ${prepared.attestationId}`;
-        expect(signed).toMatchObject({ state: "signed", signature: prepared.body.signature, signer_wallet_address: reviewerWallet });
+        expect(signed).toMatchObject({ state: "draft", signature: "", signer_wallet_address: "0x0000000000000000000000000000000000000000" });
         const [subject] = await fx.sql`SELECT suspended_at FROM core.subjects WHERE id = ${fx.reviewerSubjectA}`;
         expect(subject!.suspended_at).not.toBeNull();
       } finally {

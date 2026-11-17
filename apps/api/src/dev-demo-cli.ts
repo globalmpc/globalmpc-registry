@@ -15,7 +15,7 @@ try {
   const store = createS3ObjectStore({ bucket: required("OBJECT_BUCKET"), region: required("OBJECT_REGION"), sse: "aes256" });
   sql = postgres(required("DATABASE_URL"), { onnotice: () => {}, connection: { TimeZone: "UTC" } });
   const result = await seedDevDemo(sql, store, {
-    environment, chainId, tenantSlug: required("DEMO_TENANT_SLUG"),
+    environment, chainId, includeStageProjects: true, tenantSlug: required("DEMO_TENANT_SLUG"),
     ...(process.env["DEMO_OWNER_ORGANIZATION_NAME"] ? { ownerOrganizationName: process.env["DEMO_OWNER_ORGANIZATION_NAME"] } : {}),
   });
   process.stdout.write(`${JSON.stringify({ msg: "dev_demo.complete", ...result })}\n`);

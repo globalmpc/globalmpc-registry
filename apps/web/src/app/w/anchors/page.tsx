@@ -25,7 +25,12 @@ import { moveRefusalText, moveWaitText } from "./move-text";
  * facts, and the difference sets the `included` field of the public proof.
  */
 export default function AnchorsPage() {
-  const { token, session, loading: sessionLoading } = useSession();
+  const context = useSession();
+  return <AnchorsForSession key={JSON.stringify([context.token, context.session?.tenantId, context.session?.subjectId, context.loading])} {...context} />;
+}
+
+function AnchorsForSession({ token, session, loading: sessionLoading }: ReturnType<typeof useSession>) {
+  const mayRead = can(session, "anchor.read");
   // Resubmitting is `anchor.submit` (guidance; the server decides).
   const maySubmit = can(session, "anchor.submit");
   const [items, setItems] = useState<AnchorBatchStatus[]>([]);
@@ -36,7 +41,7 @@ export default function AnchorsPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    if (!token) return;
+    if (!token || !mayRead) return;
     try {
       const data = await listAnchorBatches(token);
       setItems(data.items);
@@ -47,16 +52,16 @@ export default function AnchorsPage() {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, mayRead]);
 
   useEffect(() => {
-    if (sessionLoading) return;
+    if (sessionLoading || !token || !mayRead) return;
     void load();
     // The worker changes chain state externally. Without periodic re-reads the screen
     // still shows "submitting" after confirmation.
     const timer = setInterval(() => void load(), 5000);
     return () => clearInterval(timer);
-  }, [load, sessionLoading]);
+  }, [load, sessionLoading, token, mayRead]);
 
   /**
    * Resubmit a stuck batch.
@@ -85,6 +90,10 @@ export default function AnchorsPage() {
         No account is connected. <Link href="/">Connect an account →</Link>
       </p>
     );
+  }
+
+  if (!sessionLoading && !mayRead) {
+    return <p className="sub">You do not have access to anchor operations. <Link href="/">Inspect published project proofs →</Link></p>;
   }
 
   const attention = items.filter((item) => item.needsAttention);

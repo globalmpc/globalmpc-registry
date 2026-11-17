@@ -18,7 +18,7 @@ const auth = vi.hoisted(() => ({
   session: {
     authenticated: true,
     subjectId: "reviewer",
-    roleBindings: [{ role: "mpc_operator" }, { role: "disclosure_approver" }],
+    roleBindings: [{ role: "administrator" }, { role: "reviewer" }],
     actions: ["gate.decide", "readiness.recompute"] as string[],
   },
   signTypedData: vi.fn(),
@@ -28,8 +28,8 @@ beforeEach(() => {
   auth.token = "token";
   auth.session.subjectId = "reviewer";
   auth.session.roleBindings = [
-    { role: "mpc_operator" },
-    { role: "disclosure_approver" },
+    { role: "administrator" },
+    { role: "reviewer" },
   ];
   auth.signTypedData.mockReset().mockResolvedValue("0xsigned");
 });
@@ -137,7 +137,7 @@ describe("signed gate decisions", () => {
     const saved = auth.session;
     auth.session = {
       ...saved,
-      roleBindings: [{ role: "gate_approver" }],
+      roleBindings: [{ role: "reviewer" }],
       actions: ["readiness.recompute"],
       assuranceLevel: "wallet_only",
     } as typeof saved;
@@ -145,7 +145,7 @@ describe("signed gate decisions", () => {
       mockHttp({ "GET /api/v1/projects/p1/readiness-policy-options?gateId=publication": { items: [{ id: "actual-policy", ruleSetId: "publication", version: "1", gateId: "publication", jurisdictionProfile: "MNG", effectiveFrom: "2026-01-01T00:00:00Z" }] },
       "POST /api/v1/projects/p1/readiness-assessments": assessment() });
       await mount(Gate);
-      expect(screen.getByTestId("assurance-notice").textContent).toContain("gate_approver");
+      expect(screen.getByTestId("assurance-notice").textContent).toContain("reviewer");
       fireEvent.click(screen.getByText("Load current readiness"));
       await screen.findByText("1 requirements are on watch");
       fireEvent.change(screen.getByLabelText("Rationale (required)"), { target: { value: "Wait" } });
@@ -305,7 +305,7 @@ describe("publication separation of duties", () => {
     await mount(Publication);
     await screen.findByText("This account cannot draft or publish");
     cleanup();
-    auth.session.roleBindings = [{ role: "mpc_operator" }];
+    auth.session.roleBindings = [{ role: "administrator" }];
     mockHttp({
       ...publicationRoutes(),
       "POST /api/v1/registry-entries": failure(),

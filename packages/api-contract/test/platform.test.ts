@@ -19,7 +19,7 @@ import {
 import { NINE_STRUCTURES, schemaFields, type StructureLink } from "../src/structures.js";
 
 const ACTOR: AuthorizationContext = {
-  role: "reviewer_legal",
+  role: "reviewer",
   assuranceLevel: "high_assurance",
   actorTenantId: "tenant-a",
   actorProjectIds: "all",
@@ -40,7 +40,7 @@ const RESOURCE: ResourceContext = {
   separationSensitive: false,
 };
 
-const POLICY = { action: "verification.read", allowedRoles: ["reviewer_legal"] };
+const POLICY = { action: "verification.read", allowedRoles: ["reviewer"] };
 
 describe("jurisdiction[] condition (02 §2.5)", () => {
   it("allows a scoped binding on a project hosted in its jurisdiction", () => {
@@ -125,7 +125,7 @@ describe("break-glass role (02 §2.6)", () => {
       "break_glass.incident",
       "break_glass.release",
     ]) {
-      expect(ACTION_POLICIES[action]?.allowedRoles).toEqual(["security_operator"]);
+      expect(ACTION_POLICIES[action]?.allowedRoles).toEqual(["administrator"]);
     }
   });
 });
@@ -133,7 +133,7 @@ describe("break-glass role (02 §2.6)", () => {
 describe("connection security review (02 §2.8)", () => {
   it("is a separate action from configuring the connection", () => {
     expect(ACTION_POLICIES["connection.security_review"]?.allowedRoles).toEqual([
-      "security_operator",
+      "administrator",
     ]);
     const route = ROUTES.find((candidate) => candidate.path.endsWith("/security-reviews"));
     expect(route?.action).toBe("connection.security_review");

@@ -25,6 +25,7 @@ export const DEMO_PEOPLE = [
   "Steward A",
   "Approver A",
   "Reviewer A",
+  "Dispute Reviewer A",
   "Proposer A",
   "Voter A",
   "Publisher A",

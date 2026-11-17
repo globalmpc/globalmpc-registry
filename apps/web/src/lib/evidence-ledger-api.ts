@@ -39,6 +39,7 @@ export interface LedgerSummary {
     gateId: string;
     ruleSetVersion: string;
     status: string;
+    itemClaimTypes?: string[];
     missing?: string[];
     reviewedItems?: string;
     requiredItems?: string;
@@ -67,9 +68,12 @@ async function read<T>(path: string, token: string): Promise<T> {
     );
   return response.json() as Promise<T>;
 }
-export function listClaimCatalog(token: string, cursor?: string) {
+export function listClaimCatalog(token: string, cursor?: string, projectId?: string) {
+  const query = new URLSearchParams();
+  if (cursor) query.set("cursor", cursor);
+  if (projectId) query.set("projectId", projectId);
   return read<{ items: CatalogEntry[]; nextCursor: string | null }>(
-    `/api/v1/claim-types${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+    `/api/v1/claim-types${query.size ? `?${query}` : ""}`,
     token,
   );
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import * as React from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { ProjectProgress, stageCoverage } from "../src/components/ProjectProgress";
 import type { LedgerSummary } from "../src/lib/evidence-ledger-api";
@@ -19,6 +19,7 @@ it("keeps an earlier gap visible even when a later evidence stage passes", () =>
   expect(screen.getByText("1 / 3 required evidence items reviewed")).toBeTruthy();
   expect(screen.getByText("1 missing evidence type(s)")).toBeTruthy();
   expect(screen.getByRole("progressbar").getAttribute("value")).toBe("1");
+  expect(within(screen.getByRole("list", { name: "Project stages" })).getAllByRole("listitem")).toHaveLength(5);
   expect(screen.getByText(/not a signed decision/)).toBeTruthy();
 });
 it("distinguishes no stage rules from a failing first stage", () => {
@@ -31,7 +32,7 @@ it("distinguishes no stage rules from a failing first stage", () => {
 });
 it("never substitutes whole-catalog totals or zero for unavailable stage coverage", () => {
   render(<ProjectProgress summary={{...summary,stages:[{...summary.stages[0],reviewedItems:undefined,requiredItems:undefined}]}} published />);
-  expect(screen.getByText("Required-item coverage unavailable")).toBeTruthy();
+  expect(screen.getAllByText("Required-item coverage unavailable")).toHaveLength(2);
   expect(screen.queryByRole("progressbar")).toBeNull();
   expect(screen.getByText(/in this published version/)).toBeTruthy();
 });
@@ -41,7 +42,7 @@ it("does not draw a completed bar for zero, invalid or inverted counts", () => {
   }
   render(<ProjectProgress summary={{...summary,stages:[{...summary.stages[0],reviewedItems:"0",requiredItems:"0",status:"not_evaluable"}]}} />);
   expect(screen.queryByRole("progressbar")).toBeNull();
-  expect(screen.getByText("Assessment incomplete")).toBeTruthy();
+  expect(screen.getAllByText("Assessment incomplete")).toHaveLength(2);
 });
 
 it("does not call a later passing assessment a completed human decision", () => {
@@ -55,4 +56,18 @@ it("does not turn reviewed coverage into a passing gate", () => {
   expect(screen.getByText("Needs attention: Exploration")).toBeTruthy();
   expect(screen.queryByText("All assessed stages meet evidence requirements")).toBeNull();
   expect(screen.getByText(/not a signed decision/)).toBeTruthy();
+});
+
+it("shows all five supported project stages without inventing evidence or gate decisions", () => {
+  const view = render(<ProjectProgress summary={{ ...summary, currentStage: null, stages: [] }} />);
+  const roadmap = screen.getByRole("list", { name: "Project stages" });
+  expect(within(roadmap).getAllByRole("listitem").map(item => within(item).getByRole("strong").textContent)).toEqual([
+    "Exploration", "Resource definition", "Feasibility", "Permitting", "Production",
+  ]);
+  expect(within(roadmap).getAllByText("Not assessed")).toHaveLength(5);
+  expect(within(roadmap).queryByText(/Reviewed|Gate Go|Not reached/)).toBeNull();
+  view.rerender(<ProjectProgress summary={{ ...summary, currentStage: "stage.permitted", stages: [{ ...summary.stages[1], gateId: "stage.permitted" }] }} />);
+  expect(screen.getByText("Evidence assessment: Permitting")).toBeTruthy();
+  expect(within(roadmap).getAllByText("Not assessed")).toHaveLength(4);
+  expect(within(screen.getByText("Permitting").closest("li")!).getByText("Evidence requirements met")).toBeTruthy();
 });

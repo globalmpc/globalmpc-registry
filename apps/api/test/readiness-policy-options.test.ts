@@ -139,7 +139,7 @@ describeDb("readiness policy options", () => {
     expect((await options(fx.projectA, "", null)).statusCode).toBe(401);
     const scoped = await signIn(app, fx.scopedStewardA);
     expect((await options(fx.otherProjectA, "", scoped)).statusCode).toBe(403);
-    const reviewer = await signIn(app, fx.reviewerA);
+    const reviewer = await signIn(app, fx.readerA);
     expect((await options(fx.projectA, "", reviewer)).statusCode).toBe(403);
   });
   it("does not reveal policies for a missing, malformed or other-tenant project", async () => {

@@ -63,7 +63,7 @@ describeDb("jurisdiction-scoped role bindings", () => {
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role, jurisdiction)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'reviewer_legal', ${jurisdiction})
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'reviewer', ${jurisdiction})
     `;
     return { token: await signIn(app, account), subjectId };
   }
@@ -138,7 +138,7 @@ describeDb("jurisdiction-scoped role bindings", () => {
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${approverSubject}, ${fx.orgA}, 'security_operator')
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${approverSubject}, ${fx.orgA}, 'administrator')
     `;
     const approverToken = await signIn(app, approver);
 
@@ -148,7 +148,7 @@ describeDb("jurisdiction-scoped role bindings", () => {
       headers: { authorization: `Bearer ${operatorToken}`, "idempotency-key": idempotencyKey() },
       payload: {
         subjectId,
-        role: "reviewer_lab",
+        role: "reviewer",
         organizationId: fx.orgA,
         jurisdiction: ["MNG"],
         reason: "Lab reviewer for Mongolian projects",
@@ -171,7 +171,7 @@ describeDb("jurisdiction-scoped role bindings", () => {
 
     const [binding] = await fx.sql<{ jurisdiction: string[] | null }[]>`
       SELECT jurisdiction FROM core.role_bindings
-      WHERE subject_id = ${subjectId} AND role = 'reviewer_lab'
+      WHERE subject_id = ${subjectId} AND role = 'reviewer' AND jurisdiction = ARRAY['MNG']::text[]
     `;
     expect(binding?.jurisdiction).toEqual(["MNG"]);
   });
@@ -184,7 +184,7 @@ describeDb("jurisdiction-scoped role bindings", () => {
       headers: { authorization: `Bearer ${operatorToken}`, "idempotency-key": idempotencyKey() },
       payload: {
         subjectId: randomUUID(),
-        role: "reviewer_lab",
+        role: "reviewer",
         jurisdiction: ["Mongolia"],
         reason: "x",
       },

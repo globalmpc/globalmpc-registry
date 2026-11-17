@@ -125,17 +125,19 @@ export default function GovernancePage() {
    */
   // Roles in effect: one held below its identity-assurance minimum offers nothing here.
   const roles = effectiveRoles(session);
-  const proposableSpaces = (["protocol", "project"] as const).filter((candidate) =>
-    roles.includes(`${candidate}_proposer`),
-  );
+  const proposableSpaces: readonly ("protocol" | "project")[] = roles.includes("project_member") ? ["protocol", "project"] : [];
   const canPropose = proposableSpaces.length > 0;
   const createSpace = proposableSpaces.includes(space) ? space : proposableSpaces[0];
-  const canVoteIn = (proposalSpace: string) => roles.includes(`${proposalSpace}_voter`);
-  const canVote = roles.some((role) => role === "protocol_voter" || role === "project_voter");
-  const canAdminister = (proposalSpace: string) =>
-    roles.includes(`${proposalSpace}_proposer`) || roles.includes("mpc_operator");
-  const canAdministerAny = canPropose || roles.includes("mpc_operator");
-  const canRecordExecution = roles.includes("execution_recorder");
+  const canVoteIn = (proposalSpace: string, proposalProjectId: string | null | undefined) =>
+    roles.includes("project_member") && (session?.roleBindings ?? []).some(binding => {
+      if (binding.role !== "project_member" || binding.governanceScope === "none") return false;
+      const namespace = binding.governanceScope ?? (binding.projectId ? "project" : "protocol");
+      return namespace === proposalSpace && (namespace === "protocol" || binding.projectId === proposalProjectId);
+    });
+  const canVote = roles.includes("project_member");
+  const canAdminister = (_proposalSpace: string) => roles.includes("project_member") || roles.includes("administrator");
+  const canAdministerAny = canPropose || roles.includes("administrator");
+  const canRecordExecution = roles.includes("project_member");
   const awaitingRecord = proposals.filter(
     (proposal) => proposal.state === "execution_pending" || proposal.state === "disputed",
   );
@@ -282,7 +284,7 @@ export default function GovernancePage() {
         return (
           <td>
             <div className="row" style={{ gap: 6 }}>
-              {canVoteIn(proposal.space) && proposal.state === "voting"
+              {canVoteIn(proposal.space, proposal.projectId) && proposal.state === "voting"
                 ? (["for", "against", "abstain"] as const).map((choice) => (
                     <button
                       key={choice}

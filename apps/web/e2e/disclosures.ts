@@ -15,3 +15,7 @@ export async function openPublicLookup(page: Page) {
   const summary = page.getByRole("main").locator("summary").filter({ hasText: /^Find a record or proof$/ });
   await openDisclosure(summary.locator(".."));
 }
+
+export async function openIntegrityProof(page: Page) {
+  await openDisclosure(page.getByTestId("integrity-disclosure"));
+}

@@ -4,7 +4,7 @@ import { readableStage } from "@/lib/stages";
 export { readableStage } from "@/lib/stages";
 import { ProjectProgress, stageCoverage } from "./ProjectProgress";
 
-/** Only actual assessed gates are displayed: a prototype's position is not stage authority. */
+/** Show the full journey, with diagnostics only for actual assessed gates. */
 export function StageAssessments({
   summary,
 }: {
@@ -18,6 +18,7 @@ export function StageAssessments({
           Evidence readiness · separate from a human decision
         </span>
       </div>
+      <ProjectProgress summary={summary} />
       {summary.stages.length === 0 ? (
         <p className="sub">
           No stage rules have been assessed. A stage cannot be inferred from
@@ -25,7 +26,6 @@ export function StageAssessments({
         </p>
       ) : (
         <>
-          <ProjectProgress summary={summary} />
           <div className="stage-assessments" role="list" aria-label="Configured evidence stages">
           {summary.stages.map((stage) => (
             <details

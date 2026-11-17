@@ -8,6 +8,7 @@ import {
   issueTestSession,
   newAccount,
   setupFixture,
+  syncSubjectAssurance,
   signIn,
   testEnv,
   type TestFixture,
@@ -102,10 +103,10 @@ describeDb("Governance", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("a vote-only account cannot propose", async () => {
-    const response = await propose(voterToken, {});
+  it("an administrator cannot propose", async () => {
+    const response = await propose(await signIn(app, fx.operatorA), {});
     expect(response.statusCode).toBe(403);
-    expect(response.json().details.requiredRoles).toContain("protocol_proposer");
+    expect(response.json().details.requiredRoles).toContain("project_member");
   });
 
   it("cannot propose a target outside the space", async () => {
@@ -416,7 +417,7 @@ describeDb("Governance — on-chain snapshot", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql, { governanceChain: chain });
     proposerToken = await signIn(app, fx.proposerA);
-    projectProposerToken = await signIn(app, await addGovernanceAccount(fx, "project_proposer"));
+    projectProposerToken = await signIn(app, await addGovernanceAccount(fx, "project_member"));
   });
 
   afterAll(async () => {
@@ -526,7 +527,7 @@ describeDb("Governance — on-chain snapshot", () => {
 
     it("refuses a voter with no signing wallet rather than counting zero", async () => {
       const opened = await openVoting({});
-      const walletless = await addGovernanceAccount(fx, "protocol_voter");
+      const walletless = await addGovernanceAccount(fx, "project_member");
       const subjectId = await subjectOf(walletless.address);
       await fx.sql`UPDATE core.wallet_identities SET disabled_at = now() WHERE wallet_address = ${walletless.address}`;
       const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, {
@@ -542,7 +543,7 @@ describeDb("Governance — on-chain snapshot", () => {
       const opened = await openVoting({});
       expect(opened.statusCode).toBe(200);
       const id = opened.json().id as string;
-      const voter = await addGovernanceAccount(fx, "protocol_voter");
+      const voter = await addGovernanceAccount(fx, "project_member");
       const voterSubject = await subjectOf(voter.address);
       const token = await signIn(app, voter);
       balances.set(voter.address, 5n);
@@ -559,6 +560,9 @@ describeDb("Governance — on-chain snapshot", () => {
       balances.set(richer.address, 70n);
       const replaced = await bindWalletByProof(app, passkey, richer.account);
       expect(replaced.statusCode, replaced.body).toBe(200);
+      // Rebinding a wallet does not confer identity assurance on its new address.
+      await fx.sql`UPDATE core.wallet_identities SET assurance_level = 'identity_bound' WHERE subject_id = ${voterSubject} AND disabled_at IS NULL`;
+      await syncSubjectAssurance(fx.sql);
       reads.length = 0;
 
       const again = await vote(id, token, "against");
@@ -572,7 +576,7 @@ describeDb("Governance — on-chain snapshot", () => {
       expect(count!.n).toBe(1);
 
       // The old wallet's next holder binds it by proof and tries to vote its balance again.
-      const holder = await addGovernanceAccount(fx, "protocol_voter");
+      const holder = await addGovernanceAccount(fx, "project_member");
       const holderSubject = await subjectOf(holder.address);
       const holderToken = await signIn(app, holder);
       const holderPasskey = await issueTestSession(fx.appSql, fx.tenantA, holderSubject, {
@@ -581,6 +585,8 @@ describeDb("Governance — on-chain snapshot", () => {
       });
       const rebound = await bindWalletByProof(app, holderPasskey, voter.account);
       expect(rebound.statusCode, rebound.body).toBe(200);
+      await fx.sql`UPDATE core.wallet_identities SET assurance_level = 'identity_bound' WHERE subject_id = ${holderSubject} AND disabled_at IS NULL`;
+      await syncSubjectAssurance(fx.sql);
       const twice = await vote(id, holderToken, "for");
       expect(twice.statusCode).toBe(409);
       expect(twice.json().code).toBe("GOVERNANCE_WALLET_ALREADY_VOTED");
@@ -598,7 +604,7 @@ describeDb("Governance — on-chain snapshot", () => {
 
     it("the database pins a snapshot vote's weight wallet and weight, even for the owner", async () => {
       const opened = await openVoting({});
-      const voter = await addGovernanceAccount(fx, "protocol_voter");
+      const voter = await addGovernanceAccount(fx, "project_member");
       const voterSubject = await subjectOf(voter.address);
       expect((await vote(opened.json().id, await signIn(app, voter), "for")).statusCode).toBe(200);
       await expect(
@@ -612,7 +618,7 @@ describeDb("Governance — on-chain snapshot", () => {
     it("pins a snapshot vote's weight even with no recorded weight wallet (a vote from before 0130)", async () => {
       const opened = await openVoting({});
       const proposalId = opened.json().id as string;
-      const voter = await addGovernanceAccount(fx, "protocol_voter");
+      const voter = await addGovernanceAccount(fx, "project_member");
       const voterSubject = await subjectOf(voter.address);
       await fx.sql`
         INSERT INTO core.governance_votes (id, tenant_id, proposal_id, voter_subject_id, choice, weight)

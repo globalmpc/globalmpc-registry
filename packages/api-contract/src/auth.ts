@@ -128,6 +128,8 @@ export const sessionResponse = z.object({
   roleBindings: z.array(
     z.object({
       role: z.string(),
+      governanceScope: z.enum(["protocol", "project", "none"]).optional(),
+      scopeKind: z.enum(["tenant", "organization", "none"]).optional(),
       organizationId: z.string().nullable(),
       projectId: z.string().nullable(),
     }),
@@ -201,35 +203,21 @@ export const revokeAccountSessionResponse = z.object({
  * The API and UI share this table. The server makes the final decision; hiding
  * buttons in the frontend is not a security control (§2.1).
  */
+/** Standing roles; public_reader is an unbound fallback and break_glass is temporary. */
+export const HUMAN_ROLES = ["project_member", "reviewer", "administrator"] as const;
+export const HUMAN_ROLE_LABELS: Readonly<Record<typeof HUMAN_ROLES[number], string>> = {
+  project_member: "Project member",
+  reviewer: "Reviewer and approver",
+  administrator: "Platform administrator",
+};
+export const GRANTABLE_ROLES = [...HUMAN_ROLES, ...SERVICE_ONLY_ROLES] as const;
 export const ROLE_MINIMUM_ASSURANCE: Readonly<Record<string, AssuranceLevel>> = {
   public_reader: "wallet_only",
-  protocol_voter: "wallet_only",
-  project_voter: "wallet_only",
-  protocol_proposer: "identity_bound",
-  project_proposer: "identity_bound",
-  data_steward: "identity_bound",
-  project_admin: "identity_bound",
-  project_sponsor_operator: "identity_bound",
-  spv_representative: "identity_bound",
-  execution_recorder: "identity_bound",
-  auditor: "identity_bound",
-  external_regulated_service_provider: "high_assurance",
-  // The scan service is a system identity, not a person. Its credentials are
-  // managed differently from human accounts, so assurance is set high.
+  project_member: "identity_bound",
+  reviewer: "high_assurance",
+  administrator: "high_assurance",
   scan_service: "high_assurance",
-  // The CRE workflow's identity (service token, D7). Same reasoning as the scan service.
   cre_reporter: "high_assurance",
-  reviewer_cp_qp: "high_assurance",
-  reviewer_lab: "high_assurance",
-  reviewer_legal: "high_assurance",
-  reviewer_assurance: "high_assurance",
-  // Makes material public and anchored, which cannot be undone.
-  disclosure_approver: "high_assurance",
-  issuer_officer: "high_assurance",
-  gate_approver: "high_assurance",
-  mpc_operator: "high_assurance",
-  treasury_signer: "high_assurance",
-  security_operator: "high_assurance",
 };
 
 const ASSURANCE_RANK: Readonly<Record<AssuranceLevel, number>> = {

@@ -272,7 +272,7 @@ describeDb("service token ensure", () => {
 
   it("refuses a person role, and says when the value is due for renewal", async () => {
     await expect(
-      ensure(generateServiceTokenValue(), { label: "person-role", role: "mpc_operator" }),
+      ensure(generateServiceTokenValue(), { label: "person-role", role: "administrator" }),
     ).rejects.toBeInstanceOf(ServiceTokenError);
 
     const short = await ensure(generateServiceTokenValue(), { label: "short-lived", ttlSeconds: 10 * DAY });

@@ -324,7 +324,7 @@ describe("Data Room evidence and source workflows", () => {
         message: "Reviewer required",
         retryable: false,
         correlationId: "corr-permission",
-        details: { requiredRoles: ["reviewer_cp_qp"], accessRequestPath: "/w/access-requests" },
+        details: { requiredRoles: ["reviewer"], accessRequestPath: "/w/access-requests" },
       },
       { status: 403 },
     );
@@ -333,7 +333,7 @@ describe("Data Room evidence and source workflows", () => {
       render(<DataRoom params={Promise.resolve({ id: "p1" })} />);
     });
     await screen.findByText("Reviewer required");
-    expect(screen.getByText("reviewer_cp_qp")).toBeDefined();
+    expect(screen.getByText("reviewer")).toBeDefined();
     expect(screen.getByRole("link", { name: /access/i }).getAttribute("href")).toBe(
       "/w/access-requests",
     );

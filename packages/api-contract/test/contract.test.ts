@@ -158,7 +158,7 @@ describe("route definitions", () => {
 
 describe("authorization — the seven conditions of 02 §2.1", () => {
   const ACTOR: AuthorizationContext = {
-    role: "gate_approver",
+    role: "reviewer",
     assuranceLevel: "high_assurance",
     actorTenantId: "tenant-a",
     actorProjectIds: ["project-1"],
@@ -186,13 +186,13 @@ describe("authorization — the seven conditions of 02 §2.1", () => {
   it("returns the required roles and request path on a role mismatch", () => {
     const decision = authorize(
       ACTION_POLICIES["gate.decide"]!,
-      { ...ACTOR, role: "data_steward" },
+      { ...ACTOR, role: "project_member" },
       RESOURCE,
     );
     expect(decision.allow).toBe(false);
     if (!decision.allow) {
       expect(decision.reason).toBe("ROLE_ACTION_NOT_ALLOWED");
-      expect(decision.requiredRoles).toContain("gate_approver");
+      expect(decision.requiredRoles).toContain("reviewer");
       expect(decision.accessRequestPath).toContain("project-1");
     }
   });
@@ -238,7 +238,7 @@ describe("authorization — the seven conditions of 02 §2.1", () => {
    */
   it("access request paths are only the three with screens (§11.7)", () => {
     const emitted = new Set<string>();
-    for (const role of ["data_steward", "gate_approver"]) {
+    for (const role of ["project_member", "reviewer"]) {
       for (const projectId of ["project-1", null]) {
         for (const assuranceLevel of ["wallet_only", "high_assurance"] as const) {
           const decision = authorize(
@@ -298,25 +298,25 @@ describe("authorization — the seven conditions of 02 §2.1", () => {
 describe("assurance level — OD-04", () => {
   it("reviewer roles are not granted by wallet alone", () => {
     for (const role of [
-      "reviewer_cp_qp",
-      "reviewer_lab",
-      "reviewer_legal",
-      "reviewer_assurance",
-      "issuer_officer",
-      "gate_approver",
-      "treasury_signer",
-      "security_operator",
-      "mpc_operator",
+      "reviewer",
+      "reviewer",
+      "reviewer",
+      "reviewer",
+      "reviewer",
+      "reviewer",
+      "administrator",
+      "administrator",
+      "administrator",
     ]) {
       expect(ROLE_MINIMUM_ASSURANCE[role]).toBe("high_assurance");
       expect(satisfiesAssurance("wallet_only", ROLE_MINIMUM_ASSURANCE[role]!)).toBe(false);
     }
   });
 
-  it("public reader and governance participation work with wallet alone", () => {
-    for (const role of ["public_reader", "protocol_voter", "project_voter"]) {
-      expect(satisfiesAssurance("wallet_only", ROLE_MINIMUM_ASSURANCE[role]!)).toBe(true);
-    }
+  it("keeps public reading unbound but requires verified identity for project membership", () => {
+    expect(satisfiesAssurance("wallet_only", ROLE_MINIMUM_ASSURANCE["public_reader"]!)).toBe(true);
+    expect(satisfiesAssurance("wallet_only", ROLE_MINIMUM_ASSURANCE["project_member"]!)).toBe(false);
+    expect(satisfiesAssurance("identity_bound", ROLE_MINIMUM_ASSURANCE["project_member"]!)).toBe(true);
   });
 });
 
@@ -725,10 +725,10 @@ describe("governance roles per space", () => {
   const roles = (action: string) => ACTION_POLICIES[action]!.allowedRoles;
 
   it("each space proposes and votes with its own roles only", () => {
-    expect(roles(governanceAction("protocol", "propose"))).toEqual(["protocol_proposer"]);
-    expect(roles(governanceAction("project", "propose"))).toEqual(["project_proposer"]);
-    expect(roles(governanceAction("protocol", "vote"))).toEqual(["protocol_voter"]);
-    expect(roles(governanceAction("project", "vote"))).toEqual(["project_voter"]);
+    expect(roles(governanceAction("protocol", "propose"))).toEqual(["project_member"]);
+    expect(roles(governanceAction("project", "propose"))).toEqual(["project_member"]);
+    expect(roles(governanceAction("protocol", "vote"))).toEqual(["project_member"]);
+    expect(roles(governanceAction("project", "vote"))).toEqual(["project_member"]);
   });
 
   it("the MPC operator neither proposes nor votes in any space", () => {
@@ -736,13 +736,13 @@ describe("governance roles per space", () => {
     for (const action of Object.keys(ACTION_POLICIES).filter(
       (name) => name.startsWith("governance.") && /\.(propose|vote)$/.test(name),
     )) {
-      expect(roles(action), action).not.toContain("mpc_operator");
+      expect(roles(action), action).not.toContain("administrator");
     }
-    expect(roles(governanceAction("project", "administer"))).toContain("mpc_operator");
+    expect(roles(governanceAction("project", "administer"))).toContain("administrator");
   });
 
   it("only the execution recorder writes execution records", () => {
-    expect(roles("governance.execution.record")).toEqual(["execution_recorder"]);
+    expect(roles("governance.execution.record")).toEqual(["project_member"]);
   });
 });
 

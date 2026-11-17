@@ -44,7 +44,7 @@ export const NAV: readonly NavEntry[] = [
   { href: "/w/verification", label: "Verification", requires: "verification.read" },
   { href: "/w/readiness", label: "Readiness & Gates", requires: "readiness.read" },
   { href: "/w/registries", label: "Registries", requires: "registry.read" },
-  { href: "/w/anchors", label: "Anchor", requires: "registry.read" },
+  { href: "/w/anchors", label: "Anchor", requires: "anchor.read" },
   { href: "/w/integrations", label: "Integrations", requires: "authority.read" },
   { href: "/w/authorities", label: "Authorities", requires: "authority.read" },
   { href: "/w/governance", label: "Governance", requires: "governance.read" },

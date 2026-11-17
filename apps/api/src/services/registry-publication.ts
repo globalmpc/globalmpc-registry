@@ -11,6 +11,22 @@ import {
   ledgerInputHash,
 } from "@mpc/db";
 
+/** Resolve only identity/scope before returning an idempotent mutation response. */
+export async function registrySubjectProjectId(
+  tx: postgres.TransactionSql, tenantId: string, kind: "project" | "verification", subjectId: string,
+): Promise<string> {
+  const rows = kind === "project"
+    ? await tx<{project_id: string}[]>`SELECT id AS project_id FROM core.projects WHERE tenant_id=${tenantId} AND id=${subjectId}`
+    : await tx<{project_id: string}[]>`SELECT c.project_id FROM core.verification_attestations a
+        JOIN core.verification_cases c ON c.tenant_id=a.tenant_id AND c.id=a.case_id
+        WHERE a.tenant_id=${tenantId} AND a.id=${subjectId}`;
+  if (!rows[0]) {
+    if (kind === "verification") throw unprocessable("REGISTRY_SUBJECT_NOT_SIGNED", "A Verification Registry entry must point to a signed attestation in this tenant");
+    throw notFound("Project not found");
+  }
+  return rows[0].project_id;
+}
+
 /** Keep assessment inputs stable until the publication transaction commits. */
 export async function lockEvidenceLedgerPublicationInputs(tx: postgres.TransactionSql, projectId: string): Promise<void> {
   try {
@@ -47,7 +63,7 @@ export async function assertEvidenceLedgerProjection(
     throw unprocessable("PUBLICATION_LEDGER_MISMATCH", "The ledger must match this project's recorded assessment");
   }
   const current = await computeEvidenceLedger(tx, tenantId, projectId, evaluatedAt);
-  if (!current || !sameCanonical(evidenceLedgerSemantic(stored), evidenceLedgerSemantic(current))) {
+  if (!current || !sameCanonical(evidenceLedgerSemantic(stored), evidenceLedgerSemantic(current, stored))) {
     throw unprocessable("PUBLICATION_LEDGER_STALE", "Evidence changed since assessment; assess again and prepare a new draft");
   }
 }

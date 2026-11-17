@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ProjectStageRoadmap } from "./ProjectProgress";
 import { StageAssessments } from "./StageAssessments";
 import { ErrorNotice } from "./ErrorNotice";
 import {
@@ -44,7 +45,7 @@ function readableLabel(value: string) {
 function stageLabel(stage: string) {
   return STAGE_LABELS[stage] ?? readableLabel(stage);
 }
-function gradeLabel(grade: string | null | undefined) {
+export function gradeLabel(grade: string | null | undefined) {
   return grade ? (GRADE_LABELS[grade] ?? readableLabel(grade)) : "Not graded";
 }
 const REASON_LABELS: Record<string, string> = {
@@ -59,10 +60,10 @@ const REASON_LABELS: Record<string, string> = {
   CURRENT_SCOPED_REVIEW_REQUIRED:
     "A current signed review of the linked evidence is still needed.",
 };
-function statusLabel(status: string) {
+export function statusLabel(status: string) {
   return STATUS_LABELS[status] ?? status;
 }
-function reasonsText(reasons: string[]) {
+export function reasonsText(reasons: string[]) {
   return reasons.map((reason) => REASON_LABELS[reason] ?? reason).join("; ");
 }
 
@@ -107,7 +108,7 @@ export function EvidenceLedger({
           {reviewed} / {summary.items.length} items
         </dd>
       </dl>
-      {browsable ? <StageAssessments summary={summary} /> : null}
+      {browsable ? <StageAssessments summary={summary} /> : <ProjectStageRoadmap stages={summary.stages} />}
       {browsable ? (
         <div className="evidence-browser-controls">
           <label>Search evidence items

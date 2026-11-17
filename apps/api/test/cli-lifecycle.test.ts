@@ -168,7 +168,7 @@ it("bootstraps an operator with explicit defaults and emits no personal data", a
       tenantSlug: "tenant",
       email: "operator@example.test",
       jurisdiction: "MNG",
-      role: "mpc_operator",
+      role: "administrator",
       assuranceLevel: "high_assurance",
     }),
   );

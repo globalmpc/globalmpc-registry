@@ -6,12 +6,13 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import Team from "../src/app/w/projects/[id]/team/page";
 import Audit from "../src/app/w/projects/[id]/audit/page";
 import { DisclosurePreview } from "../src/components/DisclosurePreview";
-import { DirectoryEvidence } from "../src/components/DirectoryEvidence";
+import { DirectoryEvidence, directoryReviewedItemCount } from "../src/components/DirectoryEvidence";
 import { WorkspaceShell } from "../src/components/WorkspaceShell";
 import { StageAssessments } from "../src/components/StageAssessments";
 import { PageFrame } from "../src/components/PageFrame";
@@ -111,7 +112,7 @@ it("does not fetch project data for a session lacking project.read", async () =>
   expect(calls).toHaveLength(0);
   expect(screen.getByText("Role-free guidance")).toBeTruthy();
 });
-it("renders only server-assessed gates and keeps missing and N/A evidence distinct", () => {
+it("shows the full roadmap with diagnostics only for server-assessed gates", () => {
   const summary: LedgerSummary = {
     evaluatedAt: "2026-11-09T00:00:00Z",
     inputSnapshotHash: "hash",
@@ -141,7 +142,8 @@ it("renders only server-assessed gates and keeps missing and N/A evidence distin
   expect(screen.getByText("Mining licence")).toBeTruthy();
   expect(screen.getByText("Reviewed 1 / 2 required items")).toBeTruthy();
   expect(view.container.querySelectorAll("details")).toHaveLength(1);
-  expect(screen.queryByText("Closure")).toBeNull();
+  expect(within(screen.getByText("Production").closest("li")!).getByText("Not assessed")).toBeTruthy();
+  expect(screen.getByRole("list", { name: "Project stages" }).children).toHaveLength(5);
   view.rerender(<StageAssessments summary={{ ...summary, stages: [] }} />);
   expect(screen.getByText(/No stage rules have been assessed/)).toBeTruthy();
 });
@@ -284,7 +286,7 @@ it("keeps project team assignments separate from organization-wide roles and exc
     kind: "person",
     locked: false,
     roles: [
-      { id: `${id}-role`, role: "data_steward", projectId, revokedAt: null },
+      { id: `${id}-role`, role: "reviewer", projectId, revokedAt: null },
     ],
   });
   mockHttp({
@@ -297,7 +299,7 @@ it("keeps project team assignments separate from organization-wide roles and exc
         {
           ...subject("Former member", "p1"),
           roles: [
-            { role: "data_steward", projectId: "p1", revokedAt: "2026-01-01" },
+            { role: "reviewer", projectId: "p1", revokedAt: "2026-01-01" },
           ],
         },
       ],
@@ -321,7 +323,7 @@ it("uses the selected project's audit filter and never queries operational outbo
           occurredAt: "2026-11-09",
           command: "evidence.changed",
           resourceType: "claim",
-          effectiveRole: "data_steward",
+          effectiveRole: "reviewer",
           beforeVersion: 1,
           afterVersion: 2,
         },
@@ -371,13 +373,15 @@ it("labels previews as unpublished and uses no proof or public lookup for privat
 });
 it("does not manufacture project evidence coverage from missing or invalid public metadata", () => {
   const view = render(<DirectoryEvidence value={null} />);
-  expect(screen.getByText("Evidence coverage unavailable")).toBeTruthy();
+  expect(screen.getByText("Not assessed")).toBeTruthy();
   view.rerender(
     <DirectoryEvidence
       value={{ currentStage: "stage.production", items: [] }}
     />,
   );
-  expect(screen.queryByText("Production")).toBeNull();
+  expect(screen.getByText("Production: not assessed")).toBeTruthy();
+  expect(screen.getByRole("list", { name: "Published evidence stages" }).children).toHaveLength(5);
+  expect(screen.queryByText(/Evidence assessment:|Reviewed|Gate Go/)).toBeNull();
 });
 it("clears project identity when the account changes even though the cookie-session marker is unchanged", async () => {
   let release!: (value: unknown) => void;
@@ -455,4 +459,27 @@ it("clears unfinished form state when navigating between documents in the same p
     (screen.getByLabelText("Unsaved classification") as HTMLInputElement).value,
   ).toBe("");
   await screen.findByText("Scoped project");
+});
+
+it("renders the frozen five-stage summary and counts reviewed evidence rather than stage totals", () => {
+  const value = {
+    snapshotId: "11111111-1111-4111-8111-111111111111", evaluatedAt: "2026-11-09T00:00:00Z",
+    inputSnapshotHash: `0x${"ab".repeat(32)}`, currentStage: "stage.feasibility", limitations: [],
+    items: [{ claimType: "synthetic", catalogVersion: "1", displayName: "Synthetic evidence", status: "reviewed", grade: "partially_verified", reviewScope: [], reviews: [], reasons: [], limitations: [] }],
+    stages: ["exploration", "resource_defined", "feasibility", "permitted", "production"].map((gate, index) => ({
+      gateId: `stage.${gate}`, ruleSetVersion: "1", status: index < 3 ? "ok" : "gap", missing: [], reviewedItems: "1", requiredItems: "1",
+    })),
+  };
+  const view = render(<DirectoryEvidence value={value} />);
+  expect(screen.getByText("Stage 3 of 5")).toBeTruthy();
+  expect(view.container.querySelectorAll('[data-status="ok"]')).toHaveLength(3);
+  expect(directoryReviewedItemCount(value)).toBe(1);
+  expect(directoryReviewedItemCount({ ...value, items: [{ ...value.items[0], status: "needs_re_review" }] })).toBe(0);
+  expect(directoryReviewedItemCount(null)).toBeNull();
+  view.rerender(<DirectoryEvidence value={{ ...value, currentStage: null, stages: value.stages.map(stage => ({ ...stage, status: "gap" })) }} />);
+  expect(screen.getByText("No stage established")).toBeTruthy();
+  expect(screen.queryByText("Not assessed")).toBeNull();
+  expect(view.container.querySelectorAll('[data-status="gap"]')).toHaveLength(5);
+  view.rerender(<DirectoryEvidence value={{ ...value, currentStage: null, stages: [] }} />);
+  expect(screen.getByText("Not assessed")).toBeTruthy();
 });
