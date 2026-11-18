@@ -289,6 +289,11 @@ test.describe("golden path", () => {
     await page.getByTestId("anchor").click();
     // A created batch is not yet on chain.
     await expect(page.getByTestId("anchor-result")).toContainText("created");
+    const downloadPromise=page.waitForEvent("download");
+    await page.getByRole("button",{name:"Download signed review proof"}).click();
+    const reviewExport=await downloadPromise;
+    const reviewExportPath=await reviewExport.path();
+    expect(reviewExportPath).toBeTruthy();
 
     // --- 8. Lookup without sign-in ---------------------------------------
     await page.goto("/connect");
@@ -349,5 +354,9 @@ test.describe("golden path", () => {
     await expect(
       page.getByText("Integrity and authority are different questions"),
     ).toBeVisible();
+    await page.goto("/verify");
+    await page.getByLabel("Review export JSON").setInputFiles(reviewExportPath!);
+    await expect(page.getByRole("status")).toContainText("Review commitment matches");
+
   });
 });

@@ -85,3 +85,29 @@ Each has one synthetic reviewed item; later stages require a grade that this ite
 meet. The resulting public snapshot, not a UI override, supplies the five-segment progress bar.
 These are evidence coverage examples, not real mine progress or signed gate decisions. Existing
 published versions without coverage remain unchanged; the new examples are separate projects.
+
+## Document-rich examples
+
+Development seed tasks also opt into `DOCUMENTS-1`, `DOCUMENTS-3` and `DOCUMENTS-5`.
+These are new projects: each contains 20 synthetic text documents and 20 catalog-bound
+review items, grouped as four requirements per supported stage. They cover licences,
+geology, drilling, assays, feasibility, permitting and operational reports. Projects
+have respectively 4, 12 and 20 reviewed items; remaining documents are present but
+have no synthetic professional sign-off. Every upload must receive a clean scan
+before promotion. The normal evaluator supplies their stage 1, 3 and 5 coverage.
+
+Original fixtures and published versions are preserved. Completed document examples
+are skipped on retry; untouched incomplete examples resume their quarantined uploads.
+The fixtures publish only labelled synthetic assessment metadata, never repository
+internal documentation or private originals. No real mining documents were found in
+the first-party seed assets, so document bodies are generated illustrative text.
+
+The dev seed CLI accepts `DEMO_INCLUDE_DOCUMENTS=false` to omit the document-rich
+examples (default `true`). `DEMO_SCAN_TIMEOUT_MS` controls each scenario's scan wait
+(default 240000 ms; integer range 1000–240000). Invalid settings fail before seeding.
+A timeout remains a visible failure and the next run resumes; it is not reported as
+successful seeding. Existing completed scenarios are preserved.
+
+The CI task waiter allows up to six ten-minute windows for a fresh seed across
+all eleven scenarios (at most 44 minutes of scan waiting at the configured cap).
+Only waiter exhaustion is retried; AWS errors stop the owned task immediately.

@@ -20,7 +20,7 @@ export interface RegistryLeaf {
   /** Decimal string of an integer version. Never a number. */
   readonly version: string;
   readonly status: "published" | "revoked" | "superseded";
-  readonly serializationVersion: "1";
+  readonly serializationVersion: "1" | "2";
   readonly policyVersion: string;
   readonly schemaVersion: string;
   readonly contentHash: string;
@@ -54,7 +54,7 @@ export function assertValidLeaf(leaf: RegistryLeaf): void {
       "/status",
     );
   }
-  if (leaf.serializationVersion !== "1") {
+  if (leaf.serializationVersion !== "1" && leaf.serializationVersion !== "2") {
     throw new CanonicalError(
       "E_LEAF_INVALID_FIELD",
       `Unsupported serializationVersion: ${leaf.serializationVersion}`,

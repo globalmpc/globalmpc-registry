@@ -1,3 +1,4 @@
+import { freezeReviewBundle } from "../services/review-commitment.js";
 import { authorizedProjectLookup } from "../services/authorized-project-lookup.js";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
@@ -100,6 +101,28 @@ export async function registerRegistryRoutes(
 
   // --- Publish (step 2) --------------------------------------------------
 
+  app.get<{Params:{id:string}}>("/api/v1/registry-entries/versions/:id/review-bundle", async (request,reply) => {
+    reply.header("Cache-Control","private, no-store");
+    const {session,tenantId}=requireReadContext(request);
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.params.id))throw notFound("Review bundle not available for this version");
+    return withTenant(sql,{tenantId},async tx=>{
+      const stored=await authorizedProjectLookup(session,"registry.read",async()=>{
+        const [row]=await tx<{project_id:string;bundle:unknown;bundle_hash:string;public_projection:unknown;leaf_payload:unknown;id:string;registry_type:"project"|"verification"|"asset";subject_id:string;version:number;status:"published"|"revoked"|"superseded";content_hash:string;policy_version:string;schema_version:string;serialization_version:string}[]>`
+          SELECT b.project_id,b.bundle,b.bundle_hash,v.*,e.registry_type,e.subject_id,l.leaf_payload
+          FROM core.registry_review_bundles b JOIN core.registry_entry_versions v ON v.id=b.entry_version_id AND v.tenant_id=b.tenant_id
+          JOIN core.registry_entries e ON e.id=v.entry_id AND e.tenant_id=v.tenant_id
+          LEFT JOIN chain.anchor_batch_leaves l ON l.entry_version_id=v.id
+          WHERE b.tenant_id=${tenantId} AND b.entry_version_id=${request.params.id}::uuid`;
+        if(!row) throw notFound("Review bundle not available for this version");
+        return row;
+      },row=>row.project_id);
+      assertAuthorized(session,"registry.read",projectResource(tenantId,stored.project_id,{sensitivity:"restricted"}),sessionFacts(session));
+      return {entryVersionId:stored.id,bundle:stored.bundle,bundleHash:stored.bundle_hash,projection:stored.public_projection,
+        leaf:stored.leaf_payload ?? {registryType:stored.registry_type,entryVersionId:stored.id,subjectId:stored.subject_id,version:String(stored.version),status:stored.status,
+          contentHash:stored.content_hash,policyVersion:stored.policy_version,schemaVersion:stored.schema_version,serializationVersion:stored.serialization_version}};
+    });
+  });
+
   app.post<{ Params: { draftId: string } }>(
     "/api/v1/registry-entries/drafts/:draftId/publish",
     async (request, reply) => {
@@ -201,7 +224,8 @@ export async function registerRegistryRoutes(
            * creates that record. The server decides; lifecycle is **not a value the client
            * gets to claim.**
            */
-          const publishedProjection = { ...draft.projection, status: subject.publishedStatus };
+          const reviewBundle = await freezeReviewBundle(tx, tenantId, subject.projectId, draft.registry_type, draft.subject_id, draft.projection);
+          const publishedProjection = { ...draft.projection, status: subject.publishedStatus, reviewCommitment: reviewBundle.commitment };
           const projectionCheck = publicProjection.safeParse(publishedProjection);
           if (!projectionCheck.success) {
             throw unprocessable(
@@ -256,14 +280,17 @@ export async function registerRegistryRoutes(
             INSERT INTO core.registry_entry_versions (
               id, tenant_id, entry_id, version, status, public_projection,
               content_hash, source_snapshot_hash, policy_version, schema_version,
-              previous_version_id, published_at
+              previous_version_id, published_at, serialization_version
             ) VALUES (
               ${versionId}, ${tenantId}, ${entryId}, ${nextVersion}, 'published',
               ${tx.json(publishedProjection as never)}, ${contentHash},
               ${draft.source_snapshot_hash}, ${draft.policy_version}, ${draft.schema_version},
-              ${previous?.id ?? null}, now()
+              ${previous?.id ?? null}, now(), '2'
             )
           `;
+
+          await tx`INSERT INTO core.registry_review_bundles(entry_version_id,tenant_id,project_id,bundle,bundle_hash)
+            VALUES(${versionId},${tenantId},${subject.projectId},${tx.json(reviewBundle.bundle as never)},${reviewBundle.bundleHash})`;
 
           // The previous version is not deleted; it is linked as superseded (invariant 4).
           if (previous) {
@@ -376,7 +403,7 @@ export async function registerRegistryRoutes(
             contentHash,
             policyVersion: draft.policy_version,
             schemaVersion: draft.schema_version,
-            serializationVersion: "1" as const,
+            serializationVersion: "2" as const,
             publishedAt: new Date().toISOString(),
             requestId,
             asOf,
@@ -512,8 +539,8 @@ export async function registerRegistryRoutes(
 
         for (const [index, leaf] of batch.leaves.entries()) {
           await tx`
-            INSERT INTO chain.anchor_batch_leaves (batch_id, leaf_hash, entry_version_id, leaf_index)
-            VALUES (${batchRowId}, ${leaf.leafHash}, ${leaf.entryVersionId}, ${index})
+            INSERT INTO chain.anchor_batch_leaves (batch_id, leaf_hash, entry_version_id, leaf_index, leaf_payload)
+            VALUES (${batchRowId}, ${leaf.leafHash}, ${leaf.entryVersionId}, ${index}, ${tx.json(leaf.leaf as never)})
           `;
         }
 
