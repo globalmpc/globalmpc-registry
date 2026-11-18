@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { File } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hashProjection, keccak256 } from "@mpc/canonical";
@@ -122,7 +122,7 @@ describe("independent public proof verification", () => {
     const calls = mockHttp({});
     render(<Verifier />);
     const content = { name: "Mine", version: "1" };
-    const input = document.querySelector('input[type="file"]')!;
+    const input = screen.getByLabelText("Published record JSON");
     fireEvent.change(input, {
       target: {
         files: [new File([JSON.stringify(content)], "record.json", { type: "application/json" })],
@@ -135,10 +135,33 @@ describe("independent public proof verification", () => {
   it("rejects an invalid saved JSON file without uploading it", async () => {
     const calls = mockHttp({});
     render(<Verifier />);
-    fireEvent.change(document.querySelector('input[type="file"]')!, {
+    fireEvent.change(screen.getByLabelText("Published record JSON"), {
       target: { files: [new File(["not JSON"], "bad.json")] },
     });
     await screen.findByText(/not JSON we can canonicalise/);
     expect(calls).toHaveLength(0);
   });
+});
+
+function emptyReviewExport(){
+ const bundle={bundleVersion:"1",reviews:[]},bundleHash=hashProjection(bundle);
+ const projection={reviewCommitment:{version:"1",bundleHash,reviewCount:"0",independentlyVerifiableCount:"0"}};
+ return {bundle,bundleHash,projection,leaf:{registryType:"project",entryVersionId:"new-version",subjectId:"subject",version:"1",status:"published",serializationVersion:"2",policyVersion:"1",schemaVersion:"1",contentHash:hashProjection(projection)}};
+}
+it("clears a prior matching proof when a different export is imported",async()=>{
+ mockHttp({[recordRoute]:{entryVersionId:"version"},[route]:proof});
+ render(<Verifier/>);check();await screen.findByTestId("verify-result");
+ fireEvent.change(screen.getByLabelText("Review export JSON"),{target:{files:[new File([JSON.stringify(emptyReviewExport())],"new.json")]}});
+ await screen.findByText(/Review commitment matches/);
+ expect(screen.queryByTestId("verify-result")).toBeNull();
+ expect((screen.getByLabelText("Entry version id") as HTMLInputElement).value).toBe("new-version");
+});
+it("discards a pending old proof response after importing another export",async()=>{
+ let finish!:(value:unknown)=>void;
+ mockHttp({[recordRoute]:{entryVersionId:"version"},[route]:()=>new Promise(resolve=>{finish=resolve;})});
+ render(<Verifier/>);check();await waitFor(()=>expect(finish).toBeTruthy());
+ fireEvent.change(screen.getByLabelText("Review export JSON"),{target:{files:[new File([JSON.stringify(emptyReviewExport())],"new.json")]}});
+ await screen.findByText(/Review commitment matches/);
+ await act(async()=>{finish(proof);});
+ expect(screen.queryByTestId("verify-result")).toBeNull();
 });

@@ -1,3 +1,5 @@
+import { freezeReviewBundle } from "../src/services/review-commitment.js";
+import { hashProjection } from "@mpc/canonical";
 import { withTenant } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -369,6 +371,17 @@ describeDb("Verification and EIP-712 signature", () => {
         signatureRequestId: signatureRequest.signatureRequestId,
         signature,
       });
+      const frozen=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>freezeReviewBundle(tx,fx.tenantA,fx.projectA,"verification",draft.id,{}));
+      expect(frozen.commitment.reviewCount).toBe("1");
+      expect(frozen.commitment.independentlyVerifiableCount).toBe("1");
+      expect(frozen.bundle.reviews[0]!.signature).toBe(signature);
+      expect(frozen.bundleHash).toBe(hashProjection(frozen.bundle as never));
+      expect(frozen.bundle.reviews[0]!.signingEnvelope).toBeTruthy();
+      await expect(fx.sql`UPDATE core.verification_attestations SET signing_envelope='{}' WHERE id=${draft.id}`).rejects.toThrow("Signed envelope is immutable");
+      await expect(withTenant(fx.appSql,{tenantId:fx.tenantB},tx=>freezeReviewBundle(tx,fx.tenantB,fx.projectA,"verification",draft.id,{}))).rejects.toMatchObject({code:"REVIEW_SUBJECT_NOT_SIGNED"});
+      const [claim]=await fx.sql<{claim_type:string}[]>`SELECT claim_type FROM core.claims WHERE id=${evidenceClaimId}`;
+      const excluded=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>freezeReviewBundle(tx,fx.tenantA,fx.projectA,"project",fx.projectA,{evidenceLedger:{items:[{claimType:claim!.claim_type,status:"not_applicable"}]}}));
+      expect(excluded.bundle.reviews).toEqual([]);
       return draft.id as string;
     }
 

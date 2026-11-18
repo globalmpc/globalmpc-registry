@@ -275,13 +275,15 @@ describeDb('computed ledger API and approved public boundary',()=>{
       let recorded=0;let reassessed=false;
       for(let page=0;page<pages&&!reassessed;page++){
         const result=await sweep();expect(result.ran).toBe(true);recorded+=result.recorded;
-        const [current]=await fx.sql`SELECT id FROM core.evidence_ledger_snapshots WHERE project_id=${projectId} ORDER BY created_at DESC,id DESC LIMIT 1`;
-        reassessed=current!.id!==snapshot.id;
+        const [current]=await fx.sql`SELECT id FROM core.evidence_ledger_snapshots WHERE project_id=${projectId}
+          AND snapshot->>'evaluatedAt'=${new Date(futureTimestamp).toISOString()} LIMIT 1`;
+        reassessed=Boolean(current);
       }
       expect(recorded).toBeGreaterThan(0);
     }finally{await futureWorker.end();}
     const [futureSnapshot]=await fx.sql`SELECT id,snapshot FROM core.evidence_ledger_snapshots
-      WHERE project_id=${projectId} ORDER BY created_at DESC,id DESC LIMIT 1`;
+      WHERE project_id=${projectId} AND snapshot->>'evaluatedAt'=${new Date(futureTimestamp).toISOString()}
+      ORDER BY created_at DESC,id DESC LIMIT 1`;
     expect(futureSnapshot!.id).not.toBe(snapshot.id);
     expect(futureSnapshot!.snapshot.evaluatedAt).toBe(new Date(futureTimestamp).toISOString());
     expect(futureSnapshot!.snapshot.items[0].status).toBe('needs_re_review');

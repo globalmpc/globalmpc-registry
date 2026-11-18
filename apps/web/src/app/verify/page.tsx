@@ -1,9 +1,10 @@
 "use client";
+import { verifyReviewExport } from "@/lib/review-bundle";
 
 import { ContractLink } from "@/components/ContractLink";
 import { TxLink } from "@/components/TxLink";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { hashProjection, verifyMerkleProof, type Hex } from "@mpc/canonical";
 import {
   getInclusionProof,
@@ -48,6 +49,7 @@ type Outcome =
     };
 
 export default function ProofVerifierPage() {
+  const [reviewResult,setReviewResult]=useState<string|null>(null);
   const [mode, setMode] = useState<"key" | "versionId">("key");
   const [registryType, setRegistryType] = useState("project");
   const [publicKey, setPublicKey] = useState("");
@@ -59,7 +61,12 @@ export default function ProofVerifierPage() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
+  const generation=useRef(0);
+
+  function invalidateProof(){generation.current++;setOutcome({kind:"idle"});setError(null);setBusy(false);}
+
   async function check() {
+    const requestGeneration=++generation.current;
     setBusy(true);
     setError(null);
     setOutcome({ kind: "idle" });
@@ -76,6 +83,7 @@ export default function ProofVerifierPage() {
       } catch (caught) {
         // Not yet anchored is a state, not an error. Drawing both in the same red
         // box reads as "proof failed".
+        if(requestGeneration!==generation.current)return;
         setOutcome({
           kind: "not-anchored",
           detail:
@@ -93,6 +101,7 @@ export default function ProofVerifierPage() {
         proof.root as Hex,
       );
 
+      if(requestGeneration!==generation.current)return;
       const expected = expectedLeaf.trim().toLowerCase();
       setOutcome({
         kind: "checked",
@@ -102,9 +111,9 @@ export default function ProofVerifierPage() {
         expectedLeafMatch: expected ? expected === proof.leafHash.toLowerCase() : null,
       });
     } catch (caught) {
-      setError(caught);
+      if(requestGeneration===generation.current)setError(caught);
     } finally {
-      setBusy(false);
+      if(requestGeneration===generation.current)setBusy(false);
     }
   }
 
@@ -135,6 +144,25 @@ export default function ProofVerifierPage() {
         </div>
       </div>
 
+      <section className="panel" aria-label="Review signature verification">
+        <h2>Verify a signed review export</h2>
+        <p className="meta">Check the exported reviews against the publication commitment. Then check its leaf against the inclusion proof below. Current qualifications and on-chain finality require separate checks.</p>
+        <label>Review export JSON<input type="file" accept="application/json" onChange={async event=>{
+          const file=event.target.files?.[0]; if(!file)return;
+          const importGeneration=++generation.current;
+          setOutcome({kind:"idle"});setError(null);setBusy(false);setExpectedLeaf("");setVersionId("");
+          setReviewResult(null);
+          try{
+            const result=await verifyReviewExport(JSON.parse(await file.text()));
+            if(importGeneration!==generation.current)return;
+            setExpectedLeaf(result.leafHash);
+            setMode("versionId");setVersionId(result.entryVersionId);
+            setReviewResult(`${result.verified} signatures verified; ${result.unavailable} legacy reviews lack signing context. Review commitment matches; check the inclusion proof next.`);
+          }catch(error){if(importGeneration===generation.current)setReviewResult(error instanceof Error?error.message:"Invalid review export");}
+        }}/></label>
+        {reviewResult?<p role="status">{reviewResult}</p>:null}
+      </section>
+
       <div className="panel">
         <div className="row" style={{ gap: 6, marginBottom: 14 }} data-testid="verify-mode">
           {(["key", "versionId"] as const).map((option) => (
@@ -142,7 +170,7 @@ export default function ProofVerifierPage() {
               key={option}
               className={mode === option ? "primary" : undefined}
               aria-pressed={mode === option}
-              onClick={() => setMode(option)}
+              onClick={() => {invalidateProof();setMode(option);}}
             >
               {option === "key" ? "By registry key" : "By version id"}
             </button>
@@ -164,7 +192,7 @@ export default function ProofVerifierPage() {
                 <select
                   id="verify-registry"
                   value={registryType}
-                  onChange={(event) => setRegistryType(event.target.value)}
+                  onChange={(event) => {invalidateProof();setRegistryType(event.target.value);}}
                 >
                   <option value="project">project</option>
                   <option value="verification">verification</option>
@@ -177,7 +205,7 @@ export default function ProofVerifierPage() {
                   id="verify-key"
                   className="mono"
                   value={publicKey}
-                  onChange={(event) => setPublicKey(event.target.value)}
+                  onChange={(event) => {invalidateProof();setPublicKey(event.target.value);}}
                 />
               </div>
             </>
@@ -188,7 +216,7 @@ export default function ProofVerifierPage() {
                 id="verify-version"
                 className="mono"
                 value={versionId}
-                onChange={(event) => setVersionId(event.target.value)}
+                onChange={(event) => {invalidateProof();setVersionId(event.target.value);}}
               />
             </div>
           )}
@@ -208,7 +236,7 @@ export default function ProofVerifierPage() {
             className="mono"
             value={expectedLeaf}
             placeholder="0x…"
-            onChange={(event) => setExpectedLeaf(event.target.value)}
+            onChange={(event) => {invalidateProof();setExpectedLeaf(event.target.value);}}
           />
           <p className="meta" style={{ margin: "4px 0 0" }}>
             If you kept a leaf hash from an earlier receipt, paste it and we will compare rather than

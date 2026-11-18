@@ -1,3 +1,4 @@
+import { signedReviewExport } from "./resources.js";
 import { readinessPolicyOptions } from "./resources.js";
 import { uploadCreationResult } from "./resources.js";
 import { responseMeta } from "./common.js";
@@ -780,6 +781,13 @@ export const ROUTES: readonly RouteDefinition[] = [
   },
 
   // --- Registry -----------------------------------------------------------
+  {
+    method:"get",path:"/api/v1/registry-entries/versions/{id}/review-bundle",
+    summary:"Export a frozen signed-review commitment for an authorized project reader",
+    operationId:"exportSignedReviewBundle",public:false,mutation:false,requiresIfMatch:false,
+    action:"registry.read",implemented:true,responseSchema:signedReviewExport,
+  },
+
   {
     method: "post",
     path: "/api/v1/registry-entries",

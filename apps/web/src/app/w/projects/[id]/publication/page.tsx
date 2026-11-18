@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { use, useCallback, useEffect, useState } from "react";
 import {
+  apiFetch,
   createAnchorBatch,
   draftRegistryEntry,
   getProject,
@@ -85,6 +86,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
   const canPublish = roles.includes("reviewer");
   const pending = drafts.find((draft) => draft.state === "pending") ?? null;
   const lastPublished = drafts.find((draft) => draft.state === "published") ?? null;
+  const exportVersionId=published?.id ?? lastPublished?.entryVersionId;
   const ownDraft = pending !== null && pending.proposedBySubjectId === session?.subjectId;
 
   const renderNotice = () => {
@@ -228,6 +230,15 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
           Publish
         </button>
 
+        {exportVersionId ? <button type="button" onClick={async()=>{
+          try {
+            const response=await apiFetch(`/api/v1/registry-entries/versions/${exportVersionId}/review-bundle`,{cache:"no-store"});
+            if(!response.ok)throw new Error("Review proof is unavailable or access is denied");
+            const data:unknown=await response.json();
+            const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"}));
+            const link=document.createElement("a");link.href=url;link.download=`review-bundle-${exportVersionId}.json`;link.click();URL.revokeObjectURL(url);
+          }catch(error){setError(error);}
+        }}>Download signed review proof</button>:null}
         {published || lastPublished ? (
           <dl className="dl" data-testid="published-result" style={{ marginTop: 14 }}>
             <dt>Public key</dt>

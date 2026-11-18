@@ -26,7 +26,7 @@ export interface AnchorBatch {
   readonly root: Hex;
   readonly manifestHash: Hex;
   readonly recordCount: number;
-  readonly leaves: readonly { entryVersionId: string; leafHash: Hex }[];
+  readonly leaves: readonly { entryVersionId: string; leafHash: Hex; leaf: RegistryLeaf }[];
   readonly manifest: unknown;
 }
 
@@ -50,7 +50,7 @@ export function toRegistryLeaf(row: PublishedVersionRow): RegistryLeaf {
     // Integer decimal string. Numbers do not go into the canonical payload.
     version: String(row.version),
     status: row.status,
-    serializationVersion: "1",
+    serializationVersion: row.serialization_version as RegistryLeaf["serializationVersion"],
     policyVersion: row.policy_version,
     schemaVersion: row.schema_version,
     contentHash: row.content_hash,
@@ -95,7 +95,7 @@ export async function buildAnchorBatch(
   // The manifest is kept off-chain. Only its hash goes on chain (08 §8.4).
   const manifest = {
     manifestVersion: "1",
-    serializationVersion: "1",
+    serializationVersion: leaves.every(entry => entry.leaf.serializationVersion === "1") ? "1" : "2",
     recordCount: String(leaves.length),
     root: tree.root,
     leaves: [...leaves]
@@ -111,6 +111,7 @@ export async function buildAnchorBatch(
     leaves: leaves.map((entry) => ({
       entryVersionId: entry.entryVersionId,
       leafHash: entry.leafHash,
+      leaf: entry.leaf,
     })),
     manifest,
   };

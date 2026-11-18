@@ -265,4 +265,100 @@ describeDb("additive development fixtures", () => {
     expect(await fx.sql`SELECT * FROM core.registry_entry_versions WHERE tenant_id=${fx.tenantA} ORDER BY id`).toEqual(versions);
   });
 
+  it("adds rich document projects through scanning, preserving publications and repeated runs", async () => {
+    const before = await fx.sql`SELECT * FROM core.registry_entry_versions WHERE tenant_id=${fx.tenantA} ORDER BY id`;
+    let puts = 0;
+    const interruptedStore = {...store, put: async (...args: Parameters<typeof store.put>) => {
+      if (++puts === 5) throw new Error("synthetic interrupted upload");
+      return store.put(...args);
+    }};
+    await expect(seedDevDemo(ownerSql,interruptedStore,{...options,includeDocumentProjects:true})).rejects.toThrow("synthetic interrupted upload");
+    const partialUploads=await fx.sql`SELECT u.id FROM core.object_uploads u JOIN core.projects p ON p.id=u.project_id WHERE p.project_key=${key("DOCUMENTS-1")}`;
+    expect(partialUploads).toHaveLength(4);
+    await expect(seedDevDemo(ownerSql,store,{...options,includeDocumentProjects:true,scanTimeoutMs:0})).rejects.toThrow("scan timeout");
+    const [partial] = await fx.sql<{id:string}[]>`SELECT id FROM core.projects WHERE project_key=${key("DOCUMENTS-1")}`;
+    const uploadsBefore = await fx.sql`SELECT id,state FROM core.object_uploads WHERE project_id=${partial!.id} ORDER BY id`;
+    expect(uploadsBefore).toHaveLength(20);
+    expect(uploadsBefore.every(upload=>upload.state==='quarantined')).toBe(true);
+    let stopped = false;
+    const scanner = (async () => {
+      while (!stopped) {
+        const uploads = await fx.sql<{id:string;version:number}[]>`SELECT id,version FROM core.object_uploads WHERE tenant_id=${fx.tenantA} AND state='quarantined'`;
+        for (const upload of uploads) {
+          const response = await app.inject({method:"POST",url:`/api/v1/uploads/${upload.id}/scan-result`,headers:{authorization:`Bearer ${fx.scanServiceToken}`,"idempotency-key":crypto.randomUUID(),"if-match":`"${upload.version}"`},payload:{result:"clean"}});
+          expect(response.statusCode,response.body).toBe(200);
+        }
+        await new Promise(resolve=>setTimeout(resolve,5));
+      }
+    })();
+    try {
+      const result = await seedDevDemo(ownerSql,store,{...options,includeDocumentProjects:true});
+      expect(result.created).toHaveLength(3);
+    } finally { stopped=true; await scanner; }
+    for (const stage of [1,3,5]) {
+      const response=await app.inject(`/api/v1/public/registries/project/${key(`DOCUMENTS-${stage}`)}`);
+      expect(response.statusCode,response.body).toBe(200);
+      const ledger=response.json().evidenceLedger;
+      expect(ledger.items).toHaveLength(20);
+      for (const [index, assessed] of ledger.stages.entries()) {
+        expect(assessed.status).toBe(index < stage ? "ok" : "gap");
+        expect(String(assessed.requiredItems)).toBe("4");
+        expect(String(assessed.reviewedItems)).toBe(index < stage ? "4" : "0");
+      }
+      const [project] = await fx.sql<{id:string}[]>`SELECT id FROM core.projects WHERE project_key=${key(`DOCUMENTS-${stage}`)}`;
+      const coordinates=await fx.sql`SELECT source_coordinate FROM core.claims WHERE project_id=${project!.id}`;
+      expect(coordinates).toHaveLength(20);
+      expect(coordinates.every(row=>typeof row.source_coordinate === 'object' && typeof row.source_coordinate.reference === 'string')).toBe(true);
+      const attestations=await fx.sql`SELECT a.id FROM core.verification_attestations a JOIN core.verification_cases c ON c.id=a.case_id WHERE c.project_id=${project!.id}`;
+      expect(attestations).toHaveLength(stage*4);
+      const catalogs=await fx.sql`SELECT project_id FROM core.claim_types WHERE tenant_id=${fx.tenantA} AND claim_type LIKE ${`synthetic_dev_demo_documents_${stage}_licence%`}`;
+      expect(catalogs).toHaveLength(20);
+      expect(catalogs.every(row=>row.project_id===project!.id)).toBe(true);
+      const policies=await fx.sql`SELECT project_id,definition FROM core.compliance_policy_sets WHERE project_id=${project!.id}`;
+      expect(policies).toHaveLength(5);
+      const labels=policies.flatMap(row=>row.definition.requirements.map((requirement:{label:string})=>requirement.label));
+      expect(new Set(labels).size).toBe(20);
+
+      expect(ledger.currentStage).toBe(`stage.${["exploration","resource_defined","feasibility","permitted","production"][stage-1]}`);
+      expect(ledger.items.filter((item:{status:string})=>item.status==="reviewed")).toHaveLength(stage*4);
+      const uploads=await fx.sql`SELECT u.state FROM core.object_uploads u JOIN core.projects p ON p.id=u.project_id WHERE p.project_key=${key(`DOCUMENTS-${stage}`)}`;
+      expect(uploads).toHaveLength(20);
+      expect(uploads.every(upload=>upload.state==='promoted')).toBe(true);
+      expect(JSON.stringify(ledger)).not.toContain('object_key');
+    }
+    const after=await fx.sql`SELECT * FROM core.registry_entry_versions WHERE tenant_id=${fx.tenantA} ORDER BY id`;
+    expect(after.filter(row=>before.some(old=>old.id===row.id))).toEqual(before);
+    expect((await seedDevDemo(ownerSql,store,{...options,includeDocumentProjects:true})).created).toEqual([]);
+    expect(await fx.sql`SELECT * FROM core.registry_entry_versions WHERE tenant_id=${fx.tenantA} ORDER BY id`).toEqual(after);
+  }, 30_000);
+
+  it("rejects an unexpected upload on a partial document project without deleting it", async () => {
+    const other = await setupFixture();
+    const objects = createMemoryObjectStore();
+    const [tenant] = await other.sql<{slug:string}[]>`SELECT slug FROM core.tenants WHERE id=${other.tenantA}`;
+    const opts={...options,tenantSlug:tenant!.slug,scanTimeoutMs:0,includeDocumentProjects:true};
+    const seedOwner=postgres(process.env["DATABASE_URL"]!,{connection:{role:ownerRole},onnotice:()=>{}});
+    try {
+      // Complete the original fixtures first using the same scanner transition as the existing fixture tests.
+      const server=await buildServer(loadConfig(testEnv()),other.appSql);
+      let stopped=false;
+      const scanner=(async()=>{while(!stopped){
+        for(const upload of await other.sql`SELECT id,version FROM core.object_uploads WHERE tenant_id=${other.tenantA} AND state='quarantined'`){
+          const response=await server.inject({method:"POST",url:`/api/v1/uploads/${upload.id}/scan-result`,headers:{authorization:`Bearer ${other.scanServiceToken}`,"idempotency-key":crypto.randomUUID(),"if-match":`"${upload.version}"`},payload:{result:"clean"}});
+          expect(response.statusCode,response.body).toBe(200);
+        }
+        await new Promise(resolve=>setTimeout(resolve,5));
+      }})();
+      try{await seedDevDemo(seedOwner,objects,{...opts,includeDocumentProjects:false,scanTimeoutMs:3000});}
+      finally{stopped=true;await scanner;await server.close();}
+      await expect(seedDevDemo(seedOwner,objects,opts)).rejects.toThrow("scan timeout");
+      const [project]=await other.sql<{id:string}[]>`SELECT id FROM core.projects WHERE tenant_id=${other.tenantA} AND project_key LIKE 'DEMO-V1-DOCUMENTS-1-%'`;
+      const unexpected=crypto.randomUUID();
+      await other.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,original_filename,sensitivity,state)
+        VALUES(${unexpected},${other.tenantA},${project!.id},'synthetic-user-upload',${computeContentHash(Buffer.from('user fixture'))},1,'text/plain','user.txt','public','quarantined')`;
+      await expect(seedDevDemo(seedOwner,objects,opts)).rejects.toThrow("user activity");
+      expect(await other.sql`SELECT id FROM core.object_uploads WHERE id=${unexpected}`).toHaveLength(1);
+    } finally {await seedOwner.end();await other.close();}
+  },30_000);
+
 });

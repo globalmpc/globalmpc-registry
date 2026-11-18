@@ -1595,6 +1595,11 @@ export async function registerVerificationRoutes(
           await tx`
             UPDATE core.verification_attestations
             SET signature = ${parsed.data.signature},
+                signing_envelope = ${tx.json(JSON.parse(JSON.stringify({
+                  typedData: buildTypedData(config, message),
+                  authorityBasis: basis, credential, versions,
+                  reviewerSubjectId: attestation.reviewer_subject,
+                }, (_key, value) => typeof value === "bigint" ? value.toString() : value)))},
                 signer_wallet_address = ${signer},
                 signed_at = now(),
                 state = 'signed',
