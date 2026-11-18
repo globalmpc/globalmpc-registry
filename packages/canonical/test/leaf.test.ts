@@ -49,9 +49,15 @@ describe("assertValidLeaf", () => {
     expect(() => assertValidLeaf({ ...VALID, contentHash: "0xdead" })).toThrowError(/32-byte/);
   });
 
+  it("separates v2 from legacy bytes without changing deterministic v1", () => {
+    const legacy=hashLeaf(VALID);
+    expect(hashLeaf({...VALID,serializationVersion:"2"})).not.toBe(legacy);
+    expect(hashLeaf({...VALID})).toBe(legacy);
+  });
+
   it("rejects an unsupported serializationVersion", () => {
     expect(() =>
-      assertValidLeaf({ ...VALID, serializationVersion: "2" as never }),
+      assertValidLeaf({ ...VALID, serializationVersion: "3" as never }),
     ).toThrowError(/serializationVersion/);
   });
 });

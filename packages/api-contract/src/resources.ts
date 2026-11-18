@@ -1148,7 +1148,7 @@ export const registryEntryVersion = z.object({
   contentHash: hex32.nullable(),
   policyVersion: z.string(),
   schemaVersion: z.string(),
-  serializationVersion: z.literal("1"),
+  serializationVersion: z.enum(["1", "2"]),
   publishedAt: isoDateTime.nullable(),
   revokedAt: isoDateTime.nullable(),
   supersededById: z.string().nullable(),
@@ -1162,6 +1162,11 @@ export const registryEntryVersion = z.object({
  */
 export const publicProjection = z
   .object({
+    reviewCommitment: z.object({
+      version: z.literal("1"), bundleHash: hex32,
+      reviewCount: z.string().regex(/^(0|[1-9][0-9]*)$/),
+      independentlyVerifiableCount: z.string().regex(/^(0|[1-9][0-9]*)$/),
+    }).strict().optional(),
     evidenceLedger: publicEvidenceLedger.optional(),
     stableId: z.string(),
     projectKey: z.string().optional(),
@@ -2479,4 +2484,11 @@ export const readinessPolicyOptions = z.object({
     id: z.string().guid(), ruleSetId: z.string(), version: z.string(), gateId: z.string(),
     jurisdictionProfile: z.string(), effectiveFrom: isoDateTime,
   })),
+});
+
+/** Private export; never served by public Registry routes. */
+export const signedReviewExport = z.object({
+  entryVersionId:z.string().uuid(),bundleHash:hex32,
+  bundle:z.record(z.string(),z.unknown()),projection:publicProjection,
+  leaf:z.object({registryType:z.enum(["project","verification","asset"]),entryVersionId:z.string().uuid(),subjectId:z.string().uuid(),version:z.string(),status:z.enum(["published","revoked","superseded"]),serializationVersion:z.enum(["1","2"]),policyVersion:z.string(),schemaVersion:z.string(),contentHash:hex32}),
 });

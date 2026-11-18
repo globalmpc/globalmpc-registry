@@ -28,7 +28,17 @@ def run(stack):
     arn, cluster = task["taskArn"], task["clusterArn"]
     print(f"dev demo task: {arn}", flush=True)
     try:
-        subprocess.run(["aws", "ecs", "wait", "tasks-stopped", "--cluster", cluster, "--tasks", arn], check=True)
+        # The CLI waiter expires after about ten minutes. A fresh seed may scan
+        # eleven scenarios; allow six bounded windows, retrying only waiter expiry.
+        for attempt in range(6):
+            try:
+                subprocess.run(["aws", "ecs", "wait", "tasks-stopped", "--cluster", cluster, "--tasks", arn],
+                               check=True, capture_output=True, text=True)
+                break
+            except subprocess.CalledProcessError as error:
+                if attempt == 5 or "Max attempts exceeded" not in (error.stderr or ""):
+                    raise
+
     except subprocess.CalledProcessError:
         aws("ecs", "stop-task", "--cluster", cluster, "--task", arn, "--reason", "Dev demo CI waiter failed")
         raise RuntimeError("Demo task waiter failed; stop requested") from None

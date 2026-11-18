@@ -40,6 +40,18 @@ class TaskTests(unittest.TestCase):
                 demo.run("stack")
             self.assertEqual(api.call_args.args[:2], ("ecs", "stop-task"))
 
+    def test_waiter_expiry_retries_but_is_bounded(self):
+        expired = subprocess.CalledProcessError(255, "wait", stderr="Waiter TasksStopped failed: Max attempts exceeded")
+        for results, expected_calls, success in [([expired, None], 2, True), ([expired] * 6, 6, False)]:
+            with self.subTest(success=success), patch.dict(os.environ, {"DEPLOY_ENVIRONMENT": "develop", "CHAIN_ID": "5611"}), patch.object(demo, "aws", side_effect=[self.outputs, self.launched, {"tasks": [{"containers": [{"exitCode": 0}]}]}]) as api, patch.object(demo.subprocess, "run", side_effect=results) as wait:
+                if success:
+                    demo.run("stack")
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "stop requested"):
+                        demo.run("stack")
+                    self.assertEqual(api.call_args.args[:2], ("ecs", "stop-task"))
+                self.assertEqual(wait.call_count, expected_calls)
+
     def test_seed_override_runs_through_task_and_image_entrypoints(self):
         import json
         root = Path(__file__).resolve().parents[2]

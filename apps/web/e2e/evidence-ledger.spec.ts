@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { openIntegrityProof } from "./disclosures";
 import { openHeaderMenu } from "./header-menu";
 import { expect, test } from "@playwright/test";
@@ -180,6 +181,22 @@ test.describe("evidence ledger complete journey", () => {
     );
 
     await publishAndAnchor(page, projectId, projectKey);
+    await page.goto(`/w/projects/${projectId}/publication`);
+    const downloadEvent=page.waitForEvent("download");
+    await page.getByRole("button",{name:"Download signed review proof"}).click();
+    const download=await downloadEvent;
+    const file=await download.path();expect(file).toBeTruthy();
+    const exported=JSON.parse(await readFile(file!,"utf8"));
+    expect(exported.bundle.reviews).toHaveLength(1);
+    expect(exported.projection.reviewCommitment.independentlyVerifiableCount).toBe("1");
+    const proof=await read(page,`/api/v1/public/proofs/${exported.entryVersionId}`);
+    await page.goto("/verify");
+    await page.getByLabel("Review export JSON").setInputFiles(file!);
+    await expect(page.getByRole("status")).toContainText("1 signatures verified; 0 legacy reviews");
+    await expect(page.getByLabel("Expected leaf hash (optional)")).toHaveValue(proof.leafHash);
+    await page.getByRole("button",{name:"Check proof"}).click();
+    await expect(page.getByTestId("verify-expected")).toContainText("Same as");
+
     // Private basis of the approved item, read with Operator A's workspace access.
     const privateLedger = (
       await read(page, `/api/v1/projects/${projectId}/evidence-ledger`)

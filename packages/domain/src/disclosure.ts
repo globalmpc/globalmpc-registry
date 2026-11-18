@@ -30,6 +30,7 @@ export const PUBLIC_FIELD_ALLOWLIST = [
   "staleStatus",
   "claimSummary",
   "evidenceLedger",
+  "reviewCommitment",
   "grade",
   "limitations",
   "verificationScope",

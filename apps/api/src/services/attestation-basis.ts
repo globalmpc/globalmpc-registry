@@ -25,6 +25,8 @@ import {
 type Tx = postgres.TransactionSql;
 
 interface AuthorityRow {
+  id: string;
+  version: number;
   state: AuthorityState;
   valid_from: string;
   valid_until: string | null;
@@ -90,10 +92,10 @@ export async function loadAuthorityBasis(
   tx: Tx,
   credential: CredentialFacts,
   claimIds: readonly string[],
-): Promise<AuthorityBasis> {
+): Promise<AuthorityBasis & {snapshot:unknown}> {
   const [issuer] = credential.issuerAuthorityId
     ? await tx<AuthorityRow[]>`
-        SELECT state, to_char(valid_from, 'YYYY-MM-DD') AS valid_from,
+        SELECT id,version,state, to_char(valid_from, 'YYYY-MM-DD') AS valid_from,
                to_char(valid_until, 'YYYY-MM-DD') AS valid_until, recognized_scope
         FROM core.authorities WHERE id = ${credential.issuerAuthorityId}
       `
@@ -104,7 +106,7 @@ export async function loadAuthorityBasis(
   `;
 
   const sources = await tx<AuthorityRow[]>`
-    SELECT DISTINCT au.id, au.state, to_char(au.valid_from, 'YYYY-MM-DD') AS valid_from,
+    SELECT DISTINCT au.id, au.version, au.state, to_char(au.valid_from, 'YYYY-MM-DD') AS valid_from,
            to_char(au.valid_until, 'YYYY-MM-DD') AS valid_until, au.recognized_scope
     FROM core.claims c
     JOIN core.source_receipts r ON r.id = c.source_receipt_id
@@ -112,13 +114,13 @@ export async function loadAuthorityBasis(
     WHERE c.id = ANY(${claimIds as string[]}::uuid[])
   `;
 
-  return evaluateAuthorityBasis({
+  return {...evaluateAuthorityBasis({
     issuer: issuer ? toAuthorityFacts(issuer) : null,
     sourceAuthorities: sources.map(toAuthorityFacts),
     claimTypes: claims.map((claim) => claim.claim_type),
     credentialScope: credential.credentialScope,
     asOf: today(),
-  });
+  }), snapshot:{evaluatedAt:today(),issuer:issuer ?? null,sourceAuthorities:sources,claimTypes:claims.map(claim=>claim.claim_type),credentialScope:credential.credentialScope}};
 }
 
 /**

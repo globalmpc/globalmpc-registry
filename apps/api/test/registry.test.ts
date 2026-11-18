@@ -2,7 +2,7 @@ import { addGovernanceAccount } from "./helpers/governance-accounts.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { verifyMerkleProof, type Hex } from "@mpc/canonical";
+import { verifyMerkleProof, hashLeaf, type Hex } from "@mpc/canonical";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from "./helpers/db.js";
@@ -1535,7 +1535,18 @@ describeDb("Registry publication and public lookup", () => {
       // Returns the value given at publication — not a hard-coded constant.
       expect(proof.policyVersion).toBe("mn-core-9.9.9");
       expect(proof.schemaVersion).toBe("project-registry-9");
-      expect(proof.serializationVersion).toBe("1");
+      expect(proof.serializationVersion).toBe("2");
+
+      const exported=await app.inject({method:"GET",url:`/api/v1/registry-entries/versions/${published.id}/review-bundle`,headers:{authorization:`Bearer ${tokens.operatorA}`}});
+      expect(exported.statusCode,exported.body).toBe(200);
+      expect(exported.json().bundle.reviews).toEqual([]);
+      expect(exported.json().projection.reviewCommitment.reviewCount).toBe("0");
+      expect(hashLeaf(exported.json().leaf)).toBe(proof.leafHash);
+      const otherToken=await signIn(app,fx.operatorB);
+      expect((await app.inject({method:"GET",url:`/api/v1/registry-entries/versions/${published.id}/review-bundle`,headers:{authorization:`Bearer ${otherToken}`}})).statusCode).toBe(404);
+      await expect(fx.sql`UPDATE core.registry_review_bundles SET bundle='{}' WHERE entry_version_id=${published.id}`).rejects.toThrow();
+
+      expect((await app.inject({method:"GET",url:`/api/v1/registry-entries/versions/${published.id}/review-bundle`})).statusCode).toBe(401);
 
       // Carries no subject. Only the spec name.
       expect(proof.subjectId).toBeUndefined();

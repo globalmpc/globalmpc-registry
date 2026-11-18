@@ -157,3 +157,12 @@ Asset token issuance, trading and custody are outside this registry's current fu
 ---
 
 Maintained by [Global MPC (Mineral Project Coin)](https://globalmpc.tech). $MPC remains at the Pre-TGE stage, and no token contract address has been published. Official site: https://globalmpc.tech
+
+Published versions created with serialization v2 commit a frozen review bundle as
+well as the public record. Authorized workspace readers can download the signed
+review proof from Publication and check it at `/verify`, then compare its leaf
+with the anchor inclusion proof. Original documents and review bodies stay off
+chain; only hashes are anchored. Legacy v1 proofs retain their original meaning.
+Older reviews without stored signing context are identified as unavailable for
+independent signature verification; historical proof does not establish current
+reviewer standing or factual truth.
