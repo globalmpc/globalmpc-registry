@@ -1,3 +1,4 @@
+import { DEMO_DOCUMENTS } from "./dev-demo-documents.js";
 import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
@@ -28,9 +29,10 @@ export async function ensureDemoCoverageDefinitions(
       AND kind='person' AND email IS NULL AND NOT EXISTS(SELECT 1 FROM core.role_bindings WHERE subject_id=${subject!})`;
     if (!holder) throw new Error("Coverage fixture identity was changed; seed stopped");
   }
+  const rich = scenario.startsWith("DOCUMENTS-");
   const catalog = { id: fixtureId("coverage:catalog"), claimType: `synthetic_dev_demo_${scenario.toLowerCase().replaceAll("-", "_")}_licence` };
   const definition = { fields: [{ key: "reference", label: "Synthetic reference", type: "string", required: true }] };
-  const displayName = `SYNTHETIC DEMO ${scenario.toLowerCase()} licence`;
+  const displayName = rich ? "Exploration licence" : `SYNTHETIC DEMO ${scenario.toLowerCase()} licence`;
   const effectiveFrom = new Date("2020-01-01T00:00:00Z");
   const [existing] = await tx`SELECT * FROM core.claim_types WHERE id=${catalog.id}`;
   if (existing) {
@@ -42,6 +44,20 @@ export async function ensureDemoCoverageDefinitions(
     await fixtureApproval(tx, tenant, proposer, approver, "claim_type", catalog.claimType, catalog.id,
       { claimType: catalog.claimType, displayName, description: limitation, definition, projectId: project }, effectiveFrom, limitation);
   }
+  const catalogs = [{ ...catalog, gate: "exploration", label: displayName }];
+  if (rich) for (const [key, label, gate] of DEMO_DOCUMENTS.slice(1)) {
+    const item = { id: fixtureId(`coverage:catalog:${key}`), claimType: `${catalog.claimType}_${key}`, gate, label };
+    const [found] = await tx`SELECT * FROM core.claim_types WHERE id=${item.id}`;
+    if (found && (found.project_id !== project || found.tenant_id !== tenant || found.claim_type !== item.claimType ||
+      !isDeepStrictEqual(found.definition, definition))) throw new Error("Coverage catalog identity collision");
+    if (!found) {
+      await tx`INSERT INTO core.claim_types(id,tenant_id,project_id,claim_type,catalog_version,display_name,description,definition,effective_from)
+        VALUES(${item.id},${tenant},${project},${item.claimType},1,${label},${limitation},${tx.json(definition)},${effectiveFrom})`;
+      await fixtureApproval(tx, tenant, proposer, approver, "claim_type", item.claimType, item.id,
+        { claimType: item.claimType, displayName: label, description: limitation, definition, projectId: project }, effectiveFrom, limitation);
+    }
+    catalogs.push(item);
+  }
   const gates = ["exploration", "resource_defined", "feasibility", "permitted", "production"];
   for (const [index, gate] of (completedStages === undefined ? gates.slice(0, 1) : gates).entries()) {
     const policyId = fixtureId(`coverage:${gate}`);
@@ -49,10 +65,10 @@ export async function ensureDemoCoverageDefinitions(
       ruleSetId: `synthetic-demo-${project}-${gate}`, version: "1.0.0",
       effectiveFrom: "2020-01-01T00:00:00Z", supersededBy: null, jurisdictionProfile: "MNG",
       gateId: `stage.${gate}`, retroactive: false,
-      requirements: [{ requirementId: "synthetic_licence_review", label: "Synthetic licence evidence and review",
-        appliesWhen: { op: "always" }, requiredClaimTypes: [catalog.claimType], minimumGrade: completedStages !== undefined && index >= completedStages ? "verified" : "partially_verified",
+      requirements: (rich ? catalogs.filter(item => item.gate === gate) : [{...catalog,label: "Synthetic licence evidence and review"}]).map(item => ({ requirementId: rich ? item.claimType : "synthetic_licence_review", label: item.label,
+        appliesWhen: { op: "always" }, requiredClaimTypes: [item.claimType], minimumGrade: completedStages !== undefined && index >= completedStages ? "verified" : "partially_verified",
         freshnessThresholdDays: null, requiredAttestations: ["professional_signoff"], blockingConflictTypes: [],
-        notEvaluableWhen: { op: "never" }, watchWhen: null }],
+        notEvaluableWhen: { op: "never" }, watchWhen: null })),
     });
     const [policy] = await tx`SELECT * FROM core.compliance_policy_sets WHERE id=${policyId}`;
     if (policy) {

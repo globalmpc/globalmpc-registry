@@ -14,8 +14,12 @@ try {
   };
   const store = createS3ObjectStore({ bucket: required("OBJECT_BUCKET"), region: required("OBJECT_REGION"), sse: "aes256" });
   sql = postgres(required("DATABASE_URL"), { onnotice: () => {}, connection: { TimeZone: "UTC" } });
+  const includeDocuments = process.env["DEMO_INCLUDE_DOCUMENTS"] ?? "true";
+  if (!["true", "false"].includes(includeDocuments)) throw new DemoSeedError("DEMO_INCLUDE_DOCUMENTS must be true or false");
+  const scanTimeoutMs = Number(process.env["DEMO_SCAN_TIMEOUT_MS"] ?? "240000");
+  if (!Number.isSafeInteger(scanTimeoutMs) || scanTimeoutMs < 1000 || scanTimeoutMs > 240000) throw new DemoSeedError("DEMO_SCAN_TIMEOUT_MS must be between 1000 and 240000");
   const result = await seedDevDemo(sql, store, {
-    environment, chainId, includeStageProjects: true, tenantSlug: required("DEMO_TENANT_SLUG"),
+    environment, chainId, includeStageProjects: true, includeDocumentProjects: includeDocuments === "true", scanTimeoutMs, tenantSlug: required("DEMO_TENANT_SLUG"),
     ...(process.env["DEMO_OWNER_ORGANIZATION_NAME"] ? { ownerOrganizationName: process.env["DEMO_OWNER_ORGANIZATION_NAME"] } : {}),
   });
   process.stdout.write(`${JSON.stringify({ msg: "dev_demo.complete", ...result })}\n`);

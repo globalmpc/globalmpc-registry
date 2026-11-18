@@ -1,3 +1,4 @@
+import { DEMO_DOCUMENTS, demoStage, reviewedDemoDocument } from "./dev-demo-documents.js";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type postgres from "postgres";
@@ -21,7 +22,8 @@ export const DEMO_LIMITATION = "SYNTHETIC DEV DEMO ONLY: simulated review, no re
 // Fixture issuers/credentials cannot back the application's real mining-right claim type.
 const scenarios = ["INPUT", "REVIEW", "PUBLIC"] as const;
 const stageScenarios = ["STAGE-1", "STAGE-2", "STAGE-3", "STAGE-4", "STAGE-5"] as const;
-type Scenario = typeof scenarios[number] | typeof stageScenarios[number];
+const documentScenarios = ["DOCUMENTS-1", "DOCUMENTS-3", "DOCUMENTS-5"] as const;
+type Scenario = typeof scenarios[number] | typeof stageScenarios[number] | typeof documentScenarios[number];
 type Tx = postgres.TransactionSql;
 export class DemoSeedError extends Error {}
 
@@ -59,7 +61,7 @@ async function assertPristinePartial(tx: Tx, tenant: string, project: string, ow
     EXISTS(SELECT 1 FROM core.source_receipts WHERE tenant_id=${tenant} AND project_id=${project}) OR
     EXISTS(SELECT 1 FROM core.project_fact_versions WHERE tenant_id=${tenant} AND project_id=${project}) OR
     EXISTS(SELECT 1 FROM core.disclosure_restrictions WHERE tenant_id=${tenant} AND project_id=${project}) OR
-    EXISTS(SELECT 1 FROM core.object_uploads WHERE tenant_id=${tenant} AND project_id=${project} AND id<>${id(tenant, `${scenario}:upload`)})
+    EXISTS(SELECT 1 FROM core.object_uploads WHERE tenant_id=${tenant} AND project_id=${project} AND NOT (id=ANY(${[id(tenant, `${scenario}:upload`), ...(scenario.startsWith("DOCUMENTS-") ? DEMO_DOCUMENTS.slice(1).map(([key]) => id(tenant, `${scenario}:${key}:upload`)) : [])]}::uuid[])))
     AS changed`;
   if (activity?.changed) throw new DemoSeedError("Incomplete demo has user activity or restrictions; seed stopped without replacing it");
 }
@@ -70,6 +72,7 @@ export interface DemoOptions {
   tenantSlug: string;
   ownerOrganizationName?: string;
   includeStageProjects?: boolean;
+  includeDocumentProjects?: boolean;
   scanTimeoutMs?: number;
   pollIntervalMs?: number;
 }
@@ -93,7 +96,7 @@ export async function seedDevDemo(sql: postgres.Sql, store: ObjectStore, options
           WHERE o.tenant_id=${tenantId} AND r.role='administrator' AND r.revoked_at IS NULL`);
     if (owners.length !== 1) throw new DemoSeedError("Demo owner is missing or ambiguous; configure DEMO_OWNER_ORGANIZATION_NAME");
     const result = { created: [] as string[], skipped: [] as string[], assessed: [] as string[] };
-    for (const scenario of [...scenarios, ...(options.includeStageProjects ? stageScenarios : [])]) {
+    for (const scenario of [...scenarios, ...(options.includeStageProjects ? stageScenarios : []), ...(options.includeDocumentProjects ? documentScenarios : [])]) {
       const projectId = id(tenantId, scenario);
       const projectKey = `DEMO-V1-${scenario}-${tenantId}`;
       const state = await withTenant(sql, { tenantId }, async tx => {
@@ -116,7 +119,7 @@ export async function seedDevDemo(sql: postgres.Sql, store: ObjectStore, options
       });
       if (state === "done") {
         await withTenant(sql, { tenantId }, async tx => {
-          await ensureDemoCoverageDefinitions(tx, tenantId, projectId, scenario, DEMO_LIMITATION, name => id(tenantId, `${scenario}:${name}`), scenario.startsWith("STAGE-") ? Number(scenario.slice(6)) : undefined);
+          await ensureDemoCoverageDefinitions(tx, tenantId, projectId, scenario, DEMO_LIMITATION, name => id(tenantId, `${scenario}:${name}`), demoStage(scenario));
           if (await seedDemoCoverageSnapshot(tx, tenantId, projectId, DEMO_LIMITATION)) result.assessed.push(projectKey);
         });
         result.skipped.push(projectKey); continue;
@@ -134,28 +137,66 @@ export async function seedDevDemo(sql: postgres.Sql, store: ObjectStore, options
             VALUES (${uploadId},${tenantId},${projectId},${object.key},${object.contentHash},${object.byteSize},'text/plain',${`${projectKey}-SYNTHETIC.txt`},'public','quarantined')`;
         });
       }
+      if (scenario.startsWith("DOCUMENTS-")) {
+        for (const [key, label] of DEMO_DOCUMENTS.slice(1)) {
+          const extraId = id(tenantId, `${scenario}:${key}:upload`);
+          const exists = await withTenant(sql, { tenantId }, async tx => (await tx`SELECT id FROM core.object_uploads WHERE id=${extraId} AND tenant_id=${tenantId}`).length > 0);
+          if (exists) continue;
+          const object = await store.put(quarantineKey(tenantId, extraId), Buffer.from(`${DEMO_LIMITATION}\n${label}\nReference: ${projectKey}/${key}\nIllustrative document content only.\n`), "text/plain");
+          await withTenant(sql, { tenantId }, async tx => {
+            await assertPristinePartial(tx, tenantId, projectId, owners[0]!.id, scenario);
+            await tx`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,original_filename,sensitivity,state)
+              VALUES(${extraId},${tenantId},${projectId},${object.key},${object.contentHash},${object.byteSize},'text/plain',${`${label} — SYNTHETIC.txt`},'public','quarantined')`;
+          });
+        }
+      }
       if (scenario !== "INPUT") {
         const deadline = Date.now() + (options.scanTimeoutMs ?? 180_000);
         for (;;) {
           const upload = await withTenant(sql, { tenantId }, async tx => {
-            const [row] = await tx<{ state: string }[]>`SELECT state FROM core.object_uploads
-              WHERE tenant_id=${tenantId} AND id=${uploadId}`;
-            return row;
+            const rows = await tx<{ state: string }[]>`SELECT state FROM core.object_uploads
+              WHERE tenant_id=${tenantId} AND project_id=${projectId}`;
+            if (rows.length === 0) throw new DemoSeedError(`Demo upload missing: ${projectKey}`);
+            return { state: rows.some(row => row.state !== "scanned_clean" && row.state !== "quarantined") ? "failed" : rows.every(row => row.state === "scanned_clean") ? "scanned_clean" : "quarantined" };
           });
-          if (!upload) throw new DemoSeedError(`Demo upload missing: ${projectKey}`);
           if (upload.state === "scanned_clean") break;
           if (upload.state !== "quarantined") throw new DemoSeedError(`Demo upload did not pass scanning: ${projectKey}`);
           if (Date.now() >= deadline) throw new DemoSeedError(`Demo scan timeout: ${projectKey}; rerun to resume`);
           await delay(options.pollIntervalMs ?? 2000);
         }
       }
+      // Prepare object copies outside tenant transactions; recheck scan state under lock below.
+      if (scenario !== "INPUT") {
+        const documents = scenario.startsWith("DOCUMENTS-")
+          ? DEMO_DOCUMENTS.map(([key], index) => ({ upload: index === 0 ? uploadId : id(tenantId, `${scenario}:${key}:upload`), namespace: index === 0 ? scenario : `${scenario}:${key}` }))
+          : [{upload: uploadId, namespace: scenario}];
+        const sources = await withTenant(sql, {tenantId}, async tx => {
+          await assertPristinePartial(tx, tenantId, projectId, owners[0]!.id, scenario);
+          const rows = await tx<{id:string;state:string;object_key:string}[]>`SELECT id,state,object_key FROM core.object_uploads WHERE tenant_id=${tenantId} AND project_id=${projectId}`;
+          return documents.map(document => {
+            const source = rows.find(row => row.id === document.upload);
+            if (source?.state !== "scanned_clean") throw new DemoSeedError("Demo evidence requires an actual clean scan");
+            return {key:source.object_key, namespace:document.namespace};
+          });
+        });
+        for (const source of sources) {
+          await store.copy(source.key, evidenceKey(tenantId, id(tenantId, `${source.namespace}:artifact`)));
+        }
+      }
       await withTenant(sql, { tenantId }, async tx => {
         await assertPristinePartial(tx, tenantId, projectId, owners[0]!.id, scenario);
         // The scan is a live worker result. Check it again under a row lock before promotion.
-        const catalog = await ensureDemoCoverageDefinitions(tx, tenantId, projectId, scenario, DEMO_LIMITATION, name => id(tenantId, `${scenario}:${name}`), scenario.startsWith("STAGE-") ? Number(scenario.slice(6)) : undefined);
+        const catalog = await ensureDemoCoverageDefinitions(tx, tenantId, projectId, scenario, DEMO_LIMITATION, name => id(tenantId, `${scenario}:${name}`), demoStage(scenario));
+        if (scenario.startsWith("DOCUMENTS-")) {
+          for (const [key, , gate] of DEMO_DOCUMENTS.slice(1)) {
+            const claimType = `${catalog.claimType}_${key}`;
+            const [definition] = await tx<{id:string}[]>`SELECT id FROM core.claim_types WHERE tenant_id=${tenantId} AND project_id=${projectId} AND claim_type=${claimType}`;
+            await finishEvidence(tx, tenantId, projectId, id(tenantId, `${scenario}:${key}:upload`), `${scenario}:${key}`, {id:definition!.id,claimType}, false, reviewedDemoDocument(scenario, gate));
+          }
+        }
         const assessed = scenario === "INPUT"
           ? await seedDemoCoverageSnapshot(tx, tenantId, projectId, DEMO_LIMITATION)
-          : await finishEvidence(tx, store, tenantId, projectId, uploadId, scenario, catalog);
+          : await finishEvidence(tx, tenantId, projectId, uploadId, scenario, catalog);
         if (assessed) result.assessed.push(projectKey);
         await audit(tx, tenantId, projectId, "dev_demo.completed");
       });
@@ -168,7 +209,7 @@ export async function seedDevDemo(sql: postgres.Sql, store: ObjectStore, options
   }
 }
 
-async function finishEvidence(tx: Tx, store: ObjectStore, tenant: string, project: string, uploadId: string, scenario: Scenario, catalog: DemoCatalog): Promise<boolean> {
+async function finishEvidence(tx: Tx, tenant: string, project: string, uploadId: string, scenario: string, catalog: DemoCatalog, finalize = true, reviewed = true): Promise<boolean> {
   const claimType = catalog.claimType;
   const [clock] = await tx<{ at: Date }[]>`SELECT now() AS at`;
   const credentialIssuedAt = new Date(clock!.at.getTime()-86400_000);
@@ -176,7 +217,7 @@ async function finishEvidence(tx: Tx, store: ObjectStore, tenant: string, projec
     SELECT state,object_key,content_hash FROM core.object_uploads WHERE tenant_id=${tenant} AND id=${uploadId} FOR UPDATE`;
   if (upload?.state !== "scanned_clean") throw new DemoSeedError("Demo evidence requires an actual clean scan");
   const artifact = id(tenant, `${scenario}:artifact`);
-  await store.copy(upload.object_key, evidenceKey(tenant, artifact));
+  // Object copy was prepared before this transaction; the locked clean-scan check remains authoritative.
   await tx`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,object_key,sensitivity)
     VALUES (${artifact},${tenant},${project},'raw_source',${upload.content_hash},${evidenceKey(tenant, artifact)},'public')`;
   await tx`UPDATE core.object_uploads SET state='promoted',promoted_artifact_id=${artifact},version=version+1 WHERE id=${uploadId}`;
@@ -197,12 +238,13 @@ async function finishEvidence(tx: Tx, store: ObjectStore, tenant: string, projec
   await tx`UPDATE core.object_uploads SET uploaded_by=${proposer} WHERE id=${uploadId} AND uploaded_by IS NULL`;
   const claim = id(tenant, `${scenario}:claim`);
   await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,evidence_tier,as_of,submitted_by,catalog_entry_id,catalog_version,structured_values,document_upload_ids)
-    VALUES (${claim},${tenant},${project},${claimType},'SYNTHETIC DEMO-0001',
-      '{"reference":"Synthetic generated document; not an official licence"}','P1',current_date,${proposer},${catalog.id},1,'{"reference":"SYNTHETIC DEMO-0001"}',${[uploadId]}::uuid[])`;
+    VALUES (${claim},${tenant},${project},${claimType},${`SYNTHETIC ${scenario}`},
+      ${tx.json({reference:`Synthetic generated evidence: ${scenario}; not an official document`})},'P1',current_date,${proposer},${catalog.id},1,'{"reference":"SYNTHETIC DEMO-0001"}',${[uploadId]}::uuid[])`;
   await tx`INSERT INTO core.lineage_edges(id,tenant_id,from_id,to_id,relation_type)
     VALUES (${randomUUID()},${tenant},${artifact},${claim},'supports')`;
   await setProvenanceCause(tx, "dev_demo.synthetic_fixture", null);
   await recomputeGrade(tx, claim);
+  if (!reviewed) return false;
   await tx`INSERT INTO core.authorities(id,tenant_id,name,jurisdiction,proves,does_not_prove,recognized_scope,verification_method,public_disclosure_level,valid_from,state)
     VALUES (${issuer},${tenant},${`SYNTHETIC DEMO ${scenario} issuer`},'MNG',ARRAY['synthetic_review'],ARRAY['real_professional_accreditation','official_mining_rights'],
       ${[claimType]}::text[],'synthetic_fixture_only','public',current_date-1,'accepted')`;
@@ -259,9 +301,10 @@ async function finishEvidence(tx: Tx, store: ObjectStore, tenant: string, projec
     VALUES (${randomUUID()},${tenant},${attestation},${nonce},${snapshot.hash},${payloadHash},${new Date(Number(issuedAt)*1000)},${new Date(Number(issuedAt+600n)*1000)},now())`;
   await tx`UPDATE core.verification_cases SET state='signed' WHERE id=${caseId}`;
   await reassessClaim(tx, claim);
+  if (!finalize) return false;
   const coverage = await seedDemoCoverageSnapshot(tx, tenant, project, DEMO_LIMITATION);
   if (!coverage) throw new DemoSeedError("Fresh demo coverage already exists");
-  if (scenario === "PUBLIC" || scenario.startsWith("STAGE-")) {
+  if (scenario === "PUBLIC" || (scenario.startsWith("STAGE-") || scenario.startsWith("DOCUMENTS-"))) {
     const subject = await resolvePublicationSubject(tx, tenant, "project", project);
     const projection = publicProjection.parse({ ...subject.identity, status: subject.publishedStatus, version: "1", asOf: new Date().toISOString(),
       sourceAge: null, staleStatus: "unknown", limitations: [DEMO_LIMITATION], legalEffect: "none", disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"], evidenceLedger: publicLedgerProjection(coverage) });
