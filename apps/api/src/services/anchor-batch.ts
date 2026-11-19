@@ -66,13 +66,19 @@ export function toRegistryLeaf(row: PublishedVersionRow): RegistryLeaf {
 export async function buildAnchorBatch(
   tx: postgres.TransactionSql,
   tenantId: string,
+  projectId: string,
 ): Promise<AnchorBatch> {
   const rows = await tx<PublishedVersionRow[]>`
     SELECT v.id, e.registry_type, e.subject_id, v.version, v.status,
            v.content_hash, v.policy_version, v.schema_version, v.serialization_version
     FROM core.registry_entry_versions v
-    JOIN core.registry_entries e ON e.id = v.entry_id
-    WHERE v.status IN ('published', 'revoked', 'superseded')
+    JOIN core.registry_entries e ON e.id = v.entry_id AND e.tenant_id = v.tenant_id
+    LEFT JOIN core.verification_attestations a
+      ON e.registry_type = 'verification' AND a.id = e.subject_id AND a.tenant_id = e.tenant_id
+    LEFT JOIN core.verification_cases c ON c.id = a.case_id AND c.tenant_id = a.tenant_id
+    WHERE v.tenant_id = ${tenantId}
+      AND ((e.registry_type = 'project' AND e.subject_id = ${projectId}) OR c.project_id = ${projectId})
+      AND v.status IN ('published', 'revoked', 'superseded')
       AND v.content_hash IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM chain.anchor_batch_leaves l WHERE l.entry_version_id = v.id

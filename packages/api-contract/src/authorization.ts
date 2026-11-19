@@ -586,6 +586,10 @@ const ROLE_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     action: "anchor.read",
     allowedRoles: WORKSPACE_READERS,
   },
+  "anchor.batch.create": {
+    action: "anchor.batch.create",
+    allowedRoles: ["administrator"],
+  },
   "anchor.submit": {
     action: "anchor.submit",
     allowedRoles: ["administrator"],
@@ -837,7 +841,7 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = Object.fr
     ...policy,
     ...((/^(admin\.|review_registry\.|credential\.status\.|connection\.|break_glass\.)/.test(action) && action !== "break_glass.quarantine") || ["document.rule.manage", "authority.register", "authority.review", "audit.read", "audit.export", "anchor.read", "anchor.submit"].includes(action)
       ? { requiresTenantScope: true } : {}),
-    ...(["registry.draft", "registry.publish", "registry.revoke"].includes(action)
+    ...(["registry.draft", "registry.publish", "registry.revoke", "anchor.batch.create"].includes(action)
       ? { requiresResourceScope: true } : {}),
   }]),
 );

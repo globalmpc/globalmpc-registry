@@ -1,3 +1,4 @@
+import { withTenant } from "@mpc/db";
 import { addGovernanceAccount } from "./helpers/governance-accounts.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -503,7 +504,7 @@ describeDb("Registry publication and public lookup", () => {
         const result=await app.inject({method:"POST",url:`/api/v1/stale-signals/${signal}/resolve`,headers:{authorization:`Bearer ${scoped}`,"idempotency-key":idempotencyKey()},payload:{resolution:"dismissed",note:"Scope checked"}});
         expect(result.statusCode,result.body).toBe(expected);
       }
-      for(const [method,url] of [["POST","/api/v1/anchor-batches"],["POST",`/api/v1/anchor-batches/${randomUUID()}/resubmit`],["GET","/api/v1/anchor-batches"]] as const){
+      for(const [method,url] of [["POST",`/api/v1/anchor-batches/${randomUUID()}/resubmit`],["GET","/api/v1/anchor-batches"]] as const){
         const result=await app.inject({method,url,headers:{authorization:`Bearer ${scoped}`,"idempotency-key":idempotencyKey()}});
         expect(result.statusCode,result.body).toBe(403);
       }
@@ -866,7 +867,7 @@ describeDb("Registry publication and public lookup", () => {
           authorization: `Bearer ${tokens.operatorA}`,
           "idempotency-key": idempotencyKey(),
         },
-        payload: {},
+        payload: { projectId: await projectWithKey(publicKey) },
       });
       return batch.json().id as string;
     }
@@ -1396,46 +1397,64 @@ describeDb("Registry publication and public lookup", () => {
   }
 
   describe("anchor and inclusion proof", () => {
-    it("builds a batch from published versions", async () => {
-      await publish(tokens.operatorA);
-
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/v1/anchor-batches",
-        headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
-        payload: {},
+    it("anchors only the selected project and leaves another project pending", async () => {
+      const [role] = await fx.appSql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
+      expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+      const projectA = await projectWithKey("ANCHOR-A-" + randomUUID());
+      const projectB = await projectWithKey("ANCHOR-B-" + randomUUID());
+      const firstA = (await publish(tokens.operatorA, { subjectId: projectA })).json();
+      const nextA = (await publish(tokens.operatorA, { subjectId: projectA })).json();
+      const versionB = (await publish(tokens.operatorA, { subjectId: projectB })).json();
+      const scoped = await signIn(app, await addGovernanceAccount(fx, "administrator", {
+        projectId: projectA, assurance: "high_assurance",
+      }));
+      const create = (token: string, payload: object) => app.inject({
+        method: "POST", url: "/api/v1/anchor-batches",
+        headers: { authorization: "Bearer " + token, "idempotency-key": idempotencyKey() },
+        payload,
       });
 
-      expect(response.statusCode).toBe(200);
-      const body = response.json();
-      expect(body.recordCount).toBeGreaterThan(0);
-      expect(body.root).toMatch(/^0x[0-9a-f]{64}$/);
-      // Not on chain yet.
-      expect(body.confirmationState).toBe("created");
-    });
-
-    it("does not create an empty batch when nothing is pending", async () => {
-      // Everything was anchored in the previous test.
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/v1/anchor-batches",
-        headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
-        payload: {},
-      });
-      expect(response.statusCode).toBe(422);
-      expect(response.json().code).toBe("ANCHOR_BATCH_EMPTY");
+      expect((await create(tokens.operatorA, {})).statusCode).toBe(400);
+      expect((await create(scoped, { projectId: projectB })).statusCode).toBe(403);
+      const response = await create(scoped, { projectId: projectA });
+      expect(response.statusCode, response.body).toBe(200);
+      const batch = response.json();
+      expect(batch).toMatchObject({ recordCount: 2, confirmationState: "created" });
+      const [audit] = await fx.sql`SELECT project_id FROM audit.events
+        WHERE tenant_id = ${fx.tenantA} AND resource_id = ${batch.id} AND command = 'anchor.batch.created'`;
+      expect(audit?.project_id).toBe(projectA);
+      const leaves = await fx.sql<{ entry_version_id: string }[]>`
+        SELECT entry_version_id FROM chain.anchor_batch_leaves WHERE batch_id = ${batch.id}
+      `;
+      expect(leaves.map(row => row.entry_version_id).sort()).toEqual([firstA.id, nextA.id].sort());
+      await expect(fx.sql`
+        INSERT INTO chain.anchor_batch_leaves (batch_id, leaf_hash, entry_version_id, leaf_index)
+        VALUES (${batch.id}, ${"0x" + "99".repeat(32)}, ${versionB.id}, 2)
+      `).rejects.toMatchObject({ code: "23514" });
+      const otherTenant = await signIn(app, fx.operatorB);
+      expect((await create(otherTenant, { projectId: projectA })).statusCode).toBe(404);
+      await expect(withTenant(fx.appSql, { tenantId: fx.tenantB }, tx => tx`
+        INSERT INTO chain.anchor_batch_leaves (batch_id, leaf_hash, entry_version_id, leaf_index)
+        VALUES (${batch.id}, ${"0x" + "99".repeat(32)}, ${versionB.id}, 2)
+      `)).rejects.toMatchObject({ code: "23514" });
+      expect((await create(scoped, { projectId: projectA })).json().code).toBe("ANCHOR_BATCH_EMPTY");
+      const other = await create(tokens.operatorA, { projectId: projectB });
+      expect(other.statusCode, other.body).toBe(200);
+      expect(other.json().recordCount).toBe(1);
     });
 
     it("concurrent batch requests do not anchor the same version twice", async () => {
       // Both requests see the same unanchored versions. Without serialization both build a batch
       // from them, and one version ends up in two roots — its inclusion becomes ambiguous.
-      const published = (await publish(tokens.operatorA, { publicKey: `CON-${randomUUID().slice(0, 8)}` })).json();
+      const publicKey = "CON-" + randomUUID().slice(0, 8);
+      const published = (await publish(tokens.operatorA, { publicKey })).json();
+      const projectId = await projectWithKey(publicKey);
       const create = () =>
         app.inject({
           method: "POST",
           url: "/api/v1/anchor-batches",
           headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
-          payload: {},
+          payload: { projectId },
         });
 
       // Force the overlap. Holding a lock on chain.transactions stops each request just before
@@ -1493,7 +1512,7 @@ describeDb("Registry publication and public lookup", () => {
         method: "POST",
         url: "/api/v1/anchor-batches",
         headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
-        payload: {},
+        payload: { projectId: await projectWithKey(publicKey) },
       });
 
       const response = await app.inject({
@@ -1525,7 +1544,7 @@ describeDb("Registry publication and public lookup", () => {
         method: "POST",
         url: "/api/v1/anchor-batches",
         headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
-        payload: {},
+        payload: { projectId: await projectWithKey(publicKey) },
       });
 
       const proof = (
@@ -1559,7 +1578,7 @@ describeDb("Registry publication and public lookup", () => {
         method: "POST",
         url: "/api/v1/anchor-batches",
         headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
-        payload: {},
+        payload: { projectId: await projectWithKey(publicKey) },
       });
 
       const proof = (
@@ -1579,7 +1598,7 @@ describeDb("Registry publication and public lookup", () => {
         method: "POST",
         url: "/api/v1/anchor-batches",
         headers: { authorization: `Bearer ${tokens.operatorA}`, "idempotency-key": idempotencyKey() },
-        payload: {},
+        payload: { projectId: await projectWithKey(publicKey) },
       });
 
       const proof = (
@@ -1604,7 +1623,8 @@ describeDb("Registry publication and public lookup", () => {
     });
 
     it("cannot modify an anchor batch", async () => {
-      await publish(tokens.operatorA);
+      const publicKey = "IMM-" + randomUUID().slice(0, 8);
+      await publish(tokens.operatorA, { publicKey });
       const batch = (
         await app.inject({
           method: "POST",
@@ -1613,7 +1633,7 @@ describeDb("Registry publication and public lookup", () => {
             authorization: `Bearer ${tokens.operatorA}`,
             "idempotency-key": idempotencyKey(),
           },
-          payload: {},
+          payload: { projectId: await projectWithKey(publicKey) },
         })
       ).json();
 

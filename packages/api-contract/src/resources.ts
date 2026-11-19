@@ -8,7 +8,7 @@ import {
   READINESS_STATUSES,
   SOURCE_RESULTS,
 } from "@mpc/domain";
-import { hex32, isoDateTime, safetyFields, sourceStatusView, walletAddress } from "./common.js";
+import { hex32, isoDateTime, responseMeta, safetyFields, sourceStatusView, walletAddress } from "./common.js";
 
 /** Project — 04 §4.2. */
 export const projectSummary = z.object({
@@ -2491,4 +2491,15 @@ export const signedReviewExport = z.object({
   entryVersionId:z.string().uuid(),bundleHash:hex32,
   bundle:z.record(z.string(),z.unknown()),projection:publicProjection,
   leaf:z.object({registryType:z.enum(["project","verification","asset"]),entryVersionId:z.string().uuid(),subjectId:z.string().uuid(),version:z.string(),status:z.enum(["published","revoked","superseded"]),serializationVersion:z.enum(["1","2"]),policyVersion:z.string(),schemaVersion:z.string(),contentHash:hex32}),
+});
+
+export const createProjectAnchorBatchRequest = z.object({ projectId: z.string().uuid() }).strict();
+
+export const createdProjectAnchorBatch = responseMeta.extend({
+  id: z.string().uuid(),
+  batchId: hex32,
+  root: hex32,
+  manifestHash: hex32,
+  recordCount: z.number().int().positive(),
+  confirmationState: z.literal("created"),
 });

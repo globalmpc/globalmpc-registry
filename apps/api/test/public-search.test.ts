@@ -29,24 +29,19 @@ describeDb("public unified search", () => {
     operator = await signIn(app, fx.operatorA);
 
     const approver = await signIn(app, fx.disclosureApproverA);
-    const publish = async (key: string) =>
-      publishProject(
-        app,
-        fx.sql,
-        { drafter: operator, publisher: approver },
-        await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, key),
-      );
-    const published = await publish(publicKey);
+    const projectId = await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, publicKey);
+    const publish = () => publishProject(app, fx.sql, { drafter: operator, publisher: approver }, projectId);
+    const published = await publish();
     expect(published.statusCode).toBe(200);
-    // In a one-leaf batch the root is the leaf hash. A sibling makes the root path tested separately.
-    expect((await publish(`${publicKey}-SIBLING`)).statusCode).toBe(200);
+    // Two versions of this project exercise the sibling proof path.
+    expect((await publish()).statusCode).toBe(200);
     const entryVersionId = (published.json() as { id: string }).id;
 
     const batch = await app.inject({
       method: "POST",
       url: "/api/v1/anchor-batches",
       headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() },
-      payload: {},
+      payload: { projectId },
     });
     expect(batch.statusCode).toBe(200);
 

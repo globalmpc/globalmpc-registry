@@ -1,4 +1,4 @@
-import { signedReviewExport } from "./resources.js";
+import { createProjectAnchorBatchRequest, createdProjectAnchorBatch, signedReviewExport } from "./resources.js";
 import { readinessPolicyOptions } from "./resources.js";
 import { uploadCreationResult } from "./resources.js";
 import { responseMeta } from "./common.js";
@@ -870,14 +870,15 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/anchor-batches",
-    summary: "Create a Merkle batch — includes only published versions",
+    summary: "Create a Merkle batch for one project",
     operationId: "createAnchorBatch",
+    requestSchema: createProjectAnchorBatchRequest,
     public: false,
     mutation: true,
     requiresIfMatch: false,
-    action: "anchor.submit",
+    action: "anchor.batch.create",
     implemented: true,
-    responseSchema: registryEntryVersion,
+    responseSchema: createdProjectAnchorBatch,
   },
 
   {

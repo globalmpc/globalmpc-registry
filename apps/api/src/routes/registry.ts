@@ -8,6 +8,7 @@ import { withTenant } from "@mpc/db";
 import { hashProjection, verifyMerkleProof, type Hex } from "@mpc/canonical";
 import { checkPublishable, isPublicField, sameChainEnvironment } from "@mpc/domain";
 import {
+  createProjectAnchorBatchRequest,
   PROOF_DOES_NOT_PROVE,
   PROOF_PROVES,
   publicProjection,
@@ -502,10 +503,18 @@ export async function registerRegistryRoutes(
   app.post("/api/v1/anchor-batches", async (request) => {
     const { session, tenantId, idempotencyKey } = requireMutationContext(request);
 
+    const body = parseBody(createProjectAnchorBatchRequest, request.body);
+    const projectId = body.projectId.toLowerCase();
+    const action = "anchor.batch.create";
+    await authorizedProjectLookup(session, action, () => withTenant(sql, { tenantId }, async tx => {
+      const [project] = await tx`SELECT id FROM core.projects WHERE tenant_id = ${tenantId} AND id = ${projectId}`;
+      if (!project) throw notFound("Project not found");
+      return projectId;
+    }), id => id);
     const effectiveRole = assertAuthorized(
       session,
-      "anchor.submit",
-      tenantResource(tenantId, {
+      action,
+      projectResource(tenantId, projectId, {
         sensitivity: "public",
         state: "ready",
         statesAllowingAction: ["ready"],
@@ -518,20 +527,17 @@ export async function registerRegistryRoutes(
 
     return withTenant(sql, { tenantId }, (tx) =>
       withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-        // One batch build per tenant at a time. Two concurrent requests would read the same
-        // unanchored versions and anchor each of them in two roots. The second waits here and,
-        // with a fresh snapshot, finds them taken. The unique index on
-        // `anchor_batch_leaves.entry_version_id` (0041) holds even if this lock is skipped.
-        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`anchor-batch:${tenantId}`}::TEXT, 0))`;
-        const batch = await buildAnchorBatch(tx, tenantId);
+        // Serialize creation for this project. The unique leaf index also guards other writers.
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`anchor-batch:${tenantId}:${projectId}`}::TEXT, 0))`;
+        const batch = await buildAnchorBatch(tx, tenantId, projectId);
         const batchRowId = randomUUID();
 
         await tx`
           INSERT INTO chain.anchor_batches (
-            id, tenant_id, batch_id, merkle_root, manifest_hash,
+            id, tenant_id, project_id, batch_id, merkle_root, manifest_hash,
             manifest_object_key, schema_version, record_count
           ) VALUES (
-            ${batchRowId}, ${tenantId}, ${batch.batchId}, ${batch.root},
+            ${batchRowId}, ${tenantId}, ${projectId}, ${batch.batchId}, ${batch.root},
             ${batch.manifestHash}, ${`manifests/${batch.batchId}.json`}, '1',
             ${batch.recordCount}
           )
@@ -558,6 +564,7 @@ export async function registerRegistryRoutes(
           effectiveRole,
           tenantId,
           session,
+          projectId,
           command: "anchor.batch.created",
           resourceType: "anchor_batch",
           resourceId: batchRowId,

@@ -269,15 +269,14 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
       <div className="panel">
         <h2>4. anchor</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          Published versions are bound into a Merkle tree. Nothing is submitted to the chain at this
-          step.
+          This batch includes only published versions of this project that are not already in a batch.
         </p>
         <button
           data-testid="anchor"
           disabled={busy || !canDraft || !(published || lastPublished)}
           onClick={() =>
             void run(async () => {
-              setBatch(await createAnchorBatch(token, newIdempotencyKey()));
+              setBatch(await createAnchorBatch(token, id, newIdempotencyKey()));
             })
           }
         >
