@@ -44,11 +44,12 @@ describeDb("public anchor contract", () => {
 
     const operator = await signIn(app, fx.operatorA);
     const approver = await signIn(app, fx.disclosureApproverA);
+    const projectId = await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, `CTR-${randomUUID().slice(0, 8)}`);
     const published = await publishProject(
       app,
       fx.sql,
       { drafter: operator, publisher: approver },
-      await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, `CTR-${randomUUID().slice(0, 8)}`),
+      projectId,
     );
     expect(published.statusCode).toBe(200);
     entryVersionId = (published.json() as { id: string }).id;
@@ -57,7 +58,7 @@ describeDb("public anchor contract", () => {
       method: "POST",
       url: "/api/v1/anchor-batches",
       headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() },
-      payload: {},
+      payload: { projectId },
     });
     expect(batch.statusCode).toBe(200);
 

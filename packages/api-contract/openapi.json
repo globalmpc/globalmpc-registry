@@ -49175,7 +49175,7 @@
       },
       "post": {
         "operationId": "createAnchorBatch",
-        "summary": "Create a Merkle batch — includes only published versions",
+        "summary": "Create a Merkle batch for one project",
         "tags": [
           "workspace"
         ],
@@ -49214,100 +49214,54 @@
                     "createAnchorBatchResponse": {
                       "type": "object",
                       "properties": {
-                        "id": {
+                        "requestId": {
                           "type": "string"
                         },
-                        "registryType": {
+                        "resourceVersion": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "asOf": {
                           "type": "string",
-                          "enum": [
-                            "project",
-                            "verification",
-                            "asset"
-                          ]
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
                         },
-                        "publicKey": {
-                          "type": "string"
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         },
-                        "version": {
+                        "batchId": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "root": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "manifestHash": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "recordCount": {
                           "type": "integer",
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
                         },
-                        "status": {
+                        "confirmationState": {
                           "type": "string",
-                          "enum": [
-                            "draft",
-                            "published",
-                            "revoked",
-                            "superseded"
-                          ]
-                        },
-                        "contentHash": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^0x[0-9a-f]{64}$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "policyVersion": {
-                          "type": "string"
-                        },
-                        "schemaVersion": {
-                          "type": "string"
-                        },
-                        "serializationVersion": {
-                          "type": "string",
-                          "enum": [
-                            "1",
-                            "2"
-                          ]
-                        },
-                        "publishedAt": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "revokedAt": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "supersededById": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "const": "created"
                         }
                       },
                       "required": [
+                        "requestId",
+                        "asOf",
                         "id",
-                        "registryType",
-                        "publicKey",
-                        "version",
-                        "status",
-                        "contentHash",
-                        "policyVersion",
-                        "schemaVersion",
-                        "serializationVersion",
-                        "publishedAt",
-                        "revokedAt",
-                        "supersededById"
+                        "batchId",
+                        "root",
+                        "manifestHash",
+                        "recordCount",
+                        "confirmationState"
                       ],
                       "additionalProperties": false
                     }
@@ -49493,6 +49447,50 @@
               }
             }
           },
+          "413": {
+            "description": "Request body larger than the server accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/definitions/ErrorEnvelope",
+                  "definitions": {
+                    "ErrorEnvelope": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {}
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "correlationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryable",
+                        "correlationId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "$schema": "https://json-schema.org/draft/2020-12/schema"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Domain rule violation (e.g. GATE_GAP_BLOCKS_GO)",
             "content": {
@@ -49582,12 +49580,39 @@
             }
           }
         },
-        "x-mpc-action": "anchor.submit",
+        "x-mpc-action": "anchor.batch.create",
         "security": [
           {
             "accountSession": []
           }
-        ]
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/definitions/createAnchorBatchRequest",
+                "definitions": {
+                  "createAnchorBatchRequest": {
+                    "type": "object",
+                    "properties": {
+                      "projectId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      }
+                    },
+                    "required": [
+                      "projectId"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "$schema": "https://json-schema.org/draft/2020-12/schema"
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/anchor-batches/{batchId}/resubmit": {

@@ -1558,11 +1558,11 @@ export async function listAnchorBatches(
   return parse<{ items: AnchorBatchStatus[] } & ListWindow>(response);
 }
 
-export async function createAnchorBatch(token: string, key: string): Promise<AnchorBatch> {
+export async function createAnchorBatch(token: string, projectId: string, key: string): Promise<AnchorBatch> {
   const response = await apiFetch("/api/v1/anchor-batches", {
     method: "POST",
     headers: { ...authHeader(token), "content-type": "application/json", "idempotency-key": key },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ projectId }),
   });
   return parse<AnchorBatch>(response);
 }
