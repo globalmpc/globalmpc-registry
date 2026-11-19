@@ -79,15 +79,16 @@ test.describe("review lifecycle", () => {
 
     // --- The reviewer signs (reviewer) ------------------------------
     await connectAs(page, "Reviewer A");
-    await page.goto(`/w/projects/${projectId}/verification`);
-    const open = page.getByRole("button", { name: "Open this case" }).first();
-    const caseId = (await open.getAttribute("data-testid"))!.replace("select-case-", "");
-    await open.click();
+    await page.goto("/w/work");
+    const assigned = page.getByTestId("work-assigned").locator(`a[href^="/w/projects/${projectId}/verification?"]`);
+    await expect(assigned).toHaveAccessibleName("Open review");
+    await assigned.click();
+    await expect(page.getByRole("heading", { name: "Assigned review" })).toBeVisible();
+    const caseId = new URL(page.url()).searchParams.get("caseId")!;
 
     // The reviewer cannot change the state. Signing is their act: the screen does not offer the
     // change, and the server refuses it when asked directly.
-    await page.getByLabel("Reason (required)").fill("Attempting it without the role");
-    await expect(page.getByTestId("transition-cancelled")).toBeDisabled();
+    await expect(page.getByTestId("transition-cancelled")).toHaveCount(0);
     const direct = await page.request.post(`/api/v1/verification-cases/${caseId}/transitions`, {
       headers: {
         origin: new URL(page.url()).origin,
@@ -100,6 +101,9 @@ test.describe("review lifecycle", () => {
     expect(direct.status()).toBe(403);
     expect(((await direct.json()) as { code?: string }).code).toBe("AUTHORIZATION_DENIED");
 
+    await page.getByLabel("Review finding").fill("Reviewed the submitted evidence");
+    await page.getByLabel("Source reference").fill("Submitted evidence snapshot");
+    await page.getByLabel("What this review did not check (required)").fill("Desk review only");
     await page.getByRole("button", { name: "Create the draft" }).click();
     await page.getByRole("button", { name: "Create a signature request" }).click();
     await page.getByTestId("sign-attestation").click();

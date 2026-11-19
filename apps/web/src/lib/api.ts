@@ -2367,6 +2367,7 @@ export interface RegistryEntrySummary {
 }
 
 export interface MyWork {
+  hasVisibleProjects?: boolean;
   assignedToMe: {
     caseId: string;
     projectId: string;

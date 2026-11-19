@@ -740,6 +740,9 @@ td .project-stage-roadmap { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* Public detail: one stage selector and the published results for that selection. */
 .public-evidence { margin: 28px 0; }
+.registration-next { border-inline-start: 3px solid var(--positive); }
+.registration-next h2 { margin-bottom: 8px; }
+.registration-next p { margin: 0; }
 .public-evidence-overview { padding: 0; }
 .public-evidence-totals, .public-results-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .public-evidence-totals h2 { font-size: .875rem; font-weight: 400; color: var(--muted-foreground); margin: 0; }

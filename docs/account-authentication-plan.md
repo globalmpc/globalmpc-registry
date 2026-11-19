@@ -31,7 +31,7 @@ accounts. Wallets stay, but only as signing keys bound to an account.
 | Identity / case | Namespace and uniqueness | Who may set or change it | Frozen vs live | Result / priority |
 | --- | --- | --- | --- | --- |
 | Account email | Normalised (trim, lower-case domain, NFC); unique per subject, globally unique (D6) | Set by the inviting admin; changed only by a two-person admin change, which revokes all sessions | Live; audit keeps the history | Proof of control is a code sent to it. **It never authorises anything by itself** |
-| Google identity | `(iss = https://accounts.google.com, sub)` | The account holder links it from a session that already passed MFA, or while accepting an invitation (WP4: for an address Google manages — see WP4 decisions) | Live; unlink audited; **revoked by an approved MFA reset or a completed email change** (0123) | Matched only by `(iss, sub)`. Email in the token is display-only |
+| Google identity | `(iss = https://accounts.google.com, sub)` | The account holder links it from a session that already passed MFA, or while accepting an invitation (WP4: for an address Google manages — see WP4 decisions) | Live; unlink audited; **revoked by an approved MFA reset or a completed email change** (0123) | Matched only by `(iss, sub)`. For first registration only, a Google-managed verified address may consume a matching pending invitation. An email match never links an existing account |
 | Microsoft identity | `(tid, oid)` from a v2.0 ID token; issuer must equal `https://login.microsoftonline.com/{tid}/v2.0` for that token's `tid` | Same as Google | Live; revoked by recovery like Google (0123) | Matched only by `(tid, oid)`. `email`, `preferred_username` and `upn` are never used for matching (Microsoft: these values are mutable and must not be used for authorization; identify users by `oid` / `sub`) |
 | Passkey | WebAuthn credential ID, RP ID = web host | Holder enrols from a session at the required level; admin can only revoke | Live; sign counter tracked | Phishing-resistant factor |
 | TOTP secret | One per subject | Holder enrols; admin can only revoke | Live | Second factor, not phishing-resistant |
@@ -46,7 +46,7 @@ accounts. Wallets stay, but only as signing keys bound to an account.
 **Priority of overlapping conditions** (evaluated in this order, first match wins):
 
 1. Revoked or expired session, disabled subject, revoked authenticator used by the session → 401.
-2. Session below AAL2 (first factor only) → only MFA enrolment, MFA challenge and logout.
+2. A Google first-factor session opens My Work directly. The My Work, project overview, verification case and administrator screens can read their explicitly listed resources under live role bindings and project scope. Administrative mutations require a second factor when submitted. An invited Google user who deferred first enrolment may enrol from the original live invitation identity after 24 hours, provided no previous confirmed factor, recovery codes, reset, completed email change or approved suspension exists. The session remains AAL1. Other private workspace operations retain their existing step-up requirements. Other first factors follow the original MFA flow.
 3. No role binding → "access pending"; public reads only.
 4. Role binding present but session AAL or identity assurance below the role minimum → that role is not effective for this request (same narrowing rule as today: narrowed, never widened).
 5. Otherwise the existing authorisation rules apply unchanged.

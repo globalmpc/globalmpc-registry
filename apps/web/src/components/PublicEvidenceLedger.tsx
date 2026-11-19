@@ -35,7 +35,7 @@ function PublishedItem({ item }: { readonly item: LedgerItem }) {
 
 function StageSelector({ summary, selected, onSelect }: {
   readonly summary: LedgerSummary;
-  readonly selected: string;
+  readonly selected: string | null;
   readonly onSelect: (gate: string) => void;
 }) {
   return <ol className="public-stage-selector" aria-label="Project stages">
@@ -63,18 +63,17 @@ function StageContext({ stage, items }: {
 }
 
 export function PublicEvidenceLedger({ summary }: { readonly summary: LedgerSummary }) {
-  const initialStage = PROJECT_STAGES.find(stage => stage.gateId === summary.currentStage)?.gateId ?? PROJECT_STAGES[0].gateId;
-  const [selected, setSelected] = useState<string>(initialStage);
+  const [selected, setSelected] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
-  const [all, setAll] = useState(false);
+  const all = selected === null;
   const stage = summary.stages.find(candidate => candidate.gateId === selected);
   const knownLinks = stage?.itemClaimTypes !== undefined;
   const stageItems = !all && knownLinks ? summary.items.filter(item => stage.itemClaimTypes!.includes(item.claimType)) : summary.items;
   const items = stageItems.filter(item => (status === "all" || item.status === status) &&
     `${item.displayName} ${item.claimType}`.toLowerCase().includes(query.trim().toLowerCase()));
   const reviewed = summary.items.filter(item => item.status === "reviewed").length;
-  function selectStage(gate: string) { setSelected(gate); setAll(false); setQuery(""); setStatus("all"); }
+  function selectStage(gate: string | null) { setSelected(gate); setQuery(""); setStatus("all"); }
   return <section className="public-evidence" data-testid="evidence-ledger">
     <div className="public-evidence-overview">
       <h2 className="public-review-title">Document review items <span className="meta">{summary.items.length} items · {reviewed} reviewed</span></h2>
@@ -82,7 +81,7 @@ export function PublicEvidenceLedger({ summary }: { readonly summary: LedgerSumm
     </div>
     <div id="published-stage-results" className="public-stage-results">
       <div className="public-results-heading"><h3>{all ? "All published items" : readableStage(selected)}</h3>
-        <button type="button" aria-pressed={all} onClick={() => {setAll(!all);setQuery("");setStatus("all");}}>{all ? "Show selected stage" : "All published items"}</button></div>
+        {selected !== null ? <button type="button" onClick={() => selectStage(null)}>All published items</button> : null}</div>
       {!all && !knownLinks ? <p className="meta">{stage ? "This published version does not include item-to-stage links." : "No assessment was published for this stage."} Showing all published items.</p> : null}
       <div className="evidence-browser-controls">
         <label>Search evidence items<input type="search" placeholder="Search by name or claim type" value={query} onChange={e => setQuery(e.target.value)}/></label>
@@ -92,7 +91,7 @@ export function PublicEvidenceLedger({ summary }: { readonly summary: LedgerSumm
         <p role="status">Showing {items.length} of {stageItems.length} items</p>
       </div>
       <ul className="evidence-browser-list">{items.map(item => <PublishedItem key={`${selected}:${item.claimType}:${item.catalogVersion ?? "legacy"}`} item={item}/>)}</ul>
-      {items.length === 0 ? <p>{stageItems.length === 0 ? "No published items are linked to this stage." : "No items match these filters."}
+      {items.length === 0 ? <p>{stageItems.length === 0 ? (all ? "No review items have been published." : "No published items are linked to this stage.") : "No items match these filters."}
         {stageItems.length > 0 ? <button type="button" onClick={() => {setQuery("");setStatus("all");}}>Clear filters</button> : null}</p> : null}
     </div>
     <details className="public-record-disclosure" data-testid="assessment-details"><summary>Assessment details and limitations</summary>

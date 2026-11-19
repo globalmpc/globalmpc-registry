@@ -57,7 +57,10 @@ export function WorkspaceGate({ children }: { readonly children: React.ReactNode
   const { session, loading } = useSession();
   const pathname = usePathname();
   const router = useRouter();
-  const pendingFactor = !loading && needsSecondFactor(session);
+  const googleOverview = session?.firstFactor === "google" && session.aal === "aal1";
+  const googleReadScreen = ["/w/work", "/w/admin", "/w/projects", "/w/verification", "/w/readiness"].includes(pathname) ||
+    /^\/w\/projects\/[a-f0-9-]{36}(?:\/verification)?$/i.test(pathname);
+  const pendingFactor = !loading && (needsSecondFactor(session) || (googleOverview && !googleReadScreen));
 
   useEffect(() => {
     if (pendingFactor) router.replace(`/auth/mfa?next=${encodeURIComponent(pathname)}`);
@@ -90,6 +93,12 @@ export function WorkspaceGate({ children }: { readonly children: React.ReactNode
         <Link href="/auth/mfa">Finish signing in with your second factor →</Link>
       </p>
     );
+  }
+
+  if (googleOverview && pathname === "/w/work" && !session.actions?.includes("project.read")) {
+    if (!session.roleBindings?.length && !session.narrowedRoles?.length) return <AccessPending />;
+    return <div className="panel"><h1>My Work</h1><p>Your current access does not include projects.</p>
+      <Link href="/w/access-requests">Request project access →</Link></div>;
   }
 
   if (!session.tenantId) {

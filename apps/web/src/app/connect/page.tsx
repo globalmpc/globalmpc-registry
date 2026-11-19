@@ -78,6 +78,12 @@ export default function SignInPage() {
       ) : null}
 
       <div className="panel" data-testid="email-sign-in">
+        {methods && (methods.google || methods.microsoft) ? (
+          <>
+            <ProviderButtons methods={methods} start={{ purpose: "sign_in" }} />
+            <p className="meta">{C.or}</p>
+          </>
+        ) : null}
         {sent === null ? (
           <form
             onSubmit={(event) => {
@@ -134,12 +140,6 @@ export default function SignInPage() {
           </>
         )}
 
-        {methods && (methods.google || methods.microsoft) ? (
-          <>
-            <p className="meta">{C.or}</p>
-            <ProviderButtons methods={methods} start={{ purpose: "sign_in" }} />
-          </>
-        ) : null}
         <p className="meta" style={{ marginBottom: 0 }}>
           {C.noInvitation}
         </p>

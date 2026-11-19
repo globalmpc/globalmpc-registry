@@ -2108,6 +2108,7 @@ export const registryEntrySummary = z.object({
  * "what I am waiting on" look alike, yet their next actions are opposite.
  */
 export const myWork = z.object({
+  hasVisibleProjects: z.boolean().optional(),
   /** Reviews assigned to me. They finish only when I act. */
   assignedToMe: z.array(
     z.object({

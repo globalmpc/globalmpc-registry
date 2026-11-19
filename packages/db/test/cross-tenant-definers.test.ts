@@ -15,6 +15,8 @@ const describeDb = DATABASE_URL ? describe : describe.skip;
  * `CROSS_TENANT` and its migration sets `row_security = off`.
  */
 const CROSS_TENANT = [
+  "core.match_google_workspace_invitation(uuid,text,text,text)",
+  "core.match_google_workspace_invitation(uuid,text,text,text,text)",
   "core.find_person_by_email(text)",
   "core.start_email_challenge(core.email_challenge_purpose,text,text,uuid,bytea,text,text,text)",
   "core.verify_sign_in_code(text,bytea,text,text,uuid,text,integer)",

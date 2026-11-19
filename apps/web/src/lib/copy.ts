@@ -137,7 +137,7 @@ export const COPY = {
 export const AUTH_COPY = {
   signIn: {
     heading: "Sign in",
-    lead: "Sign in with the email address your invitation was sent to. There is no password.",
+    lead: "Choose a sign-in method for your Registry account.",
     emailLabel: "Email address",
     sendCode: "Send code",
     sending: "Sending…",
@@ -410,7 +410,7 @@ export const AUTH_COPY = {
     MFA_TOTP_ALREADY_ENROLLED: "An authenticator app is already set up.",
     MFA_ALREADY_SATISFIED: "This session has already proved a second factor.",
     OIDC_ACCOUNT_NOT_FOUND:
-      "No account is linked to this sign-in. Sign in with your email address, then link it from Account settings.",
+      "Workspace access is unavailable for this account. Ask your administrator to check your invitation or sign in with your linked account.",
     OIDC_IDENTITY_UNAVAILABLE: "This sign-in cannot be linked to your account.",
     OIDC_PROVIDER_ALREADY_LINKED: "You already have a sign-in of this provider linked. Unlink it first.",
     OIDC_EMAIL_CODE_REQUIRED: "This provider cannot confirm the invited address. Use the emailed code instead.",

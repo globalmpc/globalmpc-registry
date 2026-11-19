@@ -174,9 +174,6 @@ export default function NewProjectPage() {
               </option>
             ))}
           </select>
-          <div className="meta mono" data-testid="owner-organization-id">
-            {ownerOrganizationId || "—"}
-          </div>
         </div>
 
         <div className="field">
@@ -202,16 +199,9 @@ export default function NewProjectPage() {
           >
             {submitting ? "Registering…" : "Register"}
           </button>
-          <span className="meta">
-            Idempotency-Key <span className="mono">{idempotencyKey.slice(0, 12)}…</span>
-          </span>
         </div>
       </form>
 
-      <p className="meta">
-        On success the audit event and the outbox event are written in the same transaction. On
-        failure neither remains.
-      </p>
     </>
   );
 }

@@ -94,7 +94,7 @@ export interface Session {
  * first-factor-only session reaches only MFA, logout and its own session — is the request hook's
  * (server.ts).
  */
-export async function resolveSession(sql: postgres.Sql, row: ResolvedSessionRow): Promise<Session> {
+export async function resolveSession(sql: postgres.Sql, row: ResolvedSessionRow, workspaceRead = false): Promise<Session> {
   const aal = deriveAuthenticationLevel({ firstFactor: row.firstFactor, secondFactor: row.secondFactor });
 
   return {
@@ -112,6 +112,7 @@ export async function resolveSession(sql: postgres.Sql, row: ResolvedSessionRow)
       // A recovery code proves possession of a printed code, not of an authenticator: until the
       // session enrols or proves one, no role is effective, whatever level it would need.
       if (row.recoveryLimited) return required;
+      if (workspaceRead && row.firstFactor === "google" && required !== null && role !== BREAK_GLASS_ROLE) return true;
       return required !== null && satisfiesAuthenticationLevel(aal, required) ? true : required;
     })),
   };

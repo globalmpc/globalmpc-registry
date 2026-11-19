@@ -15,6 +15,7 @@ test.describe("Administration", () => {
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
+    await page.locator("summary").filter({ hasText: /^Add a person without sign-in$/ }).click();
     await page.getByRole("textbox", { name: "Name" }).fill(name);
     await page.getByRole("button", { name: "Add person" }).click();
 
@@ -28,6 +29,7 @@ test.describe("Administration", () => {
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
+    await page.locator("summary").filter({ hasText: /^Add a person without sign-in$/ }).click();
     await page.getByRole("textbox", { name: "Name" }).fill(name);
     await page.getByRole("button", { name: "Add person" }).click();
     await expect(page.getByTestId("admin-subjects")).toContainText(name);
@@ -40,6 +42,7 @@ test.describe("Administration", () => {
 
     // 02 §2.8 — proposal and approval are done by different people. The server blocks it,
     // but a pressable button that is always rejected makes the screen look broken.
+    await page.locator("summary").filter({ hasText: /^Role approvals/ }).click();
     const grants = page.getByTestId("admin-role-grants");
     await expect(grants).toContainText(name);
     await expect(grants.locator("tr", { hasText: name })).toContainText(
@@ -57,6 +60,7 @@ test.describe("Administration", () => {
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
+    await page.locator("summary").filter({ hasText: /^Add a person without sign-in$/ }).click();
     await page.getByRole("textbox", { name: "Name" }).fill(name);
     await page.getByRole("button", { name: "Add person" }).click();
     const row = page.getByTestId("admin-subjects").locator("tr", { hasText: name });
@@ -99,6 +103,7 @@ test.describe("Administration", () => {
 
     // 02 §2.8 — the same rule as grants: a different person decides.
     await expect(row).toContainText("revocation pending");
+    await page.locator("summary").filter({ hasText: /^Role approvals/ }).click();
     const revocations = page.getByTestId("admin-role-revocations");
     const pending = revocations.locator("tr", { hasText: "Voter A" });
     await expect(pending).toContainText("You proposed this — someone else decides.");

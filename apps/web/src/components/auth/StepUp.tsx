@@ -38,7 +38,7 @@ interface Pending {
 }
 
 export function StepUpProvider({ children }: { readonly children: React.ReactNode }) {
-  const { refresh } = useSession();
+  const { refresh, session } = useSession();
   const router = useRouter();
   const [pending, setPending] = useState<Pending | null>(null);
   const pendingRef = useRef<Pending | null>(null);
@@ -62,16 +62,24 @@ export function StepUpProvider({ children }: { readonly children: React.ReactNod
       } catch (caught) {
         const need = stepUpNeed(caught);
         if (!need) throw caught;
+        if (need.kind === "second_factor" && session?.firstFactor === "google" && !session.recoveryLimited) {
+          const status = await getMfaStatus();
+          if (status.passkeyEnrolled || status.totpEnrolled) {
+            await prompt(status.passkeyEnrolled ? "aal3" : "aal2");
+            return action();
+          }
+        }
         if (need.kind !== "step_up") {
           // A first-factor or recovery session has one place to go; a prompt here could not help.
-          router.push("/auth/mfa");
+          const path = window.location.pathname + window.location.search;
+          router.push(path.startsWith("/w/") ? `/auth/mfa?next=${encodeURIComponent(path)}` : "/auth/mfa");
           throw caught;
         }
         await prompt(need.level);
         return action();
       }
     },
-    [prompt, router],
+    [prompt, router, session],
   );
 
   const settle = useCallback((outcome: "proved" | "cancelled") => {
@@ -109,6 +117,7 @@ function StepUpDialog({
   readonly onCancel: () => void;
   readonly onProved: () => Promise<void>;
 }) {
+  const { session } = useSession();
   const [status, setStatus] = useState<MfaStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -132,7 +141,9 @@ function StepUpDialog({
         ) : null}
         {status && level === "aal3" && !status.passkeyEnrolled ? (
           <p className="meta" data-testid="step-up-no-passkey">
-            {C.noPasskey} <a href="/w/settings">{AUTH_COPY.settings.navLabel} →</a>
+            {C.noPasskey} {session?.aal === "aal1" ?
+              <a href={`/auth/mfa?next=${encodeURIComponent(window.location.pathname + window.location.search)}`}>Set up authentication →</a>
+              : <a href="/w/settings">{AUTH_COPY.settings.navLabel} →</a>}
           </p>
         ) : status ? (
           <SecondFactorChallenge

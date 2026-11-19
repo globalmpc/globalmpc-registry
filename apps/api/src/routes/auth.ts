@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type postgres from "postgres";
-import { ACTION_POLICIES, type FirstFactor, type SecondFactor } from "@mpc/api-contract";
+import { ACTION_POLICIES, requiredAuthenticationLevel, satisfiesAuthenticationLevel, type FirstFactor, type SecondFactor } from "@mpc/api-contract";
 import { withTenant } from "@mpc/db";
 import { ROLE_SELF_BOUND, recordAudit } from "../audit.js";
 import { hashUserAgent } from "../device.js";
@@ -23,7 +23,7 @@ import { extractBearerToken, revokeSessionToken } from "../plugins/session-token
 export function sessionView(session: Session) {
   // A recovery-limited session gets the same narrow view: until it enrols a factor, a stolen
   // recovery code must not learn more than a stolen first factor does.
-  if (session.aal === "aal1" || session.recoveryLimited) {
+  if ((session.aal === "aal1" && session.firstFactor !== "google") || session.recoveryLimited) {
     return {
       subjectId: session.subjectId,
       assuranceLevel: session.assuranceLevel,
@@ -44,11 +44,28 @@ export function sessionView(session: Session) {
     sessionId: _id,
     ...visible
   } = session;
+  // A role can authorize workspace reads while still requiring step-up for its writes.
+  // Report the true factor shortfall to the session menu without changing resource decisions.
+  const narrowed = new Map(session.narrowedRoles.map(entry => [entry.role, entry.requiredAal]));
+  const actionSession = { ...session, roleBindings: session.roleBindings.filter(({ role }) => {
+    if (session.firstFactor !== "google" || !session.aal) return true;
+    const required = requiredAuthenticationLevel(role);
+    if (required !== null && satisfiesAuthenticationLevel(session.aal, required)) return true;
+    narrowed.set(role, required);
+    return false;
+  }) };
   return {
     ...visible,
+    narrowedRoles: Array.from(narrowed, ([role, requiredAal]) => ({ role, requiredAal })),
     aal: session.aal ?? "aal1",
     mfaSatisfied: session.aal === "aal2" || session.aal === "aal3",
-    actions: Object.keys(ACTION_POLICIES).filter((action) => holdsActionRole(session, action)),
+    // Admin controls can start a step-up. The server verifies it before executing a mutation.
+    actions: Object.keys(ACTION_POLICIES).filter((action) => {
+      const workspaceControl = action.startsWith("admin.") ||
+        ["project.read", "readiness.read", "verification.read", "document.rule.manage"].includes(action);
+      if (workspaceControl) return holdsActionRole(session, action);
+      return session.aal !== "aal1" && holdsActionRole(actionSession, action);
+    }),
   };
 }
 

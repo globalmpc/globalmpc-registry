@@ -454,7 +454,7 @@ describe("second-factor screen", () => {
 describe("provider callback", () => {
   it("removes the provider's code from the address bar and completes sign-in", async () => {
     window.history.replaceState(null, "", "/auth/oidc/google/callback?state=st&code=cd&iss=https%3A%2F%2Faccounts.google.com");
-    s.refresh.mockResolvedValue(aal1);
+    s.refresh.mockResolvedValue({ ...aal1, firstFactor: "google" });
     const calls = mockHttp({
       "POST /api/v1/auth/oidc/google/callback": () =>
         Response.json({ aal: "aal1" }, { headers: { "x-mpc-oidc-purpose": "sign_in" } }),
@@ -462,7 +462,7 @@ describe("provider callback", () => {
     render(<OidcCallbackPage />);
     expect(window.location.search).toBe("");
     expect(window.location.pathname).toBe("/auth/oidc/google/callback");
-    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/auth/mfa"));
+    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/w/work"));
     // No binding from the page: the web server adds it from its own cookie.
     expect(posted(calls, "/callback")?.body).toEqual({ state: "st", code: "cd", iss: "https://accounts.google.com" });
   });

@@ -76779,6 +76779,9 @@
                     "getMyWorkResponse": {
                       "type": "object",
                       "properties": {
+                        "hasVisibleProjects": {
+                          "type": "boolean"
+                        },
                         "assignedToMe": {
                           "type": "array",
                           "items": {

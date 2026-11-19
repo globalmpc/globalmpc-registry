@@ -24,6 +24,7 @@ test.afterAll(closeMailbox);
 async function invite(page: Page, email: string): Promise<void> {
   await connectAs(page, "Operator A");
   await page.goto("/w/admin");
+  await page.getByText("Invite a person", { exact: true }).click();
   const panel = page.getByTestId("admin-invitations");
   await panel.getByLabel("Email address").fill(email);
   // The seeded organisation loads asynchronously; its initial text input is
