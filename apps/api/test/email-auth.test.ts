@@ -217,7 +217,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       expect(await fx.sql`SELECT 1 FROM core.sessions WHERE subject_id = ${subjectId}`).toHaveLength(1);
     });
 
-    it("an aal1 session gets MFA_REQUIRED for anything restricted", async () => {
+    it("email sign-in preserves the reviewer assurance requirement", async () => {
       const email = freshEmail();
       const subjectId = await person(email);
       await fx.sql`
@@ -232,7 +232,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
         headers: bearer(sessionToken),
       });
       expect(response.statusCode).toBe(403);
-      expect(response.json().code).toBe("MFA_REQUIRED");
+      expect(response.json()).toMatchObject({ code: "AUTHORIZATION_DENIED", details: { reason: "ASSURANCE_LEVEL_INSUFFICIENT" } });
     });
 
     it("allows five wrong codes, then refuses even the right one", async () => {
@@ -542,7 +542,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
     });
   });
 
-  describe("two-person email change", () => {
+  describe("administrator email change", () => {
     async function propose(token: string, subjectId: string, newEmail: string) {
       return adminPost("/api/v1/admin/email-changes", token, { subjectId, newEmail, reason: "Lost access to the mailbox" });
     }
@@ -555,9 +555,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       );
     }
 
-    it("takes a second admin and a code at the new address, then ends every session", async () => {
+    it("takes one administrator and a code at the new address, then ends every session", async () => {
       const proposer = await admin("administrator");
-      const approver = await admin("administrator");
       const oldEmail = freshEmail("old");
       const subjectId = await person(oldEmail);
       await start(oldEmail);
@@ -568,19 +567,18 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       expect(proposed.statusCode).toBe(200);
       const change = proposed.json();
 
-      // The proposer cannot decide.
-      const selfDecision = await decide(proposer.token, change, "approve");
-      expect(selfDecision.statusCode).toBe(422);
-      expect(selfDecision.json().code).toBe("EMAIL_CHANGE_SELF_APPROVAL");
-
-      const approved = await decide(approver.token, change, "approve");
+      const approved = await decide(proposer.token, change, "approve");
       expect(approved.statusCode).toBe(200);
       // Nothing changed yet: the new address must prove it is reachable.
       const [still] = await fx.sql<{ email: string }[]>`SELECT email FROM core.subjects WHERE id = ${subjectId}`;
       expect(still!.email).toBe(oldEmail);
 
       const code = await mailedCode(newEmail, "email_change_code");
-      const completed = await post("/api/v1/auth/email-change/verify", { email: newEmail, code });
+      const denied = await post("/api/v1/auth/email-change/verify", { email: newEmail, code, ownerCode: randomUUID() });
+      expect(denied.statusCode).toBe(401);
+      expect((await fx.sql`SELECT email FROM core.subjects WHERE id=${subjectId}`)[0]!.email).toBe(oldEmail);
+      const ownerCode = await mailedCode(oldEmail, "email_change_owner");
+      const completed = await post("/api/v1/auth/email-change/verify", { email: newEmail, code, ownerCode });
       expect(completed.statusCode).toBe(200);
 
       const [after] = await fx.sql<{ email: string }[]>`SELECT email FROM core.subjects WHERE id = ${subjectId}`;
@@ -619,19 +617,13 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       expect(await pendingToOld()).toHaveLength(before);
     });
 
-    it("the person whose address changes cannot decide it, and nobody proposes their own", async () => {
-      const proposer = await admin("administrator");
+    it("allows administrators to change their own verified mailbox", async () => {
       const target = await admin("administrator");
-      // Only an address can be changed (0118); the admin fixture has none of its own.
       await fx.sql`UPDATE core.subjects SET email = ${freshEmail("target")} WHERE id = ${target.subjectId}`;
       const own = await propose(target.token, target.subjectId, freshEmail());
-      expect(own.statusCode).toBe(422);
-      expect(own.json().code).toBe("EMAIL_CHANGE_SELF");
-
-      const change = (await propose(proposer.token, target.subjectId, freshEmail())).json();
-      const decided = await decide(target.token, change, "approve");
-      expect(decided.statusCode).toBe(422);
-      expect(decided.json().code).toBe("EMAIL_CHANGE_SELF_TARGET");
+      expect(own.statusCode, own.body).toBe(200);
+      const approved = await decide(target.token, own.json(), "approve");
+      expect(approved.statusCode, approved.body).toBe(200);
     });
 
     it("a person without an address cannot be given one by an email change", async () => {

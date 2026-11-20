@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { getAuthMethods, type AuthMethods } from "@/lib/account-api";
 import { AUTH_COPY } from "@/lib/copy";
 import { isAccountSession, useSession } from "@/lib/session";
-import { FactorsSection } from "@/components/settings/FactorsSection";
 import { IdentitiesSection } from "@/components/settings/IdentitiesSection";
 import { SessionsSection } from "@/components/settings/SessionsSection";
 import { WalletsSection } from "@/components/settings/WalletsSection";
@@ -56,7 +55,6 @@ export default function AccountSettingsPage() {
           <p className="sub">{C.lead}</p>
         </div>
       </div>
-      <FactorsSection onSessionEnded={sessionEnded} onAccountChanged={accountChanged} />
       <IdentitiesSection methods={methods} onSessionEnded={sessionEnded} onAccountChanged={accountChanged} />
       <WalletsSection onSessionEnded={sessionEnded} onAccountChanged={accountChanged} />
       <SessionsSection onSignOut={sessionEnded} reloadKey={sessionsKey} />

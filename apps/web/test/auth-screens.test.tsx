@@ -3,13 +3,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as webauthn from "@simplewebauthn/browser";
 import Connect from "../src/app/connect/page";
-import SecondFactorPage from "../src/app/auth/mfa/page";
 import OidcCallbackPage from "../src/app/auth/oidc/[provider]/callback/page";
 import AcceptInvitationPage from "../src/app/invitations/accept/page";
 import EmailChangePage from "../src/app/account/email-change/page";
 import { EmailCodeForm, formatRemaining, resendDelaySeconds } from "../src/components/auth/EmailCodeForm";
 import { navigation } from "../src/components/auth/ProviderButtons";
-import { TotpQr } from "../src/components/auth/TotpQr";
 import { pendingInvitation } from "../src/lib/pending-invitation";
 import type { SessionInfo } from "../src/lib/api";
 import { mockHttp, type HttpCall } from "./support/http";
@@ -171,6 +169,7 @@ describe("sign-in screen", () => {
     s.refresh.mockResolvedValue(aal1);
     render(<Connect />);
     expect(screen.queryByTestId("legacy-wallet-sign-in")).toBeNull();
+    await screen.findByLabelText("Email address");
     type("Email address", " person@example.test ");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     expect((await screen.findByTestId("code-sent")).textContent).toContain("expires in 10 minutes");
@@ -178,7 +177,7 @@ describe("sign-in screen", () => {
     await waitFor(() => expect(screen.getByLabelText("6-digit code")).toBeTruthy());
     type("6-digit code", "123456");
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await waitFor(() => expect(s.push).toHaveBeenCalledWith("/auth/mfa?next=%2Fw%2Fadmin"));
+    await waitFor(() => expect(s.push).toHaveBeenCalledWith("/w/admin"));
     expect(posted(calls, "/email/verify")?.body).toEqual({ email: "person@example.test", code: "123456" });
   });
 
@@ -191,6 +190,7 @@ describe("sign-in screen", () => {
     });
     s.refresh.mockResolvedValue(aal2);
     render(<Connect />);
+    await screen.findByLabelText("Email address");
     type("Email address", "person@example.test");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     await screen.findByTestId("code-sent");
@@ -209,6 +209,7 @@ describe("sign-in screen", () => {
     });
     s.refresh.mockResolvedValue({ ...aal2, roleBindings: [{ role: "reviewer", organizationId: "o", projectId: null }], assuranceLevel: "identity_bound" });
     render(<Connect />);
+    await screen.findByLabelText("Email address");
     type("Email address", "person@example.test");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     await screen.findByTestId("code-sent");
@@ -219,10 +220,11 @@ describe("sign-in screen", () => {
 
   it("states a refused code request and lets another address be used", async () => {
     mockHttp({
-      "GET /api/v1/auth/methods": () => Promise.reject(new Error("offline")),
+      "GET /api/v1/auth/methods": methods(),
       "POST /api/v1/auth/email/start": refusal(429, "RATE_LIMITED"),
     });
     render(<Connect />);
+    await screen.findByLabelText("Email address");
     type("Email address", "person@example.test");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     expect((await screen.findByRole("alert")).textContent).toBe("Too many attempts. Wait a few minutes and try again.");
@@ -234,6 +236,7 @@ describe("sign-in screen", () => {
       "POST /api/v1/auth/email/start": { accepted: true, message: "m", expiresInMinutes: 10 },
     });
     render(<Connect />);
+    await screen.findByLabelText("Email address");
     type("Email address", "person@example.test");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     fireEvent.click(await screen.findByRole("button", { name: "Use another address" }));
@@ -249,7 +252,7 @@ describe("sign-in screen", () => {
     });
     render(<Connect />);
     fireEvent.click(await screen.findByRole("button", { name: "Continue with Microsoft" }));
-    expect(screen.queryByRole("button", { name: "Continue with Google" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in with Google" })).toBeNull();
     await waitFor(() => expect(assign).toHaveBeenCalledWith("https://login.microsoftonline.com/authorize?x"));
     expect(posted(calls, "/oidc/microsoft/start")?.body).toEqual({ purpose: "sign_in" });
     expect(screen.queryByTestId("legacy-wallet-sign-in")).toBeNull();
@@ -261,7 +264,9 @@ describe("sign-in screen", () => {
       "POST /api/v1/auth/oidc/google/start": refusal(503, "OIDC_PROVIDER_UNAVAILABLE"),
     });
     render(<Connect />);
-    fireEvent.click(await screen.findByRole("button", { name: "Continue with Google" }));
+    const google = await screen.findByRole("button", { name: "Sign in with Google" });
+    expect(screen.queryByLabelText("Email address")).toBeNull();
+    fireEvent.click(google);
     expect((await screen.findByRole("alert")).textContent).toBeTruthy();
   });
 
@@ -273,188 +278,10 @@ describe("sign-in screen", () => {
   });
 });
 
-describe("second-factor screen", () => {
-  it("proves an authenticator code and continues to where the person was going", async () => {
-    s.session = aal1;
-    window.history.replaceState(null, "", "/auth/mfa?next=%2Fw%2Fsettings");
-    const calls = mockHttp({
-      "GET /api/v1/auth/mfa": status({ totpEnrolled: true }),
-      "POST /api/v1/auth/mfa/totp/verify": factor(),
-    });
-    render(<SecondFactorPage />);
-    await screen.findByTestId("mfa-challenge");
-    expect(screen.queryByRole("button", { name: "Use your passkey" })).toBeNull();
-    type("6-digit code from your authenticator app", "123456");
-    fireEvent.click(screen.getByRole("button", { name: "Verify code" }));
-    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/w/settings"));
-    expect(posted(calls, "/totp/verify")?.body).toEqual({ code: "123456" });
-    expect(s.refresh).toHaveBeenCalled();
-  });
-
-  it("proves a passkey through the browser ceremony", async () => {
-    s.session = aal1;
-    vi.mocked(webauthn.startAuthentication).mockResolvedValue({ id: "cred" } as never);
-    const calls = mockHttp({
-      "GET /api/v1/auth/mfa": status({ passkeyEnrolled: true }),
-      "POST /api/v1/auth/mfa/passkeys/authentication/options": { options: { challenge: "c" } },
-      "POST /api/v1/auth/mfa/passkeys/authentication/verify": factor({ aal: "aal3", secondFactor: "passkey" }),
-    });
-    render(<SecondFactorPage />);
-    fireEvent.click(await screen.findByTestId("passkey-prove"));
-    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/w/projects"));
-    expect(webauthn.startAuthentication).toHaveBeenCalledWith({ optionsJSON: { challenge: "c" } });
-    expect(posted(calls, "/authentication/verify")?.body).toEqual({ response: { id: "cred" } });
-  });
-
-  it("says a cancelled passkey prompt is a cancellation", async () => {
-    s.session = aal1;
-    const cancelled = Object.assign(new Error("x"), { name: "NotAllowedError" });
-    vi.mocked(webauthn.startAuthentication).mockRejectedValue(cancelled);
-    mockHttp({
-      "GET /api/v1/auth/mfa": status({ passkeyEnrolled: true }),
-      "POST /api/v1/auth/mfa/passkeys/authentication/options": { options: {} },
-    });
-    render(<SecondFactorPage />);
-    fireEvent.click(await screen.findByTestId("passkey-prove"));
-    expect((await screen.findByRole("alert")).textContent).toContain("cancelled or timed out");
-  });
-
-  it("uses a recovery code, then asks for a new factor", async () => {
-    s.session = aal1;
-    let limited = false;
-    const calls = mockHttp({
-      "GET /api/v1/auth/mfa": () => status(limited ? { recoveryLimited: true } : { totpEnrolled: true }),
-      "POST /api/v1/auth/mfa/recovery-codes/verify": () => {
-        limited = true;
-        return { aal: "aal2", recoveryLimited: true, revokedSessions: 2 };
-      },
-    });
-    render(<SecondFactorPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Use a recovery code instead" }));
-    expect(screen.getByText(/signs out every other session/)).toBeTruthy();
-    type("Recovery code", " abcd-efgh ");
-    fireEvent.click(screen.getByRole("button", { name: "Use recovery code" }));
-    await screen.findByTestId("mfa-reenrol");
-    expect(posted(calls, "/recovery-codes/verify")?.body).toEqual({ code: "abcd-efgh" });
-  });
-
-  it("enrols a passkey first, then shows the recovery codes once until the person keeps them", async () => {
-    s.session = aal1;
-    vi.mocked(webauthn.startRegistration).mockResolvedValue({ id: "new" } as never);
-    const calls = mockHttp({
-      "GET /api/v1/auth/mfa": status(),
-      "POST /api/v1/auth/mfa/passkeys/registration/options": { options: { rp: { id: "localhost" } } },
-      "POST /api/v1/auth/mfa/passkeys/registration/verify": factor({
-        aal: "aal3",
-        secondFactor: "passkey",
-        recoveryCodes: ["code-1", "code-2"],
-      }),
-    });
-    render(<SecondFactorPage />);
-    await screen.findByTestId("mfa-enrol");
-    type("Passkey name (optional)", " Laptop ");
-    fireEvent.click(screen.getByTestId("passkey-enrol"));
-    const list = await screen.findByTestId("recovery-code-list");
-    expect(list.textContent).toBe("code-1code-2");
-    expect(posted(calls, "/registration/verify")?.body).toEqual({ response: { id: "new" }, name: "Laptop" });
-    const proceed = screen.getByRole("button", { name: "Continue" });
-    expect(proceed.hasAttribute("disabled")).toBe(true);
-    // Recovery codes are never written to storage or the URL.
-    expect(JSON.stringify({ ...sessionStorage, ...localStorage })).not.toContain("code-1");
-    expect(window.location.href).not.toContain("code-1");
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(proceed);
-    expect(s.replace).toHaveBeenCalledWith("/w/projects");
-  });
-
-  it("enrols an authenticator app from a QR code drawn in the page", async () => {
-    s.session = aal1;
-    const calls = mockHttp({
-      "GET /api/v1/auth/mfa": status({ enrolment: { passkey: "MFA_STEP_UP_REQUIRED", totp: "allowed" } }),
-      "POST /api/v1/auth/mfa/totp/setup": {
-        otpauthUri: "otpauth://totp/MPC:person?secret=JBSWY3DPEHPK3PXP&issuer=MPC",
-        secret: "JBSWY3DPEHPK3PXP",
-        expiresAt: "z",
-      },
-      "POST /api/v1/auth/mfa/totp/confirm": factor({ recoveryCodes: [] }),
-    });
-    render(<SecondFactorPage />);
-    expect(screen.queryByTestId("passkey-enrol")).toBeNull();
-    fireEvent.click(await screen.findByTestId("totp-setup"));
-    expect((await screen.findByTestId("totp-secret")).textContent).toBe("JBSWY3DPEHPK3PXP");
-    expect(screen.getByTestId("totp-qr").querySelector("path")?.getAttribute("d")).toMatch(/^M\d+ \d+h1v1h-1z/);
-    type("6-digit code from your authenticator app", "654321");
-    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/w/projects"));
-    expect(posted(calls, "/totp/confirm")?.body).toEqual({ code: "654321" });
-  });
-
-  it("sends a person whose enrolment window closed to an administrator", async () => {
-    s.session = aal1;
-    mockHttp({
-      "GET /api/v1/auth/mfa": status({
-        enrolment: { passkey: "MFA_ENROLMENT_WINDOW_CLOSED", totp: "MFA_ENROLMENT_WINDOW_CLOSED" },
-      }),
-    });
-    render(<SecondFactorPage />);
-    expect((await screen.findByTestId("mfa-window-closed")).textContent).toContain("MFA reset");
-  });
-
-  it("ends every session once re-enrolment after a recovery code completes", async () => {
-    s.session = { ...aal2, recoveryLimited: true } as SessionInfo;
-    mockHttp({
-      "GET /api/v1/auth/mfa": status({ recoveryLimited: true, enrolment: { passkey: "allowed", totp: "allowed" } }),
-      "POST /api/v1/auth/mfa/totp/setup": { otpauthUri: "otpauth://totp/x?secret=A", secret: "A", expiresAt: "z" },
-      "POST /api/v1/auth/mfa/totp/confirm": factor({ sessionEnded: true }),
-    });
-    render(<SecondFactorPage />);
-    fireEvent.click(await screen.findByTestId("totp-setup"));
-    await screen.findByTestId("totp-secret");
-    type("6-digit code from your authenticator app", "111111");
-    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    expect((await screen.findByTestId("recovery-complete")).textContent).toContain("Every session has ended");
-    expect(s.signOut).toHaveBeenCalledOnce();
-  });
-
-  it("states a status that cannot be read", async () => {
-    s.session = aal1;
-    mockHttp({ "GET /api/v1/auth/mfa": refusal(500, "INTERNAL") });
-    render(<SecondFactorPage />);
-    expect(await screen.findByRole("alert")).toBeTruthy();
-  });
-
-  it("moves on at once when the session already holds its second factor", () => {
-    s.session = aal2;
-    mockHttp({});
-    render(<SecondFactorPage />);
-    // No role yet: the access-pending landing, not a project list that only refuses.
-    expect(s.replace).toHaveBeenCalledWith("/w/access-pending");
-    cleanup();
-    s.replace.mockReset();
-    s.session = { ...aal2, roleBindings: [{ role: "project_member", organizationId: "o", projectId: null }], assuranceLevel: "identity_bound" };
-    render(<SecondFactorPage />);
-    expect(s.replace).toHaveBeenCalledWith("/w/projects");
-  });
-
-  it("points a signed-out visitor to sign-in and lets a pending one sign out", async () => {
-    mockHttp({ "GET /api/v1/auth/mfa": status({ totpEnrolled: true }) });
-    const view = render(<SecondFactorPage />);
-    expect(screen.getByRole("link", { name: "Sign in →" }).getAttribute("href")).toBe("/connect");
-    s.loading = true;
-    view.rerender(<SecondFactorPage />);
-    expect(screen.getByText("Loading your session…")).toBeTruthy();
-    s.loading = false;
-    s.session = aal1;
-    view.rerender(<SecondFactorPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
-    await waitFor(() => expect(s.push).toHaveBeenCalledWith("/connect"));
-  });
-});
-
 describe("provider callback", () => {
   it("removes the provider's code from the address bar and completes sign-in", async () => {
     window.history.replaceState(null, "", "/auth/oidc/google/callback?state=st&code=cd&iss=https%3A%2F%2Faccounts.google.com");
-    s.refresh.mockResolvedValue(aal1);
+    s.refresh.mockResolvedValue({ ...aal1, firstFactor: "google" });
     const calls = mockHttp({
       "POST /api/v1/auth/oidc/google/callback": () =>
         Response.json({ aal: "aal1" }, { headers: { "x-mpc-oidc-purpose": "sign_in" } }),
@@ -462,7 +289,7 @@ describe("provider callback", () => {
     render(<OidcCallbackPage />);
     expect(window.location.search).toBe("");
     expect(window.location.pathname).toBe("/auth/oidc/google/callback");
-    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/auth/mfa"));
+    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/w/work"));
     // No binding from the page: the web server adds it from its own cookie.
     expect(posted(calls, "/callback")?.body).toEqual({ state: "st", code: "cd", iss: "https://accounts.google.com" });
   });
@@ -488,7 +315,7 @@ describe("provider callback", () => {
         Response.json({}, { headers: { "x-mpc-oidc-purpose": "invitation_accept" } }),
     });
     render(<OidcCallbackPage />);
-    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/auth/mfa"));
+    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/w/projects"));
     expect(pendingInvitation.read()).toBeNull();
   });
 
@@ -537,7 +364,7 @@ describe("invitation acceptance", () => {
     expect(posted(calls, "/accept/start")?.body).toEqual({ token: TOKEN });
     type("8-digit code", "12345678");
     fireEvent.click(screen.getByRole("button", { name: "Accept invitation" }));
-    await waitFor(() => expect(s.push).toHaveBeenCalledWith("/auth/mfa"));
+    await waitFor(() => expect(s.push).toHaveBeenCalledWith("/w/projects"));
     expect(posted(calls, "/accept/verify")?.body).toEqual({ token: TOKEN, code: "12345678", displayName: "Kim Reviewer" });
     expect(pendingInvitation.read()).toBeNull();
   });
@@ -601,10 +428,11 @@ describe("email change completion", () => {
     render(<EmailChangePage />);
     await screen.findByLabelText("6-digit code");
     type("New address", " new@example.test ");
+    type("Confirmation key from your current email", "11111111-1111-4111-8111-111111111111");
     type("6-digit code", "123456");
     fireEvent.click(screen.getByRole("button", { name: "Confirm address" }));
     expect((await screen.findByTestId("email-change-done")).textContent).toContain("Every session has ended");
-    expect(posted(calls, "/email-change/verify")?.body).toEqual({ email: "new@example.test", code: "123456" });
+    expect(posted(calls, "/email-change/verify")?.body).toEqual({ email: "new@example.test", code: "123456", ownerCode: "11111111-1111-4111-8111-111111111111" });
     expect(s.signOut).toHaveBeenCalledOnce();
   });
 
@@ -625,17 +453,5 @@ describe("email change completion", () => {
     await screen.findByTestId("code-expiry");
     expect(posted(calls, "/email-change/start")?.body).toEqual({ email: "new@example.test" });
     vi.useRealTimers();
-  });
-});
-
-describe("authenticator QR", () => {
-  it("draws the URI locally as SVG, fetching nothing", () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-    render(<TotpQr uri="otpauth://totp/MPC:a?secret=JBSWY3DPEHPK3PXP&issuer=MPC" size={120} />);
-    const svg = screen.getByTestId("totp-qr");
-    expect(svg.getAttribute("width")).toBe("120");
-    expect(svg.querySelector("image")).toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -15,6 +15,8 @@ const describeDb = DATABASE_URL ? describe : describe.skip;
  * `CROSS_TENANT` and its migration sets `row_security = off`.
  */
 const CROSS_TENANT = [
+  "core.match_google_workspace_invitation(uuid,text,text,text)",
+  "core.match_google_workspace_invitation(uuid,text,text,text,text)",
   "core.find_person_by_email(text)",
   "core.start_email_challenge(core.email_challenge_purpose,text,text,uuid,bytea,text,text,text)",
   "core.verify_sign_in_code(text,bytea,text,text,uuid,text,integer)",
@@ -22,12 +24,14 @@ const CROSS_TENANT = [
   "core.accept_invitation(text,bytea,text,uuid,text,uuid,text,integer)",
   "core.request_email_change(uuid,uuid,text,text,uuid)",
   "core.decide_email_change(uuid,uuid,boolean,text,integer,uuid,bytea,text)",
-  "core.complete_email_change(text,bytea,text,text)",
+  "core.complete_email_change(text,bytea,text,text,text)",
   "core.purge_email_auth_records()",
   "core.start_oidc_transaction(uuid,core.oidc_provider,core.oidc_purpose,text,text,text,bytea,text,uuid,text,text,text)",
   "core.claim_oidc_transaction(text,text,core.oidc_provider,uuid)",
+  "core.link_google_workspace_account(uuid,text,text,text,text)",
+  "core.google_session_requires_mfa(uuid)",
   "core.complete_oidc_sign_in(uuid,text,text,uuid,text,integer)",
-  "core.complete_oidc_link(uuid,uuid,text,text,text,text,uuid)",
+  "core.complete_oidc_link(uuid,uuid,text,text,text,text,uuid,text)",
   "core.complete_oidc_invitation(uuid,text,text,text,text,text,uuid,uuid,uuid,text,integer)",
   "core.purge_oidc_records()",
   "core.purge_auth_records()",
@@ -36,7 +40,7 @@ const CROSS_TENANT = [
   "core.decide_subject_suspension(uuid,uuid,boolean,text,integer)",
   "core.operational_gauges()",
   "core.governance_votes_pin_weight()",
-  "core.bind_wallet_by_proof(uuid,uuid,text,uuid,text)",
+  "core.bind_wallet_by_proof(uuid,uuid,text,uuid,text,text)",
   // Session and service-token paths, before 0112 (0005/0026/0074, 0108, 0109): read before a
   // tenant is set.
   "core.revoke_session(text)",
@@ -46,6 +50,14 @@ const CROSS_TENANT = [
 
 /** Audited (0112–0130): act inside the tenant context the caller set — see 0131's header. */
 const SAME_TENANT = [
+  "core.wallet_recovery_session_live(uuid)",
+  "core.start_wallet_recovery(uuid,integer,text)",
+  "core.confirm_wallet_recovery(uuid,uuid,uuid)",
+  "core.approve_wallet_recovery(uuid,uuid)",
+  "core.cancel_suspended_wallet_recoveries()",
+  // 0152: authorizes the live session and scopes its writes here; the existing create_invitation
+  // definer owns the cross-tenant email uniqueness check under its own row_security setting.
+  "core.create_role_invitation(uuid,uuid,text,uuid,text,text,text,uuid,text)",
   // 0141: only chronology writes for the RLS-authorized schema row; retains caller tenant context.
   "core.record_schema_activation()",
   "core.create_subject_session(uuid,text,uuid,core.session_first_factor,core.session_second_factor,integer)",

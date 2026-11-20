@@ -7,7 +7,7 @@ import { getAuthMethods, startEmailSignIn, verifyEmailSignIn, type AuthMethods }
 import { authErrorMessage } from "@/lib/auth-errors";
 import { AUTH_COPY } from "@/lib/copy";
 import { explicitNextPath, landingPath } from "@/lib/next-path";
-import { needsSecondFactor, useSession } from "@/lib/session";
+import { useSession } from "@/lib/session";
 import { EmailCodeForm } from "@/components/auth/EmailCodeForm";
 import { ProviderButtons } from "@/components/auth/ProviderButtons";
 
@@ -28,16 +28,21 @@ export default function SignInPage() {
   const { session, loading, refresh } = useSession();
   const router = useRouter();
   const [methods, setMethods] = useState<AuthMethods | null>(null);
+  const [methodsFailed, setMethodsFailed] = useState(false);
+  const [emailSelected, setEmailSelected] = useState(false);
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState<{ at: number; count: number; minutes: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    getAuthMethods()
+  function loadMethods() {
+    setMethodsFailed(false);
+    void getAuthMethods()
       .then(setMethods)
-      .catch(() => setMethods(null));
-  }, []);
+      .catch(() => setMethodsFailed(true));
+  }
+
+  useEffect(loadMethods, []);
 
   /**
    * Where a fresh session goes: the second factor first, unless it already holds one. Without an
@@ -46,10 +51,6 @@ export default function SignInPage() {
   async function afterSignIn() {
     const next = explicitNextPath();
     const fresh = await refresh();
-    if (needsSecondFactor(fresh)) {
-      router.push(next ? `/auth/mfa?next=${encodeURIComponent(next)}` : "/auth/mfa");
-      return;
-    }
     router.push(landingPath(fresh, next));
   }
 
@@ -71,14 +72,16 @@ export default function SignInPage() {
         </div>
       </div>
 
-      {!loading && session?.authenticated && !needsSecondFactor(session) ? (
+      {!loading && session?.authenticated ? (
         <p className="sub">
           {C.alreadySignedIn} <a href={landingPath(session)}>{C.goToWorkspace}</a>
         </p>
       ) : null}
 
       <div className="panel" data-testid="email-sign-in">
-        {sent === null ? (
+        <SignInOptions methods={methods} methodsFailed={methodsFailed} emailSelected={emailSelected}
+          loadMethods={loadMethods} onSelectEmail={() => setEmailSelected(true)} />
+        {methods?.emailCode && (!methods.google || emailSelected) && (sent === null ? (
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -132,14 +135,8 @@ export default function SignInPage() {
               </button>
             </p>
           </>
-        )}
+        ))}
 
-        {methods && (methods.google || methods.microsoft) ? (
-          <>
-            <p className="meta">{C.or}</p>
-            <ProviderButtons methods={methods} start={{ purpose: "sign_in" }} />
-          </>
-        ) : null}
         <p className="meta" style={{ marginBottom: 0 }}>
           {C.noInvitation}
         </p>
@@ -156,6 +153,30 @@ export default function SignInPage() {
           <li>{REQUIRED_BOUNDARY_COPY.proofResult}</li>
         </ul>
       </div>
+    </>
+  );
+}
+
+function SignInOptions({ methods, methodsFailed, emailSelected, loadMethods, onSelectEmail }: {
+  methods: AuthMethods | null;
+  methodsFailed: boolean;
+  emailSelected: boolean;
+  loadMethods: () => void;
+  onSelectEmail: () => void;
+}) {
+  return (
+    <>
+      {methods && (methods.google || methods.microsoft) ? (
+        <>
+          <ProviderButtons methods={methods} start={{ purpose: "sign_in" }} />
+          {!methods.google ? <p className="meta">{C.or}</p> : null}
+        </>
+      ) : null}
+      {!methods && (methodsFailed ? <p role="alert">Could not load sign-in options.{" "}
+        <button type="button" onClick={loadMethods}>Try again</button></p> : <p role="status">Loading sign-in options…</p>)}
+      {methods?.google && !emailSelected ? (
+        <button className="link email-sign-in-option" type="button" onClick={onSelectEmail}>Use an email code instead</button>
+      ) : null}
     </>
   );
 }

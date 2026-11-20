@@ -99,6 +99,7 @@ export default function AdminPage() {
   const mayManageRules = can(session, "document.rule.manage");
   const mayManageSinks = can(session, "admin.notification.manage");
   const [subjects, setSubjects] = useState<AdminSubject[]>([]);
+  const [personQuery, setPersonQuery] = useState("");
   const [grants, setGrants] = useState<RoleGrant[]>([]);
   const [revocations, setRevocations] = useState<RoleRevocation[]>([]);
   const [sinks, setSinks] = useState<NotificationSink[]>([]);
@@ -142,7 +143,15 @@ export default function AdminPage() {
         listNotificationSinks(token),
         listDocumentLinkRules(token),
       ]);
-      setSubjects(subjectPage.items);
+      const seenNames = new Set<string>();
+      const duplicateNames = new Set<string>();
+      for (const { displayName } of subjectPage.items) {
+        if (seenNames.has(displayName)) duplicateNames.add(displayName);
+        seenNames.add(displayName);
+      }
+      setSubjects(subjectPage.items.map(subject => duplicateNames.has(subject.displayName)
+        ? { ...subject, displayName: `${subject.displayName} (${subject.id})` }
+        : subject));
       setGrants(grantPage.items);
       setRevocations(revocationPage.items);
       setSinks(sinkPage.items);
@@ -178,7 +187,8 @@ export default function AdminPage() {
     }
   }
 
-  const locked = subjects.filter((subject) => subject.locked);
+  const matchingPeople = subjects.filter(subject => subject.displayName.toLowerCase().includes(personQuery.trim().toLowerCase()));
+  const lockedCount = subjects.filter((subject) => subject.kind === "person" && subject.locked).length;
   // A request a suspension closed is not waiting on anyone, whatever its state says.
   const pending = grants.filter((grant) => grant.state === "pending" && !grant.closedReason);
   const pendingRevocations = revocations.filter(
@@ -192,11 +202,11 @@ export default function AdminPage() {
   }
 
   const renderNotice = () => {
-    return locked.length > 0 ? (
-      <div className="notice" style={{ color: "var(--alert)" }} data-testid="admin-locked">
-        <div className="title">{AUTH_COPY.admin.lockedTitle(locked.length)}</div>
-        {AUTH_COPY.admin.lockedBody(locked.map((subject) => subject.displayName).join(", "))}
-      </div>
+    return lockedCount > 0 ? (
+      <details data-testid="admin-locked">
+        <summary>+{lockedCount} {lockedCount === 1 ? "alert" : "alerts"}</summary>
+        <p className="sub">{AUTH_COPY.admin.lockedTitle(lockedCount)}</p>
+      </details>
     ) : null;
   };
 
@@ -271,7 +281,7 @@ export default function AdminPage() {
       <div className="panel">
         <h2>Propose a role</h2>
         <p className="sub" style={{ marginTop: 0 }}>
-          Proposing does not grant. Someone else has to decide, and it cannot be you.
+          Approve the proposal to grant the role.
         </p>
         <form
           onSubmit={(event) => {
@@ -641,11 +651,6 @@ export default function AdminPage() {
       <div className="page-head">
         <div>
           <h1>Administration</h1>
-          <p className="sub">
-            People, wallets, and roles for this tenant. Granting or revoking a role takes two
-            people: one proposes, another decides. The server enforces that — hiding a button is
-            not a control.
-          </p>
         </div>
       </div>
 
@@ -653,8 +658,161 @@ export default function AdminPage() {
 
       {renderNotice()}
 
+      <AccountAdmin subjects={subjects} onChanged={reload} />
+
+      <details className="panel">
+        <summary>Role approvals ({pending.length + pendingRevocations.length})</summary>
       <div className="panel">
-        <h2>Add a person</h2>
+        <h2>Role proposals waiting on a decision</h2>
+        {pending.length === 0 ? (
+          <p className="sub" style={{ margin: 0 }}>
+            No pending role requests.
+          </p>
+        ) : (
+          <div className="table-scroll">
+            <table data-testid="admin-role-grants">
+              <thead>
+                <tr>
+                  <th>Who</th>
+                  <th>Role</th>
+                  <th>Why</th>
+                  <th>Decision</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pending.map((grant) => {
+                  return (
+                    <tr key={grant.id}>
+                      <td>{grant.subjectName}</td>
+                      <td className="mono">{grant.role}</td>
+                      <td style={{ color: "var(--muted-foreground)" }}>{grant.reason}</td>
+                      <td>
+                        {!mayApproveRoles ? null : (
+                          <>
+                            <button
+                              className="primary"
+                              onClick={() =>
+                                void run(() =>
+                                  decideRoleGrant(
+                                    token!,
+                                    newIdempotencyKey(),
+                                    grant.id,
+                                    grant.version,
+                                    { decision: "approve", reason: "Reviewed and approved" },
+                                  ),
+                                )
+                              }
+                            >
+                              Approve
+                            </button>{" "}
+                            <button
+                              onClick={() =>
+                                void run(() =>
+                                  decideRoleGrant(
+                                    token!,
+                                    newIdempotencyKey(),
+                                    grant.id,
+                                    grant.version,
+                                    { decision: "reject", reason: "Not needed for this role" },
+                                  ),
+                                )
+                              }
+                            >
+                              Reject
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="panel">
+        <h2>Role revocations waiting on a decision</h2>
+        {pendingRevocations.length === 0 ? (
+          <p className="sub" style={{ margin: 0 }}>
+            No pending role requests.
+          </p>
+        ) : (
+          <div className="table-scroll">
+            <table data-testid="admin-role-revocations">
+              <thead>
+                <tr>
+                  <th>Who</th>
+                  <th>Role</th>
+                  <th>Reason</th>
+                  <th>Why</th>
+                  <th>Decision</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingRevocations.map((revocation) => (
+                  <tr key={revocation.id}>
+                    <td>{revocation.subjectName}</td>
+                    <td className="mono">{revocation.role}</td>
+                    <td className="meta">
+                      {REVOCATION_REASONS.find((option) => option.value === revocation.reasonCode)
+                        ?.label ?? revocation.reasonCode}
+                    </td>
+                    <td style={{ color: "var(--muted-foreground)" }}>{revocation.reason}</td>
+                    <td>
+                      {!mayApproveRoles ? null : (
+                        <>
+                          <button
+                            className="primary"
+                            onClick={() =>
+                              void run(() =>
+                                decideRoleRevocation(
+                                  token!,
+                                  newIdempotencyKey(),
+                                  revocation.id,
+                                  revocation.version,
+                                  { decision: "approve", reason: "Reviewed and approved" },
+                                ),
+                              )
+                            }
+                          >
+                            Approve
+                          </button>{" "}
+                          <button
+                            onClick={() =>
+                              void run(() =>
+                                decideRoleRevocation(
+                                  token!,
+                                  newIdempotencyKey(),
+                                  revocation.id,
+                                  revocation.version,
+                                  { decision: "reject", reason: "The role is still needed" },
+                                ),
+                              )
+                            }
+                          >
+                            Reject
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      </details>
+      <details className="panel">
+        <summary>Settings</summary>
+        {renderDocumentTypeRules()}
+        {renderNotificationDelivery()}
+      </details>
+
+      <details className="panel">
+        <summary>Add a person without sign-in</summary>
         <p className="sub" style={{ marginTop: 0 }}>
           A new subject has no wallet and no role. Both are separate, deliberate steps.
         </p>
@@ -681,10 +839,11 @@ export default function AdminPage() {
             Add person
           </button>
         </form>
-      </div>
-
+      </details>
       <div className="panel">
         <h2>People</h2>
+        <label>Find a person <input type="search" value={personQuery} onChange={event => setPersonQuery(event.target.value)} /></label>
+        {personQuery && matchingPeople.length === 0 ? <p role="status">No matching people.</p> : null}
         <div className="table-scroll">
           <table data-testid="admin-subjects">
             <thead>
@@ -697,7 +856,7 @@ export default function AdminPage() {
               </tr>
             </thead>
             <tbody>
-              {subjects.map((subject) => (
+              {matchingPeople.map((subject) => (
                 <tr key={subject.id}>
                   <td>
                     {subject.displayName}
@@ -857,8 +1016,7 @@ export default function AdminPage() {
           <h2>Propose a revocation</h2>
           <p className="sub" style={{ marginTop: 0 }}>
             Revoke <span className="mono">{revokeFor.role}</span> from {revokeFor.subjectName}.
-            Proposing does not revoke. Someone else has to decide, and it cannot be you. The role
-            is ended, not deleted: the record of who held it stays.
+            Approve the proposal to revoke access. The role history stays available.
           </p>
           <form
             onSubmit={(event) => {
@@ -906,177 +1064,8 @@ export default function AdminPage() {
         </div>
       ) : null}
 
-      {/*
-        Document type rules.
 
-        A rule writes links into every project of the tenant, which is why the server gives it
-        to a tenant-wide role only. Retiring keeps the links already made — people may have come
-        to rely on them — so the screen says that before the button, not after.
-      */}
-      {renderDocumentTypeRules()}
 
-      {/*
-        Notification sinks.
-
-        **Show "registered" separately from "actually delivering".** A sink that is configured but
-        sends nothing is the worst state — everyone believes it is sending.
-      */}
-      {renderNotificationDelivery()}
-
-      <div className="panel">
-        <h2>Role proposals waiting on a decision</h2>
-        {pending.length === 0 ? (
-          <p className="sub" style={{ margin: 0 }}>
-            Nothing is waiting. This is not a permission problem.
-          </p>
-        ) : (
-          <div className="table-scroll">
-            <table data-testid="admin-role-grants">
-              <thead>
-                <tr>
-                  <th>Who</th>
-                  <th>Role</th>
-                  <th>Why</th>
-                  <th>Decision</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pending.map((grant) => {
-                  const mine = grant.requestedBySubjectId === session?.subjectId;
-                  return (
-                    <tr key={grant.id}>
-                      <td>{grant.subjectName}</td>
-                      <td className="mono">{grant.role}</td>
-                      <td style={{ color: "var(--muted-foreground)" }}>{grant.reason}</td>
-                      <td>
-                        {/*
-                          The proposer gets no decision buttons. The server blocks the
-                          same thing, but a clickable button that is always rejected makes
-                          the screen look broken.
-                        */}
-                        {!mayApproveRoles ? null : mine ? (
-                          <span className="meta">You proposed this — someone else decides.</span>
-                        ) : (
-                          <>
-                            <button
-                              className="primary"
-                              onClick={() =>
-                                void run(() =>
-                                  decideRoleGrant(
-                                    token!,
-                                    newIdempotencyKey(),
-                                    grant.id,
-                                    grant.version,
-                                    { decision: "approve", reason: "Reviewed and approved" },
-                                  ),
-                                )
-                              }
-                            >
-                              Approve
-                            </button>{" "}
-                            <button
-                              onClick={() =>
-                                void run(() =>
-                                  decideRoleGrant(
-                                    token!,
-                                    newIdempotencyKey(),
-                                    grant.id,
-                                    grant.version,
-                                    { decision: "reject", reason: "Not needed for this role" },
-                                  ),
-                                )
-                              }
-                            >
-                              Reject
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div className="panel">
-        <h2>Role revocations waiting on a decision</h2>
-        {pendingRevocations.length === 0 ? (
-          <p className="sub" style={{ margin: 0 }}>
-            Nothing is waiting. This is not a permission problem.
-          </p>
-        ) : (
-          <div className="table-scroll">
-            <table data-testid="admin-role-revocations">
-              <thead>
-                <tr>
-                  <th>Who</th>
-                  <th>Role</th>
-                  <th>Reason</th>
-                  <th>Why</th>
-                  <th>Decision</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pendingRevocations.map((revocation) => (
-                  <tr key={revocation.id}>
-                    <td>{revocation.subjectName}</td>
-                    <td className="mono">{revocation.role}</td>
-                    <td className="meta">
-                      {REVOCATION_REASONS.find((option) => option.value === revocation.reasonCode)
-                        ?.label ?? revocation.reasonCode}
-                    </td>
-                    <td style={{ color: "var(--muted-foreground)" }}>{revocation.reason}</td>
-                    <td>
-                      {/* Same as grants: the proposer gets no decision buttons. The server blocks it too. */}
-                      {!mayApproveRoles ? null : revocation.requestedBySubjectId === session?.subjectId ? (
-                        <span className="meta">You proposed this — someone else decides.</span>
-                      ) : (
-                        <>
-                          <button
-                            className="primary"
-                            onClick={() =>
-                              void run(() =>
-                                decideRoleRevocation(
-                                  token!,
-                                  newIdempotencyKey(),
-                                  revocation.id,
-                                  revocation.version,
-                                  { decision: "approve", reason: "Reviewed and approved" },
-                                ),
-                              )
-                            }
-                          >
-                            Approve
-                          </button>{" "}
-                          <button
-                            onClick={() =>
-                              void run(() =>
-                                decideRoleRevocation(
-                                  token!,
-                                  newIdempotencyKey(),
-                                  revocation.id,
-                                  revocation.version,
-                                  { decision: "reject", reason: "The role is still needed" },
-                                ),
-                              )
-                            }
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-      <AccountAdmin subjects={subjects} onChanged={reload} />
     </>
   );
 }

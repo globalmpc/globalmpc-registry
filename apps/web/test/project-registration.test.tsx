@@ -162,8 +162,8 @@ it("renders project facts and sends every filter to the server, clearing filters
   );
   render(<Projects />);
   await screen.findByTestId("project-list");
-  expect(screen.getByText("2 stale signal(s)")).toBeTruthy();
-  expect(screen.getByText("No claims")).toBeTruthy();
+  expect(screen.getAllByRole("columnheader").map(header => header.textContent)).toEqual(["Project", "Evidence stage", "Lifecycle", "Owner"]);
+  expect(screen.getByRole("link", { name: "MPC-2" }).getAttribute("href")).toBe("/w/projects/p2");
   for (const [label, value] of [
     ["Lifecycle", "draft"],
     ["Host country (ISO3)", "mng"],

@@ -305,11 +305,15 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
     return (
       <>
-        <div className="project-next-actions" aria-label="Project next steps">
+        {project.activity.length === 1 && project.activity[0]?.command === "project.registered" ? <section className="panel registration-next" aria-label="Registration confirmation">
+          <h2>Project registered</h2>
+          {actions.includes("source.upload") ? <Link href={`/w/projects/${id}/register`}>Upload supporting evidence →</Link>
+            : <p>Ask a project member with upload access to add supporting evidence.</p>}
+        </section> : <div className="project-next-actions" aria-label="Project next steps">
           <div><span className="eyebrow">Evidence needing attention</span><strong>{project.readiness.flatMap((row) => row.openGaps).length} recorded gaps</strong>{actions.includes("readiness.read") ? <Link href={`/w/projects/${id}/requirements`}>Inspect requirements →</Link> : null}</div>
           <div><span className="eyebrow">Evidence changes</span><strong>{project.dataAge.openStaleSignals} open stale signals</strong>{actions.includes("evidence.read") ? <Link href={`/w/projects/${id}/impacts`}>Check impact →</Link> : null}</div>
           {actions.includes("source.upload") ? <div><span className="eyebrow">Add supporting material</span><strong>Register evidence</strong><Link href={`/w/projects/${id}/register`}>Upload a file →</Link></div> : null}
-        </div>
+        </div>}
         {actions.includes("readiness.read") ? (
           <WorkspaceEvidenceLedger mayManagePolicies={session?.actions?.includes("registry.read") ?? false} key={`${token}:${id}`} token={token} projectId={id} revision={assessmentRevision} browsable />
         ) : null}

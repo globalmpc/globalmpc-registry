@@ -412,7 +412,7 @@ describeDb("Readiness and Gate Decision", () => {
         secondFactor: "passkey",
       });
       const second = newAccount();
-      const replaced = await bindWalletByProof(app, account, second.account);
+      const replaced = await bindWalletByProof(app, account, second.account, "rotation", fx.approverA.account);
       expect(replaced.statusCode, replaced.body).toBe(200);
       expect(replaced.json().replaced).toMatchObject({ walletAddress: fx.approverA.address });
 
@@ -448,7 +448,7 @@ describeDb("Readiness and Gate Decision", () => {
 
       // Bound again by proof (a disabled address re-binds), the original key signs again; the
       // second key is now the history.
-      const back = await bindWalletByProof(app, account, fx.approverA.account);
+      const back = await bindWalletByProof(app, account, fx.approverA.account, "rotation", second.account);
       expect(back.statusCode, back.body).toBe(200);
       const cut = await decide(tokens.approverA, await holdContent(), second);
       expect(cut.statusCode).toBe(400);

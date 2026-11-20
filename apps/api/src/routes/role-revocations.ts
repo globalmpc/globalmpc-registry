@@ -184,17 +184,6 @@ async function assertApproverRemains(tx: Tx, tenantId: string, binding: BindingR
               SELECT 1 FROM core.subject_sign_in_providers(ARRAY[s.id])
             )
           )
-          AND (
-            EXISTS (
-              SELECT 1 FROM core.webauthn_credentials c
-              WHERE c.tenant_id = s.tenant_id AND c.subject_id = s.id AND c.revoked_at IS NULL
-            )
-            OR (need.minimum <> 'high_assurance' AND EXISTS (
-              SELECT 1 FROM core.totp_authenticators t
-              WHERE t.tenant_id = s.tenant_id AND t.subject_id = s.id
-                AND t.confirmed_at IS NOT NULL AND t.revoked_at IS NULL
-            ))
-          )
       )
   `;
 
@@ -317,15 +306,6 @@ export async function registerRoleRevocationRoutes(
             throw unprocessable("ROLE_REVOCATION_ALREADY_DECIDED", "Proposal is already decided", {
               state: current.state,
             });
-          }
-
-          // The DB CHECK blocks the same thing; filtering here first says why it was refused.
-          if (current.requested_by_subject_id === session.subjectId) {
-            throw unprocessable(
-              "ROLE_REVOCATION_SELF_APPROVAL",
-              "The proposer cannot approve their own proposal",
-              { hint: "Another admin holder decides" },
-            );
           }
 
           const approved = parsed.data.decision === "approve";

@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { demoEmail } from "./demo-people";
+import { closeMailbox, database } from "./mailbox";
 import { expect, test, type Page } from "@playwright/test";
 import type { TypedDataDefinition } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -6,7 +9,7 @@ import { connectAs } from "./connect-as";
 /**
  * Real wallet connection — at the moment of signing, never to sign in (WP7).
  *
- * A wallet is a signing key. The account signs in by email and a second factor; a wallet is
+ * A wallet is a signing key. The account signs in by email; a wallet is
  * asked for only when something is signed — here, the proof that binds a new wallet to the
  * account in settings, the one signature every person makes first.
  *
@@ -33,8 +36,9 @@ const METAMASK: FakeWallet = {
   mode: "desktop",
 };
 
-/** The person who binds wallets here: tenant C holds no projects, so nothing else depends on it. */
-const PERSON = "Operator C";
+const E2E_TENANT_C = "e0000000-0000-4000-8000-00000000000c";
+
+test.afterAll(closeMailbox);
 
 /**
  * Installs the wallets and returns the fresh address they hold and the requests they received
@@ -44,19 +48,31 @@ const PERSON = "Operator C";
 async function installWallets(
   page: Page,
   wallets: readonly FakeWallet[],
-): Promise<{ address: string; calls: string[] }> {
+): Promise<{ person: string; address: string; calls: string[] }> {
   const account = privateKeyToAccount(generatePrivateKey());
+  const previous = privateKeyToAccount(generatePrivateKey());
+  const subjectId = randomUUID();
+  const person = `Wallet holder ${subjectId}`;
+  await database().begin(async tx => {
+    await tx`SELECT set_config('app.current_tenant', ${E2E_TENANT_C}, true)`;
+    await tx`INSERT INTO core.subjects(id,tenant_id,kind,display_name,email)
+      VALUES (${subjectId},${E2E_TENANT_C},'person',${person},${demoEmail(person)})`;
+    await tx`INSERT INTO core.wallet_identities(id,tenant_id,subject_id,wallet_address,chain_id,assurance_level,bound_at)
+      VALUES (${randomUUID()},${E2E_TENANT_C},${subjectId},${previous.address.toLowerCase()},31337,'wallet_only',now())`;
+  });
   const calls: string[] = [];
   await page.exposeFunction("__e2eWalletCall", (call: string) => {
     calls.push(call);
   });
-  await page.exposeFunction("__e2eWalletSignTyped", (json: string) =>
-    account.signTypedData(typedData(JSON.parse(json))),
-  );
+  await page.exposeFunction("__e2eWalletSignTyped", (address: string, json: string) => {
+    const signer = [account, previous].find(candidate => candidate.address.toLowerCase() === address.toLowerCase());
+    if (!signer) throw new Error("Unknown signing account");
+    return signer.signTypedData(typedData(JSON.parse(json)));
+  });
 
   for (const [index, wallet] of wallets.entries()) {
     await page.addInitScript(
-      ({ address, wallet, claimsWindow }) => {
+      ({ address, previousAddress, wallet, claimsWindow }) => {
         const w = window as unknown as Record<string, unknown>;
         let chain = wallet.startChain;
         const known = new Set<number>([wallet.startChain]);
@@ -75,7 +91,7 @@ async function installWallets(
             switch (method) {
               case "eth_requestAccounts":
               case "eth_accounts":
-                return [address];
+                return [address, previousAddress];
               case "eth_chainId":
                 return `0x${chain.toString(16)}`;
               case "wallet_switchEthereumChain": {
@@ -101,7 +117,7 @@ async function installWallets(
                 if (Number((JSON.parse(params?.[1] as string) as { domain: { chainId: unknown } }).domain.chainId) !== chain) {
                   throw fail("Provided chainId must match the active chainId", { code: -32602 });
                 }
-                return (w["__e2eWalletSignTyped"] as (json: string) => Promise<string>)(params?.[1] as string);
+                return (w["__e2eWalletSignTyped"] as (address: string, json: string) => Promise<string>)(String(params?.[0]), String(params?.[1]));
               }
               default:
                 throw fail(`unsupported ${method}`, { code: 4200 });
@@ -124,11 +140,11 @@ async function installWallets(
         window.addEventListener("eip6963:requestProvider", announce);
         announce();
       },
-      { address: account.address, wallet, claimsWindow: index === 0 },
+      { address: account.address, previousAddress: previous.address, wallet, claimsWindow: index === 0 },
     );
   }
 
-  return { address: account.address.toLowerCase(), calls };
+  return { person, address: account.address.toLowerCase(), calls };
 }
 
 /** viem wants bigint for the integer fields the server sends as decimal strings. */
@@ -154,7 +170,7 @@ async function openWallets(page: Page) {
 }
 
 /**
- * The account holds one wallet (0130); the seed gave Operator C one, so every binding here is a
+ * The account holds one wallet (0130); each test starts with one, so every binding here is a
  * replacement: the screen names the wallet it replaces, and nothing is signed until confirmed.
  */
 async function replaceAndConfirm(section: ReturnType<Page["getByTestId"]>, start?: () => Promise<void>) {
@@ -162,25 +178,27 @@ async function replaceAndConfirm(section: ReturnType<Page["getByTestId"]>, start
   await (start ? start() : section.getByTestId("replace-wallet").click());
   const confirm = section.getByTestId("replace-confirm");
   await expect(confirm).toContainText(`This will replace ${current}`, { ignoreCase: true });
+  if (start) await confirm.getByLabel("Existing signing wallet app").selectOption({ label: "MetaMask" });
   await confirm.getByTestId("confirm-replace").click();
   return current;
 }
 
 test.describe("a wallet is connected only to sign", () => {
   test("signing in asks no wallet anything, even with one installed, and offers none", async ({ page }) => {
-    const { calls } = await installWallets(page, [METAMASK]);
+    const { calls, person } = await installWallets(page, [METAMASK]);
     await page.goto("/connect");
-    await expect(page.getByLabel("Email address")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign in with Google" })).toBeVisible();
+    await expect(page.getByLabel("Email address")).toHaveCount(0);
     await expect(page.getByRole("button", { name: /wallet/i })).toHaveCount(0);
 
-    await connectAs(page, PERSON, { wallet: false });
+    await connectAs(page, person, { wallet: false });
     await expect(page.getByTestId("sign-in-method")).toHaveText("email");
     expect(calls).toEqual([]);
   });
 
   test("MetaMask desktop — starting on Ethereum (1), adds the chain and signs the binding", async ({ page }) => {
-    const { address, calls } = await installWallets(page, [METAMASK]);
-    await connectAs(page, PERSON, { wallet: false });
+    const { address, calls, person } = await installWallets(page, [METAMASK]);
+    await connectAs(page, person, { wallet: false });
     expect(calls).toEqual([]);
 
     const section = await openWallets(page);
@@ -194,8 +212,8 @@ test.describe("a wallet is connected only to sign", () => {
   });
 
   test("MetaMask mobile — offers to add the chain even when 4902 is wrapped in -32603", async ({ page }) => {
-    const { address, calls } = await installWallets(page, [{ ...METAMASK, mode: "mobile-nested" }]);
-    await connectAs(page, PERSON, { wallet: false });
+    const { address, calls, person } = await installWallets(page, [{ ...METAMASK, mode: "mobile-nested" }]);
+    await connectAs(page, person, { wallet: false });
 
     const section = await openWallets(page);
     await replaceAndConfirm(section);
@@ -204,7 +222,7 @@ test.describe("a wallet is connected only to sign", () => {
   });
 
   test("Trust Wallet — a refused chain switch stops the signature and keeps the session", async ({ page }) => {
-    const { address, calls } = await installWallets(page, [
+    const { address, calls, person } = await installWallets(page, [
       {
         name: "Trust Wallet",
         rdns: "com.trustwallet.app",
@@ -213,7 +231,7 @@ test.describe("a wallet is connected only to sign", () => {
         mode: "reject-switch",
       },
     ]);
-    await connectAs(page, PERSON, { wallet: false });
+    await connectAs(page, person, { wallet: false });
 
     const section = await openWallets(page);
     const before = await replaceAndConfirm(section);
@@ -229,11 +247,11 @@ test.describe("a wallet is connected only to sign", () => {
   });
 
   test("with Brave and MetaMask both installed, signs with the chosen wallet", async ({ page }) => {
-    const { address, calls } = await installWallets(page, [
+    const { address, calls, person } = await installWallets(page, [
       { name: "Brave Wallet", rdns: "com.brave.wallet", flags: { isBraveWallet: true }, startChain: 1, mode: "desktop" },
       METAMASK,
     ]);
-    await connectAs(page, PERSON, { wallet: false });
+    await connectAs(page, person, { wallet: false });
 
     const section = await openWallets(page);
     await replaceAndConfirm(section, () => section.getByRole("button", { name: "Replace · MetaMask" }).click());
@@ -251,8 +269,8 @@ test.describe("a wallet is connected only to sign", () => {
  */
 test.describe("the account's one signing wallet", () => {
   test("replace shows the wallet it replaces, signs nothing until confirmed, and keeps the session", async ({ page }) => {
-    const { address, calls } = await installWallets(page, [METAMASK]);
-    await connectAs(page, PERSON, { wallet: false });
+    const { address, calls, person } = await installWallets(page, [METAMASK]);
+    await connectAs(page, person, { wallet: false });
     const section = await openWallets(page);
     await expect(section.getByTestId("replace-wallet")).toHaveText("Replace");
     await expect(section.getByTestId("disable-wallet")).toHaveText("Disable");
@@ -284,8 +302,8 @@ test.describe("the account's one signing wallet", () => {
   });
 
   test("disable without a replacement signs out and leaves the account with no signing wallet", async ({ page }) => {
-    await installWallets(page, [METAMASK]);
-    await connectAs(page, PERSON, { wallet: false });
+    const { person } = await installWallets(page, [METAMASK]);
+    await connectAs(page, person, { wallet: false });
     const section = await openWallets(page);
     await section.getByTestId("disable-wallet").click();
     await expect(section).toContainText("leaves the account with no signing wallet");
@@ -295,7 +313,7 @@ test.describe("the account's one signing wallet", () => {
 
     // Signed in again (a fresh page: its own virtual authenticator), the account has no wallet.
     const again = await page.context().newPage();
-    await connectAs(again, PERSON, { wallet: false });
+    await connectAs(again, person, { wallet: false });
     const after = await openWallets(again);
     await expect(after.getByTestId("wallet-current")).toHaveCount(0);
     await expect(after.getByTestId("bind-wallet")).toBeVisible();

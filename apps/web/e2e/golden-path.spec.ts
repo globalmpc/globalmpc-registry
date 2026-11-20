@@ -207,6 +207,9 @@ test.describe("golden path", () => {
     await page.getByRole("button", { name: "Open this case" }).first().click();
     await expect(page.getByTestId("selected-case")).toContainText("assigned");
 
+    await page.getByLabel("Review finding").fill("Reviewed the submitted evidence");
+    await page.getByLabel("Source reference").fill("Submitted evidence snapshot");
+    await page.getByLabel("What this review did not check (required)").fill("Desk review only");
     await page.getByRole("button", { name: "Create the draft" }).click();
     // Checks the attestation state value, not other "draft" text on screen (headings, button labels).
     await expect(page.getByText("draft", { exact: true })).toBeVisible();
@@ -214,7 +217,7 @@ test.describe("golden path", () => {
     await page.getByRole("button", { name: "Create a signature request" }).click();
     // What is being signed is shown first in human-readable form (§11.4).
     await expect(page.getByTestId("signing-payload")).toContainText(projectKey);
-    await expect(page.getByTestId("signing-payload")).toContainText("site due diligence");
+    await expect(page.getByTestId("signing-payload")).toContainText("Desk review only");
 
     await page.getByTestId("sign-attestation").click();
     await expect(page.getByTestId("signed-result")).toContainText("signed");

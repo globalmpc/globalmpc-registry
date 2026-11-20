@@ -16,11 +16,11 @@ const tokenHash = () => `0x${randomBytes(32).toString("hex")}`;
  * Interleavings of the account state machine — final cross-package review (migration 0132).
  *
  * Expected, from the contracts rather than the implementation:
- * - F1: an identity revoked by an MFA reset, an address change or an unlink signs nobody in, even
+ * - F1: an identity revoked by an address change or an unlink signs nobody in, even
  *   when the sign-in started before the revocation committed and waited for it; a sign-in that
- *   committed first is ended by the revocation. Linking races a reset the same way. A Google /
+ *   committed first is ended by the revocation. Linking races an address change the same way. A Google /
  *   Microsoft session does not resolve once its identity is revoked.
- * - F3: a suspension and a reset decision, an email-change decision or an email-change completion
+ * - F3: a suspension and an email-change decision or an email-change completion
  *   of the same person never deadlock (40P01): both lock the person first, so one waits and then
  *   finds the other's result.
  *
@@ -90,7 +90,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       held();
       await gate;
     });
-    await holding;
+    await Promise.race([holding, committed]);
     const racing = racer();
     const blocked = await blockedOnLock(racerName);
     release();
@@ -144,18 +144,6 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       SELECT status FROM core.complete_oidc_sign_in(${transactionId}, ${GOOGLE}, ${key}, ${sessionId}, ${tokenHash()}, 3600)
     `.then((rows) => rows[0]!.status);
 
-  async function resetRequest(subjectId: string) {
-    const id = randomUUID();
-    await fx.sql`
-      INSERT INTO core.mfa_reset_requests (id, tenant_id, subject_id, reason, requested_by_subject_id)
-      VALUES (${id}, ${fx.tenantA}, ${subjectId}, 'lost', ${await person()})
-    `;
-    return id;
-  }
-
-  const approveReset = (tx: postgres.TransactionSql, resetId: string, decider: string) =>
-    tx`SELECT * FROM core.decide_mfa_reset(${resetId}, ${decider}, true, 'approved', 1)`;
-
   async function approvedEmailChange(subjectId: string) {
     const change = randomUUID();
     const newEmail = `moved-${randomUUID().slice(0, 8)}@example.com`;
@@ -169,17 +157,19 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       )
     `;
     const code = randomBytes(32);
+    const ownerCode = randomUUID();
     await fx.sql`
-      INSERT INTO core.email_challenges (id, purpose, email, tenant_id, subject_id, email_change_id, code_hmac, created_at, expires_at)
+      INSERT INTO core.email_challenges (id, purpose, email, tenant_id, subject_id, email_change_id, code_hmac, created_at, expires_at, owner_proof_digest)
       VALUES (${randomUUID()}, 'email_change', ${newEmail}, ${fx.tenantA}, ${subjectId}, ${change}, ${code},
-              now() - interval '1 second', now() - interval '1 second' + interval '10 minutes')
+              now() - interval '1 second', now() - interval '1 second' + interval '10 minutes',
+              (SELECT sha256(convert_to(email || ':' || ${ownerCode}, 'UTF8')) FROM core.subjects WHERE id=${subjectId}))
     `;
-    return { change, newEmail, code };
+    return { change, newEmail, code, ownerCode };
   }
 
-  const completeEmailChange = (conn: postgres.Sql | postgres.TransactionSql, newEmail: string, code: Buffer) =>
+  const completeEmailChange = (conn: postgres.Sql | postgres.TransactionSql, newEmail: string, code: Buffer, ownerCode: string) =>
     conn<{ status: string }[]>`
-      SELECT status FROM core.complete_email_change(${newEmail}, ${code}, ${randomUUID()}, ${randomUUID()})
+      SELECT status FROM core.complete_email_change(${newEmail}, ${code}, ${randomUUID()}, ${randomUUID()}, ${ownerCode})
     `.then((rows) => rows[0]!.status);
 
   async function sessionIdOf(token: string) {
@@ -191,29 +181,10 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     (await fx.sql<{ revoked_at: Date | null }[]>`SELECT revoked_at FROM core.sessions WHERE id = ${id}`)[0];
 
   describe("F1: a revoked identity signs nobody in", () => {
-    it("a sign-in waiting on an approved MFA reset finds the identity revoked", async () => {
+    it("a sign-in that locked the identity first is ended by the address change that waited for it", async () => {
       const subject = await person();
       const identity = await googleIdentity(subject);
-      const reset = await resetRequest(subject);
-      const transaction = await claimed("sign_in");
-      const decider = await person();
-      const sessionId = randomUUID();
-
-      const { result, blocked } = await race(two, (tx) => approveReset(tx, reset, decider), names.one, () =>
-        signIn(one, transaction, identity.key, sessionId),
-      );
-      expect(blocked).toBe(true);
-      expect(result).toBe("not_found");
-      expect(await sessionRow(sessionId)).toBeUndefined();
-      const [revoked] = await fx.sql`SELECT revoked_reason FROM core.external_identities WHERE id = ${identity.id}`;
-      expect(revoked!.revoked_reason).toBe("mfa_reset");
-    });
-
-    it("a sign-in that locked the identity first is ended by the reset that waited for it", async () => {
-      const subject = await person();
-      const identity = await googleIdentity(subject);
-      const reset = await resetRequest(subject);
-      const decider = await person();
+      const { newEmail, code, ownerCode } = await approvedEmailChange(subject);
       const transaction = await claimed("sign_in");
       const sessionId = randomUUID();
 
@@ -223,7 +194,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
         names.two,
         () => outcome(two.begin(async (tx) => {
           await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
-          await approveReset(tx, reset, decider);
+          expect(await completeEmailChange(tx, newEmail, code, ownerCode)).toBe("completed");
         })),
       );
       expect(blocked).toBe(true);
@@ -234,13 +205,13 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     it("a sign-in waiting on a completed address change finds the identity revoked", async () => {
       const subject = await person();
       const identity = await googleIdentity(subject);
-      const { newEmail, code } = await approvedEmailChange(subject);
+      const { newEmail, code, ownerCode } = await approvedEmailChange(subject);
       const transaction = await claimed("sign_in");
       const sessionId = randomUUID();
 
       const { result, blocked } = await race(
         two,
-        async (tx) => expect(await completeEmailChange(tx, newEmail, code)).toBe("completed"),
+        async (tx) => expect(await completeEmailChange(tx, newEmail, code, ownerCode)).toBe("completed"),
         names.one,
         () => signIn(one, transaction, identity.key, sessionId),
       );
@@ -269,21 +240,20 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       expect(await sessionRow(sessionId)).toBeUndefined();
     });
 
-    it("a link waiting on an approved MFA reset finds its session ended and links nothing", async () => {
+    it("a link waiting on an address change finds its session ended and links nothing", async () => {
       const subject = await person();
       const holder = await sessionIdOf(
         await issueTestSession(fx.appSql, fx.tenantA, subject, { firstFactor: "email_code", secondFactor: "totp" }),
       );
-      const reset = await resetRequest(subject);
-      const decider = await person();
+      const { newEmail, code, ownerCode } = await approvedEmailChange(subject);
       const transaction = await claimed("link", holder);
       const key = `race-link-${randomUUID()}`;
 
-      const { result, blocked } = await race(two, (tx) => approveReset(tx, reset, decider), names.one, () =>
+      const { result, blocked } = await race(two, async (tx) => expect(await completeEmailChange(tx, newEmail, code, ownerCode)).toBe("completed"), names.one, () =>
         outcome(one.begin(async (tx) => {
           await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
           await tx`
-            SELECT * FROM core.complete_oidc_link(${transaction}, ${holder}, ${GOOGLE}, ${key}, NULL, NULL, ${randomUUID()})
+            SELECT * FROM core.complete_oidc_link(${transaction}, ${holder}, ${GOOGLE}, ${key}, NULL, NULL, ${randomUUID()}, (SELECT email FROM core.subjects WHERE id=${subject}))
           `;
         })),
       );
@@ -292,13 +262,12 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       expect(await fx.sql`SELECT 1 FROM core.external_identities WHERE subject_key = ${key}`).toHaveLength(0);
     });
 
-    it("a link that committed first is revoked by the reset that waited for it", async () => {
+    it("a link that committed first is revoked by the address change that waited for it", async () => {
       const subject = await person();
       const holder = await sessionIdOf(
         await issueTestSession(fx.appSql, fx.tenantA, subject, { firstFactor: "email_code", secondFactor: "totp" }),
       );
-      const reset = await resetRequest(subject);
-      const decider = await person();
+      const { newEmail, code, ownerCode } = await approvedEmailChange(subject);
       const transaction = await claimed("link", holder);
       const key = `race-link-${randomUUID()}`;
 
@@ -306,20 +275,20 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
         one,
         async (tx) => {
           const [linked] = await tx<{ status: string }[]>`
-            SELECT status FROM core.complete_oidc_link(${transaction}, ${holder}, ${GOOGLE}, ${key}, NULL, NULL, ${randomUUID()})
+            SELECT status FROM core.complete_oidc_link(${transaction}, ${holder}, ${GOOGLE}, ${key}, NULL, NULL, ${randomUUID()}, (SELECT email FROM core.subjects WHERE id=${subject}))
           `;
           expect(linked!.status).toBe("linked");
         },
         names.two,
         () => outcome(two.begin(async (tx) => {
           await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
-          await approveReset(tx, reset, decider);
+          expect(await completeEmailChange(tx, newEmail, code, ownerCode)).toBe("completed");
         })),
       );
       expect(blocked).toBe(true);
       expect(result).toBe("ok");
       const [identity] = await fx.sql`SELECT revoked_reason FROM core.external_identities WHERE subject_key = ${key}`;
-      expect(identity!.revoked_reason).toBe("mfa_reset");
+      expect(identity!.revoked_reason).toBe("email_change");
     });
 
     it("a Google session does not resolve once its identity is revoked, however that happened", async () => {
@@ -377,24 +346,6 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       }));
     }
 
-    it("a suspension and an MFA reset decision of the same person", async () => {
-      const subject = await person();
-      const reset = await resetRequest(subject);
-      const decider = await person();
-      const suspend = await suspensionRequest(subject);
-      const outcomes = await queuedBehindSubject(subject, suspend, () =>
-        outcome(one.begin(async (tx) => {
-          await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
-          await approveReset(tx, reset, decider);
-        })),
-      );
-      expect(outcomes.suspension).toBe("ok");
-      // The reset waited, then found it closed by the suspension (a new version): no deadlock.
-      expect(outcomes.other).toMatch(/^40001 MFA_RESET_VERSION_MISMATCH/);
-      const [closed] = await fx.sql`SELECT state::text, closed_reason FROM core.mfa_reset_requests WHERE id = ${reset}`;
-      expect(closed).toEqual({ state: "rejected", closed_reason: "subject_suspended" });
-    });
-
     it("a suspension and an email-change decision of the same person", async () => {
       const subject = await person();
       const change = randomUUID();
@@ -424,11 +375,11 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
 
     it("a suspension and an email-change completion of the same person", async () => {
       const subject = await person();
-      const { newEmail, code } = await approvedEmailChange(subject);
+      const { newEmail, code, ownerCode } = await approvedEmailChange(subject);
       const suspend = await suspensionRequest(subject);
       let status = "";
       const outcomes = await queuedBehindSubject(subject, suspend, () =>
-        outcome(completeEmailChange(one, newEmail, code).then((s) => (status = s))),
+        outcome(completeEmailChange(one, newEmail, code, ownerCode).then((s) => (status = s))),
       );
       expect(outcomes).toEqual({ suspension: "ok", other: "ok" });
       expect(status).toBe("code_invalid");
@@ -450,69 +401,64 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
         tx`SELECT * FROM core.decide_subject_suspension(${id}, ${decider}, true, 'ok', 1)`;
     }
 
-    const resetRow = async (id: string) =>
-      (await fx.sql<{ state: string; closed_reason: string | null }[]>`
-        SELECT state::text, closed_reason FROM core.mfa_reset_requests WHERE id = ${id}
-      `)[0];
-
-    it("L2: an approval waiting on its approver's suspension is refused, not left open", async () => {
+    it.each(["approval", "suspension"])("serializes a wallet approval when %s commits first", async first => {
       const approver = await person();
-      const target = await person();
-      const reset = await resetRequest(target);
+      await fx.sql`UPDATE core.subjects SET assurance_level='high_assurance' WHERE id=${approver}`;
+      await fx.sql`INSERT INTO core.role_bindings (id,tenant_id,subject_id,organization_id,role)
+        VALUES (${randomUUID()},${fx.tenantA},${approver},${fx.orgA},'administrator')`;
+      const session = await sessionIdOf(await issueTestSession(fx.appSql, fx.tenantA, approver, { firstFactor: "email_code" }));
+      const owner = await person();
+      const ownerSession = await sessionIdOf(await issueTestSession(fx.appSql, fx.tenantA, owner, { firstFactor: "email_code" }));
+      const wallet = randomUUID();
+      const address = "0x" + randomBytes(20).toString("hex");
+      await fx.sql`INSERT INTO core.wallet_identities(id,tenant_id,subject_id,wallet_address,chain_id,assurance_level,bound_at)
+        VALUES (${wallet},${fx.tenantA},${owner},${address},97,'high_assurance',now())`;
+      const id = randomUUID();
+      await fx.sql`INSERT INTO core.wallet_recoveries(id,tenant_id,subject_id,session_id,previous_wallet_id,previous_version,
+        chain_id,wallet_address,email,proof_digest,confirmed_at)
+        SELECT ${id},tenant_id,id,${ownerSession},${wallet},1,97,${"0x"+randomBytes(20).toString("hex")},email,${randomBytes(32)},now()
+        FROM core.subjects WHERE id=${owner}`;
+      const approve = async (tx: postgres.TransactionSql) => {
+        const [row] = await tx`SELECT core.approve_wallet_recovery(${session},${id}) AS approved`;
+        expect(row!.approved).toBe(true);
+      };
       const suspend = await suspensionOf(approver);
-
-      // The suspension has closed what the approver approved so far; the approval is still to come.
-      const { result, blocked } = await race(two, suspend, names.one, () =>
-        outcome(one.begin(async (tx) => {
-          await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
-          await approveReset(tx, reset, approver);
-        })),
-      );
+      const [hold, next] = first === "approval" ? [approve, suspend] : [suspend, approve];
+      const {blocked, result} = await race(one, hold, names.two, () => outcome(two.begin(async tx => {
+        await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+        await next(tx);
+      })));
       expect(blocked).toBe(true);
-      // Before 0133 the approval read "not suspended", waited on its foreign key and committed.
-      expect(result).toMatch(/^42501 ACTOR_SUSPENDED/);
-      expect(await resetRow(reset)).toEqual({ state: "pending", closed_reason: null });
-      expect((await fx.sql`SELECT core.mfa_reset_window_open(${target}) AS open`)[0]!.open).toBe(false);
+      const [row] = await fx.sql`SELECT approved_by, cancelled_at FROM core.wallet_recoveries WHERE id=${id}`;
+      if (first === "approval") {
+        expect(result).toBe("ok");
+        expect(row!.approved_by).toBe(approver);
+        expect(row!.cancelled_at).toBeInstanceOf(Date);
+      } else {
+        expect(result).toMatch(/SESSION_INVALID/);
+        expect(row!.approved_by).toBeNull();
+      }
     });
 
-    it("L2: an approval that committed first is closed by the suspension that waited for it", async () => {
-      const approver = await person();
-      const target = await person();
-      const reset = await resetRequest(target);
-      const suspend = await suspensionOf(approver);
-
-      const { result, blocked } = await race(one, (tx) => approveReset(tx, reset, approver), names.two, () =>
-        outcome(two.begin(async (tx) => {
-          await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
-          await suspend(tx);
-        })),
-      );
-      expect(blocked).toBe(true);
-      expect(result).toBe("ok");
-      expect(await resetRow(reset)).toEqual({ state: "approved", closed_reason: "approver_suspended" });
-      expect((await fx.sql`SELECT core.mfa_reset_window_open(${target}) AS open`)[0]!.open).toBe(false);
-    });
-
-    it("N1: a sign-in started while a reset holds the person waits before the identity, so neither deadlocks", async () => {
+    it("N1: a sign-in started while an address change holds the person waits before the identity, so neither deadlocks", async () => {
       const subject = await person();
       const identity = await googleIdentity(subject);
-      const reset = await resetRequest(subject);
-      const decider = await person();
+      const { newEmail, code, ownerCode } = await approvedEmailChange(subject);
       const transaction = await claimed("sign_in");
       const sessionId = randomUUID();
 
-      // The reset has locked the person (its first step) and pauses before it revokes anything.
+      // The address change has locked the person (its first step) and pauses before it revokes anything.
       let release!: () => void;
       const gate = new Promise<void>((resolve) => (release = resolve));
       let locked!: () => void;
       const lockedP = new Promise<void>((resolve) => (locked = resolve));
-      const resetting = outcome(two.begin(async (tx) => {
+      const changing = outcome(two.begin(async (tx) => {
         await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
         await tx`SELECT 1 FROM core.subjects WHERE id = ${subject} FOR UPDATE`;
         locked();
         await gate;
         // Revokes the identity. Before 0133 the sign-in held it and waited on the person: 40P01.
-        await approveReset(tx, reset, decider);
+        expect(await completeEmailChange(tx, newEmail, code, ownerCode)).toBe("completed");
       }));
       await lockedP;
       const signing = signIn(one, transaction, identity.key, sessionId).catch(
@@ -529,11 +475,11 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       });
       expect(free).toBe(true);
       release();
-      expect(await resetting).toBe("ok");
+      expect(await changing).toBe("ok");
       expect(await signing).toBe("not_found");
       expect(await sessionRow(sessionId)).toBeUndefined();
       const [revoked] = await fx.sql`SELECT revoked_reason FROM core.external_identities WHERE id = ${identity.id}`;
-      expect(revoked!.revoked_reason).toBe("mfa_reset");
+      expect(revoked!.revoked_reason).toBe("email_change");
     });
   });
 });

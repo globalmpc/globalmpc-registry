@@ -22,7 +22,6 @@ import { registerRegistryRoutes } from "./routes/registry.js";
 import { registerPublicRoutes } from "./routes/public.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRoleRevocationRoutes } from "./routes/role-revocations.js";
-import { registerMfaRoutes } from "./routes/mfa.js";
 import { registerSubjectSuspensionRoutes } from "./routes/subject-suspensions.js";
 import { registerOidcRoutes } from "./routes/oidc.js";
 import type { OidcFetch } from "./services/oidc.js";
@@ -60,7 +59,7 @@ import {
   resolveServiceToken,
   resolveSessionToken,
 } from "./plugins/session-token.js";
-import { badRequest, forbidden, tooManyRequests } from "./errors.js";
+import { badRequest, forbidden, tooManyRequests, unauthorized } from "./errors.js";
 import { isEncodedAuthPath } from "./plugins/path-encoding.js";
 
 /** `METHOD /fastify/path` → the service scope that reaches it (contract `serviceScope`). */
@@ -79,13 +78,6 @@ const SERVICE_SCOPE_BY_ROUTE: ReadonlyMap<string, ServiceScope> = new Map(
  */
 const SESSIONLESS_ROUTES: ReadonlySet<string> = new Set(
   ROUTES.filter((route) => route.public).map(
-    (route) => `${route.method.toUpperCase()} ${toFastifyPath(route.path)}`,
-  ),
-);
-
-/** Routes a recovery-limited session may reach (contract `allowsRecoveryLimited`). */
-const RECOVERY_LIMITED_ROUTES: ReadonlySet<string> = new Set(
-  ROUTES.filter((route) => route.allowsRecoveryLimited === true).map(
     (route) => `${route.method.toUpperCase()} ${toFastifyPath(route.path)}`,
   ),
 );
@@ -115,12 +107,6 @@ function signInMethodOf(route: string, params: unknown): string | undefined {
   return SIGN_IN_ROUTES.get(route);
 }
 
-/** Routes a first-factor-only session may reach (contract `allowsFirstFactorOnly`). */
-const FIRST_FACTOR_ROUTES: ReadonlySet<string> = new Set(
-  ROUTES.filter((route) => route.allowsFirstFactorOnly === true).map(
-    (route) => `${route.method.toUpperCase()} ${toFastifyPath(route.path)}`,
-  ),
-);
 import {
   createEdgeClientResolver,
   createOpsEndpointGuard,
@@ -429,38 +415,8 @@ export async function buildServer(
     const resolved = await resolveSessionToken(sql, token);
     if (!resolved) return;
 
+    if (resolved.recoveryLimited) throw unauthorized("UNAUTHENTICATED", "Sign in again");
     const session = await resolveSession(sql, resolved);
-
-    /**
-     * Priority rule 2: a first-factor-only session reaches MFA enrolment, MFA challenge, logout
-     * and its own session — nothing else, not even reads. The routes that allow it say so in the
-     * contract (`allowsFirstFactorOnly`); every other route refuses it here.
-     */
-    if (
-      session.aal === "aal1" &&
-      (route === undefined || !FIRST_FACTOR_ROUTES.has(`${request.method} ${route}`))
-    ) {
-      throw forbidden("MFA_REQUIRED", "Complete a second factor before using this session", {
-        reason: "AUTHENTICATION_LEVEL_INSUFFICIENT",
-        requiredAal: "aal2",
-      });
-    }
-
-    /**
-     * A session restored by a recovery code may only enrol a new factor, read its own session
-     * and sign out (WP3) — the same allowlist pattern as rule 2.
-     */
-    if (
-      session.recoveryLimited &&
-      (route === undefined || !RECOVERY_LIMITED_ROUTES.has(`${request.method} ${route}`))
-    ) {
-      throw forbidden(
-        "MFA_RECOVERY_REENROLMENT_REQUIRED",
-        "Enrol a new passkey or authenticator app before using this session",
-        { reason: "RECOVERY_CODE_SESSION" },
-      );
-    }
-
     request.session = session;
   });
 
@@ -477,7 +433,6 @@ export async function buildServer(
   await registerEmailAuthRoutes(app, sql, config);
   await registerInvitationRoutes(app, sql, config);
   await registerEmailChangeRoutes(app, sql, config);
-  await registerMfaRoutes(app, sql, config);
   await registerSubjectSuspensionRoutes(app, sql);
   await registerOidcRoutes(app, sql, config, deps.oidcFetch);
   await registerWalletRoutes(app, sql, config);

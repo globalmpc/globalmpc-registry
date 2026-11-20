@@ -21,20 +21,6 @@ import { extractBearerToken, revokeSessionToken } from "../plugins/session-token
  * second one.
  */
 export function sessionView(session: Session) {
-  // A recovery-limited session gets the same narrow view: until it enrols a factor, a stolen
-  // recovery code must not learn more than a stolen first factor does.
-  if (session.aal === "aal1" || session.recoveryLimited) {
-    return {
-      subjectId: session.subjectId,
-      assuranceLevel: session.assuranceLevel,
-      firstFactor: session.firstFactor,
-      secondFactor: session.secondFactor,
-      aal: session.aal,
-      mfaSatisfied: false,
-      recoveryLimited: session.recoveryLimited,
-      roleBindings: [],
-    };
-  }
   const {
     organizationProjectIds: _projects,
     projectJurisdictions: _jurisdictions,
@@ -47,8 +33,8 @@ export function sessionView(session: Session) {
   return {
     ...visible,
     aal: session.aal ?? "aal1",
-    mfaSatisfied: session.aal === "aal2" || session.aal === "aal3",
-    actions: Object.keys(ACTION_POLICIES).filter((action) => holdsActionRole(session, action)),
+    mfaSatisfied: Boolean(session.secondFactor && !session.recoveryLimited),
+    actions: Object.keys(ACTION_POLICIES).filter(action => holdsActionRole(session, action)),
   };
 }
 

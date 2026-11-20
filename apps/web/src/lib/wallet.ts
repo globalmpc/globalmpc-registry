@@ -164,8 +164,7 @@ export async function connectWallet(): Promise<string> {
  * fails verification, and that failure looks like "wrong signature", making the cause hard to find.
  * Check up front and say what differs.
  */
-export async function currentChainId(): Promise<number> {
-  const provider = getInjectedProvider();
+export async function currentChainId(provider = getInjectedProvider()): Promise<number> {
   if (!provider) throw new WalletError("No browser wallet is available", false);
 
   const hex = (await provider.request({ method: "eth_chainId" })) as string;
@@ -207,6 +206,10 @@ const CHAIN_PARAMS: Readonly<Partial<Record<number, ChainParams>>> = {
   },
 } satisfies Record<SupportedChainId, ChainParams>;
 
+export function chainDisplayName(chainId: number): string {
+  return CHAIN_PARAMS[chainId]?.chainName ?? `chain ${chainId}`;
+}
+
 /**
  * Block explorer URL for a transaction hash.
  *
@@ -242,8 +245,7 @@ export function blockExplorerAddressUrl(chainId: number, address: string): strin
  *
  * Some wallets do not switch after adding, so check once more.
  */
-export async function switchChain(chainId: number): Promise<void> {
-  const provider = getInjectedProvider();
+export async function switchChain(chainId: number, provider = getInjectedProvider()): Promise<void> {
   if (!provider) throw new WalletError("No browser wallet is available", false);
 
   const hex = `0x${chainId.toString(16)}`;
@@ -270,7 +272,7 @@ export async function switchChain(chainId: number): Promise<void> {
     }
   }
 
-  if ((await currentChainId()) !== chainId) {
+  if ((await currentChainId(provider)) !== chainId) {
     try {
       await switchTo();
     } catch (again) {
@@ -286,10 +288,11 @@ export async function switchChain(chainId: number): Promise<void> {
  */
 export async function ensureChain(
   chainId: number,
+  provider = getInjectedProvider(),
 ): Promise<{ readonly before: number; readonly switched: boolean }> {
-  const before = await currentChainId();
+  const before = await currentChainId(provider);
   if (before === chainId) return { before, switched: false };
-  await switchChain(chainId);
+  await switchChain(chainId, provider);
   return { before, switched: true };
 }
 
@@ -303,8 +306,8 @@ export async function ensureChain(
 export async function signTypedDataWithWallet(
   typedData: unknown,
   address: string,
+  provider = getInjectedProvider(),
 ): Promise<string> {
-  const provider = getInjectedProvider();
   if (!provider) throw new WalletError("No browser wallet is available", false);
 
   try {

@@ -62,7 +62,7 @@ export function signBindingChallenge(
 export function submitBinding(
   app: FastifyInstance,
   token: string,
-  body: { challengeId: string; signature: string; replaceReason?: string },
+  body: { challengeId: string; signature: string; previousWalletSignature?: string; replaceReason?: string },
 ): Promise<LightMyRequestResponse> {
   return app.inject({ method: "POST", url: "/api/v1/auth/wallets", headers: bearer(token), payload: body });
 }
@@ -73,6 +73,7 @@ export async function bindWalletByProof(
   token: string,
   signer: Signer,
   replaceReason?: string,
+  previousSigner?: Signer,
 ): Promise<LightMyRequestResponse> {
   const challenge = await requestBindingChallenge(app, token, signer.address.toLowerCase());
   if (challenge.statusCode !== 200) return challenge;
@@ -80,6 +81,7 @@ export async function bindWalletByProof(
   return submitBinding(app, token, {
     challengeId: body.challengeId,
     signature: await signBindingChallenge(signer, body),
+    ...(previousSigner ? { previousWalletSignature: await signBindingChallenge(previousSigner, body) } : {}),
     ...(replaceReason ? { replaceReason } : {}),
   });
 }

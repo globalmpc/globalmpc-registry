@@ -12,7 +12,7 @@ import { withTenant } from "@mpc/db";
 import { createAccountCrypto, generateEmailCode, generateInvitationToken } from "../account-crypto.js";
 import { recordAudit } from "../audit.js";
 import type { AppConfig } from "../config.js";
-import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
+import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { hashToken, newSessionToken, SESSION_TTL_SECONDS } from "../plugins/session-token.js";
@@ -34,11 +34,7 @@ import {
 /**
  * Invitations — account authentication WP2, plan journey 1 and decisions D5/D6.
  *
- * An admin invites an address into an organisation of their tenant. The invitation carries **no
- * role**: the new account is created with none and the lowest identity assurance, and roles are
- * granted afterwards through the two-person role grant. Accepting needs the link (a 256-bit token
- * stored only as a hash) **and** a code mailed to the invited address, so a forwarded or leaked
- * link alone does not make an account.
+ * Administrators may authorize a role that takes effect upon verified acceptance.
  *
  * An address that already belongs to a subject, or has an open invitation or email change, in
  * any tenant, cannot be invited. Every such refusal gives the one code
@@ -53,6 +49,8 @@ interface InvitationRow {
   id: string;
   email: string;
   organization_id: string;
+  invited_role: string | null;
+  invited_project_id: string | null;
   state: "pending" | "accepted" | "revoked" | "expired";
   invited_by_subject_id: string;
   created_at: Date;
@@ -72,6 +70,8 @@ function toInvitation(row: InvitationRow, requestId: string, asOf: string) {
     id: row.id,
     email: row.email,
     organizationId: row.organization_id,
+    role: row.invited_role,
+    projectId: row.invited_project_id,
     state: expired ? ("expired" as const) : row.state,
     invitedBySubjectId: row.invited_by_subject_id,
     createdAt: row.created_at.toISOString(),
@@ -87,7 +87,7 @@ function toInvitation(row: InvitationRow, requestId: string, asOf: string) {
 }
 
 const INVITATION_COLUMNS = (tx: postgres.TransactionSql) => tx`
-  id, email, organization_id, state, invited_by_subject_id, created_at, expires_at,
+  id, email, organization_id, invited_role, invited_project_id, state, invited_by_subject_id, created_at, expires_at,
   accepted_at, accepted_subject_id, revoked_at, closed_reason, version
 `;
 
@@ -143,12 +143,14 @@ export async function registerInvitationRoutes(
     try {
       return await withTenant(sql, { tenantId }, (tx) =>
         withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          const [created] = await tx<{ status: string }[]>`
-            SELECT status FROM core.create_invitation(
-              ${id}, ${parsed.data.organizationId}, ${email}, ${session.subjectId},
-              ${hashToken(token)}, ${link}
-            )
-          `;
+          const { organizationId, access } = parsed.data;
+          const create = access ? tx`core.create_role_invitation(
+            ${id}, ${organizationId}, ${email}, ${session.sessionId}, ${hashToken(token)}, ${link},
+            ${access.role}, ${access.projectId ?? null}, ${access.identityBasis})` :
+            tx`core.create_invitation(${id}, ${organizationId}, ${email}, ${session.subjectId}, ${hashToken(token)}, ${link})`;
+          const [created] = await tx<{ status: string }[]>`SELECT status FROM ${create}`;
+          if (created!.status === "not_authorized") throw forbidden("INVITATION_GRANT_FORBIDDEN", "A workspace administrator must authorize this invitation");
+          if (created!.status === "project_unknown") throw unprocessable("PROJECT_UNKNOWN", "Choose an eligible project in this workspace");
           if (created!.status === "organization_unknown") {
             throw unprocessable("ORGANIZATION_UNKNOWN", "The organisation is not in this workspace");
           }
@@ -164,7 +166,7 @@ export async function registerInvitationRoutes(
             afterVersion: 1,
             correlationId,
             requestIp: request.clientIp,
-            detail: { emailHash, organizationId: parsed.data.organizationId },
+            detail: { emailHash, organizationId, ...(access ? { role: access.role, projectId: access.projectId ?? null, identityBasis: access.identityBasis } : {}) },
           });
 
           const [row] = await tx<InvitationRow[]>`

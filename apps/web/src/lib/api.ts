@@ -113,6 +113,8 @@ export type AuthenticationLevel = "aal1" | "aal2" | "aal3";
 export interface SessionInfo {
   authenticated: boolean;
   /** What the session proved first: `email_code`, `google` or `microsoft`. */
+  googleWorkspaceAccess?: boolean;
+  googleRequiresMfa?: boolean;
   firstFactor?: "email_code" | "google" | "microsoft" | null;
   secondFactor?: "passkey" | "totp" | "recovery_code" | null;
   /** Derived by the server from what the session proved. `aal1`: first factor only. */
@@ -2367,6 +2369,7 @@ export interface RegistryEntrySummary {
 }
 
 export interface MyWork {
+  hasVisibleProjects?: boolean;
   assignedToMe: {
     caseId: string;
     projectId: string;

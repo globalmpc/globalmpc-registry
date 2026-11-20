@@ -14,7 +14,8 @@ import { authErrorMessage } from "@/lib/auth-errors";
 import { AUTH_COPY } from "@/lib/copy";
 import { useSession } from "@/lib/session";
 import { assuranceNarrowedRoles } from "@/lib/access";
-import { connectWallet, ensureChain, selectWallet, signTypedDataWithWallet } from "@/lib/wallet";
+import { type DiscoveredWallet, connectWallet, ensureChain, getInjectedProvider, selectWallet, signTypedDataWithWallet } from "@/lib/wallet";
+import { WalletRecoveryPanel } from "./WalletRecoveryPanel";
 import { Address } from "@/components/Address";
 import { ErrorLine, useAction } from "./useAction";
 
@@ -62,6 +63,7 @@ export function WalletsSection({
   const [items, setItems] = useState<AccountWallet[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [disabling, setDisabling] = useState(false);
+  const [previousProviderId, setPreviousProviderId] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
   const [reason, setReason] = useState<string>("rotation");
   const [replaceReason, setReplaceReason] = useState<WalletReplaceReason>("rotation");
@@ -91,7 +93,15 @@ export function WalletsSection({
   async function sign({ address, challenge }: Pending, why?: WalletReplaceReason) {
     await ensureChain(challenge.chainId);
     const signature = await signTypedDataWithWallet(challenge.typedData, address);
-    await bindWallet(challenge.challengeId, signature, why);
+    let previousSignature: string | undefined;
+    if (challenge.replaces) {
+      const provider = discovered.find(wallet => wallet.id === previousProviderId)?.provider ?? getInjectedProvider();
+      if (!provider) throw new Error("Connect the existing signing wallet");
+      await provider.request({ method: "eth_requestAccounts" });
+      await ensureChain(challenge.chainId, provider);
+      previousSignature = await signTypedDataWithWallet(challenge.typedData, challenge.replaces.walletAddress, provider);
+    }
+    await bindWallet(challenge.challengeId, signature, why, previousSignature);
   }
 
   /** Asks the server first: if the challenge replaces a wallet, nothing is signed until confirmed. */
@@ -101,6 +111,7 @@ export function WalletsSection({
     const address = await connectWallet();
     const challenge = await createWalletBindingChallenge(address);
     if (challenge.replaces) {
+      setPreviousProviderId(discovered.find(wallet => wallet.provider === getInjectedProvider())?.id ?? "");
       setReplaceReason("rotation");
       setPending({ address, challenge });
       return;
@@ -108,7 +119,7 @@ export function WalletsSection({
     await sign({ address, challenge });
   }
 
-  const label = active ? C.replace : C.bind;
+
 
   function renderReplacementResult() {
     return <>
@@ -179,12 +190,21 @@ export function WalletsSection({
       <ErrorLine error={loadError ?? error} />
 
       {renderWalletList()}
+      {items.length > 0 && <WalletRecoveryPanel onBound={changed} />}
       {pending ? (
         <div className="notice" data-testid="replace-confirm">
           <p>{C.replaceWarning(pending.challenge.replaces!.walletAddress, pending.address)}</p>
           {active?.id === pending.challenge.replaces!.id && active.boundVia === "operator" ? (
             <p data-testid="replace-operator-verified">{C.replaceOperatorVerified}</p>
           ) : null}
+          {discovered.length > 1 && (
+            <div className="field">
+              <label htmlFor="previous-wallet-provider">Existing signing wallet app</label>
+              <select id="previous-wallet-provider" value={previousProviderId} onChange={event => setPreviousProviderId(event.target.value)}>
+                {discovered.map(wallet => <option key={wallet.id} value={wallet.id}>{wallet.name}</option>)}
+              </select>
+            </div>
+          )}
           <div className="field">
             <label htmlFor="wallet-replace-reason">{C.replaceReason}</label>
             <select
@@ -271,38 +291,52 @@ export function WalletsSection({
         </form>
       ) : null}
 
-      <div className="row" style={{ marginTop: 12 }}>
-        {discovered.length > 1 ? (
-          discovered.map((candidate) => (
-            <button
-              key={candidate.id}
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                selectWallet(candidate);
-                void act(start);
-              }}
-            >
-              {label} · {candidate.name}
-            </button>
-          ))
-        ) : (
+      <WalletActions discovered={discovered} active={Boolean(active)} busy={busy}
+        onStart={() => void act(start)} onDisable={() => setDisabling(true)} />
+    </div>
+  );
+}
+
+function WalletActions({ discovered, active, busy, onStart, onDisable }: {
+  discovered: readonly DiscoveredWallet[];
+  active: boolean;
+  busy: boolean;
+  onStart: () => void;
+  onDisable: () => void;
+}) {
+  const label = active ? C.replace : C.bind;
+  return (
+    <div className="row" style={{ marginTop: 12 }}>
+      {discovered.length > 1 ? (
+        discovered.map((candidate) => (
           <button
+            key={candidate.id}
             type="button"
-            className="primary"
             disabled={busy}
-            data-testid={active ? "replace-wallet" : "bind-wallet"}
-            onClick={() => void act(start)}
+            onClick={() => {
+              selectWallet(candidate);
+              onStart();
+            }}
           >
-            {busy ? C.binding : label}
+            {label} · {candidate.name}
           </button>
-        )}
-        {active ? (
-          <button type="button" disabled={busy} data-testid="disable-wallet" onClick={() => setDisabling(true)}>
-            {C.disable}
-          </button>
-        ) : null}
-      </div>
+        ))
+      ) : (
+        <button
+          type="button"
+          className="primary"
+          disabled={busy}
+          data-testid={active ? "replace-wallet" : "bind-wallet"}
+          onClick={onStart}
+        >
+          {busy ? C.binding : label}
+        </button>
+      )}
+      {active ? (
+        <button type="button" disabled={busy} data-testid="disable-wallet" onClick={onDisable}>
+          {C.disable}
+        </button>
+      ) : null}
     </div>
   );
 }

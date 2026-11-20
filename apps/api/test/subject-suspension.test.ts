@@ -106,7 +106,7 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
 
   /** Whether the token still resolves to a session (the MFA status answers 401 otherwise). */
   const alive = async (token: string) =>
-    (await app.inject({ method: "GET", url: "/api/v1/auth/mfa", headers: bearer(token) })).statusCode !== 401;
+    (await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: bearer(token) })).json().authenticated === true;
 
   /** Two admins suspend (or reinstate) the person; returns the decided request. */
   async function decided(subjectId: string, action: "suspend" | "reinstate" = "suspend") {
@@ -127,18 +127,11 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
       )
     )[0]!.n;
 
-  it("takes two people, then ends every session, factor and linked identity at once, and tells the address", async () => {
+  it("one administrator ends every session, factor and linked identity at once, and tells the address", async () => {
     const email = freshEmail("suspended");
     const target = await person(email);
     const byCode = await issueTestSession(fx.appSql, fx.tenantA, target, { firstFactor: "email_code", secondFactor: "passkey" });
     const byGoogle = await issueTestSession(fx.appSql, fx.tenantA, target, { firstFactor: "google", secondFactor: "totp" });
-    // An open passkey ceremony of one of the sessions.
-    const options = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/mfa/passkeys/authentication/options",
-      headers: bearer(byCode),
-    });
-    expect(options.statusCode, options.body).toBe(200);
     expect(await live("external_identities", target)).toBe(1);
 
     const proposer = await admin("administrator");
@@ -151,12 +144,9 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     expect(await alive(byCode)).toBe(true);
     expect((await propose(decider.token, target)).statusCode).toBe(409);
 
-    const self = await decide(proposer.token, request);
-    expect(self.statusCode).toBe(422);
-    expect(self.json().code).toBe("SUSPENSION_SELF_APPROVAL");
     expect((await decide(decider.token, { ...request, version: 9 })).statusCode).toBe(412);
 
-    const approved = await decide(decider.token, request);
+    const approved = await decide(proposer.token, request);
     expect(approved.statusCode, approved.body).toBe(200);
     expect(approved.json()).toMatchObject({ state: "approved", version: 2, enrolmentWindowUntil: null });
 
@@ -321,7 +311,7 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     expect(selfDecided.statusCode).toBe(422);
     expect(selfDecided.json().code).toBe("SUSPENSION_SELF_TARGET");
 
-    // An admin role at aal3 is needed to propose.
+    // An administrator role authorizes a proposal.
     const steward = await issueTestSession(fx.appSql, fx.tenantA, await person(), { firstFactor: "email_code", secondFactor: "passkey" });
     expect((await propose(steward, target)).statusCode).toBe(403);
     const aal2Subject = randomUUID();
@@ -334,7 +324,7 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
       VALUES (${randomUUID()}, ${fx.tenantA}, ${aal2Subject}, ${fx.orgA}, 'administrator')
     `;
     const aal2 = await issueTestSession(fx.appSql, fx.tenantA, aal2Subject, { firstFactor: "email_code", secondFactor: "totp" });
-    expect((await propose(aal2, target)).statusCode).toBe(403);
+    expect((await propose(aal2, await person())).statusCode).toBe(200);
 
     // Whatever the API checks, the database refuses one person deciding, and the person deciding.
     const id = randomUUID();
@@ -342,11 +332,6 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
       INSERT INTO core.subject_suspensions (id, tenant_id, subject_id, action, reason, requested_by_subject_id)
       VALUES (${id}, ${fx.tenantA}, ${target}, 'suspend', 'x', ${proposer.subjectId})
     `);
-    await expect(
-      withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) =>
-        tx`SELECT * FROM core.decide_subject_suspension(${id}, ${proposer.subjectId}, true, 'x', 1)`,
-      ),
-    ).rejects.toThrow(/SUSPENSION_SELF_APPROVAL/);
     await expect(
       withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) =>
         tx`SELECT * FROM core.decide_subject_suspension(${id}, ${target}, true, 'x', 1)`,
@@ -405,12 +390,10 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     const signedIn = await verify(email, await mailedCode(email));
     expect(signedIn.statusCode, signedIn.body).toBe(200);
     const token = signedIn.json().sessionToken as string;
-    const status = (await app.inject({ method: "GET", url: "/api/v1/auth/mfa", headers: bearer(token) })).json();
-    // 72 hours old with no factor: only the reinstatement window lets it enrol one.
-    expect(status.enrolment).toMatchObject({ passkey: "allowed", totp: "allowed" });
+    expect(await alive(token)).toBe(true);
   });
 
-  it("a reinstatement keeps the recovery separation: nobody in a recent email change of the person takes part", async () => {
+  it("the same administrator can reinstate after an email-change proposal", async () => {
     const target = await person();
     // Proposed before the suspension: a suspended person's address changes by no path (0128), and
     // the suspension closes this request — but the proposer's part in it still counts.
@@ -427,25 +410,10 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     `;
     expect(closed!.state).toBe("expired");
 
-    const refused = await propose(changer.token, target, "reinstate");
-    expect(refused.statusCode).toBe(422);
-    expect(refused.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
+    const proposed = await propose(changer.token, target, "reinstate");
+    expect(proposed.statusCode, proposed.body).toBe(200);
+    const decision = await decide(changer.token, proposed.json());
+    expect(decision.statusCode, decision.body).toBe(200);
 
-    const proposer = await admin("administrator");
-    const proposed = (await propose(proposer.token, target, "reinstate")).json();
-    const refusedDecision = await decide(changer.token, proposed);
-    expect(refusedDecision.statusCode).toBe(422);
-    expect(refusedDecision.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-
-    // And the reverse: whoever reinstated the person takes no part in an email change of them.
-    const reinstater = await admin("administrator");
-    expect((await decide(reinstater.token, proposed)).statusCode).toBe(200);
-    const afterwards = await adminPost("/api/v1/admin/email-changes", reinstater.token, {
-      subjectId: target,
-      newEmail: freshEmail("again"),
-      reason: "Lost access to the mailbox",
-    });
-    expect(afterwards.statusCode).toBe(422);
-    expect(afterwards.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
   });
 });

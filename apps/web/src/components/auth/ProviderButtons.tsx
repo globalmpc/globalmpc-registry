@@ -56,11 +56,14 @@ export function ProviderButtons({
           <button
             key={provider}
             type="button"
+            className={provider === "google" && start.purpose === "sign_in" ? "google-sign-in" : undefined}
             disabled={busy || disabled}
             data-testid={`oidc-${provider}`}
             onClick={() => void go(provider)}
           >
-            {AUTH_COPY.signIn.withProvider(AUTH_COPY.providers[provider] ?? provider)}
+            {provider === "google" && start.purpose === "sign_in" ?
+              <img src="/auth/google-sign-in-dark.png" alt="Sign in with Google" width={180} height={40} /> :
+              AUTH_COPY.signIn.withProvider(AUTH_COPY.providers[provider] ?? provider)}
           </button>
         ))}
       </div>

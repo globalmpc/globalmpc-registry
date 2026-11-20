@@ -1382,7 +1382,7 @@ describeDb("Verification and EIP-712 signature", () => {
         firstFactor: "email_code",
         secondFactor: "passkey",
       });
-      const bound = await bindWalletByProof(app, account, second);
+      const bound = await bindWalletByProof(app, account, second, "rotation", reviewerAccount);
       expect(bound.statusCode, bound.body).toBe(200);
       expect(bound.json().replaced).toMatchObject({ walletAddress: reviewerWallet });
       oldWalletId = bound.json().replaced.id;

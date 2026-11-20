@@ -89,9 +89,10 @@ export async function startEmailChangeVerification(email: string): Promise<CodeS
 export async function verifyEmailChange(
   email: string,
   code: string,
+  ownerCode: string,
 ): Promise<{ completed: true; sessionsRevoked: true }> {
   return parse<{ completed: true; sessionsRevoked: true }>(
-    await post("/api/v1/auth/email-change/verify", { email, code }),
+    await post("/api/v1/auth/email-change/verify", { email, code, ownerCode }),
   );
 }
 
@@ -162,126 +163,6 @@ export async function unlinkIdentity(
   return parse<{ revokedSessions: number; currentSessionEnded: boolean }>(
     await post(`/api/v1/auth/identities/${identityId}/unlink`),
   );
-}
-
-// --- Second factors -------------------------------------------------------------------------
-
-export type EnrolmentVerdict =
-  | "allowed"
-  | "MFA_STEP_UP_REQUIRED"
-  | "MFA_ENROLMENT_WINDOW_CLOSED"
-  | "MFA_PASSKEY_REQUIRED"
-  | "MFA_TOTP_ALREADY_ENROLLED";
-
-export interface Passkey {
-  id: string;
-  name: string;
-  createdAt: string;
-  lastUsedAt: string | null;
-  transports: string[];
-  deviceType: "singleDevice" | "multiDevice";
-  backedUp: boolean;
-}
-
-export interface MfaStatus {
-  passkeyEnrolled: boolean;
-  totpEnrolled: boolean;
-  recoveryCodesRemaining: number | null;
-  recoveryLimited: boolean;
-  enrolment: { passkey: EnrolmentVerdict; totp: EnrolmentVerdict };
-  passkeys: Passkey[];
-}
-
-export async function getMfaStatus(): Promise<MfaStatus> {
-  return parse<MfaStatus>(await get("/api/v1/auth/mfa"));
-}
-
-export interface FactorResult {
-  aal: AuthenticationLevel;
-  secondFactor: "passkey" | "totp" | "recovery_code" | null;
-  /** The first set only, shown once. */
-  recoveryCodes: string[] | null;
-  /** A recovery completed: every session ended, this one too. Sign in again. */
-  sessionEnded: boolean;
-}
-
-export async function passkeyRegistrationOptions(): Promise<{ options: Record<string, unknown> }> {
-  return parse<{ options: Record<string, unknown> }>(
-    await post("/api/v1/auth/mfa/passkeys/registration/options"),
-  );
-}
-
-export async function verifyPasskeyRegistration(
-  response: unknown,
-  name?: string,
-): Promise<FactorResult> {
-  return parse<FactorResult>(
-    await post("/api/v1/auth/mfa/passkeys/registration/verify", {
-      response,
-      ...(name ? { name } : {}),
-    }),
-  );
-}
-
-export async function passkeyAuthenticationOptions(): Promise<{ options: Record<string, unknown> }> {
-  return parse<{ options: Record<string, unknown> }>(
-    await post("/api/v1/auth/mfa/passkeys/authentication/options"),
-  );
-}
-
-export async function verifyPasskeyAuthentication(response: unknown): Promise<FactorResult> {
-  return parse<FactorResult>(
-    await post("/api/v1/auth/mfa/passkeys/authentication/verify", { response }),
-  );
-}
-
-export async function renamePasskey(passkeyId: string, name: string): Promise<Passkey> {
-  return parse<Passkey>(
-    await apiFetch(`/api/v1/auth/mfa/passkeys/${passkeyId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name }),
-    }),
-  );
-}
-
-export interface RemovedFactor {
-  revokedSessions: number;
-  currentSessionEnded: boolean;
-}
-
-export async function removePasskey(passkeyId: string): Promise<RemovedFactor> {
-  return parse<RemovedFactor>(await post(`/api/v1/auth/mfa/passkeys/${passkeyId}/removal`));
-}
-
-export async function setupTotp(): Promise<{ otpauthUri: string; secret: string; expiresAt: string }> {
-  return parse<{ otpauthUri: string; secret: string; expiresAt: string }>(
-    await post("/api/v1/auth/mfa/totp/setup"),
-  );
-}
-
-export async function confirmTotp(code: string): Promise<FactorResult> {
-  return parse<FactorResult>(await post("/api/v1/auth/mfa/totp/confirm", { code }));
-}
-
-export async function verifyTotp(code: string): Promise<FactorResult> {
-  return parse<FactorResult>(await post("/api/v1/auth/mfa/totp/verify", { code }));
-}
-
-export async function removeTotp(): Promise<RemovedFactor> {
-  return parse<RemovedFactor>(await post("/api/v1/auth/mfa/totp/removal"));
-}
-
-export async function redeemRecoveryCode(
-  code: string,
-): Promise<{ aal: AuthenticationLevel; recoveryLimited: true; revokedSessions: number }> {
-  return parse<{ aal: AuthenticationLevel; recoveryLimited: true; revokedSessions: number }>(
-    await post("/api/v1/auth/mfa/recovery-codes/verify", { code }),
-  );
-}
-
-export async function regenerateRecoveryCodes(): Promise<{ recoveryCodes: string[] }> {
-  return parse<{ recoveryCodes: string[] }>(await post("/api/v1/auth/mfa/recovery-codes"));
 }
 
 // --- Wallets as signing keys ----------------------------------------------------------------
@@ -358,9 +239,10 @@ export async function bindWallet(
   challengeId: string,
   signature: string,
   replaceReason?: WalletReplaceReason,
+  previousWalletSignature?: string,
 ): Promise<AccountWallet & { replaced: ReplacedWallet | null }> {
   return parse<AccountWallet & { replaced: ReplacedWallet | null }>(
-    await post("/api/v1/auth/wallets", { challengeId, signature, ...(replaceReason ? { replaceReason } : {}) }),
+    await post("/api/v1/auth/wallets", { challengeId, signature, previousWalletSignature, ...(replaceReason ? { replaceReason } : {}) }),
   );
 }
 
@@ -375,7 +257,11 @@ export async function disableOwnWallet(
 
 // --- Administration -------------------------------------------------------------------------
 
+export type InvitationRole = "project_member" | "reviewer" | "administrator";
+
 export interface Invitation {
+  role?: InvitationRole | null;
+  projectId?: string | null;
   id: string;
   email: string;
   organizationId: string;
@@ -400,7 +286,7 @@ export async function listInvitations(): Promise<{ items: Invitation[] }> {
 
 export async function createInvitation(
   key: string,
-  input: { email: string; organizationId: string },
+  input: { email: string; organizationId: string; access?: { role: InvitationRole; projectId?: string; identityBasis: string } },
 ): Promise<Invitation> {
   return parse<Invitation>(await post("/api/v1/admin/invitations", input, { "idempotency-key": key }));
 }
@@ -479,17 +365,6 @@ export interface MfaReset {
   version: number;
 }
 
-export async function listMfaResets(): Promise<{ items: MfaReset[] }> {
-  return parse<{ items: MfaReset[] }>(await get("/api/v1/admin/mfa-resets"));
-}
-
-export async function createMfaReset(
-  key: string,
-  input: { subjectId: string; reason: string },
-): Promise<MfaReset> {
-  return parse<MfaReset>(await post("/api/v1/admin/mfa-resets", input, { "idempotency-key": key }));
-}
-
 // --- Suspension (AUTH-06, 0127) -------------------------------------------------------------------
 
 export interface SubjectSuspension {
@@ -535,16 +410,23 @@ export async function decideSubjectSuspension(
   );
 }
 
-export async function decideMfaReset(
-  key: string,
-  resetId: string,
-  version: number,
-  input: Decision,
-): Promise<MfaReset> {
-  return parse<MfaReset>(
-    await post(`/api/v1/admin/mfa-resets/${resetId}/decision`, input, {
-      "idempotency-key": key,
-      "if-match": `"${version}"`,
-    }),
-  );
+export interface WalletRecovery {
+  id: string;
+  name: string;
+  address: string;
+  chainId: number;
+  confirmed: boolean;
+  approved: boolean;
+}
+export async function walletRecoveries(admin: boolean) {
+  return parse<{items: WalletRecovery[]}>(await get(`/api/v1/${admin ? "admin" : "auth"}/wallet-recoveries`));
+}
+export async function requestWalletRecovery(walletAddress: string) {
+  return parse<{id: string}>(await post("/api/v1/auth/wallet-recoveries", { walletAddress }));
+}
+export async function confirmWalletRecovery(id: string, proof: string) {
+  return parse<{id: string}>(await post("/api/v1/auth/wallet-recoveries/confirm", { id, proof }));
+}
+export async function approveWalletRecovery(id: string) {
+  return parse<{id: string}>(await post("/api/v1/admin/wallet-recoveries/approve", { id }));
 }

@@ -2,9 +2,7 @@
 
 import Link from "next/link";
 import { ApiError } from "@/lib/api";
-import { stepUpNeed } from "@/lib/auth-errors";
 import { AUTH_COPY, COPY } from "@/lib/copy";
-import { StepUpCancelled, useOptionalStepUp } from "@/components/auth/StepUp";
 
 /**
  * Error display.
@@ -20,7 +18,6 @@ import { StepUpCancelled, useOptionalStepUp } from "@/components/auth/StepUp";
  * signing wallet" when an attestation or a gate decision is signed.
  */
 export function ErrorNotice({ error, context }: { error: unknown; context?: "signing" }) {
-  const stepUp = useOptionalStepUp();
   if (!(error instanceof ApiError)) {
     return (
       <div className="notice" style={{ color: "var(--destructive-text)" }} role="alert" data-testid="error-notice">
@@ -48,11 +45,6 @@ export function ErrorNotice({ error, context }: { error: unknown; context?: "sig
    * The session's level is below what this action needs (plan §3 rules 2 and 4). Not a missing
    * role: the person holds it and proves a stronger factor — then the screen is read again.
    */
-  const need = stepUpNeed(error);
-  if (need) {
-    return renderStepUp(need);
-  }
-
   /**
    * Identity assurance below the role's minimum (plan priority rule 4): the person holds the role
    * but an administrator has to verify their identity first — say that, not a refusal code.
@@ -70,36 +62,6 @@ export function ErrorNotice({ error, context }: { error: unknown; context?: "sig
           </span>{" "}
           · Trace ID <span className="mono">{envelope.correlationId}</span>
         </div>
-      </div>
-    );
-  }
-
-  function renderStepUp(need: NonNullable<ReturnType<typeof stepUpNeed>>) {
-    return (
-      <div className="notice" style={{ color: "var(--alert)" }} role="alert" data-testid="error-notice">
-        <div className="title">{AUTH_COPY.stepUp.heading}</div>
-        {need.kind === "step_up" ? (
-          <>
-            {need.level === "aal3" ? AUTH_COPY.stepUp.passkeyLead : AUTH_COPY.stepUp.factorLead}{" "}
-            {stepUp ? (
-              <button
-                type="button"
-                onClick={() =>
-                  void stepUp
-                    .prompt(need.level)
-                    .then(() => window.location.reload())
-                    .catch((caught: unknown) => {
-                      if (!(caught instanceof StepUpCancelled)) throw caught;
-                    })
-                }
-              >
-                {AUTH_COPY.stepUp.errorAction}
-              </button>
-            ) : null}
-          </>
-        ) : (
-          <Link href="/auth/mfa">{AUTH_COPY.mfa.heading} →</Link>
-        )}
       </div>
     );
   }

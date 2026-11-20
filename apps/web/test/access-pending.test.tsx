@@ -130,7 +130,7 @@ describe("what the session can use", () => {
   it("is pending with no role at all, and not while a factor is owed or a role awaits a step-up", () => {
     expect(accessPending(pending)).toBe(true);
     expect(accessPending(steward)).toBe(false);
-    expect(accessPending({ ...pending, aal: "aal1" })).toBe(false);
+    expect(accessPending({ ...pending, aal: "aal1" })).toBe(true);
     expect(accessPending({ ...pending, recoveryLimited: true })).toBe(false);
     expect(accessPending({ ...pending, tenantId: null })).toBe(false);
     expect(accessPending({ ...pending, authenticated: false })).toBe(false);
@@ -190,7 +190,7 @@ describe("the access-pending state", () => {
       expect(screen.queryByText("Private records")).toBeNull();
       const panel = screen.getByTestId("access-pending");
       expect(panel.textContent).toContain("Access pending");
-      expect(panel.textContent).toContain("second administrator approves each grant");
+      expect(panel.textContent).toContain("Ask your administrator to grant access");
       expect(screen.getByTestId("access-pending-request").getAttribute("href")).toBe("/w/access-requests");
       expect(screen.getByTestId("access-pending-settings").getAttribute("href")).toBe("/w/settings");
       // No refusal box and no role list: nothing here is an error.

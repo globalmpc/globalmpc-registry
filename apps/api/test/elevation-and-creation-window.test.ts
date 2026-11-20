@@ -4,27 +4,13 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { bearer, idempotencyKey, issueTestSession, setupFixture, testEnv, type TestFixture } from "./helpers/db.js";
-import { SoftAuthenticator } from "./helpers/webauthn.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
-/**
- * Re-review of 0128 (migration 0129).
- *
- * Expected, from the review and 02 §2.6 rather than the implementation:
- * - L-1: an approved break-glass elevation does not survive a suspension of the person: after a
- *   reinstatement and a new passkey, the session holds no `break_glass` role until a new
- *   elevation is approved. An approved MFA reset ends it the same way. Each ending is audited.
- * - L-2: the 24-hour first-enrolment window after account creation closes once the person's
- *   address has changed (or they were suspended); an invited person still enrols within it.
- */
 describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let ipCounter = 0;
-  const ORIGIN = "http://localhost:3000";
-  const RP_ID = "localhost";
-
   beforeAll(async () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
@@ -67,9 +53,9 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
     return id;
   }
 
-  async function admin(role: "administrator" | "administrator" = "administrator") {
+  async function admin(role: "administrator" = "administrator") {
     const subjectId = await subject({ email: freshEmail("admin"), role });
-    const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, { firstFactor: "email_code", secondFactor: "passkey" });
+    const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, { firstFactor: "email_code" });
     return { subjectId, token };
   }
 
@@ -85,17 +71,6 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
     return verified.json().sessionToken as string;
   }
 
-  async function enrolPasskey(token: string) {
-    const options = await post("/api/v1/auth/mfa/passkeys/registration/options", token);
-    expect(options.statusCode, options.body).toBe(200);
-    const key = new SoftAuthenticator({ origin: ORIGIN, rpId: RP_ID });
-    const verified = await post("/api/v1/auth/mfa/passkeys/registration/verify", token, {
-      response: key.register(options.json().options),
-      name: "Laptop",
-    });
-    expect(verified.statusCode, verified.body).toBe(200);
-  }
-
   const roles = async (token: string) =>
     ((await get("/api/v1/auth/session", token)).json().roleBindings as { role: string }[]).map((b) => b.role);
 
@@ -103,7 +78,7 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
   async function elevated() {
     const email = freshEmail("responder");
     const responderId = await subject({ email, role: "administrator" });
-    const token = await issueTestSession(fx.appSql, fx.tenantA, responderId, { firstFactor: "email_code", secondFactor: "passkey" });
+    const token = await issueTestSession(fx.appSql, fx.tenantA, responderId, { firstFactor: "email_code" });
     const asked = await app.inject({
       method: "POST",
       url: "/api/v1/admin/break-glass",
@@ -150,7 +125,7 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
     )[0];
 
   describe("L-1: an approved elevation", () => {
-    it("ends with a suspension and does not come back with a reinstatement and a new passkey", async () => {
+    it("ends with a suspension and does not come back with a reinstatement", async () => {
       const { email, responderId, elevationId } = await elevated();
       const suspended = await suspension(responderId, "suspend");
       expect(await elevation(elevationId)).toEqual({
@@ -168,11 +143,10 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
 
       await suspension(responderId, "reinstate");
       const token = await signIn(email);
-      await enrolPasskey(token);
       const after = await roles(token);
       expect(after).toContain("administrator");
       expect(after).not.toContain("break_glass");
-      // The person can ask for a new one, which two people approve as before.
+      // The person can ask for a new one, using the primary session.
       const again = await app.inject({
         method: "POST",
         url: "/api/v1/admin/break-glass",
@@ -183,50 +157,7 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
       expect(again.json().state).toBe("pending");
     });
 
-    it("ends with an approved MFA reset", async () => {
-      const { responderId, elevationId } = await elevated();
-      const proposer = await admin("administrator");
-      const decider = await admin("administrator");
-      const proposed = await post("/api/v1/admin/mfa-resets", proposer.token, {
-        subjectId: responderId,
-        reason: "Lost every factor",
-      });
-      expect(proposed.statusCode, proposed.body).toBe(200);
-      const approved = await post(
-        `/api/v1/admin/mfa-resets/${proposed.json().id}/decision`,
-        decider.token,
-        decision,
-        ifMatch(proposed.json().version),
-      );
-      expect(approved.statusCode, approved.body).toBe(200);
-      expect(await elevation(elevationId)).toEqual({
-        state: "released",
-        release_cause: "mfa_reset",
-        released_by_subject_id: decider.subjectId,
-      });
-      const audits = await fx.sql<{ actor_subject_id: string; detail: { resetId: string } }[]>`
-        SELECT actor_subject_id, detail FROM audit.events
-        WHERE command = 'admin.mfa_reset.elevation_released' AND resource_id = ${elevationId}
-      `;
-      expect(audits).toHaveLength(1);
-      expect(audits[0]).toMatchObject({ actor_subject_id: decider.subjectId, detail: { resetId: proposed.json().id } });
-    });
-
-    it("is left alone by a rejected reset, and an expired one is not rewritten", async () => {
-      const { responderId, elevationId } = await elevated();
-      const proposed = await post("/api/v1/admin/mfa-resets", (await admin("administrator")).token, {
-        subjectId: responderId,
-        reason: "Lost every factor",
-      });
-      const rejected = await post(
-        `/api/v1/admin/mfa-resets/${proposed.json().id}/decision`,
-        (await admin("administrator")).token,
-        { decision: "reject", reason: "Not verified" },
-        ifMatch(proposed.json().version),
-      );
-      expect(rejected.statusCode, rejected.body).toBe(200);
-      expect((await elevation(elevationId))!.state).toBe("active");
-
+    it("preserves the history of an already expired elevation", async () => {
       // Expired already: its history stays as it ended, at its expiry.
       const lapsedOwner = await subject({ role: "administrator" });
       const lapsedId = randomUUID();
@@ -268,25 +199,14 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
         SELECT params FROM core.email_outbox
         WHERE recipient = ${attackerEmail} AND template = 'email_change_code' AND state = 'pending'
       `;
-      const completed = await publicPost("/api/v1/auth/email-change/verify", { email: attackerEmail, code: mail!.params.code });
+      const [owner] = await fx.sql`SELECT params FROM core.email_outbox WHERE template='email_change_owner'
+        AND params->>'destination'=${attackerEmail}`;
+      const completed = await publicPost("/api/v1/auth/email-change/verify", {
+        email: attackerEmail, code: mail!.params.code, ownerCode: owner!.params.code,
+      });
       expect(completed.statusCode, completed.body).toBe(200);
-
-      const token = await signIn(attackerEmail);
-      const setup = await post("/api/v1/auth/mfa/totp/setup", token);
-      expect(setup.json().code).toBe("MFA_ENROLMENT_WINDOW_CLOSED");
-      const options = await post("/api/v1/auth/mfa/passkeys/registration/options", token);
-      expect(options.json().code).toBe("MFA_ENROLMENT_WINDOW_CLOSED");
-      const status = (await get("/api/v1/auth/mfa", token)).json();
-      expect(status.enrolment).toMatchObject({ passkey: "MFA_ENROLMENT_WINDOW_CLOSED", totp: "MFA_ENROLMENT_WINDOW_CLOSED" });
-    });
-
-    it("stays open for an invited person who has not changed address", async () => {
-      const email = freshEmail("invited");
-      await subject({ email, ageHours: 1 });
-      const token = await signIn(email);
-      const setup = await post("/api/v1/auth/mfa/totp/setup", token);
-      expect(setup.statusCode, setup.body).toBe(200);
-      await enrolPasskey(token);
+      const [window] = await fx.sql`SELECT core.mfa_creation_window_open(${victim}) AS open`;
+      expect(window!.open).toBe(false);
     });
 
     it("does not count after a suspension; the reinstatement opens its own window", async () => {

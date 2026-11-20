@@ -4,11 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { activateNavigationMenu, NAVIGATION_MENUS } from "@/lib/navigation-menus";
 import { useEffect, type MouseEvent } from "react";
-import { isAccountSession, needsSecondFactor, useSession } from "@/lib/session";
-import { AUTH_COPY, COPY, PUBLIC_NAV } from "@/lib/copy";
+import { isAccountSession, useSession } from "@/lib/session";
+import { COPY, PUBLIC_NAV } from "@/lib/copy";
 import { visibleNav } from "@/lib/nav";
 import { assuranceNarrowedRoles, effectiveRoles } from "@/lib/access";
-import { StepUpCancelled, useOptionalStepUp } from "@/components/auth/StepUp";
 
 /** Close the expanded public menu when a link is clicked. If it stays open across page changes, it covers the body. */
 function closeMenu(event: MouseEvent<HTMLAnchorElement>): void {
@@ -42,13 +41,10 @@ export function TopBar() {
       document.removeEventListener("keydown", dismiss);
     };
   }, []);
-  const stepUp = useOptionalStepUp();
   const authenticated = session?.authenticated === true;
-  const pendingFactor = needsSecondFactor(session);
-  const workspace = authenticated && session && !pendingFactor ? visibleNav(session) : [];
+  const workspace = authenticated && session ? visibleNav(session) : [];
   // Roles the person holds that this session's level does not make effective (a TOTP session
   // holding a reviewer role): offer the passkey instead of hiding them.
-  const narrowed = (session?.narrowedRoles ?? []).filter((entry) => entry.requiredAal !== null);
   // Roles held at this level but below their identity-assurance minimum (a reviewer whose
   // operator-verified wallet was replaced). Shown apart and marked inactive, with what to do —
   // listing them with the roles in effect claims an authority the server refuses.
@@ -60,7 +56,7 @@ export function TopBar() {
     return (
             <span className="meta">
               <span data-testid="sign-in-method">{FIRST_FACTOR_LABEL[session.firstFactor ?? ""] ?? "—"}</span>{" "}
-              · {session.aal ?? "—"} ·{" "}
+              ·{" "}
               <span data-testid="effective-roles">
                 {roles.join(", ") || (inactive.length > 0 ? "" : COPY.session.noRoles)}
               </span>
@@ -84,27 +80,6 @@ export function TopBar() {
     );
   }
 
-  function renderStepUp() {
-    return <>
-            {narrowed.length > 0 && stepUp && !pendingFactor ? (
-              <button
-                type="button"
-                data-testid="step-up-narrowed"
-                title={AUTH_COPY.stepUp.narrowed}
-                onClick={() =>
-                  void stepUp
-                    .prompt(narrowed.some((entry) => entry.requiredAal === "aal3") ? "aal3" : "aal2")
-                    .catch((caught: unknown) => {
-                      if (!(caught instanceof StepUpCancelled)) throw caught;
-                    })
-                }
-              >
-                {AUTH_COPY.stepUp.button(narrowed.map((entry) => entry.role).join(", "))}
-              </button>
-            ) : null}
-
-    </>;
-  }
 
   return (
     <header className="topbar" onClick={activateNavigationMenu}>
@@ -119,8 +94,8 @@ export function TopBar() {
           <span className="brand-context">Verification Registry</span>
         </Link>
         {/* Links come from the single registry, not a local array (@mpc/design "chrome"). */}
-        <nav className="row" style={{ gap: 14, display: authenticated && !pendingFactor && !inWorkspace ? undefined : "none" }}>
-          {authenticated && !pendingFactor ? (
+        <nav className="row" style={{ gap: 14, display: authenticated && !inWorkspace ? undefined : "none" }}>
+          {authenticated ? (
             <>
               {workspace.filter((entry) => entry.href === "/w/projects" || entry.href === "/w/work").map((entry) => <Link key={entry.href} href={entry.href}>{entry.label}</Link>)}
               <details className="nav-public">
@@ -158,8 +133,7 @@ export function TopBar() {
             <summary>Account</summary>
             <div className="nav-public-menu">
             {renderAccountIdentity()}
-            {renderStepUp()}
-            {isAccountSession(session) && !pendingFactor ? (
+            {isAccountSession(session) ? (
               <Link href="/w/settings" onClick={closeMenu}>{COPY.session.settings}</Link>
             ) : null}
             <button onClick={() => void signOut()}>{COPY.session.disconnect}</button>

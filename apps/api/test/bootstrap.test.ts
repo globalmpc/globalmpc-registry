@@ -3,12 +3,9 @@ import { listMigrations, runMigrations } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { Secret } from "otpauth";
 import { bootstrapOperator, BootstrapError } from "../src/bootstrap.js";
-import { totpCodeAt } from "../src/services/mfa.js";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
-import { SoftAuthenticator } from "./helpers/webauthn.js";
 import { hashToken } from "../src/plugins/session-token.js";
 import { bearer, issueTestSession, newAccount, setupFixture, testEnv, type TestFixture } from "./helpers/db.js";
 
@@ -110,7 +107,7 @@ describeDb("production bootstrap", () => {
     return verify.json().sessionToken as string;
   }
 
-  it("a created person signs in by emailed code and, past a second factor, holds the role", async () => {
+  it("a created person holds the granted role after signing in by emailed code", async () => {
     const args = input();
     const result = await bootstrapOperator(fx.sql, args);
     expect(result).toMatchObject({ created: true, emailBound: true, roleGranted: true });
@@ -122,12 +119,7 @@ describeDb("production bootstrap", () => {
     });
     expect(first.json()).toMatchObject({ subjectId: result.subjectId, firstFactor: "email_code", aal: "aal1" });
 
-    // The same person past a passkey: the role bootstrap granted is effective.
-    const token = await issueTestSession(fx.appSql, result.tenantId, result.subjectId, {
-      firstFactor: "email_code",
-      secondFactor: "passkey",
-    });
-    const body = (await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: bearer(token) })).json() as {
+    const body = first.json() as {
       tenantId: string;
       subjectId: string;
       assuranceLevel: string;
@@ -226,7 +218,7 @@ describeDb("production bootstrap", () => {
       await fx.sql`UPDATE core.wallet_identities SET disabled_at = now() WHERE id = ${walletId}`;
       const [before] = await snapshot(first.subjectId);
       const result = await bootstrapOperator(fx.sql, args);
-      expect(result).toMatchObject({ subjectId: first.subjectId, created: false, roleGranted: false, emailBound: true, enrolmentWindowOpened: true });
+      expect(result).toMatchObject({ subjectId: first.subjectId, created: false, roleGranted: false, emailBound: true, enrolmentWindowOpened: false });
       const [after] = await snapshot(first.subjectId);
       expect(after!.bindings).toEqual(before!.bindings);
       expect(after!.wallets).toEqual(before!.wallets);
@@ -240,21 +232,9 @@ describeDb("production bootstrap", () => {
       expect(await bootstrapOperator(fx.sql, args)).toMatchObject({ emailBound: false, enrolmentWindowOpened: false, enrolmentWindowUntil: result.enrolmentWindowUntil });
       expect((await snapshot(first.subjectId))[0]).toEqual(after);
       const token = await signInByEmail(args.email);
-      const setup = await app.inject({ method: "POST", url: "/api/v1/auth/mfa/totp/setup", headers: bearer(token), payload: {} });
-      expect(setup.statusCode, setup.body).toBe(200);
-      const secret = new Uint8Array(Secret.fromBase32(setup.json().secret).bytes);
-      const confirmed = await app.inject({ method: "POST", url: "/api/v1/auth/mfa/totp/confirm", headers: bearer(token), payload: { code: totpCodeAt(secret, Math.floor(Date.now() / 30_000) * 30_000 + 1) } });
-      expect(confirmed.statusCode, confirmed.body).toBe(200);
-      const session = await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: bearer(token) });
-      expect(session.json()).toMatchObject({ subjectId: first.subjectId, firstFactor: "email_code", aal: "aal2" });
-      const options = await app.inject({ method: "POST", url: "/api/v1/auth/mfa/passkeys/registration/options", headers: bearer(token), payload: {} });
-      expect(options.statusCode, options.body).toBe(200);
-      const authenticator = new SoftAuthenticator({ origin: "http://localhost:3000", rpId: "localhost" });
-      const passkey = await app.inject({ method: "POST", url: "/api/v1/auth/mfa/passkeys/registration/verify", headers: bearer(token), payload: { response: authenticator.register(options.json().options), name: "Operator passkey" } });
-      expect(passkey.statusCode, passkey.body).toBe(200);
       const admin = await app.inject({ method: "GET", url: "/api/v1/admin/subjects", headers: bearer(token) });
       expect(admin.statusCode, admin.body).toBe(200);
-      expect((await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: bearer(token) })).json()).toMatchObject({ subjectId: first.subjectId, aal: "aal3" });
+      expect((await app.inject({ method: "GET", url: "/api/v1/auth/session", headers: bearer(token) })).json()).toMatchObject({ subjectId: first.subjectId, aal: "aal1" });
       const [enrolled] = await snapshot(first.subjectId);
       expect(await bootstrapOperator(fx.sql, args)).toMatchObject({ emailBound: false, roleGranted: false, enrolmentWindowOpened: false });
       expect((await snapshot(first.subjectId))[0]).toEqual(enrolled);
@@ -400,56 +380,16 @@ describeDb("production bootstrap", () => {
       expect(again).toMatchObject({ subjectId: result.subjectId, created: false, emailBound: false, roleGranted: false });
     });
 
-    it("reopens the first-enrolment window for a person past 24 hours with no factor, never once one exists", async () => {
-      const email = address();
-      const args = input({ email });
+    it("allows a returning operator to sign in without creating a recovery request", async () => {
+      const args = input({ email: address() });
       const first = await bootstrapOperator(fx.sql, args);
-      // Just created: the creation window is the one that counts, nothing is recorded.
-      expect(first.enrolmentWindowOpened).toBe(false);
-      expect(first.enrolmentWindowUntil!.getTime() - Date.now()).toBeGreaterThan(23 * 3600_000);
-
-      // The operator missed it.
       await fx.sql`UPDATE core.subjects SET created_at = now() - interval '48 hours' WHERE id = ${first.subjectId}`;
-      const token = await signInByEmail(email);
-      const mfaPost = (url: string, payload: unknown = {}) =>
-        app.inject({ method: "POST", url, headers: bearer(token), payload: payload as object });
-      const closed = await mfaPost("/api/v1/auth/mfa/totp/setup");
-      expect(closed.statusCode).toBe(403);
-      expect(closed.json().code).toBe("MFA_ENROLMENT_WINDOW_CLOSED");
-
-      // A re-run opens a fresh 24 hours, audited as the deploy runner's act.
       const rerun = await bootstrapOperator(fx.sql, args);
-      expect(rerun).toMatchObject({ subjectId: first.subjectId, created: false, enrolmentWindowOpened: true });
-      expect(rerun.enrolmentWindowUntil!.getTime() - Date.now()).toBeGreaterThan(23 * 3600_000);
-      const [audit] = await fx.sql<{ effective_role: string; actor_subject_id: string | null }[]>`
-        SELECT effective_role, actor_subject_id FROM audit.events
-        WHERE command = 'bootstrap.mfa_enrolment_window.opened' AND detail->>'subjectId' = ${first.subjectId}
-      `;
-      expect(audit).toEqual({ effective_role: "deploy_bound", actor_subject_id: null });
-
-      // Another re-run while it is open records nothing new.
-      const again = await bootstrapOperator(fx.sql, args);
-      expect(again.enrolmentWindowOpened).toBe(false);
-      expect(again.enrolmentWindowUntil).toEqual(rerun.enrolmentWindowUntil);
-      const rows = await fx.sql`SELECT origin FROM core.mfa_reset_requests WHERE subject_id = ${first.subjectId}`;
-      expect(rows).toEqual([{ origin: "bootstrap" }]);
-
-      // The operator enrols an authenticator app in the window.
-      const setup = await mfaPost("/api/v1/auth/mfa/totp/setup");
-      expect(setup.statusCode, setup.body).toBe(200);
-      const secret = new Uint8Array(Secret.fromBase32(setup.json().secret).bytes);
-      const step = Math.floor(Date.now() / 30_000);
-      const confirmed = await mfaPost("/api/v1/auth/mfa/totp/confirm", { code: totpCodeAt(secret, step * 30_000 + 1) });
-      expect(confirmed.statusCode, confirmed.body).toBe(200);
-
-      // With a factor held, a re-run opens nothing and leaves the factor alone.
-      const held = await bootstrapOperator(fx.sql, args);
-      expect(held).toMatchObject({ enrolmentWindowOpened: false, enrolmentWindowUntil: null });
-      const factors = await fx.sql`
-        SELECT 1 FROM core.totp_authenticators
-        WHERE subject_id = ${first.subjectId} AND confirmed_at IS NOT NULL AND revoked_at IS NULL
-      `;
-      expect(factors).toHaveLength(1);
+      expect(rerun).toMatchObject({ subjectId: first.subjectId, created: false, enrolmentWindowOpened: false, enrolmentWindowUntil: null });
+      const token = await signInByEmail(args.email);
+      const response = await app.inject({ url: "/api/v1/admin/subjects", headers: bearer(token) });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(await fx.sql`SELECT id FROM core.mfa_reset_requests WHERE subject_id = ${first.subjectId}`).toHaveLength(0);
     });
 
     it("refuses an address already on a person in another tenant", async () => {

@@ -39,7 +39,7 @@ export default function HelpPage() {
         <section className="panel">
           <h2>Account and access</h2>
           <p>
-            Manage sign-in methods, second factors and signing wallets in
+            Manage sign-in methods and signing wallets in
             Account settings. Project permissions require an administrator and
             an independent approval.
           </p>

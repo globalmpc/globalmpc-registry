@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { publicDate } from "@/lib/public-date";
 import { useEffect, useState } from "react";
 import { getMyWork, type MyWork } from "@/lib/api";
 import { useSession } from "@/lib/session";
@@ -45,132 +46,119 @@ export default function MyWorkPage() {
       <div className="page-head">
         <div>
           <h1>My Work</h1>
-          <p className="sub">
-            What is waiting on you, what you are waiting on, and what nobody has picked up. Those
-            three call for different next steps, so they are not one list.
-          </p>
         </div>
       </div>
 
       {error ? <ErrorNotice error={error} /> : null}
 
       {!work && !error ? <p role="status">Loading your work…</p> : null}
-      {work ? <div className="work-summary" aria-label="Work summary">
-        <a href="#assigned-work"><span>Assigned to you</span><strong>{work.assignedToMe.length}</strong><span className="meta">Review and act</span></a>
-        <a href="#waiting-work"><span>Waiting on someone else</span><strong>{work.waitingOnOthers.length}</strong><span className="meta">Decisions in progress</span></a>
-        <a href="#unassigned-work"><span>Open and unassigned</span><strong>{work.unassigned.length}{work.unassignedTruncated ? "+" : ""}</strong><span className="meta">Work to pick up</span></a>
-      </div> : null}
-      <div className="panel" id="assigned-work" data-testid="work-assigned">
-        <h2>Assigned to you</h2>
-        {work && work.assignedToMe.length === 0 ? (
-          <p className="sub" style={{ margin: 0 }}>
-            Nothing is assigned to you. This is not a permission problem.
-          </p>
-        ) : (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Project</th>
-                  <th>State</th>
-                  <th>Assigned</th>
-                  <th>Conflict</th>
-                </tr>
-              </thead>
-              <tbody>
-                {work?.assignedToMe.map((item) => (
-                  <tr key={item.caseId}>
-                    <td>
-                      <Link href={`/w/projects/${item.projectId}/verification`}>
+      {work ? <>
+        <div className="panel" id="assigned-work" data-testid="work-assigned">
+          <h2>Assigned to you</h2>
+          {work.assignedToMe.length === 0 ? (
+            <p className="sub" style={{ margin: 0 }}>
+              {work.hasVisibleProjects === false ? <>No projects are available to you yet. <Link href="/w/access-requests">Request access →</Link></>
+                : <>No reviews assigned to you. <Link href="/w/projects">View projects →</Link></>}
+            </p>
+          ) : (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Project</th>
+                    <th>State</th>
+                    <th>Next step</th>
+                    <th>Conflict</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {work.assignedToMe.map((item) => (
+                    <tr key={item.caseId}>
+                      <td>
                         {item.projectName}
-                      </Link>
-                    </td>
-                    <td className="mono">{item.state}</td>
-                    <td className="mono meta">{item.assignedAt}</td>
-                    <td className="mono">
-                      {/* An assignment with an unresolved conflict of interest cannot proceed (02 §2.4). */}
-                      {item.conflictStatus === "unresolved" ? (
-                        <span style={{ color: "var(--destructive-text)" }}>unresolved</span>
-                      ) : (
-                        item.conflictStatus
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                      </td>
+                      <td className="mono">{item.state}</td>
+                      <td><Link href={`/w/projects/${item.projectId}/verification?caseId=${encodeURIComponent(item.caseId)}`}>Open review</Link></td>
+                      <td className="mono">
+                        {/* An assignment with an unresolved conflict of interest cannot proceed (02 §2.4). */}
+                        {item.conflictStatus === "unresolved" ? (
+                          <span style={{ color: "var(--destructive-text)" }}>unresolved</span>
+                        ) : (
+                          item.conflictStatus
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
-      <div className="panel" id="waiting-work" data-testid="work-waiting">
-        <h2>Waiting on someone else</h2>
-        <p className="sub" style={{ marginTop: 0 }}>
-          You started these. There is nothing for you to do until another person decides.
-        </p>
-        {work && work.waitingOnOthers.length === 0 ? (
-          <p className="sub" style={{ margin: 0 }}>
-            Nothing of yours is waiting on a decision.
-          </p>
-        ) : (
-          <ul style={{ margin: 0, paddingLeft: 18, color: "var(--muted-foreground)" }}>
-            {work?.waitingOnOthers.map((item) => (
-              <li key={item.id}>
-                {item.summary} <span className="meta">· since {item.since}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+        <details className="panel" id="waiting-work" data-testid="work-waiting">
+          <summary>Waiting on someone else ({work.waitingOnOthers.length})</summary>
 
-      <div className="panel" id="unassigned-work" data-testid="work-unassigned">
-        <h2>Open and unassigned</h2>
-        <p className="sub" style={{ marginTop: 0 }}>
-          Nobody has picked these up. They are here because a queue that shows only assigned work
-          hides exactly the items that get forgotten.
-        </p>
-        {work && work.unassigned.length === 0 ? (
-          <p className="sub" style={{ margin: 0 }}>
-            Nothing is open and unassigned.
-          </p>
-        ) : (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Kind</th>
-                  <th>What</th>
-                  <th>Open since</th>
-                </tr>
-              </thead>
-              <tbody>
-                {work?.unassigned.map((item) => (
-                  <tr key={`${item.kind}-${item.id}`}>
-                    <td className="mono">{item.kind}</td>
-                    <td style={{ color: "var(--muted-foreground)" }}>
-                      {item.summary}
-                      {item.projectId ? (
-                        <>
-                          {" "}
-                          <Link href={`/w/projects/${item.projectId}`}>project →</Link>
-                        </>
-                      ) : null}
-                    </td>
-                    <td className="mono meta">{item.since}</td>
+          {work.waitingOnOthers.length === 0 ? (
+            <p className="sub" style={{ margin: 0 }}>
+              Nothing of yours is waiting on a decision.
+            </p>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18, color: "var(--muted-foreground)" }}>
+              {work.waitingOnOthers.map((item) => (
+                <li key={item.id}>
+                  {item.summary} <span className="meta">· since {publicDate(item.since)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+
+        <details className="panel" id="unassigned-work" data-testid="work-unassigned">
+          <summary>Open and unassigned ({work.unassigned.length}{work.unassignedTruncated ? "+" : ""})</summary>
+
+          {work.unassigned.length === 0 ? (
+            <p className="sub" style={{ margin: 0 }}>
+              Nothing is open and unassigned.
+            </p>
+          ) : (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Kind</th>
+                    <th>What</th>
+                    <th>Open since</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {work?.unassignedTruncated ? (
-          <TruncatedNotice
-            shown={work.unassigned.filter((item) => item.kind === "stale_signal").length}
-            noun="stale signals, oldest first"
-            testId="work-unassigned-truncated"
-          />
-        ) : null}
-      </div>
+                </thead>
+                <tbody>
+                  {work.unassigned.map((item) => (
+                    <tr key={`${item.kind}-${item.id}`}>
+                      <td className="mono">{item.kind}</td>
+                      <td style={{ color: "var(--muted-foreground)" }}>
+                        {item.summary}
+                        {item.projectId ? (
+                          <>
+                            {" "}
+                            <Link href={`/w/projects/${item.projectId}`}>project →</Link>
+                          </>
+                        ) : null}
+                      </td>
+                      <td className="mono meta">{publicDate(item.since)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {work.unassignedTruncated ? (
+            <TruncatedNotice
+              shown={work.unassigned.filter((item) => item.kind === "stale_signal").length}
+              noun="stale signals, oldest first"
+              testId="work-unassigned-truncated"
+            />
+          ) : null}
+        </details>
+      </> : null}
     </>
   );
 }

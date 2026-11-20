@@ -79,10 +79,13 @@ export interface VerifiedIdentity {
   readonly subjectKey: string;
   /** Microsoft `tid`; null for Google. */
   readonly idpTenant: string | null;
-  /** Normalised address the provider verified, or null. Only for invitation acceptance. */
+  /** Address verified by the Google Workspace domain that manages it. */
+  readonly workspaceEmail?: string | null;
+  /** Normalised verified address for invitation acceptance. */
   readonly verifiedEmail: string | null;
   /** Normalised address the token reported, verified or not — kept only as a keyed hash. */
   readonly reportedEmail: string | null;
+  readonly displayName: string | null;
   /**
    * Google reported the address verified, but neither Gmail nor the Workspace domain in `hd`
    * holds it, so the verification may be years old and someone else's. An invitation to it is
@@ -292,9 +295,11 @@ export class OidcProviders {
     const managed = domain !== null && (GOOGLE_MAIL_DOMAINS.has(domain) || (hd !== null && hd === domain));
     return {
       provider: "google",
+      displayName: stringClaim(claims, "name"),
       issuer: GOOGLE_ISSUER,
       subjectKey: claims.sub,
       idpTenant: null,
+      workspaceEmail: verified && hd !== null && hd === domain ? email : null,
       verifiedEmail: verified && managed ? email : null,
       reportedEmail: email,
       emailCodeRequired: verified && !managed,
@@ -320,6 +325,7 @@ export class OidcProviders {
     const email = emailOf(claims);
     return {
       provider: "microsoft",
+      displayName: null,
       issuer: claims.iss,
       subjectKey: oid,
       idpTenant: tid,

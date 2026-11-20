@@ -19,6 +19,8 @@ export const EMAIL_TEMPLATES = [
   "invitation_link",
   "invitation_code",
   "email_change_code",
+  "email_change_owner",
+  "wallet_recovery",
   "email_changed_notice",
   "mfa_reset_notice",
   "account_suspended_notice",
@@ -238,6 +240,26 @@ export function renderEmail(
       return messages.invitation_link(linkParams(params));
     case "invitation_code":
       return messages.invitation_code(codeParams(params));
+    case "wallet_recovery": {
+      const p = params as { code?: unknown; address?: unknown; chainId?: unknown } | null;
+      if (typeof p?.code !== "string" || !/^[0-9a-f-]{36}$/.test(p.code) ||
+          typeof p.address !== "string" || !/^0x[0-9a-f]{40}$/.test(p.address) || !Number.isSafeInteger(p.chainId)) {
+        throw new EmailParamsError("invalid wallet recovery");
+      }
+      return { subject: "Confirm your MPC Registry wallet recovery",
+        text: `To register ${p.address} on chain ${p.chainId}, enter this key in your wallet settings within 10 minutes:\n\n${p.code}\n\nIf you did not request this change, keep the key private and contact your administrator.` };
+    }
+    case "email_change_owner": {
+      const p = params as { code?: unknown; destination?: unknown } | null;
+      if (typeof p?.code !== "string" || !/^[0-9a-f-]{36}$/.test(p.code) ||
+          typeof p.destination !== "string" || !/^[^\s@]+@[^\s@]+$/.test(p.destination)) {
+        throw new EmailParamsError("invalid email-change confirmation");
+      }
+      return {
+        subject: "Confirm moving your MPC Registry account",
+        text: `To move your account to ${p.destination}, enter this key on the email-change screen within 10 minutes:\n\n${p.code}\n\nIf you did not request this change, keep the key private and contact your administrator.`,
+      };
+    }
     case "email_change_code":
       return messages.email_change_code(codeParams(params));
     case "email_changed_notice":
