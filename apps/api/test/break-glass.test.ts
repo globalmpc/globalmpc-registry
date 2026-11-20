@@ -149,7 +149,7 @@ describeDb("break-glass elevation", () => {
     expect(response.statusCode).toBe(403);
   });
 
-  it("cannot be approved by the person elevated", async () => {
+  it("can be approved by the administrator requesting elevation", async () => {
     const t = await team();
     const requested = (
       await post(t.responder.token, "/api/v1/admin/break-glass", {
@@ -164,8 +164,8 @@ describeDb("break-glass elevation", () => {
       { decision: "approve", reason: "self" },
       requested.version,
     );
-    expect(response.statusCode).toBe(422);
-    expect(response.json().code).toBe("BREAK_GLASS_SELF_APPROVAL");
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().effective).toBe(true);
   });
 
   it("does not grant anything before approval", async () => {
@@ -233,22 +233,13 @@ describeDb("break-glass elevation", () => {
     expect(list.json().items[0].effective).toBe(false);
   });
 
-  it("ends early on release, which the elevated person cannot sign off", async () => {
+  it("ends when the elevated administrator records the release", async () => {
     const t = await team();
     const elevation = await activeElevation(t);
     const body = { cause: "Key rotated", recoveryVerification: "New key bound and tested" };
 
-    const self = await post(
-      t.responder.token,
-      `/api/v1/admin/break-glass/${elevation.id}/release`,
-      body,
-      elevation.version,
-    );
-    expect(self.statusCode).toBe(422);
-    expect(self.json().code).toBe("BREAK_GLASS_SELF_RELEASE");
-
     const released = await post(
-      t.approver.token,
+      t.responder.token,
       `/api/v1/admin/break-glass/${elevation.id}/release`,
       body,
       elevation.version,

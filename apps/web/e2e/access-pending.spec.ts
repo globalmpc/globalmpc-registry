@@ -27,6 +27,7 @@ test.afterAll(closeMailbox);
 async function invite(page: Page, email: string): Promise<void> {
   await connectAs(page, "Operator A");
   await page.goto("/w/admin");
+  await page.getByText("Invite a person", { exact: true }).click();
   const panel = page.getByTestId("admin-invitations");
   await panel.getByLabel("Email address").fill(email);
   // The seeded organisation loads asynchronously; its initial text input is
@@ -34,6 +35,7 @@ async function invite(page: Page, email: string): Promise<void> {
   const organisation = panel.getByRole("combobox", { name: "Organisation", exact: true });
   await organisation.selectOption(TENANT_A_ORG);
   await expect(organisation).toHaveValue(TENANT_A_ORG);
+  await panel.getByLabel("Invitation role", { exact: true }).selectOption("");
   await panel.getByRole("button", { name: "Send invitation" }).click();
   await expect(panel.getByTestId("invitation-list")).toContainText(email);
 }
@@ -42,29 +44,28 @@ async function invite(page: Page, email: string): Promise<void> {
 async function enrolInvitee(browser: Browser, email: string, name: string): Promise<Page> {
   const context = await browser.newContext({ baseURL: `http://localhost:${process.env["E2E_WEB_PORT"]}` });
   const page = await context.newPage();
-  await addVirtualAuthenticator(page);
   await page.goto(await invitationLink(email));
   await expect(page.getByTestId("invitation-accept")).toBeVisible();
   await page.getByLabel("Your name, as colleagues will see it").fill(name);
   await page.getByRole("button", { name: "Email me a code" }).click();
   await page.getByLabel(/-digit code$/).fill(await mailedCode(email, "invitation_code"));
   await page.getByRole("button", { name: "Accept invitation" }).click();
-  await expect(page).toHaveURL(/\/auth\/mfa/);
-  await page.getByTestId("passkey-enrol").click();
-  await expect(page.getByTestId("recovery-code-list").locator("li")).not.toHaveCount(0);
-  await page.getByRole("checkbox", { name: "I have saved these codes somewhere safe" }).check();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page).toHaveURL(/\/w\/access-pending$/);
   return page;
 }
 
-/** A wallet in the page that answers with `key` — the person's new signing key. */
-async function holdWallet(page: Page, key: `0x${string}`): Promise<string> {
+/** Expose both accounts so the replacement can be signed by each key. */
+async function holdWallet(page: Page, key: `0x${string}`, old: ReturnType<typeof privateKeyToAccount>): Promise<string> {
   const account = privateKeyToAccount(key);
   await page.exposeFunction("__apWallet", async (method: string, params: unknown[]) => {
-    if (method === "eth_requestAccounts" || method === "eth_accounts") return [account.address];
+    if (method === "eth_requestAccounts" || method === "eth_accounts") return [account.address, old.address];
     if (method === "eth_chainId") return "0x7a69";
     if (method === "wallet_switchEthereumChain") return null;
-    if (method === "eth_signTypedData_v4") return account.signTypedData(typed(JSON.parse((params as string[])[1]!)));
+    if (method === "eth_signTypedData_v4") {
+      const signer = [account, old].find(candidate => candidate.address.toLowerCase() === String(params[0]).toLowerCase());
+      if (!signer) throw new Error("Unknown signing account");
+      return signer.signTypedData(typed(JSON.parse(String(params[1]))));
+    }
     throw new Error(`Unsupported ${method}`);
   });
   await page.addInitScript(() => {
@@ -112,7 +113,7 @@ test("an invited person without a role lands on access pending and can only reac
     await expect(me).toHaveURL(/\/w\/access-pending$/);
     const pending = me.getByTestId("access-pending");
     await expect(pending.getByRole("heading", { name: "Access pending" })).toBeVisible();
-    await expect(pending).toContainText("a second administrator approves each grant");
+    await expect(pending).toContainText("Ask your administrator to grant access");
     await expect(pending.getByRole("link", { name: /Request access/ })).toHaveAttribute("href", "/w/access-requests");
     await expect(pending.getByRole("link", { name: /Account settings/ })).toHaveAttribute("href", "/w/settings");
     await expect(me.getByTestId("effective-roles")).toHaveText("No roles");
@@ -170,7 +171,7 @@ test("replacing an operator-verified wallet marks the reviewer role inactive unt
       WHERE id = ${session.subjectId}
     `;
 
-    const next = await holdWallet(me, generatePrivateKey());
+    const next = await holdWallet(me, generatePrivateKey(), old);
     await me.goto("/w/settings");
     await expect(me.getByTestId("effective-roles")).toHaveText("reviewer");
     await expect(me.getByTestId("inactive-roles")).toHaveCount(0);

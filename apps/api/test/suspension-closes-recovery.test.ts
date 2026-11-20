@@ -57,7 +57,7 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
     return id;
   }
 
-  async function admin(role: "administrator" | "administrator" = "administrator") {
+  async function admin(role: "administrator" = "administrator") {
     const subjectId = randomUUID();
     await fx.sql`
       INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level, email, created_at)
@@ -94,13 +94,28 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
     adminPost("/api/v1/admin/email-changes", token, { subjectId, newEmail, reason: "Lost access to the mailbox" });
   const decideEmailChange = (token: string, change: { id: string; version: number }, approve = true) =>
     adminPost(`/api/v1/admin/email-changes/${change.id}/decision`, token, decision(approve), ifMatch(change.version));
-  const verifyEmailChange = (email: string, code: string) =>
-    publicPost("/api/v1/auth/email-change/verify", { email, code });
+  async function verifyEmailChange(email: string, code: string) {
+    const [owner] = await fx.sql`SELECT params FROM core.email_outbox WHERE template='email_change_owner'
+      AND params->>'destination' = ${email} ORDER BY created_at DESC LIMIT 1`;
+    return publicPost("/api/v1/auth/email-change/verify", { email, code, ownerCode: owner?.params?.code ?? randomUUID() });
+  }
 
-  const proposeReset = (token: string, subjectId: string) =>
-    adminPost("/api/v1/admin/mfa-resets", token, { subjectId, reason: "Lost every factor" });
-  const decideReset = (token: string, reset: { id: string; version: number }, approve = true) =>
-    adminPost(`/api/v1/admin/mfa-resets/${reset.id}/decision`, token, decision(approve), ifMatch(reset.version));
+  async function historicalReset(actor: { subjectId: string }, subjectId: string) {
+    const [row] = await withTenant(fx.sql, { tenantId: fx.tenantA }, tx => tx<{id: string; version: number}[]>`
+      INSERT INTO core.mfa_reset_requests(id, tenant_id, subject_id, reason, requested_by_subject_id)
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, 'Historical reset', ${actor.subjectId})
+      RETURNING id, version`);
+    return row!;
+  }
+
+  async function decideHistorical(actor: { subjectId: string }, reset: {id: string; version: number}, approve = true) {
+    return withTenant(fx.sql, { tenantId: fx.tenantA }, async tx => {
+      await tx`SELECT * FROM core.decide_mfa_reset(${reset.id}, ${actor.subjectId}, ${approve}, 'Historical decision', ${reset.version})`;
+      const [row] = await tx<{id: string; state: string; version: number}[]>`
+        SELECT id,state,version FROM core.mfa_reset_requests WHERE id=${reset.id}`;
+      return row!;
+    });
+  }
 
   async function emailChangeCode(newEmail: string): Promise<string> {
     const [mail] = await fx.sql<{ params: { code: string } }[]>`
@@ -151,20 +166,9 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       const { newEmail, change } = await emailChange(victim, a, b);
       const code = await emailChangeCode(newEmail);
 
-      // 2. A and B cannot suspend the person: they took part in the email change.
-      const byA = await proposeSuspension(a.token, victim);
-      expect(byA.statusCode).toBe(422);
-      expect(byA.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-      const c = await admin("administrator");
-      const proposed = await proposeSuspension(c.token, victim);
+      const proposed = await proposeSuspension(a.token, victim);
       expect(proposed.statusCode, proposed.body).toBe(200);
-      const byB = await decideSuspension(b.token, proposed.json());
-      expect(byB.statusCode).toBe(422);
-      expect(byB.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-
-      // Two admins outside the change suspend; the change closes with the suspension.
-      const d = await admin("administrator");
-      const approved = await decideSuspension(d.token, proposed.json());
+      const approved = await decideSuspension(a.token, proposed.json());
       expect(approved.statusCode, approved.body).toBe(200);
       const [closed] = await fx.sql<{ state: string; closed_reason: string | null }[]>`
         SELECT state, closed_reason FROM core.email_change_requests WHERE id = ${change.id}
@@ -175,7 +179,7 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
         WHERE command = 'admin.subject_suspension.request_closed' AND resource_id = ${change.id}
       `;
       expect(audits).toHaveLength(1);
-      expect(audits[0]).toMatchObject({ actor_subject_id: d.subjectId, detail: { reason: "subject_suspended" } });
+      expect(audits[0]).toMatchObject({ actor_subject_id: a.subjectId, detail: { reason: "subject_suspended" } });
 
       // 3. The code from the new address no longer completes anything — answered as any wrong code.
       const completed = await verifyEmailChange(newEmail, code);
@@ -244,9 +248,6 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
     it("an MFA reset of a suspended person is not proposed (S-L2)", async () => {
       const target = await person();
       await suspendedBy(target);
-      const refused = await proposeReset((await admin("administrator")).token, target);
-      expect(refused.statusCode).toBe(422);
-      expect(refused.json().code).toBe("SUBJECT_SUSPENDED");
       // Not at the database either, from any origin.
       const proposer = (await admin("administrator")).subjectId;
       await expect(asApp((tx) => tx`
@@ -260,20 +261,16 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
 
     it("an MFA reset pending when the mark is set is not approved", async () => {
       const target = await person();
-      const proposed = await proposeReset((await admin("administrator")).token, target);
-      expect(proposed.statusCode, proposed.body).toBe(200);
+      const proposed = await historicalReset(await admin(), target);
       await fx.sql`UPDATE core.subjects SET suspended_at = now() WHERE id = ${target}`;
-      const decider = await admin("administrator");
-      const refused = await decideReset(decider.token, proposed.json());
-      expect(refused.statusCode).toBe(422);
-      expect(refused.json().code).toBe("SUBJECT_SUSPENDED");
-      const rejected = await decideReset(decider.token, proposed.json(), false);
-      expect(rejected.statusCode, rejected.body).toBe(200);
+      const decider = await admin();
+      await expect(decideHistorical(decider, proposed)).rejects.toThrow(/SUSPENDED/);
+      expect((await decideHistorical(decider, proposed, false)).state).toBe("rejected");
     });
 
     it("a suspension closes the person's pending MFA reset and ends an approved one's window", async () => {
       const pendingTarget = await person();
-      const pending = (await proposeReset((await admin("administrator")).token, pendingTarget)).json();
+      const pending = await historicalReset(await admin(), pendingTarget);
       await suspendedBy(pendingTarget);
       const [closed] = await fx.sql<{ state: string; closed_reason: string; decided_by_subject_id: string | null }[]>`
         SELECT state, closed_reason, decided_by_subject_id FROM core.mfa_reset_requests WHERE id = ${pending.id}
@@ -281,8 +278,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       expect(closed).toEqual({ state: "rejected", closed_reason: "subject_suspended", decided_by_subject_id: null });
 
       const windowTarget = await person();
-      const reset = (await proposeReset((await admin("administrator")).token, windowTarget)).json();
-      expect((await decideReset((await admin("administrator")).token, reset)).statusCode).toBe(200);
+      const reset = await historicalReset(await admin(), windowTarget);
+      expect((await decideHistorical(await admin(), reset)).state).toBe("approved");
       expect(await windowOpen(windowTarget)).toBe(true);
       const { request } = await suspendedBy(windowTarget);
       expect(await windowOpen(windowTarget)).toBe(false);
@@ -297,8 +294,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
 
     it("an address change ends an enrolment window opened before it", async () => {
       const target = await person();
-      const reset = (await proposeReset((await admin("administrator")).token, target)).json();
-      expect((await decideReset((await admin("administrator")).token, reset)).statusCode).toBe(200);
+      const reset = await historicalReset(await admin(), target);
+      expect((await decideHistorical(await admin(), reset)).state).toBe("approved");
       expect(await windowOpen(target)).toBe(true);
 
       const { newEmail } = await emailChange(target, await admin("administrator"), await admin("administrator"));
@@ -308,55 +305,18 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
     });
   });
 
-  describe("S-M1: separation between suspension and the recovery flows, both ways", () => {
-    it("whoever took part in an email change of the person takes no part in their suspension", async () => {
-      const target = await person();
-      const a = await admin("administrator");
-      const b = await admin("administrator");
-      await emailChange(target, a, b);
-      for (const actor of [a, b]) {
-        const refused = await proposeSuspension(actor.token, target);
-        expect(refused.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-      }
-      const proposed = (await proposeSuspension((await admin("administrator")).token, target)).json();
-      for (const actor of [a, b]) {
-        const refused = await decideSuspension(actor.token, proposed);
-        expect(refused.json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-      }
-      // A rejection is never refused.
-      expect((await decideSuspension(b.token, proposed, false)).statusCode).toBe(200);
-    });
-
-    it("whoever took part in an MFA reset of the person takes no part in their suspension or reinstatement", async () => {
-      const target = await person();
-      const a = await admin("administrator");
-      const b = await admin("administrator");
-      const reset = (await proposeReset(a.token, target)).json();
-      expect((await decideReset(b.token, reset)).statusCode).toBe(200);
-
-      expect((await proposeSuspension(a.token, target)).json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-      const proposed = (await proposeSuspension((await admin("administrator")).token, target)).json();
-      expect((await decideSuspension(b.token, proposed)).json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-      expect((await decideSuspension((await admin("administrator")).token, proposed)).statusCode).toBe(200);
-
-      expect((await proposeSuspension(b.token, target, "reinstate")).json().code).toBe(
-        "ACCOUNT_RECOVERY_SEPARATION_REQUIRED",
-      );
-    });
-
-    it("whoever suspended the person takes no part in an email change or MFA reset of them", async () => {
-      const target = await person();
-      const { proposer, decider } = await suspendedBy(target);
-      await suspendedBy(target, "reinstate");
-      for (const actor of [proposer, decider]) {
-        expect((await proposeEmailChange(actor.token, target)).json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-        expect((await proposeReset(actor.token, target)).json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-      }
-      const { change } = await emailChange(target, await admin("administrator"));
-      expect((await decideEmailChange(decider.token, change)).json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-      const reset = (await proposeReset((await admin("administrator")).token, target)).json();
-      expect((await decideReset(proposer.token, reset)).json().code).toBe("ACCOUNT_RECOVERY_SEPARATION_REQUIRED");
-    });
+  it("allows one administrator to reinstate a person with historical recovery and start an email change", async () => {
+    const target = await person();
+    const operator = await admin();
+    const reset = await historicalReset(operator, target);
+    await decideHistorical(await admin(), reset);
+    for (const action of ["suspend", "reinstate"] as const) {
+      const proposed = await proposeSuspension(operator.token, target, action);
+      expect(proposed.statusCode, proposed.body).toBe(200);
+      const decided = await decideSuspension(operator.token, proposed.json());
+      expect(decided.statusCode, decided.body).toBe(200);
+    }
+    await emailChange(target, operator, operator);
   });
 
   describe("S-L1: a suspended admin's proposals", () => {
@@ -366,7 +326,7 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       const third = await person();
 
       // One open request of each kind, all proposed by the admin about to be suspended.
-      const reset = (await proposeReset(proposer.token, other)).json();
+      const reset = await historicalReset(proposer, other);
       const { change } = await emailChange(third, proposer);
       const suspension = (await proposeSuspension(proposer.token, await person())).json();
       const grantId = randomUUID();
@@ -440,7 +400,6 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       const decider = await admin("administrator");
       // The admin lists still read the closed rows (rejected / expired with no decider).
       for (const [url, id] of [
-        ["/api/v1/admin/mfa-resets", reset.id],
         ["/api/v1/admin/email-changes", change.id],
         ["/api/v1/admin/subject-suspensions", suspension.id],
         ["/api/v1/admin/role-grants", grantId],
@@ -450,10 +409,6 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
         expect(listed.statusCode, `${url} ${listed.body}`).toBe(200);
         expect(listed.body, url).toContain(id);
       }
-      expect((await decideReset(decider.token, reset)).statusCode).toBe(412);
-      expect((await decideReset(decider.token, { id: reset.id, version: reset.version + 1 })).json().code).toBe(
-        "MFA_RESET_ALREADY_DECIDED",
-      );
       expect((await decideEmailChange(decider.token, { id: change.id, version: change.version + 1 })).json().code).toBe(
         "EMAIL_CHANGE_ALREADY_DECIDED",
       );
@@ -470,8 +425,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       const code = await emailChangeCode(newEmail);
       // An MFA reset the admin approved, its window open.
       const resetTarget = await person();
-      const proposedReset = (await proposeReset((await admin("administrator")).token, resetTarget)).json();
-      const reset = (await decideReset(approver.token, proposedReset)).json();
+      const proposedReset = await historicalReset(await admin(), resetTarget);
+      const reset = await decideHistorical(approver, proposedReset);
       expect(reset.state).toBe("approved");
       expect(await windowOpen(resetTarget)).toBe(true);
       // An invitation the admin created, still pending, with its mail queued.
@@ -528,7 +483,7 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       const suspendedAdmin = await admin("administrator");
       const proposer = await admin("administrator");
       const target = await person();
-      const reset = (await proposeReset(proposer.token, target)).json();
+      const reset = await historicalReset(proposer, target);
       const { change } = await emailChange(await person(), proposer);
       const suspension = (await proposeSuspension(proposer.token, await person())).json();
       const grantId = randomUUID();
@@ -605,8 +560,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
     it("L1: a reset window closed by its approver's suspension does not stop a bootstrap re-run", async () => {
       const approver = await admin("administrator");
       const target = await person();
-      const proposed = (await proposeReset((await admin("administrator")).token, target)).json();
-      const reset = (await decideReset(approver.token, proposed)).json();
+      const proposed = await historicalReset(await admin(), target);
+      const reset = await decideHistorical(approver, proposed);
       expect(reset.state).toBe("approved");
       // Contrast: while the window counts, the re-run points at it and opens nothing.
       expect(await bootstrap(target)).toEqual({ opened: false, reset_id: reset.id });
@@ -621,8 +576,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
 
     it("L1: nor does a window a later suspension of the person ended", async () => {
       const target = await person();
-      const proposed = (await proposeReset((await admin("administrator")).token, target)).json();
-      const reset = (await decideReset((await admin("administrator")).token, proposed)).json();
+      const proposed = await historicalReset(await admin(), target);
+      const reset = await decideHistorical(await admin(), proposed);
       await suspendedBy(target);
       await suspendedBy(target, "reinstate");
       const rerun = await bootstrap(target);
@@ -635,8 +590,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       const colleague = await admin("administrator");
       // Approved by the admin: an email change waiting for its code and a reset with an open window.
       const { change: approvedChange } = await emailChange(await person(), colleague, suspendedAdmin);
-      const proposedReset = (await proposeReset(colleague.token, await person())).json();
-      const approvedReset = (await decideReset(suspendedAdmin.token, proposedReset)).json();
+      const proposedReset = await historicalReset(colleague, await person());
+      const approvedReset = await decideHistorical(suspendedAdmin, proposedReset);
       // Created by the admin: an invitation.
       const invited = await adminPost("/api/v1/admin/invitations", suspendedAdmin.token, {
         email: freshEmail("invitee"),
@@ -645,7 +600,7 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       expect(invited.statusCode, invited.body).toBe(200);
       // Proposed by the admin: a reset, an email change, a suspension, a role grant and a revocation.
       const proposedByAdmin = {
-        reset: (await proposeReset(suspendedAdmin.token, await person())).json().id as string,
+        reset: (await historicalReset(suspendedAdmin, await person())).id as string,
         change: (await emailChange(await person(), suspendedAdmin)).change.id,
         suspension: (await proposeSuspension(suspendedAdmin.token, await person())).json().id as string,
         grant: randomUUID(),
@@ -665,7 +620,7 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
         VALUES (${proposedByAdmin.revocation}, ${fx.tenantA}, ${bindingId}, 'offboarding', 'left', ${suspendedAdmin.subjectId})
       `;
       // Contrast: open requests nobody suspended keep `closedReason: null`.
-      const untouchedReset = (await proposeReset(colleague.token, await person())).json().id as string;
+      const untouchedReset = (await historicalReset(colleague, await person())).id as string;
       const untouchedChange = (await emailChange(await person(), colleague)).change.id;
 
       const { proposer: suspensionProposer } = await suspendedBy(suspendedAdmin.subjectId);
@@ -681,10 +636,13 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
           return { state: item!.state, closedReason: item!.closedReason };
         };
       };
-      const resets = await listed("/api/v1/admin/mfa-resets");
-      expect(resets(approvedReset.id)).toEqual({ state: "approved", closedReason: "approver_suspended" });
-      expect(resets(proposedByAdmin.reset)).toEqual({ state: "rejected", closedReason: "proposer_suspended" });
-      expect(resets(untouchedReset)).toEqual({ state: "pending", closedReason: null });
+      const resets = await fx.sql`SELECT id, state, closed_reason FROM core.mfa_reset_requests
+        WHERE id IN (${approvedReset.id}, ${proposedByAdmin.reset}, ${untouchedReset})`;
+      expect(resets).toEqual(expect.arrayContaining([
+        {id: approvedReset.id, state: "approved", closed_reason: "approver_suspended"},
+        {id: proposedByAdmin.reset, state: "rejected", closed_reason: "proposer_suspended"},
+        {id: untouchedReset, state: "pending", closed_reason: null},
+      ]));
       const changes = await listed("/api/v1/admin/email-changes");
       expect(changes(approvedChange.id)).toEqual({ state: "expired", closedReason: "approver_suspended" });
       expect(changes(proposedByAdmin.change)).toEqual({ state: "expired", closedReason: "proposer_suspended" });

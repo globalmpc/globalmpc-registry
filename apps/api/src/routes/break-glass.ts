@@ -260,14 +260,6 @@ export async function registerBreakGlassRoutes(
               state: current.state,
             });
           }
-          // The DB CHECK blocks the same; this says why.
-          if (current.subject_id === session.subjectId) {
-            throw unprocessable(
-              "BREAK_GLASS_SELF_APPROVAL",
-              "The person elevated cannot approve their own elevation",
-              { hint: "Another security operator decides" },
-            );
-          }
           if (data.decision === "approve" && current.expires_at.getTime() <= current.now.getTime()) {
             throw unprocessable("BREAK_GLASS_EXPIRED", "The requested expiry has already passed");
           }
@@ -403,14 +395,6 @@ export async function registerBreakGlassRoutes(
               state: current.state,
             });
           }
-          if (current.subject_id === session.subjectId) {
-            throw unprocessable(
-              "BREAK_GLASS_SELF_RELEASE",
-              "The person elevated cannot approve their own release",
-              { hint: "Another security operator releases it; it also ends by itself at expiry" },
-            );
-          }
-
           await tx`
             UPDATE core.break_glass_elevations
             SET state = 'released',

@@ -150,6 +150,7 @@ export async function issuedSessionResponse(
   request: FastifyRequest,
   token: string,
   expiresAt: Date,
+
 ) {
   const row = await resolveSessionToken(sql, token);
   const session = row ? await resolveSession(sql, row) : null;

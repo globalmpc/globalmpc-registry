@@ -1,6 +1,6 @@
 import { openHeaderMenu } from "./header-menu";
 import { expect, test } from "@playwright/test";
-import { connectAs, prepareSignIn } from "./connect-as";
+import { openEmailSignIn, connectAs, prepareSignIn } from "./connect-as";
 import { demoEmail } from "./demo-people";
 import { mailedCode } from "./mailbox";
 
@@ -13,11 +13,12 @@ import { mailedCode } from "./mailbox";
  */
 
 test.describe("account connection", () => {
-  test("sign-in asks for an email address, never a wallet, and shows the boundary notice", async ({ page }) => {
+  test("sign-in offers Google, never a wallet, and shows the boundary notice", async ({ page }) => {
     await page.goto("/connect");
 
     await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
-    await expect(page.getByLabel("Email address")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign in with Google" })).toBeVisible();
+    await expect(page.getByLabel("Email address")).toHaveCount(0);
     // WP7 removed the wallet sign-in: no demo account cards and no wallet button, whatever the
     // browser has installed.
     await expect(page.locator("button.account-card")).toHaveCount(0);
@@ -206,16 +207,13 @@ test.describe("accessibility", () => {
   test("an account can sign in with the keyboard alone", async ({ page }) => {
     const email = demoEmail("Operator A");
     await prepareSignIn(page, "Operator A");
-    await page.goto("/connect");
+    await openEmailSignIn(page);
     await page.getByLabel("Email address").focus();
     await page.keyboard.type(email);
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("code-sent")).toBeVisible();
     await page.getByLabel(/-digit code$/).focus();
     await page.keyboard.type(await mailedCode(email, "sign_in_code"));
-    await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(/\/auth\/mfa/);
-    await page.getByTestId("passkey-prove").focus();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/w\/projects$/);
   });

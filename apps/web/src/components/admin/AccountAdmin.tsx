@@ -4,28 +4,27 @@ import { useCallback, useEffect, useState } from "react";
 import {
   createEmailChange,
   createInvitation,
-  createMfaReset,
   createSubjectSuspension,
   decideEmailChange,
-  decideMfaReset,
   decideSubjectSuspension,
   listEmailChanges,
   listInvitations,
-  listMfaResets,
   listSubjectSuspensions,
   revokeInvitation,
   type Decision,
   type EmailChange,
   type Invitation,
-  type MfaReset,
+  type InvitationRole,
   type SubjectSuspension,
 } from "@/lib/account-api";
+import { HUMAN_ROLE_LABELS, HUMAN_ROLES } from "@mpc/api-contract";
+import { listProjectItems, type ProjectListItem } from "@/lib/projects-api";
 import { listOrganizations, newIdempotencyKey, type AdminSubject, type OrganizationOption } from "@/lib/api";
 import { authErrorMessage } from "@/lib/auth-errors";
 import { AUTH_COPY } from "@/lib/copy";
 import { useSession } from "@/lib/session";
+import { WalletRecoveryPanel } from "../settings/WalletRecoveryPanel";
 import { can } from "@/lib/access";
-import { StepUpCancelled, useOptionalStepUp } from "@/components/auth/StepUp";
 
 const C = AUTH_COPY.admin;
 /** A suspension's closure in words; an unknown reason still reads as closed, never as open. */
@@ -53,12 +52,9 @@ export function AccountAdmin({
   // action. Guidance only; the server decides.
   const mayInvite = can(session, "admin.invitation.manage");
   const mayProposeEmail = can(session, "admin.email_change.propose");
-  const mayProposeReset = can(session, "admin.mfa_reset.propose");
   const mayProposeSuspension = can(session, "admin.subject_suspension.propose");
-  const stepUp = useOptionalStepUp();
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [changes, setChanges] = useState<EmailChange[]>([]);
-  const [resets, setResets] = useState<MfaReset[]>([]);
   const [suspensions, setSuspensions] = useState<SubjectSuspension[]>([]);
   const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -66,26 +62,31 @@ export function AccountAdmin({
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteOrg, setInviteOrg] = useState("");
+  const [inviteRole, setInviteRole] = useState<InvitationRole | "">("project_member");
+  const [inviteProject, setInviteProject] = useState("");
+  const [identityBasis, setIdentityBasis] = useState("");
+  const [projectListIncomplete, setProjectListIncomplete] = useState(false);
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
+  const [projectScope, setProjectScope] = useState(false);
+  const needsIdentityBasis = inviteRole === "reviewer" || inviteRole === "administrator";
+  const eligibleProjects = inviteRole === "reviewer" ? projects : projects.filter(project => project.ownerOrganizationId === inviteOrg);
+  const scopedProject = projectScope && inviteRole !== "" && inviteRole !== "administrator";
   const [changeSubject, setChangeSubject] = useState("");
   const [changeEmail, setChangeEmail] = useState("");
   const [changeReason, setChangeReason] = useState("");
-  const [resetSubject, setResetSubject] = useState("");
-  const [resetReason, setResetReason] = useState("");
   const [suspendSubject, setSuspendSubject] = useState("");
   const [suspendReason, setSuspendReason] = useState("");
   const [decisionReason, setDecisionReason] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     try {
-      const [invitationPage, changePage, resetPage, suspensionPage] = await Promise.all([
+      const [invitationPage, changePage, suspensionPage] = await Promise.all([
         listInvitations(),
         listEmailChanges(),
-        listMfaResets(),
         listSubjectSuspensions(),
       ]);
       setInvitations(invitationPage.items);
       setChanges(changePage.items);
-      setResets(resetPage.items);
       setSuspensions(suspensionPage.items);
       setError(null);
     } catch (caught) {
@@ -102,21 +103,35 @@ export function AccountAdmin({
       .catch(() => setOrganizations([]));
   }, [token, load]);
 
+  useEffect(() => {
+    if (!token || !scopedProject) return;
+    let active = true;
+    listProjectItems(token, {}).then(page => {
+      if (active) {
+        setProjects(page.items);
+        setProjectListIncomplete(page.truncated);
+      }
+    }).catch(() => {
+      if (active) { setProjects([]); setProjectListIncomplete(true); }
+    });
+    return () => { active = false; };
+  }, [token, scopedProject]);
+
   async function act(action: () => Promise<unknown>) {
     setBusy(true);
     setError(null);
     try {
-      await (stepUp ? stepUp.run(action) : action());
+      await action();
       await load();
       await onChanged();
     } catch (caught) {
-      if (!(caught instanceof StepUpCancelled)) setError(authErrorMessage(caught));
+      setError(authErrorMessage(caught));
     } finally {
       setBusy(false);
     }
   }
 
-  const people = subjects.filter((subject) => subject.kind === "person" && subject.id !== session?.subjectId);
+  const people = subjects.filter((subject) => subject.kind === "person");
   const nameOf = (id: string) => subjects.find((subject) => subject.id === id)?.displayName ?? id.slice(0, 8);
   const decide = (id: string, decision: Decision["decision"]) => ({
     decision,
@@ -125,13 +140,10 @@ export function AccountAdmin({
 
   const decisionControls = (
     id: string,
-    proposer: string,
     onDecide: (input: Decision) => Promise<unknown>,
     approveAction: string,
   ) =>
-    !can(session, approveAction) ? null : proposer === session?.subjectId ? (
-      <span className="meta">waiting for another administrator</span>
-    ) : (
+    !can(session, approveAction) ? null : (
       <span className="row" style={{ display: "inline-flex" }}>
         <input
           aria-label={C.decisionReason}
@@ -164,30 +176,39 @@ export function AccountAdmin({
         </div>
       ) : null}
 
-      <div className="panel" data-testid="admin-invitations">
+      {can(session, "admin.wallet.manage") && <WalletRecoveryPanel admin />}
+      <details className="panel"><summary>Invite a person</summary>
+      <div data-testid="admin-invitations">
         <h2>{C.invitations}</h2>
         <p className="sub" style={{ marginTop: 0 }}>
           {C.invitationsLead}
         </p>
         <form
-          className="row"
-          style={{ alignItems: "flex-end" }}
+          className="invitation-form"
           onSubmit={(event) => {
             event.preventDefault();
             void act(async () => {
-              await createInvitation(newIdempotencyKey(), { email: inviteEmail.trim(), organizationId: inviteOrg.trim() });
+              await createInvitation(newIdempotencyKey(), {
+                email: inviteEmail.trim(), organizationId: inviteOrg.trim(),
+                ...(inviteRole ? { access: { role: inviteRole, identityBasis: needsIdentityBasis ? identityBasis.trim() : "Organisation membership attested by inviting administrator; mailbox verified at acceptance",
+                  ...(scopedProject ? { projectId: inviteProject } : {}) } } : {}),
+              });
+              setIdentityBasis("");
+              setInviteRole("project_member");
+              setInviteProject("");
+              setProjectScope(false);
               setInviteEmail("");
             });
           }}
         >
-          <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
+          <div className="field">
             <label htmlFor="invite-email">{AUTH_COPY.signIn.emailLabel}</label>
             <input id="invite-email" type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
           </div>
-          <div className="field" style={{ marginBottom: 0 }}>
+          <div className="field">
             <label htmlFor="invite-org">{C.organization}</label>
             {organizations.length > 0 ? (
-              <select id="invite-org" value={inviteOrg} onChange={(event) => setInviteOrg(event.target.value)}>
+              <select id="invite-org" value={inviteOrg} onChange={(event) => { setInviteOrg(event.target.value); setInviteProject(""); }}>
                 <option value="">—</option>
                 {organizations.map((organization) => (
                   <option key={organization.id} value={organization.id}>
@@ -196,10 +217,38 @@ export function AccountAdmin({
                 ))}
               </select>
             ) : (
-              <input id="invite-org" value={inviteOrg} onChange={(event) => setInviteOrg(event.target.value)} />
+              <input id="invite-org" value={inviteOrg} onChange={(event) => { setInviteOrg(event.target.value); setInviteProject(""); }} />
             )}
           </div>
-          <button className="primary" type="submit" disabled={busy || !mayInvite || !inviteEmail.trim() || !inviteOrg.trim()}>
+          <label className="field">Invitation role
+            <select aria-label="Invitation role" value={inviteRole} onChange={event => { setInviteRole(event.target.value as InvitationRole | ""); setInviteProject(""); }}>
+              {HUMAN_ROLES.map(role => <option key={role} value={role}>{HUMAN_ROLE_LABELS[role]}</option>)}
+              <option value="">Account only</option>
+            </select>
+          </label>
+          {inviteRole && inviteRole !== "administrator" && <label className="field">Access scope
+            <select aria-label="Access scope" value={projectScope ? "project" : "organisation"} onChange={event => setProjectScope(event.target.value === "project")}>
+              <option value="organisation">This organisation’s projects</option>
+              <option value="project">One project</option>
+            </select>
+          </label>}
+          {scopedProject && <label className="field">Project
+            {projectListIncomplete ? <input required aria-label="Project" list="invite-project-options" placeholder="Project ID" value={inviteProject}
+              onChange={event => setInviteProject(event.target.value)} /> : <select required aria-label="Project" value={inviteProject} onChange={event => setInviteProject(event.target.value)}>
+              <option value="">Choose a project</option>
+              {eligibleProjects.map(project =>
+                <option key={project.id} value={project.id}>{project.name} · {project.projectKey}</option>)}
+            </select>}
+            {projectListIncomplete && <datalist id="invite-project-options">
+              {eligibleProjects.map(project =>
+                <option key={project.id} value={project.id}>{project.name} · {project.projectKey}</option>)}
+            </datalist>}
+          </label>}
+          {needsIdentityBasis && <label className="field">How did you verify this person’s identity?
+            <input required maxLength={1000} value={identityBasis} onChange={event => setIdentityBasis(event.target.value)} />
+          </label>}
+          {inviteRole === "administrator" && <span>Access to administer the entire workspace</span>}
+          <button className="primary" type="submit" disabled={busy || !mayInvite || !inviteEmail.trim() || !inviteOrg.trim() || (needsIdentityBasis && !identityBasis.trim()) || (scopedProject && !inviteProject.trim())}>
             {C.invite}
           </button>
         </form>
@@ -208,11 +257,13 @@ export function AccountAdmin({
           {invitations.map((invitation) => (
             <li key={invitation.id}>
               <span className="mono">{invitation.email}</span>{" "}
+              {invitation.role && <span>{HUMAN_ROLE_LABELS[invitation.role]} · {invitation.projectId ? (projects.find(p => p.id === invitation.projectId)?.name ?? invitation.projectId) : invitation.role === "administrator" ? "Workspace" : "Organisation"} </span>}
               <span className="meta" data-testid="invitation-state">
                 {invitation.closedReason
                   ? `· ${closed(invitation.closedReason)}`
                   : `· ${invitation.state} · expires ${invitation.expiresAt.slice(0, 16).replace("T", " ")}`}
               </span>{" "}
+              {invitation.acceptedSubjectId ? <span>· {nameOf(invitation.acceptedSubjectId)} </span> : null}
               {invitation.state === "pending" && mayInvite ? (
                 <button
                   type="button"
@@ -227,6 +278,8 @@ export function AccountAdmin({
         </ul>
       </div>
 
+      </details>
+      <details className="panel"><summary>Account recovery</summary>
       <div className="panel" data-testid="admin-email-changes">
         <h2>{C.emailChanges}</h2>
         <p className="sub" style={{ marginTop: 0 }}>
@@ -284,66 +337,9 @@ export function AccountAdmin({
                 · {change.closedReason ? closed(change.closedReason) : change.state} · {change.reason}
               </span>{" "}
               {change.state === "pending"
-                ? decisionControls(change.id, change.requestedBySubjectId, (input) =>
+                ? decisionControls(change.id, (input) =>
                     decideEmailChange(newIdempotencyKey(), change.id, change.version, input),
                   "admin.email_change.approve")
-                : null}
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div className="panel" data-testid="admin-mfa-resets">
-        <h2>{C.mfaResets}</h2>
-        <p className="sub" style={{ marginTop: 0 }}>
-          {C.mfaResetsLead}
-        </p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void act(async () => {
-              await createMfaReset(newIdempotencyKey(), { subjectId: resetSubject, reason: resetReason.trim() });
-              setResetReason("");
-            });
-          }}
-        >
-          <div className="row" style={{ alignItems: "flex-end" }}>
-            <div className="field" style={{ marginBottom: 0 }}>
-              <label htmlFor="reset-subject">{C.person}</label>
-              <select id="reset-subject" value={resetSubject} onChange={(event) => setResetSubject(event.target.value)}>
-                <option value="">—</option>
-                {people.map((person) => (
-                  <option key={person.id} value={person.id}>
-                    {person.displayName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field" style={{ marginBottom: 0, flex: 1 }}>
-              <label htmlFor="reset-reason">{C.reason}</label>
-              <input id="reset-reason" value={resetReason} onChange={(event) => setResetReason(event.target.value)} />
-            </div>
-            <button className="primary" type="submit" disabled={busy || !mayProposeReset || !resetSubject || !resetReason.trim()}>
-              {C.proposeMfaReset}
-            </button>
-          </div>
-        </form>
-        {resets.length === 0 ? <p className="meta">{C.noMfaResets}</p> : null}
-        <ul data-testid="mfa-reset-list">
-          {resets.map((reset) => (
-            <li key={reset.id}>
-              {reset.subjectName}{" "}
-              <span className="meta" data-testid="mfa-reset-state">
-                · {reset.closedReason ? closed(reset.closedReason) : reset.state} · {reset.reason}
-              </span>
-              {/* A closed reset has no open window, even one approved with a time still ahead. */}
-              {reset.enrolmentWindowUntil && !reset.closedReason ? (
-                <span className="meta"> · {C.windowUntil(reset.enrolmentWindowUntil.slice(0, 16).replace("T", " "))}</span>
-              ) : null}{" "}
-              {reset.state === "pending"
-                ? decisionControls(reset.id, reset.requestedBySubjectId, (input) =>
-                    decideMfaReset(newIdempotencyKey(), reset.id, reset.version, input),
-                  "admin.mfa_reset.approve")
                 : null}
             </li>
           ))}
@@ -361,7 +357,7 @@ export function AccountAdmin({
               <label htmlFor="suspend-subject">{C.person}</label>
               <select id="suspend-subject" value={suspendSubject} onChange={(event) => setSuspendSubject(event.target.value)}>
                 <option value="">—</option>
-                {people.map((person) => (
+                {people.filter((subject) => subject.id !== session?.subjectId).map((person) => (
                   <option key={person.id} value={person.id}>
                     {person.displayName}
                     {person.suspendedAt ? ` (${C.suspended})` : ""}
@@ -404,11 +400,9 @@ export function AccountAdmin({
                 · {C.suspensionAction[suspension.action] ?? suspension.action} ·{" "}
                 {suspension.closedReason ? closed(suspension.closedReason) : suspension.state} · {suspension.reason}
               </span>
-              {suspension.enrolmentWindowUntil && !suspension.closedReason ? (
-                <span className="meta"> · {C.windowUntil(suspension.enrolmentWindowUntil.slice(0, 16).replace("T", " "))}</span>
-              ) : null}{" "}
+{" "}
               {suspension.state === "pending"
-                ? decisionControls(suspension.id, suspension.requestedBySubjectId, (input) =>
+                ? decisionControls(suspension.id, (input) =>
                     decideSubjectSuspension(newIdempotencyKey(), suspension.id, suspension.version, input),
                   "admin.subject_suspension.approve")
                 : null}
@@ -416,6 +410,7 @@ export function AccountAdmin({
           ))}
         </ul>
       </div>
+      </details>
     </>
   );
 }

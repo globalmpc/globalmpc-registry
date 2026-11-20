@@ -30,3 +30,13 @@ export function demoStage(scenario: string): number | undefined {
 export function reviewedDemoDocument(scenario: string, gate: string): boolean {
   return DEMO_GATES.indexOf(gate as typeof DEMO_GATES[number]) < (demoStage(scenario) ?? 0);
 }
+
+const projectDocumentTitles: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "DOCUMENTS-1": { sampling_plan: "Khargana Creek stream-sediment sampling plan", geological_map: "North tributary alluvial terrace map", assay_report: "Placer gold sample assay register" },
+  "DOCUMENTS-3": { drilling_log: "West saddle diamond drill logs", metallurgy: "Copper flotation recovery tests", infrastructure: "Pass access road and mill power study" },
+  "DOCUMENTS-5": { mine_plan: "South pit bench and haulage plan", production_report: "Iron concentrate tonnage reconciliation", monitoring: "Tailings seepage monitoring log" },
+};
+
+export function demoDocumentTitle(scenario: string, key: string, fallback: string): string {
+  return projectDocumentTitles[scenario]?.[key] ?? fallback;
+}

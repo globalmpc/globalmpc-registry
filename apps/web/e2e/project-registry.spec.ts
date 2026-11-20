@@ -109,8 +109,14 @@ test.describe("Project List", () => {
 
     await page.getByRole("combobox", { name: "Reference label" }).selectOption("synthetic_test_project");
     await expect(page.getByRole("link", { name: projectKey })).toBeVisible();
-    await expect(page.getByTestId("project-list")).toContainText("Synthetic test");
+    await expect(page.getByTestId("project-list").getByRole("columnheader")).toHaveCount(4);
 
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      const list = page.getByTestId("project-list");
+      expect(await list.evaluate(table => table.getBoundingClientRect().right <= document.documentElement.clientWidth)).toBe(true);
+      await expect(list.getByRole("link", { name: projectKey })).toBeVisible();
+    }
     await page.getByRole("combobox", { name: "Lifecycle" }).selectOption("retired");
     await expect(page.getByRole("link", { name: projectKey })).toHaveCount(0);
     await expect(page.getByText(/No project matches these filters/)).toBeVisible();

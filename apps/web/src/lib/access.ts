@@ -17,7 +17,7 @@ import type { SessionInfo } from "./api";
 
 type Session = Pick<
   SessionInfo,
-  "authenticated" | "aal" | "recoveryLimited" | "roleBindings" | "narrowedRoles" | "assuranceLevel" | "actions" | "tenantId"
+  "authenticated" | "googleWorkspaceAccess" | "aal" | "recoveryLimited" | "roleBindings" | "narrowedRoles" | "assuranceLevel" | "actions" | "tenantId"
 >;
 
 /** Whether the session's effective roles allow this action (server-computed `actions`). */
@@ -82,7 +82,7 @@ export function assuranceNarrowedFor(
  */
 export function accessPending(session: Session | null | undefined): boolean {
   if (!session?.authenticated || !session.tenantId) return false;
-  if (session.aal === "aal1" || session.recoveryLimited) return false;
+  if (session.recoveryLimited) return false;
   return (session.roleBindings?.length ?? 0) === 0 && (session.narrowedRoles?.length ?? 0) === 0;
 }
 
@@ -92,7 +92,7 @@ export function accessPending(session: Session | null | undefined): boolean {
  */
 export function rolesAllInactive(session: Session | null | undefined): boolean {
   if (!session?.authenticated || !session.tenantId) return false;
-  if (session.aal === "aal1" || session.recoveryLimited) return false;
+  if (session.recoveryLimited) return false;
   if ((session.narrowedRoles?.length ?? 0) > 0) return false;
   return (session.roleBindings?.length ?? 0) > 0 && effectiveRoles(session).length === 0;
 }

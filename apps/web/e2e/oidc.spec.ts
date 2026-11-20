@@ -2,8 +2,10 @@ import { BUILT_SERVER, SESSION_COOKIE, OIDC_COOKIE } from "./server-mode";
 import { openHeaderMenu } from "./header-menu";
 import { randomUUID } from "node:crypto";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { connectAs, holdPasskey, sessionToken } from "./connect-as";
-import { closeMailbox, invitationLink, totp } from "./mailbox";
+import { registerSyntheticProject } from "./evidence-ledger-journey";
+import { connectAs, sessionToken } from "./connect-as";
+import { demoEmail } from "./demo-people";
+import { closeMailbox, invitationLink } from "./mailbox";
 import { approveAtProvider, MOCK_MICROSOFT_TENANT } from "./oidc";
 
 /**
@@ -61,17 +63,46 @@ async function signOut(page: Page): Promise<void> {
   await expect(page.getByRole("banner").getByRole("link", { name: "Sign in →" })).toBeVisible();
 }
 
-test("a person links Google from settings at aal2, then signs in with it and still gives their passkey", async ({
+test("one administrator invites a reviewer who signs in directly to the assigned project", async ({ page }) => {
+  const email = `reviewer-${randomUUID()}@example.com`;
+  await connectAs(page, "Operator A");
+  const project = await registerSyntheticProject(page, `INV-${randomUUID()}`, "Invited project");
+  await page.goto("/w/admin");
+  await page.getByText("Invite a person", { exact: true }).click();
+  const panel = page.getByTestId("admin-invitations");
+  await panel.getByLabel("Email address").fill(email);
+  await panel.getByRole("combobox", { name: "Organisation", exact: true }).selectOption(TENANT_A_ORG);
+  await panel.getByLabel("Invitation role", { exact: true }).selectOption("reviewer");
+  await panel.getByLabel("Access scope").selectOption("project");
+  const scope = panel.getByLabel("Project", { exact: true });
+  if (await scope.evaluate(el => el.tagName === "SELECT")) await scope.selectOption(project);
+  else await scope.fill(project);
+  await panel.getByLabel("How did you verify this person’s identity?").fill("Checked company personnel record");
+  await panel.getByRole("button", { name: "Send invitation" }).click();
+  await expect(panel.getByTestId("invitation-list")).toContainText(email);
+  await signOut(page);
+  await page.goto("/connect");
+  const signIn = await approveAtProvider(page, { email, email_verified: true, hd: "example.com" });
+  await page.getByTestId("oidc-google").click();
+  await signIn.visited;
+  await expect(page).toHaveURL(/\/w\/work$/);
+  await page.goto(`/w/projects/${project}`);
+  await expect(page.getByRole("heading", { name: "Invited project", exact: true })).toBeVisible();
+});
+
+test("an administrator links Google and uses the resulting session to add a person", async ({
   page,
   context,
 }) => {
   const sub = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
-  await connectAs(page, "Approver A");
+  await connectAs(page, "Operator A");
+  const projectId = await registerSyntheticProject(page, `OIDC-${sub}`, "Google workspace project");
   await unlinkGoogle(page);
 
   // Link: the provider round trip starts and ends in this account session.
   await page.goto("/w/settings");
-  const link = await approveAtProvider(page, { sub });
+  const identity = { sub, email: demoEmail("Operator A"), email_verified: true, hd: "e2e.example" };
+  const link = await approveAtProvider(page, identity);
   await page.getByTestId("link-google").click();
   const atProvider = await link.visited;
   expect(atProvider.url.origin).toBe("https://accounts.google.com");
@@ -83,20 +114,28 @@ test("a person links Google from settings at aal2, then signs in with it and sti
   await expect(page.getByTestId("settings-identities")).toContainText("Google");
   await expect(page.getByTestId("link-google")).toHaveCount(0);
 
-  // Sign in with it: Google is the first factor only — the passkey is still asked for.
+  // Sign in with it: the verified Google account retains its workspace role.
   await signOut(page);
   await page.goto("/connect");
-  const signIn = await approveAtProvider(page, { sub });
+  const signIn = await approveAtProvider(page, identity);
   await page.getByTestId("oidc-google").click();
   expect(cookie((await signIn.visited).cookies, OIDC_COOKIE)).toMatchObject({ sameSite: "Strict" });
-  await expect(page).toHaveURL(/\/auth\/mfa/);
+  await expect(page).toHaveURL(/\/w\/work$/);
+  await page.goto("/w/verification");
+  await expect(page.getByRole("heading", { name: "Verification", exact: true })).toBeVisible();
   await page.goto("/w/projects");
-  await expect(page).toHaveURL(/\/auth\/mfa\?next=%2Fw%2Fprojects/);
-  // connectAs may have reused a session signed in on another page, leaving this page's
-  // authenticator empty: hand it the passkey before the prompt.
-  await holdPasskey(page, "Approver A");
-  await page.getByTestId("passkey-prove").click();
-  await expect(page).toHaveURL(/\/w\/projects$/);
+  await expect(page.getByTestId("project-list")).toBeVisible();
+  await page.goto(`/w/projects/${projectId}`);
+  await expect(page.getByRole("heading", { name: "Google workspace project" })).toBeVisible();
+  await page.goto("/w/admin");
+  await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible();
+  await page.getByText("Add a person without sign-in", { exact: true }).click();
+  const newPerson = `Google admin ${sub}`;
+  await page.getByLabel("Name", { exact: true }).fill(newPerson);
+  await page.getByRole("button", { name: "Add person", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByTestId("admin-subjects")).toContainText(newPerson);
+  await expect(page).toHaveURL(/\/w\/admin$/);
   await expect(page.getByTestId("sign-in-method")).toHaveText("Google");
   await expectStrictSession(context);
 
@@ -119,6 +158,7 @@ test("an invited person accepts with Microsoft once the directory vouches for th
   // Operator A invites the address.
   await connectAs(page, "Operator A");
   await page.goto("/w/admin");
+  await page.getByText("Invite a person", { exact: true }).click();
   const panel = page.getByTestId("admin-invitations");
   await panel.getByLabel("Email address").fill(email);
   // The seeded organisation loads asynchronously; its initial text input is
@@ -126,6 +166,7 @@ test("an invited person accepts with Microsoft once the directory vouches for th
   const organisation = panel.getByRole("combobox", { name: "Organisation", exact: true });
   await organisation.selectOption(TENANT_A_ORG);
   await expect(organisation).toHaveValue(TENANT_A_ORG);
+  await panel.getByLabel("Invitation role", { exact: true }).selectOption("");
   await panel.getByRole("button", { name: "Send invitation" }).click();
   await expect(panel.getByTestId("invitation-list")).toContainText(email);
   await signOut(page);
@@ -151,16 +192,6 @@ test("an invited person accepts with Microsoft once the directory vouches for th
   const atProvider = await vouched.visited;
   expect(atProvider.url.origin).toBe("https://login.microsoftonline.com");
   expect(cookie(atProvider.cookies, OIDC_COOKIE)).toMatchObject({ httpOnly: true, secure: BUILT_SERVER, sameSite: "Strict" });
-  await expect(page).toHaveURL(/\/auth\/mfa/);
-  await expect(page.getByRole("heading", { name: "Set up your second factor" })).toBeVisible();
-
-  await page.getByTestId("totp-setup").click();
-  const secret = (await page.getByTestId("totp-secret").innerText()).trim();
-  await page.getByLabel("6-digit code from your authenticator app").fill((await totp(secret)).code);
-  await page.getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByTestId("recovery-code-list").locator("li")).not.toHaveCount(0);
-  await page.getByRole("checkbox", { name: "I have saved these codes somewhere safe" }).check();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page).toHaveURL(/\/w\/access-pending$/);
   await expect(page.getByTestId("sign-in-method")).toHaveText("Microsoft");
   await expectStrictSession(context);

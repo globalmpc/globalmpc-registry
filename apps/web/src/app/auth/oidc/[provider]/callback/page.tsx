@@ -9,7 +9,7 @@ import { pendingInvitation } from "@/lib/pending-invitation";
 import { authErrorMessage } from "@/lib/auth-errors";
 import { landingPath } from "@/lib/next-path";
 import { AUTH_COPY } from "@/lib/copy";
-import { needsSecondFactor, useSession } from "@/lib/session";
+import { useSession } from "@/lib/session";
 
 const C = AUTH_COPY.oidc;
 
@@ -50,7 +50,7 @@ export default function OidcCallbackPage() {
           return;
         }
         const fresh = await refresh();
-        router.replace(needsSecondFactor(fresh) ? "/auth/mfa" : landingPath(fresh));
+        router.replace(landingPath(fresh));
       } catch (caught) {
         setError(authErrorMessage(caught));
       }

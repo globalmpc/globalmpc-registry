@@ -238,35 +238,11 @@ describeDb("wallet binding by proof of possession", () => {
   });
 
   describe("session strength", () => {
-    it("refuses a first-factor-only session", async () => {
+    it("allows initial binding with verified email sign-in and a wallet signature", async () => {
       const subjectId = await person();
       const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, { firstFactor: "email_code" });
-      const response = await requestBindingChallenge(app, token, newAccount().address);
-      expect(response.statusCode).toBe(403);
-      expect(response.json().code).toBe("MFA_REQUIRED");
-
-      // The database refuses it too, whatever route reaches it.
-      await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, async (tx) => tx`
-          SELECT * FROM core.create_wallet_binding_challenge(
-            ${await sessionOf(subjectId)}, ${randomUUID()}, ${newAccount().address}, 31337,
-            ${`0x${randomBytes(32).toString("hex")}`}
-          )
-        `),
-      ).rejects.toThrow(/MFA_STEP_UP_REQUIRED/);
-    });
-
-    it("asks a person holding a passkey to use it", async () => {
-      const subjectId = await person();
-      await passkeySession(subjectId);
-      const totp = await totpSession(subjectId);
-
-      const refused = await requestBindingChallenge(app, totp, newAccount().address);
-      expect(refused.statusCode).toBe(403);
-      expect(refused.json()).toMatchObject({ code: "MFA_PASSKEY_REQUIRED", details: { requiredAal: "aal3" } });
-
-      const passkey = await passkeySession(subjectId);
-      expect((await bindWalletByProof(app, passkey, newAccount().account)).statusCode).toBe(200);
+      const response = await bindWalletByProof(app, token, newAccount().account);
+      expect(response.statusCode, response.body).toBe(200);
     });
 
     it("refuses a session restored by a recovery code", async () => {
@@ -276,8 +252,8 @@ describeDb("wallet binding by proof of possession", () => {
         secondFactor: "recovery_code",
       });
       const response = await requestBindingChallenge(app, token, newAccount().address);
-      expect(response.statusCode).toBe(403);
-      expect(response.json().code).toBe("MFA_RECOVERY_REENROLMENT_REQUIRED");
+      expect(response.statusCode).toBe(401);
+      expect(response.json().code).toBe("UNAUTHENTICATED");
 
       await expect(
         withTenant(fx.appSql, { tenantId: fx.tenantA }, async (tx) => tx`
@@ -437,6 +413,7 @@ describeDb("wallet binding by proof of possession", () => {
       const bound = await submitBinding(app, token, {
         challengeId: challenge.challengeId,
         signature: await signBindingChallenge(next.account, challenge),
+        previousWalletSignature: await signBindingChallenge(first.account, challenge),
       });
       expect(bound.statusCode, bound.body).toBe(200);
       expect(bound.json()).toMatchObject({
@@ -492,7 +469,7 @@ describeDb("wallet binding by proof of possession", () => {
       const taken = newAccount();
       expect((await bindWalletByProof(app, await totpSession(await person()), taken.account)).statusCode).toBe(200);
 
-      const refused = await bindWalletByProof(app, token, taken.account);
+      const refused = await bindWalletByProof(app, token, taken.account, "rotation", mine.account);
       expect(refused.statusCode).toBe(409);
       expect(refused.json().code).toBe("WALLET_UNAVAILABLE");
       expect(await activeWallets(subjectId)).toEqual([mine.address]);
@@ -529,8 +506,9 @@ describeDb("wallet binding by proof of possession", () => {
       ["replacing a wallet", true],
     ])("concurrent binds of one account leave exactly one active wallet (%s)", async (_label, hasWallet) => {
       const subjectId = await person();
+      const previous = newAccount();
       if (hasWallet) {
-        expect((await bindWalletByProof(app, await totpSession(subjectId), newAccount().account)).statusCode).toBe(200);
+        expect((await bindWalletByProof(app, await totpSession(subjectId), previous.account)).statusCode).toBe(200);
       }
       const keys = [newAccount(), newAccount(), newAccount()];
       // Sessions and challenges are issued one after another; only the binds race.
@@ -545,6 +523,7 @@ describeDb("wallet binding by proof of possession", () => {
         keys.map(async (key, i) => ({
           challengeId: challenges[i]!.challengeId,
           signature: await signBindingChallenge(key.account, challenges[i]!),
+          ...(hasWallet ? { previousWalletSignature: await signBindingChallenge(previous.account, challenges[i]!) } : {}),
         })),
       );
 
@@ -572,16 +551,146 @@ describeDb("wallet binding by proof of possession", () => {
     });
   });
 
+  it.each([false, true])("rechecks sole-admin recovery and preserves administrator access (another admin returns: %s)", async anotherReturns => {
+    const tenant = randomUUID();
+    const org = randomUUID();
+    await fx.sql`INSERT INTO core.tenants(id,slug,display_name) VALUES (${tenant},${tenant},'Wallet recovery')`;
+    await fx.sql`INSERT INTO core.organizations(id,tenant_id,legal_name,jurisdiction) VALUES (${org},${tenant},'Recovery org','MNG')`;
+    const holder = await person(tenant);
+    const other = await person(tenant);
+    const token = await issueTestSession(fx.appSql, tenant, holder, { firstFactor: "email_code" });
+    const next = newAccount();
+    await fx.sql`INSERT INTO core.wallet_identities(id,tenant_id,subject_id,wallet_address,chain_id,assurance_level,bound_at,bound_via)
+      VALUES (${randomUUID()},${tenant},${holder},${newAccount().address},31337,'high_assurance',now(),'operator')`;
+    for (const subject of [holder, other]) {
+      await fx.sql`UPDATE core.subjects SET assurance_level='high_assurance', email=coalesce(email,${subject+'@example.test'}) WHERE id=${subject}`;
+      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
+        VALUES (${randomUUID()},${tenant},${subject},${org},'administrator')`;
+    }
+    const post = (path: string, payload: Record<string,string>) =>
+      app.inject({method:"POST",url:"/api/v1/"+path,headers:bearer(token),payload});
+    const requested = await post("auth/wallet-recoveries", {walletAddress:next.address});
+    expect(requested.statusCode, requested.body).toBe(200);
+    const {id} = requested.json();
+    const approve = () => post("admin/wallet-recoveries/approve", {id});
+    const queue = async () => {
+      const response = await app.inject({url:"/api/v1/admin/wallet-recoveries",headers:bearer(token)});
+      expect(response.statusCode).toBe(200);
+      return response.json().items.map((item:{id:string}) => item.id);
+    };
+    const [mail] = await fx.sql`SELECT params FROM core.email_outbox WHERE template='wallet_recovery' AND params->>'address'=${next.address}`;
+    expect((await post("auth/wallet-recoveries/confirm",{id,proof:mail!.params.code})).statusCode).toBe(200);
+    expect(await queue()).not.toContain(id);
+    expect((await approve()).statusCode).toBe(409);
+    await fx.sql`UPDATE core.subjects SET suspended_at=now() WHERE id=${other}`;
+    expect(await queue()).toContain(id);
+    expect((await approve()).statusCode).toBe(200);
+    if (anotherReturns) {
+      await fx.sql`UPDATE core.subjects SET suspended_at=NULL WHERE id=${other}`;
+      expect((await bindWalletByProof(app, token, next.account)).statusCode).toBe(403);
+      const otherToken = await issueTestSession(fx.appSql, tenant, other, { firstFactor: "email_code" });
+      const review = await app.inject({url:"/api/v1/admin/wallet-recoveries",headers:bearer(otherToken)});
+      expect(review.json().items).toContainEqual(expect.objectContaining({id, approved:false}));
+      const approval = await app.inject({method:"POST",url:"/api/v1/admin/wallet-recoveries/approve",
+        headers:bearer(otherToken),payload:{id}});
+      expect(approval.statusCode, approval.body).toBe(200);
+    }
+    const bound = await bindWalletByProof(app, token, next.account);
+    expect(bound.statusCode, bound.body).toBe(200);
+    const [record] = await fx.sql`SELECT w.assurance_level AS wallet,w.bound_via,s.assurance_level AS person
+      FROM core.wallet_identities w JOIN core.subjects s ON s.id=w.subject_id WHERE w.id=${bound.json().id}`;
+    expect(record).toEqual({wallet:"wallet_only",bound_via:"proof",person:anotherReturns ? "wallet_only" : "high_assurance"});
+    const invitation = await app.inject({method:"POST",url:"/api/v1/admin/invitations",
+      headers:{...bearer(token),"idempotency-key":idempotencyKey()},payload:{email:`invite-${randomUUID()}@example.test`,organizationId:org}});
+    expect(invitation.statusCode, invitation.body).toBe(anotherReturns ? 403 : 200);
+  });
+
+  it.each(["lost", "admin-disabled", "approver-suspended", "logout", "expired", "idle"])("recovers a %s signing key only after mailbox proof, tenant approval and a fresh signature", async mode => {
+    const subject = await person();
+    const owner = () => issueTestSession(fx.appSql, fx.tenantA, subject, { firstFactor: "email_code" });
+    const old = newAccount();
+    const next = newAccount();
+    const bound = await bindWalletByProof(app, await owner(), old.account);
+    expect(bound.statusCode, bound.body).toBe(200);
+    const approver = await person();
+    await fx.sql`UPDATE core.subjects SET assurance_level='high_assurance' WHERE id=${approver}`;
+    await fx.sql`INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${fx.tenantA}, ${approver}, ${fx.orgA}, 'administrator')`;
+    const administrator = await issueTestSession(fx.appSql, fx.tenantA, approver, { firstFactor: "email_code" });
+    if (mode === "admin-disabled") {
+      const disabled = await app.inject({ method: "POST", url: `/api/v1/admin/wallets/${bound.json().id}/disable`,
+        headers: { ...bearer(administrator), "idempotency-key": idempotencyKey(), "if-match": '"1"' },
+        payload: { reasonCode: "key_compromised", detail: "Incident response" } });
+      expect(disabled.statusCode, disabled.body).toBe(200);
+    }
+    const token = await owner();
+    const post = (path: string, auth: string, payload: Record<string, string>) => app.inject({
+      method: "POST", url: "/api/v1/" + path, headers: bearer(auth), payload,
+    });
+    const requested = await post("auth/wallet-recoveries", token, { walletAddress: next.address });
+    expect(requested.statusCode, requested.body).toBe(200);
+    const { id } = requested.json();
+    const approve = (auth: string) => post("admin/wallet-recoveries/approve", auth, { id });
+    expect((await approve(administrator)).statusCode).toBe(409);
+    expect((await post("auth/wallet-recoveries/confirm", token, { id, proof: randomUUID() })).statusCode).toBe(403);
+    const [mail] = await fx.sql`SELECT params FROM core.email_outbox WHERE recipient=(SELECT email FROM core.subjects WHERE id=${subject})
+      AND template='wallet_recovery' AND state='pending'`;
+    expect(mail!.params.address).toBe(next.address);
+    expect((await post("auth/wallet-recoveries/confirm", token, { id, proof: mail!.params.code })).statusCode).toBe(200);
+    expect((await approve(token)).statusCode).toBe(403);
+    expect((await approve(await signIn(app, fx.operatorB))).statusCode).toBe(409);
+    if (["logout", "expired", "idle"].includes(mode)) {
+      const queued = async () => {
+        const response = await app.inject({ method: "GET", url: "/api/v1/admin/wallet-recoveries", headers: bearer(administrator) });
+        expect(response.statusCode).toBe(200);
+        return response.json().items.map((item: { id: string }) => item.id);
+      };
+      expect(await queued()).toContain(id);
+      if (mode === "logout") {
+        const logout = await app.inject({ method: "POST", url: "/api/v1/auth/logout", headers: bearer(token) });
+        expect(logout.json().revoked).toBe(true);
+      } else if (mode === "expired") {
+        await fx.sql`UPDATE core.sessions SET issued_at=now()-interval '2 hours', expires_at=now()-interval '1 hour'
+          WHERE id=(SELECT session_id FROM core.wallet_recoveries WHERE id=${id})`;
+      } else {
+        await fx.sql`UPDATE core.sessions SET issued_at=now()-interval '2 hours', last_seen_at=now()-interval '31 minutes'
+          WHERE id=(SELECT session_id FROM core.wallet_recoveries WHERE id=${id})`;
+      }
+      expect(await queued()).not.toContain(id);
+      expect((await approve(administrator)).statusCode).toBe(409);
+      return;
+    }
+    const stale = await challengeFor(token, next);
+    const approval = await approve(administrator);
+    expect(approval.statusCode, approval.body).toBe(200);
+    expect((await submitBinding(app, token, { challengeId: stale.challengeId, signature: await signBindingChallenge(next.account, stale) })).statusCode).toBe(403);
+    expect((await bindWalletByProof(app, token, newAccount().account)).statusCode).toBe(403);
+    if (mode === "approver-suspended") {
+      await fx.sql`UPDATE core.subjects SET suspended_at=now() WHERE id=${approver}`;
+      expect((await bindWalletByProof(app, token, next.account)).statusCode).toBe(403);
+      await fx.sql`UPDATE core.subjects SET suspended_at=NULL WHERE id=${approver}`;
+      expect((await bindWalletByProof(app, token, next.account)).statusCode).toBe(403);
+      expect(await activeWallets(subject)).toEqual([old.address]);
+      return;
+    }
+    const result = await bindWalletByProof(app, token, next.account, "key_lost");
+    expect(result.statusCode, result.body).toBe(200);
+    expect(await activeWallets(subject)).toEqual([next.address]);
+    expect((await approve(administrator)).statusCode).toBe(409);
+  });
+
   describe("re-binding a disabled address", () => {
-    it("binds it again for the same person, as a new row; the old row stays as it was", async () => {
+    it.each(["key_lost", "rotation", "offboarding"])("rebinds a self-disabled key after %s while preserving its history", async reason => {
       const subjectId = await person();
       const key = newAccount();
       const old = (await bindWalletByProof(app, await totpSession(subjectId), key.account)).json();
-      expect((await disable(await totpSession(subjectId), old.id)).statusCode).toBe(200);
+      expect((await disable(await totpSession(subjectId), old.id, reason)).statusCode).toBe(200);
       const [before] = await fx.sql<{ disabled_at: Date; version: number }[]>`
         SELECT disabled_at, version FROM core.wallet_identities WHERE id = ${old.id}
       `;
 
+      const other = await bindWalletByProof(app, await totpSession(subjectId), newAccount().account);
+      expect(other.statusCode).toBe(403);
       const again = await bindWalletByProof(app, await totpSession(subjectId), key.account);
       expect(again.statusCode, again.body).toBe(200);
       expect(again.json().id).not.toBe(old.id);
@@ -640,7 +749,8 @@ describeDb("wallet binding by proof of possession", () => {
     it("records the holder's reason, and refuses one that is not a replace reason", async () => {
       const subjectId = await person();
       const token = await totpSession(subjectId);
-      const old = (await bindWalletByProof(app, token, newAccount().account)).json();
+      const previous = newAccount();
+      const old = (await bindWalletByProof(app, token, previous.account)).json();
 
       for (const bogus of ["offboarding", "replaced", "consolidated_single_wallet", "x"]) {
         const refused = await bindWalletByProof(app, token, newAccount().account, bogus);
@@ -648,7 +758,7 @@ describeDb("wallet binding by proof of possession", () => {
       }
       expect(await activeWallets(subjectId)).toEqual([old.walletAddress]);
 
-      const bound = await bindWalletByProof(app, token, newAccount().account, "key_lost");
+      const bound = await bindWalletByProof(app, token, newAccount().account, "key_lost", previous.account);
       expect(bound.statusCode, bound.body).toBe(200);
       expect(await replaceCause(old.id)).toBe("key_lost");
       const [event] = await fx.sql<{ detail: Record<string, unknown> }[]>`
@@ -677,7 +787,7 @@ describeDb("wallet binding by proof of possession", () => {
         )
       `;
       const token = await totpSession(subjectId);
-      const bound = await bindWalletByProof(app, token, newAccount().account);
+      const bound = await bindWalletByProof(app, token, newAccount().account, "rotation", operatorKey.account);
       expect(bound.statusCode, bound.body).toBe(200);
       expect(bound.json().replaced).toMatchObject({ id: operatorWalletId });
 
@@ -700,10 +810,11 @@ describeDb("wallet binding by proof of possession", () => {
     it("replacing a proof-bound wallet leaves assurance as it is", async () => {
       const subjectId = await person();
       const token = await totpSession(subjectId);
-      expect((await bindWalletByProof(app, token, newAccount().account)).statusCode).toBe(200);
+      const previous = newAccount();
+      expect((await bindWalletByProof(app, token, previous.account)).statusCode).toBe(200);
       // An admin verified the person (the assurance route), not a wallet.
       await fx.sql`UPDATE core.subjects SET assurance_level = 'identity_bound' WHERE id = ${subjectId}`;
-      expect((await bindWalletByProof(app, token, newAccount().account)).statusCode).toBe(200);
+      expect((await bindWalletByProof(app, token, newAccount().account, "rotation", previous.account)).statusCode).toBe(200);
       const [subject] = await fx.sql<{ assurance_level: string }[]>`
         SELECT assurance_level::text FROM core.subjects WHERE id = ${subjectId}
       `;
@@ -741,7 +852,7 @@ describeDb("wallet binding by proof of possession", () => {
       const token = await totpSession(subjectId);
       const key = newAccount();
       expect((await bindWalletByProof(app, token, key.account)).statusCode).toBe(200);
-      const next = await bindWalletByProof(app, token, newAccount().account, "key_compromised");
+      const next = await bindWalletByProof(app, token, newAccount().account, "key_compromised", key.account);
       expect(next.statusCode, next.body).toBe(200);
       // The replace kept sessions; the old key is out for good.
       expect(await sessionAlive(token)).toBe(true);
@@ -774,8 +885,9 @@ describeDb("wallet binding by proof of possession", () => {
 
       // Retired by its holder for rotation, a key may come back — in another tenant too.
       const retired = newAccount();
-      const mine = (await bindWalletByProof(app, await totpSession(subjectId), retired.account)).json();
-      expect((await disable(await totpSession(subjectId), mine.id, "rotation")).statusCode).toBe(200);
+      const retiringSubject = await person();
+      const mine = (await bindWalletByProof(app, await totpSession(retiringSubject), retired.account)).json();
+      expect((await disable(await totpSession(retiringSubject), mine.id, "rotation")).statusCode).toBe(200);
       const elsewhere = await bindWalletByProof(
         app,
         await totpSession(await person(fx.tenantB), fx.tenantB),
@@ -819,9 +931,10 @@ describeDb("wallet binding by proof of possession", () => {
       const token = await totpSession(replacer);
       const gone = newAccount();
       expect((await bindWalletByProof(app, token, gone.account)).statusCode).toBe(200);
-      expect((await bindWalletByProof(app, token, newAccount().account, "key_lost")).statusCode).toBe(200);
+      const next = newAccount();
+      expect((await bindWalletByProof(app, token, next.account, "key_lost", gone.account)).statusCode).toBe(200);
       await expectUnavailable(await totpSession(await person()), gone);
-      expect((await bindWalletByProof(app, token, gone.account)).statusCode).toBe(200);
+      expect((await bindWalletByProof(app, token, gone.account, "rotation", next.account)).statusCode).toBe(200);
 
       // Retired for offboarding: handed on, anyone who proves it binds it.
       const leaver = await person();
@@ -858,14 +971,14 @@ describeDb("wallet binding by proof of possession", () => {
       const consolidated = newAccount();
       await history(consolidated, owner, { reason: "consolidated_single_wallet", decider: null });
       await expectUnavailable(await totpSession(await person()), consolidated);
-      expect((await bindWalletByProof(app, await totpSession(owner), consolidated.account)).statusCode).toBe(200);
+      expect((await bindWalletByProof(app, await totpSession(owner), consolidated.account)).json().code).toBe("WALLET_PREVIOUS_SIGNATURE_REQUIRED");
 
       // Disabled with no event recorded: the reason is unknown, so as lost.
       const silent = newAccount();
       const quiet = await person();
       await history(silent, quiet, null);
       await expectUnavailable(await totpSession(await person()), silent);
-      expect((await bindWalletByProof(app, await totpSession(quiet), silent.account)).statusCode).toBe(200);
+      expect((await bindWalletByProof(app, await totpSession(quiet), silent.account)).json().code).toBe("WALLET_PREVIOUS_SIGNATURE_REQUIRED");
 
       // A row with no subject: nobody is "its own subject", and a decider is never it.
       const orphan = newAccount();
@@ -888,15 +1001,15 @@ describeDb("wallet binding by proof of possession", () => {
       const attempt = fx.sql.begin(async (tx) => {
         const [row] = await tx<{ owner: string }[]>`
           SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc
-          WHERE oid = 'core.bind_wallet_by_proof(uuid, uuid, text, uuid, text)'::regprocedure
+          WHERE oid = 'core.bind_wallet_by_proof(uuid, uuid, text, uuid, text, text)'::regprocedure
         `;
         const owner = row!.owner;
         const role = `wallet_owner_nobypass_${randomUUID().slice(0, 8)}`;
         await tx`CREATE ROLE ${tx(role)} NOLOGIN NOSUPERUSER NOBYPASSRLS IN ROLE ${tx(owner)}`;
-        await tx`ALTER FUNCTION core.bind_wallet_by_proof(uuid, uuid, text, uuid, text) OWNER TO ${tx(role)}`;
+        await tx`ALTER FUNCTION core.bind_wallet_by_proof(uuid, uuid, text, uuid, text, text) OWNER TO ${tx(role)}`;
         await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
         await tx`
-          SELECT * FROM core.bind_wallet_by_proof(${sessionId}, ${challenge.challengeId}, ${key.address}, ${randomUUID()}, 'rotation')
+          SELECT * FROM core.bind_wallet_by_proof(${sessionId}, ${challenge.challengeId}, ${key.address}, ${randomUUID()}, 'rotation', NULL)
         `;
       });
       await expect(attempt).rejects.toThrow(/row-level security/);

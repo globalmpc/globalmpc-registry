@@ -11,15 +11,14 @@ import { useSession } from "@/lib/session";
 import { can } from "@/lib/access";
 import { ErrorNotice } from "@/components/ErrorNotice";
 import { TruncatedNotice } from "@/components/TruncatedNotice";
-import { ProjectStageRoadmap } from "@/components/ProjectProgress";
+
 import { WorkspaceProjectProgress } from "@/components/WorkspaceProjectProgress";
-import { GradeBadge, LifecycleBadge, ReadinessBadge } from "@/components/StatusBadge";
+import { LifecycleBadge } from "@/components/StatusBadge";
 
 /**
  * Project List — spec 11 §11.3.
  *
- * Columns: code/name, host country, mineral, reference label, lifecycle, registry state,
- * readiness summary, weakest grade, stale/suspended, owner, updated.
+ * Summarizes projects by evidence stage, lifecycle and owning organization.
  * Filters: assignment, stage, host country, grade, gap, stale, reference status.
  *
  * Filters run on the server, inside the caller's visible projects. Filtering on the screen
@@ -42,12 +41,6 @@ const STAGES = [
 ];
 
 const GRADES = ["rejected", "unverified", "self_reported", "partially_verified", "verified"];
-
-const REFERENCE_LABEL: Record<ProjectListItem["referenceStatus"], string> = {
-  none: "—",
-  official_reference: "Official Reference",
-  synthetic_test_project: "Synthetic test",
-};
 
 export default function ProjectListPage() {
   const { token, session, loading: sessionLoading } = useSession();
@@ -209,78 +202,32 @@ export default function ProjectListPage() {
     return loading ? (
       <p className="sub">Loading…</p>
     ) : projects && projects.length > 0 ? (
-      <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
-        <div className="table-scroll">
-          <table data-testid="project-list">
-            <thead>
-              <tr>
-                <th scope="col">Project key</th>
-                <th scope="col">Name</th>
-                <th scope="col">Stage & evidence progress</th>
-                <th scope="col">Host country</th>
-                <th scope="col">Minerals</th>
-                <th scope="col">Reference</th>
-                <th scope="col">Lifecycle</th>
-                <th scope="col">Project Registry</th>
-                <th scope="col">Readiness</th>
-                <th scope="col">Weakest grade</th>
-                <th scope="col">Stale / suspended</th>
-                <th scope="col">Owner</th>
-                <th scope="col">Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {projects.map((project) => (
-                <tr key={project.id}>
-                  <td>
-                    <Link href={`/w/projects/${project.id}`} className="mono">
-                      {project.projectKey}
-                    </Link>
-                  </td>
-                  <td>{project.name}</td>
-                  <td>{token && session?.actions?.includes("readiness.read") ? <WorkspaceProjectProgress key={`${session.tenantId}:${session.subjectId}:${project.id}`} token={token} projectId={project.id} savedSummary={project.stageProgress} /> : <><span className="meta">Progress requires assessment access</span><ProjectStageRoadmap /></>}</td>
-                  <td className="mono">{project.hostCountryIso3}</td>
-                  <td>{project.minerals.join(", ") || "—"}</td>
-                  <td>{REFERENCE_LABEL[project.referenceStatus]}</td>
-                  <td>
-                    <LifecycleBadge state={project.lifecycleState} />
-                  </td>
-                  <td className="mono">
-                    {project.projectRegistryStatus === "none"
-                      ? "No record"
-                      : project.projectRegistryStatus}
-                  </td>
-                  <td>
-                    {project.readinessSummary ? (
-                      <ReadinessBadge status={project.readinessSummary} />
-                    ) : (
-                      // Keep "not yet evaluated" from looking the same as "passed".
-                      <span className="meta">Not assessed</span>
-                    )}
-                  </td>
-                  <td>
-                    {project.weakestGrade ? (
-                      <GradeBadge grade={project.weakestGrade} />
-                    ) : (
-                      <span className="meta">No claims</span>
-                    )}
-                  </td>
-                  <td>
-                    {project.lifecycleState === "suspended" ? "Suspended" : null}
-                    {project.openStaleSignals > 0 ? (
-                      <div>{project.openStaleSignals} stale signal(s)</div>
-                    ) : project.lifecycleState === "suspended" ? null : (
-                      <span className="meta">—</span>
-                    )}
-                  </td>
-                  <td>{project.ownerOrganizationName}</td>
-                  <td className="mono meta">{project.updatedAt.slice(0, 10)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <table className="workspace-project-list" data-testid="project-list">
+        <thead><tr>
+          <th scope="col">Project</th>
+          <th scope="col">Evidence stage</th>
+          <th scope="col">Lifecycle</th>
+          <th scope="col">Owner</th>
+        </tr></thead>
+        <tbody>
+          {projects.map((project) => (
+            <tr key={project.id}>
+              <td>
+                <strong>{project.name}</strong>
+                <Link href={`/w/projects/${project.id}`} className="mono">{project.projectKey}</Link>
+              </td>
+              <td>
+                <span className="project-mobile-label" aria-hidden="true">Evidence stage</span>
+                {token && can(session, "readiness.read")
+                  ? <WorkspaceProjectProgress key={`${session?.tenantId}:${session?.subjectId}:${project.id}`} token={token} projectId={project.id} savedSummary={project.stageProgress} />
+                  : "Assessment access required"}
+              </td>
+              <td><span className="project-mobile-label" aria-hidden="true">Lifecycle</span><LifecycleBadge state={project.lifecycleState} /></td>
+              <td><span className="project-mobile-label" aria-hidden="true">Owner</span>{project.ownerOrganizationName}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     ) : projects ? (
       <div className="panel">
         <p className="sub" style={{ margin: 0 }}>

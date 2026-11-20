@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { readableStage } from "@/lib/stages";
 import Link from "next/link";
 import type { ProjectStageProgress } from "@mpc/api-contract";
 import { type LedgerSummary } from "@/lib/evidence-ledger-api";
@@ -33,7 +34,9 @@ function ProgressRow({ token, projectId, savedSummary }: Parameters<typeof Works
   }, [token, projectId, attempt]);
   const displayed = summary ?? savedSummary;
   const retry = state === "limited" || state === "failed";
-  return <div>
+  const stage = displayed?.stages.find(entry => entry.gateId === displayed.currentStage);
+  return <details>
+    <summary>{stage ? readableStage(stage.gateId) : displayed ? "No stage established" : "Not assessed"}</summary>
     {displayed ? <>
       <span className="meta">{summary ? "Last requested assessment · may be outdated" : "Saved assessment · may be outdated"}</span>
       <ProjectProgress summary={displayed} />
@@ -46,5 +49,5 @@ function ProgressRow({ token, projectId, savedSummary }: Parameters<typeof Works
       setAttempt(value => value + 1);
     }}>{retry ? "Retry progress" : displayed ? "Refresh progress" : "Load progress"}</button>{" "}
     <Link href={`/w/projects/${encodeURIComponent(projectId)}/requirements`}>Inspect requirements →</Link>
-  </div>;
+  </details>;
 }

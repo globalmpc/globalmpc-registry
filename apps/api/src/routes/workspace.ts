@@ -183,6 +183,7 @@ export async function registerWorkspaceRoutes(
             WHERE a.tenant_id = ${tenantId}
               AND a.subject_id = ${subjectId}
               AND a.revoked_at IS NULL
+              AND ${visible === "all" ? tx`TRUE` : tx`c.project_id = ANY(${visible as string[]}::uuid[])`}
               -- A finished case is not a to-do. registered/declined/cancelled/
               -- superseded/revoked leave nothing for the reviewer to act on.
               AND c.state IN ('draft', 'assigned', 'in_review', 'changes_requested', 'signed')
@@ -235,7 +236,14 @@ export async function registerWorkspaceRoutes(
         ORDER BY g.requested_at
       `;
 
+      const [{ has_projects }] = await tx<[{ has_projects: boolean }]>`
+        SELECT EXISTS (
+          SELECT 1 FROM core.projects p WHERE p.tenant_id = ${tenantId}
+            AND ${visible === "all" ? tx`TRUE` : tx`p.id = ANY(${visible as string[]}::uuid[])`}
+        ) AS has_projects
+      `;
       return {
+        hasVisibleProjects: has_projects,
         assignedToMe: assigned.map((row) => ({
           caseId: row.case_id,
           projectId: row.project_id,

@@ -27,6 +27,7 @@ test("a tall project list bounds progress reads and remains usable after rate li
     await expect(page.getByTestId("project-list").getByRole("row").filter({hasText:prefix})).toHaveCount(6);
     expect(requests).toBe(0);
     const rows=page.getByTestId("project-list").getByRole("row").filter({hasText:prefix});
+    for(let i=0;i<6;i++) await rows.nth(i).locator("summary").click();
     await expect(rows.getByText("No saved assessment available")).toHaveCount(6);
     for(let i=0;i<6;i++) await rows.nth(i).getByRole("button",{name:"Load progress"}).click();
     await expect.poll(()=>requests).toBeGreaterThanOrEqual(2);

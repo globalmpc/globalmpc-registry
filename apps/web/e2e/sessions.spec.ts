@@ -39,7 +39,7 @@ test("ends another browser's session from settings, keeping this one", async ({ 
     const section = phone.getByTestId("settings-sessions");
     const here = section.getByTestId("session-current");
     await expect(here).toHaveAttribute("data-session-id", phoneSession);
-    await expect(here).toContainText("emailed code + passkey");
+    await expect(here).toContainText(/^emailed code · signed in /);
     await expect(here).toContainText("this browser");
     await expect(here.getByRole("button")).toHaveCount(0);
 

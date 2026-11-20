@@ -149,8 +149,8 @@ export function canActForOrganization(
  * party bindings that hold it.
  */
 export function actableOrganizations(session: Session, action: string): "all" | readonly string[] {
-  const bindings = usableBindings(session, action);
-  if (bindings.some(binding => binding.projectId === null && isTenantWideBinding(binding))) return "all";
+  const bindings = usableBindings(session, action).filter(binding => binding.projectId === null);
+  if (bindings.some(isTenantWideBinding)) return "all";
   return [
     ...new Set(
       bindings.flatMap((binding) => (binding.scopeKind === "none" || binding.organizationId === null ? [] : [binding.organizationId])),

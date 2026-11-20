@@ -56,7 +56,7 @@ describeDb("public development wallets off the local chain", () => {
 
     it("binds a freshly generated address on 5611", async () => {
       const fresh = newAccount();
-      const response = await bindWalletByProof(testnet, account, fresh.account);
+      const response = await bindWalletByProof(testnet, account, fresh.account, "rotation", fx.stewardA.account);
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json()).toMatchObject({ walletAddress: fresh.address, chainId: 5611, boundVia: "proof" });
     });
