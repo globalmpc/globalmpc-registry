@@ -166,7 +166,7 @@ describeDb("platform administration", () => {
     expect(response.json().details.requiredRoles).toContain("administrator");
   });
 
-  it("does not let the proposer approve their own proposal", async () => {
+  it("lets the proposer approve their own proposal", async () => {
     const subject = (
       await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "grant target A" })
     ).json();
@@ -187,51 +187,8 @@ describeDb("platform administration", () => {
       `"${grant.version}"`,
     );
 
-    expect(self.statusCode).toBe(422);
-    expect(self.json().code).toBe("ROLE_GRANT_SELF_APPROVAL");
-  });
-
-  it("does not let the target of a proposal approve their own grant", async () => {
-    // Operator A proposes a role for operator B. If B could approve it, the "second person"
-    // would be the beneficiary — one person deciding what they receive.
-    const grant = (
-      await post(operatorAToken, "/api/v1/admin/role-grants", {
-        subjectId: operatorSubjectB,
-        role: "administrator",
-        reason: "audit duty for the second operator",
-      })
-    ).json();
-    expect(grant.state).toBe("pending");
-
-    const self = await post(
-      operatorBToken,
-      `/api/v1/admin/role-grants/${grant.id}/decision`,
-      { decision: "approve", reason: "this is my own grant" },
-      `"${grant.version}"`,
-    );
-
-    expect(self.statusCode).toBe(422);
-    expect(self.json().code).toBe("ROLE_GRANT_SELF_TARGET");
-  });
-
-  it("the DB refuses a grant decided by its own target", async () => {
-    const grant = (
-      await post(operatorAToken, "/api/v1/admin/role-grants", {
-        subjectId: operatorSubjectB,
-        role: "reviewer",
-        reason: "evidence duty for the second operator",
-      })
-    ).json();
-    expect(grant.state).toBe("pending");
-
-    await expect(
-      fx.sql`
-        UPDATE core.role_grant_requests
-        SET state = 'rejected', decided_by_subject_id = ${operatorSubjectB}, decided_at = now(),
-            decision_reason = 'bypassing the route'
-        WHERE id = ${grant.id}
-      `,
-    ).rejects.toThrow(/role_grant_not_self_target/);
+    expect(self.statusCode, self.body).toBe(200);
+    expect(self.json().state).toBe("approved");
   });
 
   /**
@@ -580,6 +537,13 @@ describeDb("platform administration", () => {
         secondFactor: "totp",
       });
       const replacement = newAccount();
+      const requested = await post(again, "/api/v1/auth/wallet-recoveries", { walletAddress: replacement.address });
+      expect(requested.statusCode, requested.body).toBe(200);
+      const { id } = requested.json();
+      const [mail] = await fx.sql`SELECT params FROM core.email_outbox WHERE template='wallet_recovery'
+        AND recipient=(SELECT email FROM core.subjects WHERE id=${subject.id}) AND params->>'address'=${replacement.address}`;
+      expect((await post(again, "/api/v1/auth/wallet-recoveries/confirm", { id, proof: mail!.params.code })).statusCode).toBe(200);
+      expect((await post(operatorAToken, "/api/v1/admin/wallet-recoveries/approve", { id })).statusCode).toBe(200);
       const rebound = await bindWalletByProof(app, again, replacement.account);
       expect(rebound.statusCode, rebound.body).toBe(200);
       const row = await walletRow(subject.id);

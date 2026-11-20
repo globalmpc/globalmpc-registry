@@ -50,7 +50,7 @@ function routes(): Record<string, unknown> {
 async function mount(data = routes()) {
   const calls = mockHttp(data);
   render(<Admin />);
-  await waitFor(() => expect(calls.filter((call) => call.method === "GET")).toHaveLength(10));
+  await waitFor(() => expect(calls.filter((call) => call.method === "GET")).toHaveLength(9));
   return calls;
 }
 const change = (label: string, value: string) =>
@@ -126,10 +126,13 @@ describe("account administration (WP6)", () => {
     expect(cells.map((cell) => cell.textContent)).toEqual(["email, Google", "no way to sign in", "—"]);
     expect(screen.getByTestId("subject-you").textContent).toBe("you");
     expect(screen.getByTestId("admin-locked").textContent).toContain("1 account cannot sign in");
-    expect(screen.getByTestId("admin-locked").textContent).toContain("Lost has no email address");
+    const notice = screen.getByTestId("admin-locked");
+    expect(notice.querySelector("summary")?.textContent).toBe("+1 alert");
+    expect(notice.hasAttribute("open")).toBe(false);
+    expect(notice.textContent).not.toContain("Lost");
   });
 
-  it("invites one address into one organisation with an idempotency key and no role", async () => {
+  it("invites one address into one organisation with an idempotency key and organisation member access", async () => {
     const data = routes();
     data["GET /api/v1/organizations"] = { items: [{ id: "org-1", legalName: "Acme", jurisdiction: "KR" }] };
     data["POST /api/v1/admin/invitations"] = {};
@@ -144,6 +147,7 @@ describe("account administration (WP6)", () => {
       expect(firstPost(calls, "/admin/invitations")?.body).toEqual({
         email: "new@example.test",
         organizationId: "org-1",
+        access: { role: "project_member", identityBasis: expect.stringContaining("Organisation membership") },
       }),
     );
     expect(firstPost(calls, "/admin/invitations")?.headers.get("idempotency-key")).toBeTruthy();
@@ -186,13 +190,12 @@ describe("account administration (WP6)", () => {
     expect(firstPost(calls, "/revoke")?.headers.get("if-match")).toBe('"4"');
   });
 
-  it("offers the proposer of an email change no decision", async () => {
+  it("offers the email-change proposer a decision", async () => {
     const data = routes();
     data["GET /api/v1/admin/subjects"] = { items: [person] };
     data["GET /api/v1/admin/email-changes"] = { items: [pendingChange("admin")] };
     await mount(data);
-    await screen.findByText("waiting for another administrator");
-    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(await screen.findByRole("button", { name: "Approve" })).toBeDefined();
   });
 
   it("decides another administrator's email change with a reason and the current version", async () => {
@@ -211,23 +214,19 @@ describe("account administration (WP6)", () => {
     expect(firstPost(calls, "/decision")?.headers.get("if-match")).toBe('"2"');
   });
 
-  it("proposes an email change and a second-factor reset for someone else, never oneself", async () => {
+  it("offers self and other accounts as email change targets", async () => {
     const data = routes();
     data["GET /api/v1/admin/subjects"] = { items: [{ ...person, id: "admin", displayName: "Me" }, person] };
     data["POST /api/v1/admin/email-changes"] = {};
-    data["POST /api/v1/admin/mfa-resets"] = {};
     const calls = await mount(data);
     await screen.findAllByRole("option", { name: "Reviewer" });
-    expect(screen.queryByRole("option", { name: "Me" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Me" })).toBeDefined();
     change("New address", "reviewer@example.test");
-    const [changePerson, resetPerson] = screen.getAllByLabelText("Person");
+    const [changePerson] = screen.getAllByLabelText("Person");
     fireEvent.change(changePerson!, { target: { value: "person" } });
-    fireEvent.change(resetPerson!, { target: { value: "person" } });
-    const [changeReason, resetReason] = screen.getAllByLabelText("Reason");
+    const [changeReason] = screen.getAllByLabelText("Reason");
     fireEvent.change(changeReason!, { target: { value: "Married" } });
-    fireEvent.change(resetReason!, { target: { value: "Lost every factor" } });
     const proposeChange = screen.getByRole("button", { name: "Propose email change" });
-    const proposeReset = screen.getByRole("button", { name: "Propose factor reset" });
     fireEvent.click(proposeChange);
     await waitFor(() =>
       expect(firstPost(calls, "/admin/email-changes")?.body).toEqual({
@@ -235,11 +234,6 @@ describe("account administration (WP6)", () => {
         newEmail: "reviewer@example.test",
         reason: "Married",
       }),
-    );
-    await waitFor(() => expect(proposeReset.hasAttribute("disabled")).toBe(false));
-    fireEvent.click(proposeReset);
-    await waitFor(() =>
-      expect(firstPost(calls, "/admin/mfa-resets")?.body).toEqual({ subjectId: "person", reason: "Lost every factor" }),
     );
   });
 
@@ -267,19 +261,6 @@ describe("account administration (WP6)", () => {
     data["GET /api/v1/admin/email-changes"] = {
       items: [{ ...pendingChange("other"), state: "expired", closedReason: "subject_suspended" }],
     };
-    data["GET /api/v1/admin/mfa-resets"] = {
-      items: [
-        // Approved, with a window still ahead — but its approver's suspension closed it.
-        {
-          ...pendingReset,
-          id: "closed",
-          state: "approved",
-          enrolmentWindowUntil: "2030-01-01T10:00:00Z",
-          closedReason: "approver_suspended",
-        },
-        { ...pendingReset, id: "open", state: "approved", enrolmentWindowUntil: "2030-01-02T10:00:00Z" },
-      ],
-    };
     data["GET /api/v1/admin/subject-suspensions"] = {
       items: [
         {
@@ -302,41 +283,9 @@ describe("account administration (WP6)", () => {
     expect(emailChange.textContent).toContain("Closed — person suspended");
     expect(emailChange.textContent).not.toContain("expired");
 
-    const resets = screen.getByTestId("mfa-reset-list");
-    const [closedReset, openReset] = [...resets.querySelectorAll("li")];
-    expect(closedReset!.textContent).toContain("Closed — approver suspended");
-    expect(closedReset!.textContent).not.toContain("approved");
-    expect(closedReset!.textContent).not.toContain("may enrol until");
-    // The same shape without a closure is still an open window.
-    expect(openReset!.textContent).toContain("approved");
-    expect(openReset!.textContent).toContain("may enrol until 2030-01-02 10:00");
-
     const suspension = screen.getByTestId("suspension-list");
     expect(suspension.textContent).toContain("Closed — proposer suspended");
     expect(suspension.textContent).not.toContain("may enrol until");
-  });
-
-  it("states the two-person separation refusal in one sentence", async () => {
-    const data = routes();
-    data["GET /api/v1/admin/subjects"] = { items: [person] };
-    data["GET /api/v1/admin/mfa-resets"] = {
-      items: [
-        { ...pendingReset, state: "approved", id: "old", enrolmentWindowUntil: "2026-11-02T10:00:00Z" },
-        pendingReset,
-      ],
-    };
-    data["POST /api/v1/admin/mfa-resets/rst/decision"] = () =>
-      Response.json(
-        { code: "ACCOUNT_RECOVERY_SEPARATION_REQUIRED", message: "separation", requestId: "r" },
-        { status: 409 },
-      );
-    await mount(data);
-    expect((await screen.findByTestId("mfa-reset-list")).textContent).toContain("may enrol until 2026-11-02 10:00");
-    change("Decision reason", "Verified by phone");
-    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
-    expect((await screen.findByTestId("account-admin-error")).textContent).toContain(
-      "Another administrator has to handle this one.",
-    );
   });
 
   describe("suspension (AUTH-06)", () => {
@@ -381,14 +330,13 @@ describe("account administration (WP6)", () => {
       expect(panel.getByRole("option", { name: "Reviewer (suspended)" })).toBeTruthy();
     });
 
-    it("offers the proposer no decision", async () => {
+    it("offers the suspension proposer a decision", async () => {
       const data = routes();
       data["GET /api/v1/admin/subjects"] = { items: [person] };
       data["GET /api/v1/admin/subject-suspensions"] = { items: [pendingSuspension("admin")] };
       await mount(data);
       const list = within(await screen.findByTestId("suspension-list"));
-      expect(list.getByText("waiting for another administrator")).toBeTruthy();
-      expect(list.queryByRole("button", { name: "Approve" })).toBeNull();
+      expect(list.getByRole("button", { name: "Approve" })).toBeDefined();
     });
 
     it("decides another administrator's proposal with a reason and the current version", async () => {
@@ -431,7 +379,7 @@ describe("account administration (WP6)", () => {
       await mount(data);
       const list = await screen.findByTestId("suspension-list");
       expect(list.textContent).toContain("reinstate · approved");
-      expect(list.textContent).toContain("may enrol until 2026-11-03 10:00");
+      expect(list.textContent).not.toContain("may enrol until");
       expect(within(list).queryByRole("button", { name: "Approve" })).toBeNull();
     });
 

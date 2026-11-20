@@ -159,10 +159,6 @@ export async function registerEmailChangeRoutes(
           switch (created!.status) {
             case "subject_invalid":
               throw notFound("Subject not found");
-            case "self":
-              throw unprocessable("EMAIL_CHANGE_SELF", "Nobody can change their own address", {
-                hint: "Another admin proposes it, and a third person decides",
-              });
             case "already_open":
               throw conflict("EMAIL_CHANGE_ALREADY_OPEN", "This person already has an open email change");
             case "no_address":
@@ -250,14 +246,6 @@ export async function registerEmailChangeRoutes(
               break;
             case "not_pending":
               throw unprocessable("EMAIL_CHANGE_ALREADY_DECIDED", "This request is already decided");
-            case "self_approval":
-              throw unprocessable("EMAIL_CHANGE_SELF_APPROVAL", "The proposer cannot decide their own proposal", {
-                hint: "Another admin holder decides",
-              });
-            case "self_target":
-              throw unprocessable("EMAIL_CHANGE_SELF_TARGET", "The person whose address changes cannot decide it", {
-                hint: "An admin holder other than the proposer and the person decides",
-              });
             case "separation_required":
               throw recoverySeparationRequired();
             case "subject_suspended":
@@ -336,7 +324,7 @@ export async function registerEmailChangeRoutes(
         >`
           SELECT * FROM core.complete_email_change(
             ${email}, ${keys.codeHmac("email_change", email, parsed.data.code)}, ${emailKey},
-            ${keys.ipKey(request.clientIp)}
+            ${keys.ipKey(request.clientIp)}, ${parsed.data.ownerCode}
           )
         `;
         const result = completed!;

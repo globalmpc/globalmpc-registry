@@ -5,7 +5,6 @@ import "./reference-layout.css";
 import { SessionProvider } from "@/lib/session";
 import { PageFrame } from "@/components/PageFrame";
 import { TopBar } from "@/components/TopBar";
-import { StepUpProvider } from "@/components/auth/StepUp";
 
 export const metadata: Metadata = {
   title: "MPC Registry Workspace",
@@ -26,7 +25,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <SessionProvider>
-          <StepUpProvider>
           <div className="shell">
             <a className="skip-link" href="#main">Skip to main content</a>
             <TopBar />
@@ -38,7 +36,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             */}
             <PublicFooter />
           </div>
-          </StepUpProvider>
         </SessionProvider>
       </body>
     </html>

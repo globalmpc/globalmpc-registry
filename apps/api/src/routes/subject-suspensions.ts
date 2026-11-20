@@ -197,7 +197,6 @@ export async function registerSubjectSuspensionRoutes(app: FastifyInstance, sql:
             throw unprocessable("SUSPENSION_ALREADY_DECIDED", "The request is already decided", { state: current.state });
           }
           // The database refuses both as well; checking here says why.
-          if (current.requested_by_subject_id === session.subjectId) throw DB_REFUSALS["SUSPENSION_SELF_APPROVAL"]!();
           if (current.subject_id === session.subjectId) throw DB_REFUSALS["SUSPENSION_SELF_TARGET"]!();
 
           const approved = parsed.data.decision === "approve";

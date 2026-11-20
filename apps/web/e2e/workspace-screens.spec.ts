@@ -111,7 +111,9 @@ test.describe("My Work", () => {
     await expect(page.getByTestId("work-assigned")).toBeVisible();
     await expect(page.getByTestId("work-waiting")).toBeVisible();
     await expect(page.getByTestId("work-unassigned")).toBeVisible();
-    await expect(page.getByTestId("work-unassigned")).toContainText(/nobody has picked/i);
+    await expect(page.getByTestId("work-unassigned")).not.toHaveAttribute("open", "");
+    await page.getByTestId("work-unassigned").locator("summary").click();
+    await expect(page.getByTestId("work-unassigned")).toHaveAttribute("open", "");
   });
 });
 
@@ -196,6 +198,7 @@ test.describe("notification sinks", () => {
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
+    await page.locator("summary").filter({ hasText: /^Settings$/ }).click();
     const sinks = page.getByTestId("admin-sinks");
     await expect(sinks).toContainText(/Email is deliberately not offered/);
     await expect(sinks).toContainText(/A reference, not the secret itself/);

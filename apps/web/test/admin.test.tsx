@@ -44,7 +44,7 @@ function routes(): Record<string, unknown> {
       ]),
   );
 }
-const READS = 10;
+const READS = 9;
 async function mount(data = routes()) {
   const calls = mockHttp(data);
   render(<Admin />);
@@ -161,7 +161,7 @@ describe("administration safety workflows", () => {
     expect(calls.some((call) => call.url.endsWith("/decision"))).toBe(false);
   });
 
-  it("does not offer self-approval of a role proposal", async () => {
+  it("offers self-approval of a role proposal", async () => {
     const data = routes();
     data["GET /api/v1/admin/role-grants"] = {
       items: [
@@ -178,8 +178,7 @@ describe("administration safety workflows", () => {
     };
     await mount(data);
     const table = await screen.findByTestId("admin-role-grants");
-    expect(within(table).queryByRole("button", { name: "Approve" })).toBeNull();
-    expect(within(table).getByText(/someone else decides/)).toBeDefined();
+    expect(within(table).getByRole("button", { name: "Approve" })).toBeDefined();
   });
 
   it("lists no grant or revocation a suspension closed as waiting on a decision", async () => {

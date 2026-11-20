@@ -1,4 +1,4 @@
-import { DEMO_DOCUMENTS } from "./dev-demo-documents.js";
+import { DEMO_DOCUMENTS, demoDocumentTitle } from "./dev-demo-documents.js";
 import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
@@ -31,16 +31,16 @@ export async function ensureDemoCoverageDefinitions(
   }
   const rich = scenario.startsWith("DOCUMENTS-");
   const catalog = { id: fixtureId("coverage:catalog"), claimType: `synthetic_dev_demo_${scenario.toLowerCase().replaceAll("-", "_")}_licence` };
-  const displayName = rich ? "Exploration licence" : `SYNTHETIC DEMO ${scenario.toLowerCase()} licence`;
+  const displayName = "Exploration licence";
   const effectiveFrom = new Date("2020-01-01T00:00:00Z");
   const catalogs = [{ ...catalog, gate: "exploration", label: displayName }];
   if (rich) {
     for (const [key, label, gate] of DEMO_DOCUMENTS.slice(1)) {
-      catalogs.push({ id: fixtureId(`coverage:catalog:${key}`), claimType: `${catalog.claimType}_${key}`, gate, label });
+      catalogs.push({ id: fixtureId(`coverage:catalog:${key}`), claimType: `${catalog.claimType}_${key}`, gate, label: demoDocumentTitle(scenario, key, label) });
     }
   }
   for (const item of catalogs) {
-    await ensureDemoClaimType(tx, tenant, project, proposer, approver, item, effectiveFrom, limitation);
+    item.label = await ensureDemoClaimType(tx, tenant, project, proposer, approver, item, effectiveFrom, limitation);
   }
   const gates = ["exploration", "resource_defined", "feasibility", "permitted", "production"];
   for (const [index, gate] of (completedStages === undefined ? gates.slice(0, 1) : gates).entries()) {
@@ -80,12 +80,14 @@ async function ensureDemoClaimType(
   if (existing) {
     if (existing.project_id !== project || existing.tenant_id !== tenant || existing.claim_type !== item.claimType ||
       !isDeepStrictEqual(existing.definition, definition)) throw new Error("Coverage catalog identity collision");
-    return;
+    // Historical policies use the label stored with their immutable catalog version.
+    return String(existing.display_name);
   }
   await tx`INSERT INTO core.claim_types(id,tenant_id,project_id,claim_type,catalog_version,display_name,description,definition,effective_from)
     VALUES(${item.id},${tenant},${project},${item.claimType},1,${item.label},${limitation},${tx.json(definition)},${effectiveFrom})`;
   await fixtureApproval(tx, tenant, proposer, approver, "claim_type", item.claimType, item.id,
     { claimType: item.claimType, displayName: item.label, description: limitation, definition, projectId: project }, effectiveFrom, limitation);
+  return item.label;
 }
 
 async function fixtureApproval(

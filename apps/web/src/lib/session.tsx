@@ -71,7 +71,7 @@ export function isAccountSession(session: SessionInfo | null): boolean {
  * Such a session reaches only the MFA screens; the server refuses everything else (priority rule 2).
  */
 export function needsSecondFactor(session: SessionInfo | null): boolean {
-  return Boolean(session?.authenticated && (session.aal === "aal1" || session.recoveryLimited));
+  return Boolean(session?.authenticated && ((session.aal === "aal1" && (session.firstFactor !== "google" || session.googleRequiresMfa)) || session.recoveryLimited));
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {

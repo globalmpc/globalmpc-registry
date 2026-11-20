@@ -137,7 +137,6 @@ export async function signIn(_app: FastifyInstance, account: TestAccount): Promi
   }
   return issueTestSession(appConnection(), holder.tenant_id, holder.subject_id, {
     firstFactor: "email_code",
-    secondFactor: "passkey",
   });
 }
 

@@ -1,3 +1,5 @@
+import { hashProjection } from "@mpc/canonical";
+import { publicReviewLimit } from "../src/dev-demo-profiles.js";
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
@@ -34,6 +36,9 @@ describeDb("additive development fixtures", () => {
     // Table ownership must work without superuser/BYPASSRLS, as on managed Aurora.
     await fx.sql.unsafe(`CREATE ROLE ${ownerRole} NOLOGIN NOSUPERUSER NOBYPASSRLS IN ROLE postgres`);
     ownerSql = postgres(process.env["DATABASE_URL"]!, { connection: { role: ownerRole }, onnotice: () => {} });
+    const [seedRole] = await ownerSql`SELECT rolsuper,rolbypassrls,row_security_active('core.projects') AS project_rls
+      FROM pg_roles WHERE rolname=current_user`;
+    expect(seedRole).toMatchObject({rolsuper:false,rolbypassrls:false,project_rls:true});
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     const [tenant] = await fx.sql<{ slug: string }[]>`SELECT slug FROM core.tenants WHERE id=${fx.tenantA}`;
     options = { environment: "develop", chainId: "5611", tenantSlug: tenant!.slug, pollIntervalMs: 5, scanTimeoutMs: 3000 };
@@ -87,7 +92,7 @@ describeDb("additive development fixtures", () => {
     if (scannerError) throw scannerError;
     const publicResponse = await app.inject(`/api/v1/public/registries/project/${key("PUBLIC")}`);
     expect(publicResponse.statusCode).toBe(200);
-    expect(publicResponse.json().limitations).toContain(DEMO_LIMITATION);
+    expect(publicResponse.json()).toMatchObject({ projectName: "Altan Pass Copper", mineral: ["copper"], limitations: [publicReviewLimit] });
     expect(publicResponse.json().evidenceLedger.stages).toEqual(expect.arrayContaining([
       expect.objectContaining({gateId:"stage.exploration",reviewedItems:"1",requiredItems:"1"}),
     ]));
@@ -126,7 +131,7 @@ describeDb("additive development fixtures", () => {
     expect(recovered.toLowerCase()).toBe(signed!.signer_wallet_address);
     const versionBefore = await fx.sql`SELECT * FROM core.registry_entry_versions WHERE tenant_id=${fx.tenantA} ORDER BY id`;
     await fx.sql`UPDATE core.projects SET name='User edited demo' WHERE tenant_id=${fx.tenantA} AND project_key=${key("REVIEW")}`;
-    expect(await seedDevDemo(fx.sql, store, options)).toEqual({ created: [], skipped: [key("INPUT"), key("REVIEW"), key("PUBLIC")], assessed: [] });
+    expect(await seedDevDemo(fx.sql, store, options)).toEqual({ created: [], skipped: [key("INPUT"), key("REVIEW"), key("PUBLIC")], assessed: [], updatedProfiles: [] });
     const [edited] = await fx.sql`SELECT name FROM core.projects WHERE tenant_id=${fx.tenantA} AND project_key=${key("REVIEW")}`;
     expect(edited?.name).toBe("User edited demo");
     expect(await fx.sql`SELECT * FROM core.registry_entry_versions WHERE tenant_id=${fx.tenantA} ORDER BY id`).toEqual(versionBefore);
@@ -208,6 +213,35 @@ describeDb("additive development fixtures", () => {
     expect(await fx.sql`SELECT * FROM core.evidence_ledger_snapshots WHERE tenant_id=${tenant} ORDER BY id`).toEqual(snapshots);
     expect(await fx.sql`SELECT * FROM core.claims WHERE tenant_id=${tenant}`).toEqual(claimsBefore);
     expect(await fx.sql`SELECT * FROM core.projects WHERE tenant_id=${tenant} ORDER BY id`).toEqual(projectsBefore);
+    // Reproduce the original public seed, including its permanent version ID and absent ledger.
+    const publicId = ids[2]!;
+    const legacyKey = `DEMO-V1-PUBLIC-${tenant}`;
+    const versionBytes = createHash("sha256").update(`registry-dev-demo-v1:${tenant}:PUBLIC:version`).digest("hex");
+    const versionId = `${versionBytes.slice(0,8)}-${versionBytes.slice(8,12)}-4${versionBytes.slice(13,16)}-8${versionBytes.slice(17,20)}-${versionBytes.slice(20,32)}`;
+    const original = { stableId: publicId, projectKey: legacyKey, projectName: "SYNTHETIC DEMO — public",
+      hostCountry: "MNG", mineral: ["copper"], status: "registered", version: "1", asOf: "2026-01-02T00:00:00.000Z",
+      sourceAge: null, staleStatus: "unknown", limitations: [DEMO_LIMITATION], legalEffect: "none", disclaimerCodes: ["VERIFICATION_IS_NOT_GUARANTEE"] };
+    const originalHash = hashProjection(original);
+    const entryId = crypto.randomUUID();
+    await fx.sql`UPDATE core.projects SET name=${original.projectName},version=2,lifecycle_state='registered' WHERE id=${publicId}`;
+    await fx.sql`INSERT INTO core.registry_entries(id,tenant_id,registry_type,subject_id,public_key) VALUES(${entryId},${tenant},'project',${publicId},${legacyKey})`;
+    await fx.sql`INSERT INTO core.registry_entry_versions(id,tenant_id,entry_id,version,status,public_projection,content_hash,source_snapshot_hash,policy_version,schema_version,published_at)
+      VALUES(${versionId},${tenant},${entryId},1,'published',${fx.sql.json(original)},${originalHash},${originalHash},'synthetic-demo-v1','project-registry-1',now())`;
+    await fx.sql`INSERT INTO audit.events(tenant_id,project_id,command,resource_type,resource_id,reason,correlation_id)
+      VALUES(${tenant},${publicId},'dev_demo.synthetic_publication','project',${publicId},${DEMO_LIMITATION},${crypto.randomUUID()})`;
+    expect((await seedDevDemo(ownerSql,store,legacyOptions)).updatedProfiles).toEqual([legacyKey]);
+    expect((await seedDevDemo(ownerSql,store,legacyOptions)).updatedProfiles).toEqual([]);
+    const versions = await fx.sql`SELECT * FROM core.registry_entry_versions WHERE entry_id=${entryId} ORDER BY version`;
+    expect(versions).toHaveLength(2);
+    expect(versions[0]).toMatchObject({id:versionId, content_hash:originalHash, public_projection:original, superseded_by_id:versions[1]!.id});
+    expect(versions[1]).toMatchObject({previous_version_id:versionId,source_snapshot_hash:originalHash,version:2,public_projection:{
+      asOf:original.asOf, projectName:"Altan Pass Copper", projectKey:legacyKey}});
+    expect(versions[1]!.public_projection).not.toHaveProperty("evidenceLedger");
+    expect(hashProjection(versions[1]!.public_projection)).toBe(versions[1]!.content_hash);
+    const upgraded = await app.inject(`/api/v1/public/registries/project/${legacyKey}`);
+    expect(upgraded.json()).toMatchObject({projectName:"Altan Pass Copper",version:"2",history:[{entryVersionId:versionId}]});
+    expect((await app.inject(`/api/v1/public/proofs/${versions[1]!.id}`)).statusCode).toBe(404);
+
     // Reclassifying a demo cannot turn its synthetic requirements into real project authority.
     await expect(fx.sql`UPDATE core.projects SET reference_status='none' WHERE id=${ids[0]!}`).rejects.toThrow("synthetic_test_project is fixed at creation");
 
@@ -223,7 +257,7 @@ describeDb("additive development fixtures", () => {
     const [preserved] = await fx.sql`SELECT name FROM core.projects WHERE id=${project!.id}`;
     expect(preserved?.name).toBe("User changed partial demo");
     // Start the second counterexample with the original untouched project metadata.
-    await fx.sql`UPDATE core.projects SET name='SYNTHETIC DEMO — review' WHERE id=${project!.id}`;
+    await fx.sql`UPDATE core.projects SET name='Khuren Valley Graphite' WHERE id=${project!.id}`;
     await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate)
       VALUES (${crypto.randomUUID()},${fx.tenantB},${project!.id},'mining_right_registration','User evidence','{}')`;
     await expect(seedDevDemo(ownerSql, store, otherOptions)).rejects.toThrow("user activity");
@@ -257,7 +291,7 @@ describeDb("additive development fixtures", () => {
       expect(r.json().evidenceLedger.stages).toHaveLength(5);
       for (const stage of r.json().evidenceLedger.stages) expect(stage.itemClaimTypes).toEqual([`synthetic_dev_demo_stage_${index+1}_licence`]);
       expect(r.json().evidenceLedger.stages.filter((x:{status:string})=>x.status==="ok")).toHaveLength(index+1);
-      expect(r.json().limitations).toContain(DEMO_LIMITATION);
+      expect(r.json().limitations).toContain(publicReviewLimit);
     }
     const versions=await fx.sql`SELECT * FROM core.registry_entry_versions WHERE tenant_id=${fx.tenantA} ORDER BY id`;
     expect(versions.filter(v=>before.some(old=>old.id===v.id))).toEqual(before);
@@ -298,8 +332,12 @@ describeDb("additive development fixtures", () => {
     for (const stage of [1,3,5]) {
       const response=await app.inject(`/api/v1/public/registries/project/${key(`DOCUMENTS-${stage}`)}`);
       expect(response.statusCode,response.body).toBe(200);
+      const names = ["Khargana Creek Gold", "Tenger Pass Copper", "Argal Valley Ironworks"];
+      expect(response.json().projectName).toBe(names[[1,3,5].indexOf(stage)]);
       const ledger=response.json().evidenceLedger;
       expect(ledger.items).toHaveLength(20);
+      const localTitle = ({1:"North tributary alluvial terrace map", 3:"Copper flotation recovery tests", 5:"Iron concentrate tonnage reconciliation"} as Record<number,string>)[stage];
+      expect(ledger.items.map((item:{displayName:string})=>item.displayName)).toContain(localTitle);
       for (const [index, assessed] of ledger.stages.entries()) {
         expect(assessed.status).toBe(index < stage ? "ok" : "gap");
         expect(String(assessed.requiredItems)).toBe("4");

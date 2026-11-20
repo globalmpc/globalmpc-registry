@@ -370,8 +370,26 @@ export async function registerOidcRoutes(
     const sessionId = randomUUID();
     const emailHash = identity.reportedEmail === null ? null : keys.emailKey(identity.reportedEmail);
 
-    if (claimed.purpose === "sign_in") {
+    // A linked identity keeps its original subject even when its email changes.
+    // Only Google's authoritative address can discover an invitation from ordinary sign-in.
+    let matchedInvitation: string | null = null;
+    if (claimed.purpose === "sign_in" && provider === "google" && identity.verifiedEmail !== null) {
+      const [match] = await sql<{ id: string | null }[]>`
+        SELECT core.match_google_workspace_invitation(
+          ${claimed.transaction_id}, ${identity.issuer}, ${identity.subjectKey}, ${identity.verifiedEmail}, ${identity.displayName ?? null}
+        ) AS id
+      `;
+      matchedInvitation = match!.id;
+    }
+
+    if (claimed.purpose === "sign_in" && matchedInvitation === null) {
       const row = await sql.begin(async (tx) => {
+        const [linked] = identity.workspaceEmail ? await tx<{ id: string | null }[]>`
+          SELECT core.link_google_workspace_account(
+            ${claimed.transaction_id}, ${identity.issuer}, ${identity.subjectKey},
+            ${identity.workspaceEmail}, ${emailHash}
+          ) AS id
+        ` : [];
         const [completed] = await tx<
           { status: string; tenant_id: string | null; subject_id: string | null; identity_id: string | null; expires_at: Date | null }[]
         >`
@@ -381,6 +399,16 @@ export async function registerOidcRoutes(
           )
         `;
         if (completed!.status === "session_created") {
+          if (linked?.id) {
+            await recordAccountAudit(tx, request, {
+              tenantId: completed!.tenant_id!,
+              subjectId: completed!.subject_id,
+              command: "auth.oidc.identity_linked",
+              resourceType: "external_identity",
+              resourceId: linked.id,
+              detail: { provider, linkedVia: "workspace_email" },
+            });
+          }
           for (const entry of [
             {
               command: "auth.oidc.signed_in",
@@ -576,7 +604,7 @@ export async function registerOidcRoutes(
       const [completed] = await tx<{ status: string; identity_id: string | null }[]>`
         SELECT * FROM core.complete_oidc_link(
           ${claimed.transaction_id}, ${ctx.session.sessionId}, ${identity.issuer}, ${identity.subjectKey},
-          ${identity.idpTenant}, ${emailHash}, ${identityId}
+          ${identity.idpTenant}, ${emailHash}, ${identityId}, ${identity.verifiedEmail}
         )
       `;
       if (completed!.status === "linked") {

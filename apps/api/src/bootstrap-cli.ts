@@ -100,8 +100,6 @@ try {
       role: input.role,
       roleGranted: result.roleGranted,
       // Null: the person already holds a passkey or TOTP, and a re-run opens nothing.
-      enrolmentWindowUntil: result.enrolmentWindowUntil?.toISOString() ?? null,
-      enrolmentWindowOpened: result.enrolmentWindowOpened,
     })}\n`,
   );
 } catch (error) {

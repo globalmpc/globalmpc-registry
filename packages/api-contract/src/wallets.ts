@@ -110,6 +110,7 @@ export const walletReplaceReason = z.enum(["rotation", "key_lost", "key_compromi
 export const bindWalletByProofRequest = z.object({
   challengeId: z.string().guid(),
   signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
+  previousWalletSignature: z.string().regex(/^0x[0-9a-fA-F]+$/).optional(),
   replaceReason: walletReplaceReason.default("rotation"),
 });
 
@@ -175,7 +176,18 @@ const self = {
   implemented: true,
 } as const;
 
+export const recoveryProof = z.object({ id: z.string().uuid(), proof: z.string().uuid() }).strict();
+export const recoveryId = z.object({ id: z.string().uuid() }).strict();
+const recoveryList = z.object({ items: z.array(z.object({
+  id: z.string().uuid(), name: z.string(), address: walletAddress, chainId: z.number(), approved: z.boolean(), confirmed: z.boolean(),
+})) });
+
 export const WALLET_ROUTES: readonly RouteDefinition[] = [
+  { ...self, method: "post", path: "/api/v1/auth/wallet-recoveries", operationId: "requestWalletRecovery", summary: "Email the account holder a recovery key for a new wallet", requestSchema: walletBindingChallengeRequest, responseSchema: recoveryId },
+  { ...self, method: "post", path: "/api/v1/auth/wallet-recoveries/confirm", operationId: "confirmWalletRecovery", summary: "Confirm recovery with the registered mailbox", requestSchema: recoveryProof, responseSchema: recoveryId },
+  { ...self, method: "get", path: "/api/v1/auth/wallet-recoveries", operationId: "getWalletRecovery", summary: "Read this session's recovery request", responseSchema: recoveryList },
+  { ...self, method: "get", path: "/api/v1/admin/wallet-recoveries", operationId: "listWalletRecoveries", summary: "List confirmed wallet recovery requests", action: "admin.wallet.manage", responseSchema: recoveryList },
+  { ...self, method: "post", path: "/api/v1/admin/wallet-recoveries/approve", operationId: "approveWalletRecovery", summary: "Authorize the confirmed replacement wallet", action: "admin.wallet.manage", requestSchema: recoveryId, responseSchema: recoveryId },
   {
     ...self,
     method: "get",

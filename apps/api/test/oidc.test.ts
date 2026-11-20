@@ -6,7 +6,9 @@ import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { generateInvitationToken } from "../src/account-crypto.js";
 import { hashToken } from "../src/plugins/session-token.js";
-import { bearer, issueTestSession, setupFixture, testEnv, type TestFixture } from "./helpers/db.js";
+import { publishProject } from "./helpers/registry.js";
+import { bindWalletByProof } from "./helpers/wallets.js";
+import { bearer, newAccount, issueTestSession, signIn, setupFixture, testEnv, type TestFixture } from "./helpers/db.js";
 import {
   MockOidcProvider,
   TEST_GOOGLE_CLIENT,
@@ -48,7 +50,7 @@ type Provider = "google" | "microsoft";
  * - sign-in works only for a linked identity; a token whose email matches an account never signs
  *   in, links or creates anything;
  * - linking needs aal2, comes back to the same session, and an identity linked anywhere gets one
- *   generic code; unlinking needs aal2, ends the sessions the identity signed in, and never
+ *   generic code; unlinking ends the sessions the identity signed in, and never
  *   removes the last way in;
  * - an invitation is accepted with a provider only for the address the provider verified;
  * - a Google / Microsoft session is aal1 (MFA_REQUIRED elsewhere), and the application role
@@ -130,7 +132,12 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
 
   /** Links an identity to `token`'s subject through the API. */
   async function link(provider: Provider, token: string, claims: Record<string, unknown> = {}) {
-    const response = await finish(provider, await startLink(provider, token), { claims }, token);
+    const { subjectId } = await sessionOf(token);
+    const [person] = await fx.sql`SELECT email FROM core.subjects WHERE id=${subjectId}`;
+    const email = person!.email as string;
+    const response = await finish(provider, await startLink(provider, token), { claims: {
+      email, email_verified: true, hd: email.split("@")[1], xms_edov: true, ...claims,
+    } }, token);
     expect(response.statusCode, response.body).toBe(200);
     return response.json() as { id: string; provider: Provider; issuer: string; idpTenant: string | null };
   }
@@ -144,7 +151,17 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
   // --- Sign-in --------------------------------------------------------------
 
   describe("sign-in", () => {
-    it("signs a linked Google identity in at aal1; everything but MFA is refused", async () => {
+    it("refuses to link a provider identity verified for another mailbox", async () => {
+      const holder = await aal2Person();
+      const sub = googleSub();
+      const response = await finish("google", await startLink("google", holder.token), {
+        claims: { sub, email: "other@gmail.com", email_verified: true },
+      }, holder.token);
+      expect(response.statusCode).toBe(409);
+      expect(await fx.sql`SELECT id FROM core.external_identities WHERE subject_key=${sub}`).toHaveLength(0);
+    });
+
+    it("signs a linked Google identity in at aal1 without granting roles", async () => {
       const holder = await aal2Person();
       const sub = googleSub();
       await link("google", holder.token, { sub });
@@ -157,10 +174,10 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
 
       const denied = await get("/api/v1/projects", body.sessionToken);
       expect(denied.statusCode).toBe(403);
-      expect(denied.json()).toMatchObject({ code: "MFA_REQUIRED", details: { requiredAal: "aal2" } });
-      expect((await get("/api/v1/auth/mfa", body.sessionToken)).statusCode).toBe(200);
-      // Not even the identity list: it says how the account can be reached.
-      expect((await get("/api/v1/auth/identities", body.sessionToken)).statusCode).toBe(403);
+      expect(denied.json().code).not.toBe("MFA_REQUIRED");
+      expect((await get("/api/v1/auth/mfa", body.sessionToken)).statusCode).toBe(404);
+      // Account holders can inspect their own sign-in identities.
+      expect((await get("/api/v1/auth/identities", body.sessionToken)).statusCode).toBe(200);
 
       const audits = await fx.sql<{ command: string; detail: Record<string, unknown> }[]>`
         SELECT command, detail FROM audit.events
@@ -169,6 +186,66 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       `;
       expect(audits.map((row) => row.command)).toEqual(["auth.oidc.signed_in", "auth.session.created"]);
       expect(audits[1]!.detail).toMatchObject({ firstFactor: "google", aal: "aal1" });
+    });
+
+    it("opens My Work and account administration with live administrator bindings", async () => {
+      const admin = await issueTestSession(fx.appSql, fx.tenantA, fx.operatorSubjectA, { firstFactor: "email_code", secondFactor: "passkey" });
+      const sub = googleSub();
+      await link("google", admin, { sub });
+      const response = await finish("google", await startSignIn("google"), { claims: { sub } });
+      const token = response.json().sessionToken;
+      expect(await sessionOf(token)).toMatchObject({ tenantId: fx.tenantA, aal: "aal1", actions: expect.arrayContaining(["project.read", "admin.read"]) });
+      expect((await get("/api/v1/my-work", token)).statusCode).toBe(200);
+      expect((await get("/api/v1/admin/subjects", token)).statusCode).toBe(200);
+      expect((await get("/api/v1/admin/invitations", token)).statusCode).toBe(200);
+      expect((await get(`/api/v1/projects/${fx.projectA}/overview`, token)).statusCode).toBe(200);
+      expect((await post("/api/v1/admin/role-grants", {}, bearer(token))).json().code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+    });
+
+    it("keeps Google workspace reads within the project binding and refuses administrator lists", async () => {
+      const sub = googleSub();
+      await link("google", await signIn(app, fx.scopedStewardA), { sub });
+      const signed = await finish("google", await startSignIn("google"), { claims: { sub } });
+      const token = signed.json().sessionToken;
+      expect((await get(`/api/v1/projects/${fx.projectA}/overview`, token)).statusCode).toBe(200);
+      expect([403, 404]).toContain((await get(`/api/v1/projects/${fx.otherProjectA}/overview`, token)).statusCode);
+      expect((await get("/api/v1/admin/subjects", token)).statusCode).toBe(403);
+    });
+
+    it("grants reviewer actions independently of historical session factors", async () => {
+      const approver = await sessionOf(await signIn(app, fx.approverA));
+      for (const secondFactor of [null, "totp"] as const) {
+        const token = await issueTestSession(fx.appSql, fx.tenantA, approver.subjectId, { firstFactor: "google", secondFactor });
+        const view = await sessionOf(token);
+        expect(view.narrowedRoles ?? []).toEqual([]);
+        expect(view.actions).toContain("verification.read");
+        expect(view.actions).toContain("attestation.sign");
+        expect((await get(`/api/v1/projects/${fx.projectA}/verification-cases`, token)).statusCode).toBe(200);
+      }
+    });
+
+    it("drops an outstanding assignment from My Work after its project binding is revoked", async () => {
+      const sub = googleSub();
+      await link("google", await signIn(app, fx.reviewerA), { sub });
+      const signed = await finish("google", await startSignIn("google"), { claims: { sub } });
+      const token = signed.json().sessionToken;
+      // This fixture normally also holds a tenant-wide reviewer binding.
+      await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${fx.reviewerSubjectA} AND project_id IS NULL`;
+      const cases: string[] = [];
+      for (const projectId of [fx.projectA, fx.otherProjectA]) {
+        const caseId = randomUUID();
+        await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,project_id,role)
+          VALUES (gen_random_uuid(),${fx.tenantA},${fx.reviewerSubjectA},${projectId},'reviewer')`;
+        await fx.sql`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id)
+          VALUES (${caseId},${fx.tenantA},${projectId},${fx.schemaA})`;
+        await fx.sql`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id)
+          VALUES (gen_random_uuid(),${fx.tenantA},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
+        cases.push(caseId);
+      }
+      const assigned = async () => (await get("/api/v1/my-work", token)).json().assignedToMe.map((row: {caseId: string}) => row.caseId);
+      expect(await assigned()).toEqual(expect.arrayContaining(cases));
+      await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${fx.reviewerSubjectA} AND project_id = ${fx.otherProjectA}`;
+      expect(await assigned()).toEqual([cases[0]]);
     });
 
     it("signs a linked Microsoft identity in by (tid, oid), whatever its sub", async () => {
@@ -191,7 +268,112 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       expect(elsewhere.json().code).toBe("OIDC_ACCOUNT_NOT_FOUND");
     });
 
-    it("never signs in, links or creates anything by email — even a verified one that an account holds", async () => {
+    it("classifies and opens an uploaded document with a development Google session", async () => {
+      const steward = await sessionOf(await signIn(app, fx.stewardA));
+      const token = await issueTestSession(fx.appSql, fx.tenantA, steward.subjectId, { firstFactor: "google", secondFactor: null });
+      const dev = await buildServer(loadConfig(oidcEnv({ DEPLOY_ENVIRONMENT: "develop", CHAIN_ID: "5611" })), fx.appSql);
+      try {
+        for (const secondFactor of ["totp", "passkey"] as const) {
+          const elevated = await issueTestSession(fx.appSql, fx.tenantA, steward.subjectId, { firstFactor: "google", secondFactor });
+          const session = await dev.inject({ url: "/api/v1/auth/session", headers: bearer(elevated) });
+          expect(session.json().actions).toContain("attestation.sign");
+          expect(session.json().actions).toContain("attestation.dispute.resolve");
+        }
+        const headers = bearer(token);
+        const project = `/api/v1/projects/${fx.projectA}`;
+        const upload = await dev.inject({ method: "POST", url: `${project}/uploads`,
+          headers: { ...headers, "idempotency-key": randomUUID() },
+          payload: { originalFilename: "permit.pdf", contentType: "application/pdf", contentBase64: Buffer.from("permit").toString("base64") } });
+        expect(upload.statusCode, upload.body).toBe(200);
+        const document = `/api/v1/uploads/${upload.json().id}`;
+        const profile = await dev.inject({ method: "PATCH", url: `${document}/document-profile`,
+          headers: { ...headers, "idempotency-key": randomUUID(), "if-match": `"${upload.json().version}"` },
+          payload: { documentType: "Mining permit" } });
+        expect(profile.statusCode, profile.body).toBe(200);
+        expect(profile.json().documentType).toBe("Mining permit");
+        for (const url of [`${project}/document-graph`, `${document}/impact-preview`]) {
+          const detail = await dev.inject({ url, headers });
+          expect(detail.statusCode, detail.body).toBe(200);
+        }
+      } finally {
+        await dev.close();
+      }
+    });
+
+    it("opens an existing administrator workspace on first and returning verified Google sign-in", async () => {
+      const holder = await aal2Person();
+      if (!holder.email) throw new Error("Expected a fixture email");
+      await fx.sql`UPDATE core.subjects SET assurance_level='high_assurance' WHERE id=${holder.id}`;
+      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
+        VALUES(${randomUUID()},${fx.tenantA},${holder.id},${fx.orgA},'administrator')`;
+      const sub = googleSub();
+      const claims = {
+        sub, email: holder.email, email_verified: true, hd: holder.email.split("@")[1],
+      };
+      const response = await finish("google", await startSignIn("google"), { claims });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({ firstFactor: "google", aal: "aal1" });
+      const identities = await fx.sql`
+        SELECT subject_id FROM core.external_identities WHERE provider = 'google' AND subject_key = ${sub}
+      `;
+      expect(identities).toHaveLength(1);
+      expect(identities[0]!.subject_id).toBe(response.json().subjectId);
+      const session = await get("/api/v1/auth/session", holder.token);
+      expect(response.json().subjectId).toBe(session.json().subjectId);
+      const dev = await buildServer(loadConfig(oidcEnv({ DEPLOY_ENVIRONMENT: "develop", CHAIN_ID: "5611" })), fx.appSql);
+      try {
+        for (const token of [response.json().sessionToken,
+          (await finish("google", await startSignIn("google"), { claims })).json().sessionToken]) {
+          const headers = bearer(token);
+          const session = await dev.inject({ url: "/api/v1/auth/session", headers });
+          expect(session.json()).toMatchObject({ aal: "aal1",
+            roleBindings: expect.arrayContaining([expect.objectContaining({ role: "administrator" })]) });
+          expect((await dev.inject({ url: "/api/v1/projects", headers })).statusCode).toBe(200);
+          expect((await get("/api/v1/auth/session", token)).json()).toMatchObject({ aal: "aal1", subjectId: holder.id });
+          expect((await get("/api/v1/projects", token)).statusCode).toBe(200);
+          const project = await dev.inject({ method: "POST", url: "/api/v1/projects",
+            headers: { ...headers, "idempotency-key": randomUUID() },
+            payload: { projectKey: randomUUID(), name: "Development project", hostCountryIso3: "MNG", ownerOrganizationId: fx.orgA } });
+          expect(project.statusCode, project.body).toBe(200);
+          const projectId = project.json().id;
+          for (const url of ["/api/v1/jurisdictions/MNG/profile", "/api/v1/claim-types"]) {
+            const data = await dev.inject({ url, headers });
+            expect(data.statusCode, data.body).toBe(200);
+          }
+          const assessment = await dev.inject({ method: "POST", url: `/api/v1/projects/${projectId}/evidence-ledger`,
+            headers: { ...headers, "idempotency-key": randomUUID() }, payload: {} });
+          expect(assessment.statusCode, assessment.body).toBe(200);
+          const publisher = await signIn(app, fx.disclosureApproverA);
+          const published = await publishProject(dev, fx.sql, { drafter: token, publisher }, projectId);
+          expect(published.statusCode, published.body).toBe(200);
+          const batch = await dev.inject({ method: "POST", url: "/api/v1/anchor-batches",
+            headers: { ...headers, "idempotency-key": randomUUID() }, payload: { projectId } });
+          expect(batch.statusCode, batch.body).toBe(200);
+          const grant = await dev.inject({ method: "POST", url: "/api/v1/admin/role-grants", headers });
+          expect(grant.json().code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+        }
+        const key = newAccount();
+        const token = response.json().sessionToken;
+        await expect(fx.appSql`INSERT INTO core.development_google_wallet_policy VALUES(true)`).rejects.toThrow(/permission denied/);
+        await fx.sql`INSERT INTO core.development_google_wallet_policy VALUES(true)`;
+        try {
+          const bound = await bindWalletByProof(dev, token, key.account);
+          expect(bound.statusCode, bound.body).toBe(200);
+          expect(bound.json()).toMatchObject({ chainId: 5611, walletAddress: key.address, boundVia: "proof" });
+          const replacement = await bindWalletByProof(dev, token, newAccount().account, "rotation");
+          expect(replacement.statusCode, replacement.body).toBe(403);
+          expect(replacement.json().code).toBe("WALLET_PREVIOUS_SIGNATURE_REQUIRED");
+          const authorized = await bindWalletByProof(dev, token, newAccount().account, "rotation", key.account);
+          expect(authorized.statusCode, authorized.body).toBe(200);
+        } finally {
+          await fx.sql`DELETE FROM core.development_google_wallet_policy`;
+        }
+      } finally {
+        await dev.close();
+      }
+    });
+
+    it("rejects email matching without Workspace authority", async () => {
       const holder = await aal2Person();
       await link("google", holder.token, { sub: googleSub() });
       // This file's tenants only: other test files create identities and people concurrently.
@@ -407,7 +589,7 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
         const holder = await aal2Person();
         const oid = randomUUID();
         const started = await open.inject({ method: "POST", url: "/api/v1/auth/oidc/microsoft/link/start", headers: bearer(holder.token), remoteAddress: freshIp() });
-        const { code, state } = idp.authorize(started.json().authorizationUrl, ms(TID_OTHER, { oid }));
+        const { code, state } = idp.authorize(started.json().authorizationUrl, ms(TID_OTHER, { oid, email: holder.email, xms_edov: true }));
         const linked = await open.inject({
           method: "POST", url: "/api/v1/auth/oidc/microsoft/link/callback", headers: bearer(holder.token), remoteAddress: freshIp(),
           payload: { state, code, browserBinding: started.json().browserBinding },
@@ -456,29 +638,28 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
   // --- Linking and unlinking --------------------------------------------------
 
   describe("linking", () => {
-    it("needs a session past its second factor", async () => {
+    it("requires an authenticated account session", async () => {
       const subject = await person();
       const aal1 = await issueTestSession(fx.appSql, fx.tenantA, subject.id, { firstFactor: "email_code" });
       const refused = await post("/api/v1/auth/oidc/google/link/start", undefined, bearer(aal1));
-      expect(refused.statusCode).toBe(403);
-      expect(refused.json().code).toBe("MFA_REQUIRED");
+      expect(refused.statusCode).toBe(200);
       const anonymous = await post("/api/v1/auth/oidc/google/link/start");
       expect(anonymous.statusCode).toBe(401);
 
-      // The database refuses a first-factor session on its own too.
+      // The database binds the new transaction to this session.
       const [session] = await fx.sql<{ id: string }[]>`SELECT id FROM core.sessions WHERE token_hash = ${hashToken(aal1)}`;
       const [started] = await withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx<{ status: string }[]>`
         SELECT status FROM core.start_oidc_transaction(
-          ${randomUUID()}, 'google', 'link', ${"a".repeat(64)}, ${"b".repeat(64)}, ${"c".repeat(64)}, ${Buffer.alloc(40)},
+          ${randomUUID()}, 'google', 'link', ${createHash("sha256").update(randomUUID()).digest("hex")}, ${"b".repeat(64)}, ${"c".repeat(64)}, ${Buffer.alloc(40)},
           'http://localhost:3000/auth/oidc/google/callback', ${session!.id}, NULL, NULL, ${randomUUID()}
         )
       `);
-      expect(started!.status).toBe("step_up_required");
+      expect(started!.status).toBe("started");
     });
 
     it("links to the session's subject and lists it", async () => {
       const holder = await aal2Person();
-      const linked = await link("google", holder.token, { sub: googleSub(), email: "shown@gmail.example" });
+      const linked = await link("google", holder.token, { sub: googleSub() });
       expect(linked).toMatchObject({ provider: "google", issuer: "https://accounts.google.com", idpTenant: null });
       const list = (await get("/api/v1/auth/identities", holder.token)).json();
       expect(list.items).toEqual([expect.objectContaining({ id: linked.id, linkedVia: "link", revokedAt: null })]);
@@ -488,14 +669,14 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       const [audit] = await fx.sql<{ detail: Record<string, unknown> }[]>`
         SELECT detail FROM audit.events WHERE command = 'auth.oidc.identity_linked' AND resource_id = ${linked.id}
       `;
-      expect(JSON.stringify(audit!.detail)).not.toContain("shown@gmail.example");
+      expect(JSON.stringify(audit!.detail)).not.toContain(holder.email!);
     });
 
     it("comes back only on the session that started it", async () => {
       const holder = await aal2Person();
       const other = await issueTestSession(fx.appSql, fx.tenantA, holder.id, { firstFactor: "email_code", secondFactor: "totp" });
       const started = await startLink("google", holder.token);
-      const { code, state } = idp.authorize(started.authorizationUrl);
+      const { code, state } = idp.authorize(started.authorizationUrl, { claims: { email: holder.email, hd: "example.com", email_verified: true } });
       const body = { state, code, browserBinding: started.browserBinding };
 
       expect((await post("/api/v1/auth/oidc/google/link/callback", body, bearer(other))).json().code).toBe("OIDC_STATE_INVALID");
@@ -543,12 +724,12 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
     it("one identity per provider per account", async () => {
       const holder = await aal2Person();
       await link("google", holder.token, { sub: googleSub() });
-      const second = await finish("google", await startLink("google", holder.token), { claims: { sub: googleSub() } }, holder.token);
+      const second = await finish("google", await startLink("google", holder.token), { claims: { sub: googleSub(), email: holder.email, hd: "example.com", email_verified: true } }, holder.token);
       expect(second.statusCode).toBe(409);
       expect(second.json().code).toBe("OIDC_PROVIDER_ALREADY_LINKED");
     });
 
-    it("refuses a link whose session lost its second factor before the callback", async () => {
+    it("refuses a link whose session was revoked before the callback", async () => {
       const holder = await aal2Person();
       const started = await startLink("google", holder.token);
       const { code, state } = idp.authorize(started.authorizationUrl);
@@ -560,17 +741,12 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
   });
 
   describe("unlinking", () => {
-    it("needs aal2, ends the sessions the identity signed in, and is audited", async () => {
+    it("ends the sessions the identity signed in, and is audited", async () => {
       const holder = await aal2Person();
       const sub = googleSub();
       const linked = await link("google", holder.token, { sub });
       const signedIn = (await finish("google", await startSignIn("google"), { claims: { sub } })).json().sessionToken as string;
       expect((await sessionOf(signedIn)).authenticated).toBe(true);
-
-      // A first-factor session cannot unlink — not even the one the identity signed in.
-      const aal1 = await post(`/api/v1/auth/identities/${linked.id}/unlink`, undefined, bearer(signedIn));
-      expect(aal1.statusCode).toBe(403);
-      expect(aal1.json().code).toBe("MFA_REQUIRED");
 
       const done = await post(`/api/v1/auth/identities/${linked.id}/unlink`, undefined, bearer(holder.token));
       expect(done.statusCode, done.body).toBe(200);
@@ -615,8 +791,8 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       const token = await issueTestSession(fx.appSql, fx.tenantA, subject.id, { firstFactor: "google", secondFactor: "recovery_code" });
       const [identity] = await fx.sql<{ id: string }[]>`SELECT id FROM core.external_identities WHERE subject_id = ${subject.id}`;
       const response = await post(`/api/v1/auth/identities/${identity!.id}/unlink`, undefined, bearer(token));
-      expect(response.statusCode).toBe(403);
-      expect(response.json().code).toBe("MFA_RECOVERY_REENROLMENT_REQUIRED");
+      expect(response.statusCode).toBe(401);
+      expect(response.json().code).toBe("UNAUTHENTICATED");
       const [session] = await fx.sql<{ id: string }[]>`SELECT id FROM core.sessions WHERE token_hash = ${hashToken(token)}`;
       await expect(
         withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`SELECT * FROM core.unlink_external_identity(${session!.id}, ${identity!.id})`),
@@ -637,6 +813,90 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
     }
     const acceptStart = (provider: Provider, token: string) =>
       startSignIn(provider, { purpose: "invitation_accept", invitationToken: token, displayName: "Invited Person" });
+
+    it("activates exactly one approved project role on first Google sign-in", async () => {
+      const admin = await signIn(app, fx.operatorA);
+      const email = `invited-reviewer-${randomUUID()}@example.com`;
+      const payload = { email, organizationId: fx.reviewOrgA, access: {
+        role: "reviewer", projectId: fx.projectA, identityBasis: "Checked company personnel record",
+      } };
+      const send = (token: string, data = payload) => post("/api/v1/admin/invitations", data,
+        { ...bearer(token), "idempotency-key": randomUUID() });
+      expect((await send(await signIn(app, fx.stewardA))).statusCode).toBe(403);
+      expect((await send(admin, { ...payload, access: { ...payload.access, projectId: randomUUID() } })).statusCode).toBe(422);
+      expect((await send(admin, { ...payload, access: { ...payload.access, role: "project_member" } })).statusCode).toBe(422);
+      const foreign = await send(await signIn(app, fx.operatorB));
+      expect(foreign.statusCode).toBe(422);
+      for (const state of ["revoked", "expired"]) {
+        const address = `${state}-${email}`;
+        const issued = await send(admin, { ...payload, email: address });
+        expect(issued.statusCode, issued.body).toBe(200);
+        const { id, version } = issued.json();
+        if (state === "revoked") {
+          const revoked = await post(`/api/v1/admin/invitations/${id}/revoke`, undefined,
+            { ...bearer(admin), "idempotency-key": randomUUID(), "if-match": `"${version}"` });
+          expect(revoked.statusCode, revoked.body).toBe(200);
+        } else {
+          await fx.sql`UPDATE core.invitations SET created_at = now() - interval '4 days',
+            expires_at = now() - interval '1 day' WHERE id = ${id}`;
+        }
+        const rejected = await finish("google", await startSignIn("google"),
+          { claims: { sub: googleSub(), email: address, email_verified: true, hd: "example.com" } });
+        expect(rejected.statusCode).toBe(401);
+        expect(await fx.sql`SELECT id FROM core.subjects WHERE email=${address}`).toHaveLength(0);
+      }
+      const created = await send(admin);
+      expect(created.statusCode, created.body).toBe(200);
+      expect(created.json()).toMatchObject({ role: "reviewer", projectId: fx.projectA, state: "pending" });
+      const claims = { sub: googleSub(), email, email_verified: true, hd: "example.com" };
+      const dev = await buildServer(loadConfig(oidcEnv({ DEPLOY_ENVIRONMENT: "develop", CHAIN_ID: "5611" })), fx.appSql);
+      try {
+        for (let visit = 0; visit < 2; visit++) {
+          const login = await finish("google", await startSignIn("google"), { claims });
+          expect(login.statusCode, login.body).toBe(200);
+          const headers = bearer(login.json().sessionToken);
+          const session = await dev.inject({ url: "/api/v1/auth/session", headers });
+          expect(session.json()).toMatchObject({ aal: "aal1", assuranceLevel: "high_assurance",
+            roleBindings: [expect.objectContaining({ role: "reviewer", organizationId: fx.reviewOrgA, projectId: fx.projectA })] });
+          expect((await dev.inject({ url: `/api/v1/projects/${fx.projectA}/overview`, headers })).statusCode).toBe(200);
+          expect([403, 404]).toContain((await dev.inject({ url: `/api/v1/projects/${fx.otherProjectA}/overview`, headers })).statusCode);
+        }
+      } finally {
+        await dev.close();
+      }
+    });
+
+    it("accepts a pending invitation from ordinary Google sign-in without the invitation token", async () => {
+      const [runtime] = await fx.appSql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
+      expect(runtime).toMatchObject({ rolsuper: false, rolbypassrls: false });
+      const invitation = await invite();
+      const sub = googleSub();
+      const claims = { sub, email: invitation.email, email_verified: true, hd: "example.com", name: "Alex Lee" };
+      const first = await finish("google", await startSignIn("google"), { claims });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json()).toMatchObject({ firstFactor: "google", roleBindings: [] });
+      expect(await fx.sql`SELECT display_name FROM core.subjects WHERE id = ${first.json().subjectId}`).toMatchObject([{ display_name: "Alex Lee" }]);
+      const again = await finish("google", await startSignIn("google"), { claims });
+      expect(again.json().subjectId).toBe(first.json().subjectId);
+      await fx.sql`UPDATE core.subjects SET created_at = now() - interval '2 days' WHERE id = ${first.json().subjectId}`;
+      const deferred = await get("/api/v1/auth/mfa", again.json().sessionToken);
+      expect(deferred.statusCode).toBe(404);
+      const stranger = await finish("google", await startSignIn("google"), { claims: { ...claims, sub: googleSub() } });
+      expect(stranger.json().code).toBe("OIDC_ACCOUNT_NOT_FOUND");
+    });
+
+    it("does not consume an invitation from an untrusted email or after revocation", async () => {
+      const invitation = await invite();
+      const claims = { sub: googleSub(), email: invitation.email, email_verified: true };
+      const untrusted = await finish("google", await startSignIn("google"), { claims });
+      expect(untrusted.json().code).toBe("OIDC_ACCOUNT_NOT_FOUND");
+      await withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
+        SELECT * FROM core.revoke_invitation(${invitation.id}, ${fx.operatorSubjectA}, 1)
+      `);
+      const revoked = await finish("google", await startSignIn("google"), { claims: { ...claims, hd: "example.com" } });
+      expect(revoked.json().code).toBe("OIDC_ACCOUNT_NOT_FOUND");
+      expect(await fx.sql`SELECT 1 FROM core.subjects WHERE email = ${invitation.email}`).toHaveLength(0);
+    });
 
     it("creates the account with no role and links the identity when Google verified the invited address", async () => {
       const invitation = await invite();
@@ -661,9 +921,7 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       expect(await fx.sql`SELECT 1 FROM core.email_challenges WHERE invitation_id = ${invitation.id} AND consumed_at IS NULL AND superseded_at IS NULL`).toHaveLength(0);
       expect(await fx.sql`SELECT 1 FROM core.email_outbox WHERE invitation_id = ${invitation.id} AND template = 'invitation_code' AND state = 'pending'`).toHaveLength(0);
 
-      // The 24 h first-enrolment window runs from the account's creation, as with a code.
-      const mfa = (await get("/api/v1/auth/mfa", body.sessionToken)).json();
-      expect(mfa.enrolment).toEqual({ passkey: "allowed", totp: "allowed" });
+      expect((await get("/api/v1/auth/mfa", body.sessionToken)).statusCode).toBe(404);
 
       // And the identity signs in afterwards.
       const again = await finish("google", await startSignIn("google"), { claims: { sub } });
@@ -827,48 +1085,6 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       for (const sub of b.subs) expect((await signInWith(sub)).statusCode).toBe(200);
     }
 
-    it("the reviewer's chain: an identity linked during brief aal2 access does not survive an MFA reset", async () => {
-      const victim = await aal2Person();
-      const attackerSub = googleSub();
-      // The attacker, holding the victim's aal2 session for a moment, links their own Google.
-      await link("google", victim.token, { sub: attackerSub });
-      await link("microsoft", victim.token, { oid: randomUUID() });
-      expect((await signInWith(attackerSub)).json().subjectId).toBe(victim.id);
-      const others = await bystanders();
-
-      const proposer = await admin("administrator");
-      const decider = await admin("administrator");
-      const proposed = await adminPost("/api/v1/admin/mfa-resets", proposer, { subjectId: victim.id, reason: "Lost every device" });
-      expect(proposed.statusCode, proposed.body).toBe(200);
-      const approved = await adminPost(
-        `/api/v1/admin/mfa-resets/${proposed.json().id}/decision`, decider,
-        { decision: "approve", reason: "Identity confirmed by call-back" }, { "if-match": `"${proposed.json().version}"` },
-      );
-      expect(approved.statusCode, approved.body).toBe(200);
-
-      // Inside the 24-hour enrolment window, the attacker's Google gets nowhere.
-      const after = await signInWith(attackerSub);
-      expect(after.statusCode).toBe(401);
-      expect(after.json().code).toBe("OIDC_ACCOUNT_NOT_FOUND");
-      expect(await live(victim.id)).toHaveLength(0);
-      const reasons = await fx.sql<{ revoked_reason: string }[]>`
-        SELECT DISTINCT revoked_reason FROM core.external_identities WHERE subject_id = ${victim.id}
-      `;
-      expect(reasons.map((row) => row.revoked_reason)).toEqual(["mfa_reset"]);
-
-      // The notice names the providers, nothing else.
-      const [notice] = await fx.sql<{ params: unknown }[]>`
-        SELECT params FROM core.email_outbox WHERE recipient = ${victim.email} AND template = 'mfa_reset_notice'
-      `;
-      expect(notice!.params).toEqual({ removedSignIns: ["google", "microsoft"] });
-      await expectBystandersUntouched(others);
-
-      // The owner, back at aal2, links the same Google account again.
-      const owner = await issueTestSession(fx.appSql, fx.tenantA, victim.id, { firstFactor: "email_code", secondFactor: "totp" });
-      await link("google", owner, { sub: attackerSub });
-      expect((await signInWith(attackerSub)).json().subjectId).toBe(victim.id);
-    });
-
     it("an email change revokes them too", async () => {
       const victim = await aal2Person();
       const attackerSub = googleSub();
@@ -893,7 +1109,8 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       const [mail] = await fx.sql<{ params: { code: string } }[]>`
         SELECT params FROM core.email_outbox WHERE recipient = ${newEmail} AND template = 'email_change_code' AND state = 'pending'
       `;
-      const completed = await post("/api/v1/auth/email-change/verify", { email: newEmail, code: mail!.params.code });
+      const [ownerMail] = await fx.sql`SELECT params FROM core.email_outbox WHERE recipient=${victim.email} AND template='email_change_owner' AND state='pending'`;
+      const completed = await post("/api/v1/auth/email-change/verify", { email: newEmail, code: mail!.params.code, ownerCode: ownerMail!.params.code });
       expect(completed.statusCode, completed.body).toBe(200);
 
       const after = await signInWith(attackerSub);
@@ -914,20 +1131,7 @@ describeDb("Google and Microsoft sign-in (WP4)", { timeout: 30_000 }, () => {
       expect((await signInWith(attackerSub)).json().subjectId).toBe(victim.id);
     });
 
-    it("a recovery with nothing linked says nothing about sign-ins", async () => {
-      const victim = await aal2Person();
-      const proposer = await admin("administrator");
-      const decider = await admin("administrator");
-      const proposed = await adminPost("/api/v1/admin/mfa-resets", proposer, { subjectId: victim.id, reason: "Lost every device" });
-      await adminPost(
-        `/api/v1/admin/mfa-resets/${proposed.json().id}/decision`, decider,
-        { decision: "approve", reason: "Identity confirmed by call-back" }, { "if-match": `"${proposed.json().version}"` },
-      );
-      const [notice] = await fx.sql<{ params: unknown }[]>`
-        SELECT params FROM core.email_outbox WHERE recipient = ${victim.email} AND template = 'mfa_reset_notice'
-      `;
-      expect(notice!.params).toEqual({ removedSignIns: [] });
-    });
+
   });
 
   // --- Database boundary --------------------------------------------------------

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isoDateTime } from "./common.js";
-import { sessionResponse } from "./auth.js";
+import { HUMAN_ROLES, sessionResponse } from "./auth.js";
 import type { ActionPolicy } from "./authorization.js";
 import type { RouteDefinition } from "./routes.js";
 
@@ -11,7 +11,7 @@ import type { RouteDefinition } from "./routes.js";
  *
  * - **No passwords** (D1). The first factor is a code mailed to the account's address.
  * - **Sign-up by invitation only** (D5). An invitation names one address, one organisation and
- *   **no roles**; roles come only through the two-person role grant.
+ *   optionally a standing human role authorized by the inviter.
  * - One address belongs to one subject in one tenant (D6). Every refusal to invite an address that
  *   is taken returns the one code `INVITATION_EMAIL_UNAVAILABLE`.
  * - Asking for a sign-in code always answers the same way, whether or not the address has an
@@ -101,7 +101,11 @@ export const authMethodsResponse = z.object({
 
 export const createInvitationRequest = z.object({
   email: emailAddress,
-  /** The organisation the person joins. Roles are **not** part of an invitation. */
+  access: z.object({
+    role: z.enum(HUMAN_ROLES),
+    projectId: z.string().guid().optional(),
+    identityBasis: z.string().trim().min(1).max(1000),
+  }).strict().refine(a => a.role !== "administrator" || !a.projectId, "Administrator access is workspace-wide").optional(),
   organizationId: z.string().guid(),
 });
 
@@ -111,6 +115,8 @@ export const invitation = z.object({
   id: z.string(),
   email: z.string(),
   organizationId: z.string(),
+  role: z.enum(HUMAN_ROLES).nullable(),
+  projectId: z.string().nullable(),
   /** `expired` once past `expiresAt`, even before anything recorded it. */
   state: invitationState,
   invitedBySubjectId: z.string(),
@@ -210,7 +216,7 @@ export const emailChangeRequestList = z.object({
 });
 
 export const emailChangeStartRequest = z.object({ email: emailAddress });
-export const emailChangeVerifyRequest = z.object({ email: emailAddress, code: emailCode });
+export const emailChangeVerifyRequest = z.object({ email: emailAddress, code: emailCode, ownerCode: z.string().uuid() });
 
 export const emailChangeVerifyResponse = z.object({
   completed: z.literal(true),
@@ -294,7 +300,7 @@ export const ACCOUNT_ROUTES: readonly RouteDefinition[] = [
     ...publicAccountRoute,
     method: "post",
     path: "/api/v1/auth/invitations/accept/verify",
-    summary: "Accept an invitation with its code — creates the account (no roles) and an aal1 session",
+    summary: "Accept an invitation with its code — creates the account with its invited access and an aal1 session",
     operationId: "verifyInvitationAcceptance",
     requestSchema: invitationAcceptVerifyRequest,
     responseSchema: sessionResponse,

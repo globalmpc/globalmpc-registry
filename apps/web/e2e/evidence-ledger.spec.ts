@@ -204,6 +204,7 @@ test.describe("evidence ledger complete journey", () => {
     const assessedStage = privateLedger.stages.find((stage: {gateId:string}) => stage.gateId === privateLedger.currentStage);
     await page.goto("/w/projects");
     const workspaceRow = page.getByTestId("project-list").getByRole("row").filter({has: page.getByRole("link", {name: projectKey, exact: true})});
+    await workspaceRow.locator("summary").click();
     await expect(workspaceRow).toContainText("Exploration");
     const projectStages = ["Exploration", "Resource definition", "Feasibility", "Permitting", "Production"];
     await expect(workspaceRow.getByRole("list", { name: "Project stages" }).getByRole("listitem").locator("strong")).toHaveText(projectStages);

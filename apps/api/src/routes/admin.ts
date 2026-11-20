@@ -723,35 +723,6 @@ export async function registerAdminRoutes(
           }
 
           /**
-           * Two-person rule — 02 §2.8.
-           *
-           * The DB CHECK blocks the same thing, but filtering here first says **why it was
-           * rejected**. A constraint violation message does not tell the user what to do next.
-           */
-          if (grant.requested_by_subject_id === session.subjectId) {
-            throw unprocessable(
-              "ROLE_GRANT_SELF_APPROVAL",
-              "The proposer cannot approve their own proposal",
-              { hint: "Another admin holder decides" },
-            );
-          }
-
-          /**
-           * The person receiving the role does not decide it either.
-           *
-           * Otherwise A proposes a role for B and B approves what B receives — two people on the
-           * record, one of whom decided their own grant. `role_grant_not_self_target` (0076)
-           * holds the same rule in the DB.
-           */
-          if (grant.subject_id === session.subjectId) {
-            throw unprocessable(
-              "ROLE_GRANT_SELF_TARGET",
-              "The subject of a proposal cannot decide it",
-              { hint: "An admin holder other than the proposer and the subject decides" },
-            );
-          }
-
-          /**
            * A second-person role is not granted to a subject whose active key was bound from
            * the admin UI.
            *

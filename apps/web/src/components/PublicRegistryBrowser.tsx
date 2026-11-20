@@ -1,5 +1,6 @@
 "use client";
 
+import { isDevelopmentFixture, projectSubtitle } from "@/lib/public-project";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -54,12 +55,13 @@ function PublicProjectRow({ item, hrefFor }: {
   const count = directoryReviewedItemCount(item.projection.evidenceLedger);
   const name = text(item.projection, "projectName");
   const title = name === "—" ? item.publicKey : name;
-  const synthetic = Array.isArray(item.projection.limitations) && item.projection.limitations.some(value => typeof value === "string" && value.includes("SYNTHETIC"));
+  const showTestBadge = !isDevelopmentFixture(item.publicKey) && Array.isArray(item.projection.limitations) &&
+    item.projection.limitations.some(value => typeof value === "string" && value.includes("SYNTHETIC"));
   return (
     <article className="public-project-row">
       <div>
-        <h2>{hrefFor ? <Link href={hrefFor(item)}>{title}</Link> : item.publicKey}{synthetic ? <span className="directory-test-badge">TEST DATA</span> : null}</h2>
-        <p className="meta">{item.publicKey} · {text(item.projection, "mineral")} · {text(item.projection, "hostCountry")}</p>
+        <h2>{hrefFor ? <Link href={hrefFor(item)}>{title}</Link> : title}{showTestBadge ? <span className="directory-test-badge">TEST DATA</span> : null}</h2>
+        <p className="meta">{projectSubtitle(item.publicKey, text(item.projection, "mineral"), text(item.projection, "hostCountry"))}</p>
       </div>
       <DirectoryEvidence value={item.projection.evidenceLedger} />
       <div className="directory-result-count">{count === null ? "— reviewed items" : `${count} reviewed ${count === 1 ? "item" : "items"}`}</div>

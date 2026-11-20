@@ -94,12 +94,12 @@ export const COPY = {
    */
   accessPending: {
     heading: "Access pending",
-    lead: "Your account is set up, but no role has been granted to it yet. An administrator grants roles, and a second administrator approves each grant, so the workspace stays closed to you until then.",
+    lead: "Your account is set up, but no role has been granted to it yet. Ask your administrator to grant access.",
     next: "What you can do now:",
     requestAccess: "Request access",
     requestAccessHint: "say which role you need and why",
     settings: "Account settings",
-    settingsHint: "sign-in methods, second factors and signing wallets",
+    settingsHint: "sign-in methods and signing wallets",
     signOut: "Sign out",
     publicRecords: "Published records stay open without a role:",
     explorer: "Explorer",
@@ -137,7 +137,7 @@ export const COPY = {
 export const AUTH_COPY = {
   signIn: {
     heading: "Sign in",
-    lead: "Sign in with the email address your invitation was sent to. There is no password.",
+    lead: "Choose a sign-in method for your Registry account.",
     emailLabel: "Email address",
     sendCode: "Send code",
     sending: "Sending…",
@@ -222,7 +222,7 @@ export const AUTH_COPY = {
   },
   settings: {
     heading: "Account settings",
-    lead: "How you sign in, your second factors and the wallets you sign with.",
+    lead: "Manage your sign-in methods, signing wallets and active sessions.",
     navLabel: "Account",
     identities: "Google and Microsoft sign-in",
     identitiesLead:
@@ -294,7 +294,7 @@ export const AUTH_COPY = {
   },
   invitation: {
     heading: "Accept your invitation",
-    lead: "Confirm the address the invitation was sent to, then set up a second factor.",
+    lead: "Sign in with the email address that received the invitation.",
     missing:
       "This page needs the link from your invitation email. Open the link from the email again; if it has expired, ask the person who invited you for a new one.",
     sendCode: "Email me a code",
@@ -304,7 +304,7 @@ export const AUTH_COPY = {
   },
   emailChange: {
     heading: "Confirm your new email address",
-    lead: "An administrator approved moving your account to a new address. Enter that address and the code sent to it.",
+    lead: "An administrator approved moving your account to a new address. Enter the confirmation key from your current mailbox and the code sent to the new mailbox.",
     done: "Your address has changed. Every session has ended; sign in with the new address.",
     confirm: "Confirm address",
   },
@@ -315,14 +315,14 @@ export const AUTH_COPY = {
   admin: {
     invitations: "Invitations",
     invitationsLead:
-      "An invitation names one address and one organisation, and no role. Roles are granted separately, by two people.",
+      "Choose the access this person will receive when they sign in with the invited email.",
     invite: "Send invitation",
     organization: "Organisation",
     revoke: "Revoke",
     noInvitations: "No invitations.",
     emailChanges: "Email address changes",
     emailChangesLead:
-      "Two administrators other than the person. Approval mails a code to the new address; completing it signs the person out everywhere and removes their linked Google / Microsoft sign-in.",
+      "Approval sends a code to the new address; completing it signs the person out everywhere and removes their linked Google / Microsoft sign-in.",
     proposeEmailChange: "Propose email change",
     proposeMfaReset: "Propose factor reset",
     person: "Person",
@@ -338,7 +338,7 @@ export const AUTH_COPY = {
     noMfaResets: "No resets.",
     suspensions: "Suspension",
     suspensionsLead:
-      "Takes a person's account out of use. Two administrators other than the person; approval signs them out everywhere, removes their passkeys, authenticator apps, recovery codes and linked sign-ins, and stops every sign-in. What they signed stays. Reinstating takes two administrators too and opens 24 hours to set up a new factor.",
+      "Takes a person's account out of use. An administrator can suspend or reinstate another account. Suspension ends their sessions and blocks sign-in. Their signed records remain available.",
     suspend: "Propose suspension",
     reinstate: "Propose reinstatement",
     noSuspensions: "No suspensions.",
@@ -360,8 +360,6 @@ export const AUTH_COPY = {
     } as Record<string, string>,
     noMethod: "no way to sign in",
     lockedTitle: (n: number) => `${n} account${n === 1 ? "" : "s"} cannot sign in`,
-    lockedBody: (names: string) =>
-      `${names} has no email address and no linked Google or Microsoft sign-in. Roles remain recorded, but there is no way in until an invitation or a bootstrap re-run gives them an address.`,
     you: "you",
   },
   errors: {
@@ -410,7 +408,7 @@ export const AUTH_COPY = {
     MFA_TOTP_ALREADY_ENROLLED: "An authenticator app is already set up.",
     MFA_ALREADY_SATISFIED: "This session has already proved a second factor.",
     OIDC_ACCOUNT_NOT_FOUND:
-      "No account is linked to this sign-in. Sign in with your email address, then link it from Account settings.",
+      "Workspace access is unavailable for this account. Ask your administrator to check your invitation or sign in with your linked account.",
     OIDC_IDENTITY_UNAVAILABLE: "This sign-in cannot be linked to your account.",
     OIDC_PROVIDER_ALREADY_LINKED: "You already have a sign-in of this provider linked. Unlink it first.",
     OIDC_EMAIL_CODE_REQUIRED: "This provider cannot confirm the invited address. Use the emailed code instead.",

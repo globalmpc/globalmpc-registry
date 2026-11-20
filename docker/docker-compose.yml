@@ -183,8 +183,6 @@ services:
       PORT: "3001"
       # The web origin: invitation links, the passkey origin and the OIDC redirect base.
       WEB_ORIGIN: http://localhost:3000
-      WEBAUTHN_RP_ID: localhost
-      WEBAUTHN_ORIGIN: http://localhost:3000
       CHAIN_ID: "31337"
       NODE_ENV: development
       # Google / Microsoft sign-in: off unless both id and secret are set for a provider.

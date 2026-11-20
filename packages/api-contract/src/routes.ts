@@ -167,7 +167,6 @@ import {
 } from "./auth.js";
 import { PROJECT_REGISTRY_ROUTES, projectListQuery } from "./project-registry.js";
 import { ACCOUNT_ROUTES } from "./accounts.js";
-import { MFA_ROUTES } from "./mfa.js";
 import { SUSPENSION_ROUTES } from "./suspensions.js";
 import { OIDC_ROUTES } from "./oidc.js";
 import { ADMIN_ASSURANCE_ROUTE, WALLET_ROUTES } from "./wallets.js";
@@ -309,7 +308,6 @@ export const ROUTES: readonly RouteDefinition[] = [
   },
   // Invitations, emailed sign-in codes and email change (WP2).
   ...ACCOUNT_ROUTES,
-  ...MFA_ROUTES,
   // Suspending and reinstating a person (AUTH-06, 0127).
   ...SUSPENSION_ROUTES,
   // Google / Microsoft sign-in, linking and unlinking (WP4).

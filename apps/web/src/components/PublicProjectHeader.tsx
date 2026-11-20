@@ -1,5 +1,6 @@
 "use client";
 
+import { projectSubtitle } from "@/lib/public-project";
 import { publicDate } from "@/lib/public-date";
 import { useState } from "react";
 import Link from "next/link";
@@ -14,7 +15,7 @@ export function PublicProjectHeader({
 }) {
   const [message, setMessage] = useState("");
   const name =
-    typeof entry?.projectName === "string" ? entry.projectName : publicKey;
+    typeof entry?.projectName === "string" ? entry.projectName : entry ? publicKey : "Project record";
   const minerals = Array.isArray(entry?.mineral)
     ? entry.mineral.filter((x) => typeof x === "string").join(", ")
     : typeof entry?.mineral === "string"
@@ -56,13 +57,7 @@ export function PublicProjectHeader({
             ) : null}
           </div>
           <p className="sub">
-            {[
-              publicKey,
-              minerals,
-              typeof entry?.hostCountry === "string" ? entry.hostCountry : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+            {projectSubtitle(publicKey, minerals, typeof entry?.hostCountry === "string" ? entry.hostCountry : null)}
           </p>
         </div>
         {entry ? (

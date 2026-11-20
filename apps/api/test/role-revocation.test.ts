@@ -192,15 +192,14 @@ describeDb("role revocation", () => {
     expect((await get(targetToken, "/api/v1/admin/subjects")).statusCode).toBe(200);
   });
 
-  it("does not let the proposer approve their own proposal", async () => {
+  it("lets the proposer approve their own proposal", async () => {
     const target = await seedTarget("self approval target");
     const revocation = await proposed(operatorAToken, target.bindingId);
 
     const self = await decide(operatorAToken, revocation, "approve");
 
-    expect(self.statusCode).toBe(422);
-    expect(self.json().code).toBe("ROLE_REVOCATION_SELF_APPROVAL");
-    expect(await revokedAt(target.bindingId)).toBeNull();
+    expect(self.statusCode, self.body).toBe(200);
+    expect(await revokedAt(target.bindingId)).not.toBeNull();
   });
 
   it("a revoked binding stops authorizing on the next request, and the row is kept", async () => {
@@ -370,7 +369,7 @@ describeDb("role revocation", () => {
       if (revoked) expect(response.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
     });
 
-    it.each(["no_login", "no_passkey", "suspended", "revoked_passkey"])("does not count a holder with %s", async (missing) => {
+    it.each(["no_login", "no_passkey", "suspended", "revoked_passkey"])("evaluates remaining administrator access with %s", async (missing) => {
       const { tenantId, orgId } = await seedTenant(missing);
       const target = await seedPerson(tenantId, orgId, "Target", "administrator");
       const other = await seedPerson(tenantId, orgId, "Unavailable", "administrator");
@@ -397,18 +396,19 @@ describeDb("role revocation", () => {
         }
       }
       const response = await propose(token, target.bindingId);
-      expect(response.statusCode).toBe(422);
-      expect(response.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
+      const unavailable = missing === "no_login" || missing === "suspended";
+      expect(response.statusCode).toBe(unavailable ? 422 : 200);
+      if (unavailable) expect(response.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
     });
 
-    it("rechecks the remaining holder's passkey at decision time", async () => {
+    it("rechecks the remaining holder's suspension at decision time", async () => {
       const { tenantId, orgId } = await seedTenant("Lost factor");
       const proposer = await seedPerson(tenantId, orgId, "Proposer", "administrator");
       const decider = await seedPerson(tenantId, orgId, "Decider", "administrator");
       const proposerToken = await signIn(app, proposer.account);
       const deciderToken = await signIn(app, decider.account);
       const revocation = await proposed(proposerToken, decider.bindingId);
-      await fx.sql`UPDATE core.webauthn_credentials SET revoked_at = now(), revoked_reason = 'holder_removed' WHERE subject_id = ${proposer.subjectId}`;
+      await fx.sql`UPDATE core.subjects SET suspended_at=now() WHERE id=${proposer.subjectId}`;
       const result = await decide(deciderToken, revocation, "approve");
       expect(result.statusCode).toBe(422);
       expect(result.json().code).toBe("ROLE_REVOCATION_LAST_APPROVER");
@@ -510,34 +510,6 @@ describeDb("role revocation", () => {
       const revocation = await proposed(operatorAToken, target.bindingId);
       return { id: revocation.id, requestedBy: fx.operatorSubjectA };
     }
-
-    it("cannot INSERT a proposal decided by its own proposer", async () => {
-      const target = await seedTarget("db insert target");
-
-      await expect(
-        fx.sql`
-          INSERT INTO core.role_revocation_requests (
-            id, tenant_id, role_binding_id, reason_code, reason, requested_by_subject_id,
-            state, decided_by_subject_id, decided_at, decision_reason
-          ) VALUES (
-            ${randomUUID()}, ${fx.tenantA}, ${target.bindingId}, 'duty_change', 'x',
-            ${fx.operatorSubjectA}, 'approved', ${fx.operatorSubjectA}, now(), 'self'
-          )
-        `,
-      ).rejects.toThrow(/role_revocation_two_person/);
-    });
-
-    it("cannot UPDATE a pending proposal into self-approval", async () => {
-      const row = await pendingRow("db update target");
-
-      await expect(
-        fx.sql`
-          UPDATE core.role_revocation_requests
-          SET state = 'approved', decided_by_subject_id = ${row.requestedBy}, decided_at = now()
-          WHERE id = ${row.id}
-        `,
-      ).rejects.toThrow(/role_revocation_two_person/);
-    });
 
     it("a decided proposal cannot be reopened or deleted", async () => {
       const row = await pendingRow("db reopen target");

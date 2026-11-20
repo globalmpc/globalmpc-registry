@@ -17,6 +17,7 @@ import {
   transitionCase,
   type AttestationDraft,
   type Claim,
+  type SessionInfo,
   type SignatureRequest,
   type AttestationDispute,
   type ReviewAssignmentOptions,
@@ -45,18 +46,54 @@ import { Address } from "@/components/Address";
  *
  * If evidence changes after a signature request, the request is void. The screen does not hide this.
  */
-export default function VerificationPage({ params }: { params: Promise<{ id: string }> }) {
+export default function VerificationPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ caseId?: string | string[] }> }) {
   const { id } = use(params);
+  const query = searchParams ? use(searchParams) : undefined;
+  const caseId = typeof query?.caseId === "string" ? query.caseId : "";
   const { token } = useSession();
-  return <VerificationWorkbench key={`${token ?? "anonymous"}:${id}`} id={id} />;
+  return <VerificationWorkbench key={`${token ?? "anonymous"}:${id}:${caseId}`} id={id} caseId={caseId} />;
 }
 
-function VerificationWorkbench({ id }: { readonly id: string }) {
+function AssignedReviewSummary({ id, verificationCase, caseLookupFinished, claims }: {
+  readonly id: string;
+  readonly verificationCase: VerificationCase | null;
+  readonly caseLookupFinished: boolean;
+  readonly claims: readonly Claim[];
+}) {
+  return (
+    <div className="panel">
+      <h2>Assigned review</h2>
+      <p role="status">{verificationCase?.state ?? (caseLookupFinished ? "This review is unavailable." : "Loading review…")}</p>
+      {verificationCase ? <ul>{verificationCase.claimIds.map(claimId => {
+        const claim = claims.find(item => item.id === claimId);
+        return <li key={claimId}><Link href={`/w/projects/${id}/claims/${claimId}`}>
+          {claim?.valueText || claim?.claimType || claimId}
+        </Link></li>;
+      })}</ul> : null}
+      <Link href={`/w/projects/${id}/verification`}>View all project cases</Link>
+    </div>
+  );
+}
+
+function reviewPermissions(session: SessionInfo | null, current: VerificationCase | null) {
+  const canAssign = can(session, "claim.curate");
+  const isAssignedReviewer = Boolean(session?.subjectId && current?.reviewerSubjectId === session.subjectId);
+  return {
+    canAssign,
+    canSign: can(session, "attestation.sign"),
+    canDispute: can(session, "attestation.dispute"),
+    canResolve: can(session, "attestation.dispute.resolve") && !isAssignedReviewer,
+    canChangeState: canAssign && !(current?.assignmentActive && isAssignedReviewer),
+  };
+}
+
+function VerificationWorkbench({ id, caseId }: { readonly id: string; readonly caseId: string }) {
   const { token, session, signTypedData } = useSession();
 
   const [claims, setClaims] = useState<Claim[]>([]);
   // Set when the server capped the claim list: the whole count, else null.
   const [claimTotal, setClaimTotal] = useState<number | null>(null);
+  const [caseLookupFinished, setCaseLookupFinished] = useState(false);
   const [cases, setCases] = useState<VerificationCase[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [verificationCase, setVerificationCase] = useState<VerificationCase | null>(null);
@@ -69,22 +106,16 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
   const [transitionReason, setTransitionReason] = useState("");
   const [disputes, setDisputes] = useState<AttestationDispute[]>([]);
   const [resolution, setResolution] = useState("");
-  const [limitations, setLimitations] = useState(
-    "This review is limited to the documents submitted and does not include site due diligence",
-  );
+  const [finding, setFinding] = useState("");
+  const [citation, setCitation] = useState("");
+  const [limitations, setLimitations] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [options, setOptions] = useState<ReviewAssignmentOptions | null>(null);
   const [reviewerId, setReviewerId] = useState("");
   const [credentialId, setCredentialId] = useState("");
   const [schemaId, setSchemaId] = useState("");
-  // Only the assigner reads the options. The server decides; this only avoids a certain 403.
-  const canAssign = session?.actions?.includes("claim.curate") ?? false;
-  // The same guidance for signing and disputes: a button whose action the session lacks is off.
-  const canSign = can(session, "attestation.sign");
-  const canDispute = can(session, "attestation.dispute");
-  const canResolve = can(session, "attestation.dispute.resolve") &&
-    !(session?.subjectId && verificationCase?.reviewerSubjectId === session.subjectId);
+  const { canAssign, canSign, canDispute, canResolve, canChangeState } = reviewPermissions(session, verificationCase);
 
   useEffect(() => {
     setDisputes([]);
@@ -113,8 +144,15 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
   }, [token, id]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+    void load().then(items => {
+      if (!active || !caseId) return;
+      const match = items.find(item => item.id === caseId);
+      if (match) openCase(match);
+      setCaseLookupFinished(true);
+    });
+    return () => { active = false; };
+  }, [load, caseId]);
 
   /**
    * Reviewer, credential, and schema come from this tenant's rows. Fixed seed ids made
@@ -143,6 +181,9 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
   }, [token, id, canAssign]);
 
   function openCase(item: VerificationCase) {
+    setFinding("");
+    setCitation("");
+    setLimitations("");
     setVerificationCase(item);
     setAttestation(null);setSignatureRequest(null);setSigned(null);
     setSavedAttestation(item.latestAttestation ?? null);
@@ -440,7 +481,8 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
   const renderStateChange = () => {
     return verificationCase ? (
       <div className="panel">
-        <h2>1-1. Record a state change</h2>
+        {canChangeState || !caseId ? <>
+        <h2>Record a state change</h2>
         <p className="sub" style={{ marginTop: 0 }}>
           {/* If the only options were sign or nothing, there would be no place to record
                     finding bad evidence. */}
@@ -462,7 +504,7 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
             <button
               key={state}
               data-testid={`transition-${state}`}
-              disabled={busy || !canAssign || (verificationCase.assignmentActive && verificationCase.reviewerSubjectId === session?.subjectId) || transitionReason.trim().length === 0}
+              disabled={busy || !canChangeState || transitionReason.trim().length === 0}
               onClick={() =>
                 void run(async () => {
                   await transitionCase(
@@ -486,6 +528,7 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
           ))}
         </div>
 
+        </> : null}
         {verificationCase.transitions && verificationCase.transitions.length > 0 ? (
           <div className="table-scroll" style={{ marginTop: 14 }}>
             {/* Do not hide the path taken. A case reassigned after rejection and one that
@@ -516,16 +559,31 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
     ) : null;
   };
 
+  function editReview(updateField: (value: string) => void, value: string) {
+    updateField(value);
+    setAttestation(null);
+    setSignatureRequest(null);
+  }
+
   const renderReviewDraft = () => {
     return (
       <div className="panel">
         <h2>2. Draft the review opinion</h2>
         <div className="field">
+          <label htmlFor="review-finding">Review finding</label>
+          <textarea disabled={busy || !!signed} id="review-finding" value={finding} onChange={event => editReview(setFinding, event.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="review-source">Source reference</label>
+          <input disabled={busy || !!signed} id="review-source" value={citation} onChange={event => editReview(setCitation, event.target.value)} />
+        </div>
+        <div className="field">
           <label htmlFor="limitations">What this review did not check (required)</label>
           <input
+            disabled={busy || !!signed}
             id="limitations"
             value={limitations}
-            onChange={(event) => setLimitations(event.target.value)}
+            onChange={(event) => editReview(setLimitations, event.target.value)}
           />
         </div>
         <p className="meta" style={{ marginTop: 0, marginBottom: 12 }}>
@@ -533,7 +591,7 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
           Leave it empty and no draft is created. The server and the database each refuse it.
         </p>
         <button
-          disabled={busy || !canSign || !verificationCase || limitations.trim().length === 0}
+          disabled={busy || !!attestation || !canSign || !verificationCase || !finding.trim() || !citation.trim() || !limitations.trim()}
           onClick={() =>
             void run(async () => {
               if (!verificationCase) return;
@@ -545,10 +603,8 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
                     assignmentId: verificationCase.assignmentId,
                     attestationType: "professional_signoff",
                     claimScope: verificationCase.claimIds,
-                    findings: [
-                      { finding: "The mining right number matches the registry lookup result" },
-                    ],
-                    citations: [{ source: "MN mineral registry", ref: "MV-012345" }],
+                    findings: [{ finding: finding.trim() }],
+                    citations: [{ ref: citation.trim() }],
                     limitations: limitations.trim(),
                   },
                   newIdempotencyKey(),
@@ -579,7 +635,7 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
       <div className="panel">
         <h2>3. What you are signing</h2>
         <button
-          disabled={busy || !canSign || !attestation}
+          disabled={busy || !!signed || !canSign || !attestation}
           onClick={() =>
             void run(async () => {
               if (!attestation) return;
@@ -626,7 +682,7 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
         <button
           className="primary"
           data-testid="sign-attestation"
-          disabled={busy || !canSign || !signatureRequest || !attestation}
+          disabled={busy || !!signed || !canSign || !signatureRequest || !attestation}
           onClick={() =>
             void run(async () => {
               if (!signatureRequest || !attestation) return;
@@ -785,6 +841,20 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
     ) : null;
   };
 
+  function renderAssignedReview() {
+    return (
+      <>
+        <AssignedReviewSummary id={id} verificationCase={verificationCase} caseLookupFinished={caseLookupFinished} claims={claims} />
+        {canChangeState ? renderStateChange() : verificationCase?.transitions?.length ? (
+          <details className="panel"><summary>Review history</summary>{renderStateChange()}</details>
+        ) : null}
+        {verificationCase && renderReviewDraft()}
+        {attestation && renderSigningPayload()}
+        {signatureRequest && renderSignature()}
+      </>
+    );
+  }
+
   return (
     <>
       <div className="page-head">
@@ -810,15 +880,15 @@ function VerificationWorkbench({ id }: { readonly id: string }) {
         </div>
       ) : null}
 
-      {renderEvidenceAssignment()}
-
-      {renderStateChange()}
-
-      {renderReviewDraft()}
-
-      {renderSigningPayload()}
-
-      {renderSignature()}
+      {caseId ? renderAssignedReview() : (
+        <>
+          {renderEvidenceAssignment()}
+          {renderStateChange()}
+          {renderReviewDraft()}
+          {renderSigningPayload()}
+          {renderSignature()}
+        </>
+      )}
 
       {renderDisputes()}
 
