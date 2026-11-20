@@ -90,6 +90,9 @@ export async function signScopedReview(
   await connectAs(page, "Reviewer A");
   await page.goto(`/w/projects/${projectId}/verification`);
   await page.getByRole("button", { name: "Open this case" }).first().click();
+  await page.getByLabel("Review finding").fill("Reviewed the submitted evidence");
+  await page.getByLabel("Source reference").fill("Submitted evidence snapshot");
+  await page.getByLabel("What this review did not check (required)").fill("Desk review only");
   await page.getByRole("button", { name: "Create the draft" }).click();
   await page.getByRole("button", { name: "Create a signature request" }).click();
   await page.getByTestId("sign-attestation").click();

@@ -115,6 +115,20 @@ function signInMethodOf(route: string, params: unknown): string | undefined {
   return SIGN_IN_ROUTES.get(route);
 }
 
+// Matched Fastify route templates, never caller-supplied paths. Every handler still checks
+// its role and resource scope. New endpoints and every mutation require explicit review.
+const googleWorkspaceReads = new Set([
+  "/api/v1/auth/session", "/api/v1/my-work", "/api/v1/projects", "/api/v1/organizations",
+  "/api/v1/projects/:projectId", "/api/v1/projects/:projectId/overview",
+  "/api/v1/projects/:projectId/offering-gate", "/api/v1/projects/:projectId/evidence-ledger",
+  "/api/v1/projects/:projectId/stakeholder-events", "/api/v1/projects/:projectId/disclosure-restrictions/active",
+  "/api/v1/projects/:projectId/claims", "/api/v1/projects/:projectId/verification-cases",
+  "/api/v1/attestations/:attestationId/disputes", "/api/v1/document-link-rules",
+  "/api/v1/admin/subjects", "/api/v1/admin/role-grants", "/api/v1/admin/role-revocations",
+  "/api/v1/admin/notification-sinks", "/api/v1/admin/invitations", "/api/v1/admin/email-changes",
+  "/api/v1/admin/mfa-resets", "/api/v1/admin/subject-suspensions",
+]);
+
 /** Routes a first-factor-only session may reach (contract `allowsFirstFactorOnly`). */
 const FIRST_FACTOR_ROUTES: ReadonlySet<string> = new Set(
   ROUTES.filter((route) => route.allowsFirstFactorOnly === true).map(
@@ -429,7 +443,9 @@ export async function buildServer(
     const resolved = await resolveSessionToken(sql, token);
     if (!resolved) return;
 
-    const session = await resolveSession(sql, resolved);
+    const workspaceRead = resolved.firstFactor === "google" && !resolved.googleRequiresMfa && request.method === "GET" &&
+      route !== undefined && googleWorkspaceReads.has(route);
+    const session = await resolveSession(sql, resolved, workspaceRead);
 
     /**
      * Priority rule 2: a first-factor-only session reaches MFA enrolment, MFA challenge, logout
@@ -437,7 +453,7 @@ export async function buildServer(
      * contract (`allowsFirstFactorOnly`); every other route refuses it here.
      */
     if (
-      session.aal === "aal1" &&
+      session.aal === "aal1" && !workspaceRead &&
       (route === undefined || !FIRST_FACTOR_ROUTES.has(`${request.method} ${route}`))
     ) {
       throw forbidden("MFA_REQUIRED", "Complete a second factor before using this session", {

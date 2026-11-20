@@ -171,6 +171,7 @@ describe("sign-in screen", () => {
     s.refresh.mockResolvedValue(aal1);
     render(<Connect />);
     expect(screen.queryByTestId("legacy-wallet-sign-in")).toBeNull();
+    await screen.findByLabelText("Email address");
     type("Email address", " person@example.test ");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     expect((await screen.findByTestId("code-sent")).textContent).toContain("expires in 10 minutes");
@@ -191,6 +192,7 @@ describe("sign-in screen", () => {
     });
     s.refresh.mockResolvedValue(aal2);
     render(<Connect />);
+    await screen.findByLabelText("Email address");
     type("Email address", "person@example.test");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     await screen.findByTestId("code-sent");
@@ -209,6 +211,7 @@ describe("sign-in screen", () => {
     });
     s.refresh.mockResolvedValue({ ...aal2, roleBindings: [{ role: "reviewer", organizationId: "o", projectId: null }], assuranceLevel: "identity_bound" });
     render(<Connect />);
+    await screen.findByLabelText("Email address");
     type("Email address", "person@example.test");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     await screen.findByTestId("code-sent");
@@ -219,10 +222,11 @@ describe("sign-in screen", () => {
 
   it("states a refused code request and lets another address be used", async () => {
     mockHttp({
-      "GET /api/v1/auth/methods": () => Promise.reject(new Error("offline")),
+      "GET /api/v1/auth/methods": methods(),
       "POST /api/v1/auth/email/start": refusal(429, "RATE_LIMITED"),
     });
     render(<Connect />);
+    await screen.findByLabelText("Email address");
     type("Email address", "person@example.test");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     expect((await screen.findByRole("alert")).textContent).toBe("Too many attempts. Wait a few minutes and try again.");
@@ -234,6 +238,7 @@ describe("sign-in screen", () => {
       "POST /api/v1/auth/email/start": { accepted: true, message: "m", expiresInMinutes: 10 },
     });
     render(<Connect />);
+    await screen.findByLabelText("Email address");
     type("Email address", "person@example.test");
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     fireEvent.click(await screen.findByRole("button", { name: "Use another address" }));
@@ -249,7 +254,7 @@ describe("sign-in screen", () => {
     });
     render(<Connect />);
     fireEvent.click(await screen.findByRole("button", { name: "Continue with Microsoft" }));
-    expect(screen.queryByRole("button", { name: "Continue with Google" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in with Google" })).toBeNull();
     await waitFor(() => expect(assign).toHaveBeenCalledWith("https://login.microsoftonline.com/authorize?x"));
     expect(posted(calls, "/oidc/microsoft/start")?.body).toEqual({ purpose: "sign_in" });
     expect(screen.queryByTestId("legacy-wallet-sign-in")).toBeNull();
@@ -261,7 +266,9 @@ describe("sign-in screen", () => {
       "POST /api/v1/auth/oidc/google/start": refusal(503, "OIDC_PROVIDER_UNAVAILABLE"),
     });
     render(<Connect />);
-    fireEvent.click(await screen.findByRole("button", { name: "Continue with Google" }));
+    const google = await screen.findByRole("button", { name: "Sign in with Google" });
+    expect(screen.queryByLabelText("Email address")).toBeNull();
+    fireEvent.click(google);
     expect((await screen.findByRole("alert")).textContent).toBeTruthy();
   });
 
@@ -454,7 +461,7 @@ describe("second-factor screen", () => {
 describe("provider callback", () => {
   it("removes the provider's code from the address bar and completes sign-in", async () => {
     window.history.replaceState(null, "", "/auth/oidc/google/callback?state=st&code=cd&iss=https%3A%2F%2Faccounts.google.com");
-    s.refresh.mockResolvedValue(aal1);
+    s.refresh.mockResolvedValue({ ...aal1, firstFactor: "google" });
     const calls = mockHttp({
       "POST /api/v1/auth/oidc/google/callback": () =>
         Response.json({ aal: "aal1" }, { headers: { "x-mpc-oidc-purpose": "sign_in" } }),
@@ -462,7 +469,7 @@ describe("provider callback", () => {
     render(<OidcCallbackPage />);
     expect(window.location.search).toBe("");
     expect(window.location.pathname).toBe("/auth/oidc/google/callback");
-    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/auth/mfa"));
+    await waitFor(() => expect(s.replace).toHaveBeenCalledWith("/w/work"));
     // No binding from the page: the web server adds it from its own cookie.
     expect(posted(calls, "/callback")?.body).toEqual({ state: "st", code: "cd", iss: "https://accounts.google.com" });
   });

@@ -1,18 +1,15 @@
 "use client";
 
+import { RecordAnchor, hasConfirmedAnchor, isAnchorPending, useRecordAnchor } from "./RecordAnchor";
 import { publicDate } from "@/lib/public-date";
 import { PublicEvidenceLedger } from "./PublicEvidenceLedger";
 import { ProjectStageRoadmap } from "./ProjectProgress";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { EvidenceLedger, EvidenceLedgerWarnings } from "./EvidenceLedger";
 import type { LedgerSummary, LedgerCurrent } from "@/lib/evidence-ledger-api";
 import { ContractLink } from "@/components/ContractLink";
 import { TxLink } from "@/components/TxLink";
-import {
-  getInclusionProof,
-  type InclusionProof,
-  type PublicProjection,
-} from "@/lib/api";
+import type { InclusionProof, PublicProjection } from "@/lib/api";
 import { project, type RecordDepth, type RecordView } from "@mpc/ui";
 
 /**
@@ -29,26 +26,16 @@ import { project, type RecordDepth, type RecordView } from "@mpc/ui";
  *
  * Success on 1 does not guarantee 2.
  */
-export function PublicRecord({ entry, browsableEvidence = false }: { readonly entry: PublicProjection; readonly browsableEvidence?: boolean }) {
-  const [proof, setProof] = useState<InclusionProof | null>(null);
-  const [depth, setDepth] = useState<RecordDepth>("basic");
+interface RecordProps { readonly entry: PublicProjection; readonly browsableEvidence?: boolean }
 
-  // The proof may not be anchored yet. Absence is not an error, so a lookup
-  // failure is not raised as a screen error; it is stated as "not yet available".
-  useEffect(() => {
-    let live = true;
-    setProof(null);
-    void getInclusionProof(entry.entryVersionId)
-      .then((found) => {
-        if (live) setProof(found);
-      })
-      .catch(() => {
-        if (live) setProof(null);
-      });
-    return () => {
-      live = false;
-    };
-  }, [entry.entryVersionId]);
+export function PublicRecord(props: RecordProps) {
+  return <VersionRecord key={props.entry.entryVersionId} {...props} />;
+}
+
+function VersionRecord({ entry, browsableEvidence = false }: RecordProps) {
+  const { lookup, retry } = useRecordAnchor(entry.entryVersionId);
+  const proof = lookup.state === "ready" ? lookup.proof : null;
+  const [depth, setDepth] = useState<RecordDepth>("basic");
 
   const view = toRecordView(entry, proof);
   // @mpc/ui selects fields per depth. If the screen picks them, limitations
@@ -66,7 +53,7 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
                     {view.explanation.proves.length > 0 ? (
                       view.explanation.proves.map((item) => <li key={item}>{item}</li>)
                     ) : (
-                      <li>Nothing has been anchored for this version yet.</li>
+                      <li>No proof statement available for this version.</li>
                     )}
                   </ul>
                 </div>
@@ -92,6 +79,7 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
 
   return (
       <>
+        <RecordAnchor lookup={lookup} retry={retry} version={String(entry.version)} />
         {entry.evidenceLedgerCurrent ? <EvidenceLedgerWarnings current={entry.evidenceLedgerCurrent as LedgerCurrent} compact={browsableEvidence} /> : null}
         {entry.evidenceLedger ? (browsableEvidence ? <PublicEvidenceLedger key={entry.entryVersionId} summary={entry.evidenceLedger as LedgerSummary} /> : <EvidenceLedger summary={entry.evidenceLedger as LedgerSummary} title="Evidence assessment approved with this version" />) : <ProjectStageRoadmap />}
 
@@ -136,6 +124,7 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
 
           {/* Facts that never collapse at any depth. */}
           <dl className="dl" data-testid="shared-facts">
+            {typeof entry.projectKey === "string" ? <><dt>Registry key</dt><dd className="mono">{entry.projectKey}</dd></> : null}
             <dt>Status</dt>
             <dd className="mono" data-testid="shared-status">
               {view.shared.status}
@@ -201,13 +190,11 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
                 <dd className="mono">{view.expert.policyVersion ?? "—"}</dd>
                 <dt>Merkle path</dt>
                 <dd className="mono" style={{ wordBreak: "break-all" }}>
-                  {view.expert.merklePath?.length
-                    ? view.expert.merklePath.join(" · ")
-                    : "Not anchored yet"}
+                  {proof ? (proof.proof.length ? proof.proof.join(" · ") : "Single-record batch") : "—"}
                 </dd>
                 <dt>Transaction</dt>
                 <dd>
-                  <TxLink chainId={proof?.chainId ?? null} hash={view.expert.transactionHash ?? null} />
+                  {proof ? <TxLink chainId={proof.chainId} hash={proof.transactionHash} /> : "—"}
                 </dd>
               </dl>
             </div>
@@ -216,13 +203,12 @@ export function PublicRecord({ entry, browsableEvidence = false }: { readonly en
 
         <RecordHistory history={entry.history} expanded={!browsableEvidence} />
 
-        <ProofDisclosure proof={proof} expanded={!browsableEvidence} />
+        {proof ? <ProofDisclosure proof={proof} expanded={!browsableEvidence} /> : null}
 
         <details className="public-record-disclosure" open={!browsableEvidence}>
           <summary>Integrity and authority are different questions</summary>
-          The proof confirms that this record has not changed. It does not judge whether the
-          source is factually accurate or whether the reviewer was qualified. Those are
-          established on separate grounds.
+          A confirmed proof records this published version’s inclusion in an anchored batch. Whether the
+          source is accurate and the reviewer qualified are separate questions.
         </details>
       </>
   );
@@ -246,10 +232,10 @@ function optionalStrings(entry: PublicProjection, key: string): readonly string[
 }
 
 function ProofDisclosure({ proof, expanded }: {
-  readonly proof: InclusionProof | null;
+  readonly proof: InclusionProof;
   readonly expanded: boolean;
 }) {
-  return <details className="public-record-disclosure" open={expanded || Boolean(proof && (!proof.merkleVerified || !proof.included))} data-testid="integrity-disclosure">
+  return <details className="public-record-disclosure" open={expanded || (!isAnchorPending(proof) && !hasConfirmedAnchor(proof))} data-testid="integrity-disclosure">
     <summary>Integrity proof</summary><IntegrityProof proof={proof} />
   </details>;
 }
@@ -333,12 +319,11 @@ function toRecordView(entry: PublicProjection, proof: InclusionProof | null): Re
   };
 }
 
-function IntegrityProof({ proof }: { readonly proof: InclusionProof | null }) {
+function IntegrityProof({ proof }: { readonly proof: InclusionProof }) {
   return (
         <div className="panel" data-testid="proof-panel">
           <h2>Integrity proof</h2>
-          {proof ? (
-            <>
+          <>
               <dl className="dl">
                 <dt>Merkle check</dt>
                 <dd>
@@ -352,13 +337,13 @@ function IntegrityProof({ proof }: { readonly proof: InclusionProof | null }) {
                 <dd className="mono">{proof.confirmationState}</dd>
                 <dt>Inclusion confirmed</dt>
                 <dd data-testid="proof-included">
-                  {proof.included ? (
+                  {hasConfirmedAnchor(proof) ? (
                     <span style={{ color: "var(--positive)" }}>Confirmed</span>
                   ) : (
                     // included is true only when confirmed. Before that it is not yet
                     // final (06 §6.8 no hidden success).
                     <span style={{ color: "var(--alert)" }}>
-                      Not confirmed yet — shown once the chain confirms
+                      {isAnchorPending(proof) ? "Not confirmed yet — awaiting finality" : "Inclusion could not be confirmed"}
                     </span>
                   )}
                 </dd>
@@ -382,7 +367,7 @@ function IntegrityProof({ proof }: { readonly proof: InclusionProof | null }) {
 
               <div className="row" style={{ marginTop: 14, alignItems: "flex-start", gap: 24 }}>
                 <div style={{ flex: 1, minWidth: 240 }}>
-                  <h2 style={{ fontSize: 13 }}>What this proof confirms</h2>
+                  <h2 style={{ fontSize: 13 }}>What this proof covers</h2>
                   <ul style={{ margin: 0, paddingLeft: 18, color: "var(--positive)" }}>
                     {proof.proves.map((item) => (
                       <li key={item}>{item}</li>
@@ -398,12 +383,7 @@ function IntegrityProof({ proof }: { readonly proof: InclusionProof | null }) {
                   </ul>
                 </div>
               </div>
-            </>
-          ) : (
-            <p className="sub" style={{ margin: 0 }}>
-              Not anchored yet. An integrity proof exists only after a batch is built.
-            </p>
-          )}
+          </>
         </div>
 
   );

@@ -3,7 +3,7 @@
 Development deployments run an additive seed task **after** migration and service deployment.
 It supplies the original three synthetic projects (input pending, reviewed evidence and published evidence),
 plus five published examples with evidence coverage at stages 1–5.
-Existing project data, evidence, reviews and publications are never reset or renamed. After
+The seed gives each scenario a fictional mine name and mineral. Published keys remain permanent. After
 migration 0138, a completed v1 demo can receive project-bound coverage definitions and one new
 assessment. A later deploy also resumes an unfinished seed; new demo versions use new keys.
 
@@ -11,11 +11,11 @@ assessment. A later deploy also resumes an unfinished seed; new demo versions us
 | --- | --- | --- | --- |
 | Environment | Deployment configuration and chain ID | `develop`, opBNB testnet 5611 only | Refuse other environments before connecting to storage or DB |
 | Tenant / owner | Existing tenant and configured owning organization | Existing workspace; no tenant or real account is created or changed | Ambiguous or missing owner fails closed |
-| Scenario identity | Stable v1 project key and seed audit markers | Seed-owned project only | Completed marker wins over current values: preserve user edits and revocations |
+| Scenario identity | Stable v1 project key and seed audit markers | Seed-owned project only | Preserve user edits and revocations. Only untouched legacy fixture identities qualify for a profile correction. |
 | Partial run | Per-tenant advisory lock, committed start marker | Generated quarantined document | Resume after actual scan worker success; infection or timeout fails the seed task |
 | Incomplete scenario edited by a user | Locked project and restriction scope | Project metadata, claims, documents, facts and restrictions | Stop without adding reviews or publication; only untouched partial fixtures resume |
 | Review | Explicit synthetic fixture with a fresh, discarded signing key | Demo claim only; separate fixture identities, no login methods or role grants | Store a cryptographically signed simulation, never an official-source confirmation or human approval |
-| Publication | Canonical hashing and current project identity | Public synthetic projection and mandatory limitations | Insert once; never change a published version, readiness result or anchor |
+| Publication | Canonical hashing and current project identity | Public synthetic projection and mandatory limitations | Keep published payloads, assessment dates, hashes and anchor proofs immutable. Link metadata corrections as successor versions. |
 | Chain | Existing API anchor request and anchor worker | Published versions selected by the service | Seed requests no anchor and holds no funded signing key |
 
 The migration owner creates labelled **fixture records**, not real professional approvals.
@@ -96,7 +96,12 @@ have respectively 4, 12 and 20 reviewed items; remaining documents are present b
 have no synthetic professional sign-off. Every upload must receive a clean scan
 before promotion. The normal evaluator supplies their stage 1, 3 and 5 coverage.
 
-Original fixtures and published versions are preserved. Completed document examples
+A completed legacy project receives a new profile only if its owner, original name, mineral,
+country, lifecycle and version still match the seed. Restrictions and publication drafts take
+precedence. For a public project, the seed checks the original published version, audit marker
+and content hash, then appends v2 under the same key. It copies the previously public snapshot,
+including its original assessment date and document titles. It does not publish private updates
+or carry an earlier version’s proof forward. The task reports corrected keys in `updatedProfiles`. Existing links and v1 proofs still resolve. Completed document examples
 are skipped on retry; untouched incomplete examples resume their quarantined uploads.
 The fixtures publish only labelled synthetic assessment metadata, never repository
 internal documentation or private originals. No real mining documents were found in
@@ -106,7 +111,7 @@ The dev seed CLI accepts `DEMO_INCLUDE_DOCUMENTS=false` to omit the document-ric
 examples (default `true`). `DEMO_SCAN_TIMEOUT_MS` controls each scenario's scan wait
 (default 240000 ms; integer range 1000–240000). Invalid settings fail before seeding.
 A timeout remains a visible failure and the next run resumes; it is not reported as
-successful seeding. Existing completed scenarios are preserved.
+successful seeding. Repeated runs preserve completed profiles.
 
 The CI task waiter allows up to six ten-minute windows for a fresh seed across
 all eleven scenarios (at most 44 minutes of scan waiting at the configured cap).

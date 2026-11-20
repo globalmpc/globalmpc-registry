@@ -260,6 +260,9 @@
                         "recoveryLimited": {
                           "type": "boolean"
                         },
+                        "googleRequiresMfa": {
+                          "type": "boolean"
+                        },
                         "actions": {
                           "type": "array",
                           "items": {
@@ -783,6 +786,9 @@
                           "type": "boolean"
                         },
                         "recoveryLimited": {
+                          "type": "boolean"
+                        },
+                        "googleRequiresMfa": {
                           "type": "boolean"
                         },
                         "actions": {
@@ -2778,6 +2784,9 @@
                         "recoveryLimited": {
                           "type": "boolean"
                         },
+                        "googleRequiresMfa": {
+                          "type": "boolean"
+                        },
                         "actions": {
                           "type": "array",
                           "items": {
@@ -3762,6 +3771,9 @@
                           "type": "boolean"
                         },
                         "recoveryLimited": {
+                          "type": "boolean"
+                        },
+                        "googleRequiresMfa": {
                           "type": "boolean"
                         },
                         "actions": {
@@ -16484,6 +16496,9 @@
                           "type": "boolean"
                         },
                         "recoveryLimited": {
+                          "type": "boolean"
+                        },
+                        "googleRequiresMfa": {
                           "type": "boolean"
                         },
                         "actions": {
@@ -76779,6 +76794,9 @@
                     "getMyWorkResponse": {
                       "type": "object",
                       "properties": {
+                        "hasVisibleProjects": {
+                          "type": "boolean"
+                        },
                         "assignedToMe": {
                           "type": "array",
                           "items": {

@@ -46,7 +46,7 @@ export default function SecondFactorPage() {
 
   useEffect(() => {
     if (loading || !session?.authenticated) return;
-    if (!needsSecondFactor(session)) {
+    if (session.aal !== "aal1" && !needsSecondFactor(session)) {
       // Already past this step (a reload): nothing to do here.
       if (codes === null && !recoveryDone) router.replace(currentLandingPath(session));
       return;

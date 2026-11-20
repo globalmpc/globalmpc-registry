@@ -86,6 +86,9 @@ async function mount(data = routes()) {
 }
 async function draft() {
   fireEvent.click(screen.getByTestId("select-case-case"));
+  fireEvent.change(screen.getByLabelText("What this review did not check (required)"), { target: { value: "No site visit" } });
+  fireEvent.change(screen.getByLabelText("Review finding"), { target: { value: "Reviewed the licence" } });
+  fireEvent.change(screen.getByLabelText("Source reference"), { target: { value: "Licence 42" } });
   fireEvent.click(screen.getByRole("button", { name: "Create the draft" }));
   await waitFor(() =>
     expect(
@@ -184,14 +187,29 @@ describe("independent verification", () => {
       true,
     );
     fireEvent.change(field, { target: { value: " No site visit " } });
+    fireEvent.change(screen.getByLabelText("Review finding"), { target: { value: "Reviewed the licence" } });
+    fireEvent.change(screen.getByLabelText("Source reference"), { target: { value: "Licence 42" } });
     fireEvent.click(screen.getByRole("button", { name: "Create the draft" }));
     await waitFor(() =>
       expect(calls.find((call) => call.method === "POST")?.body).toMatchObject({
         assignmentId: "assignment",
         claimScope: ["claim"],
+        findings: [{ finding: "Reviewed the licence" }],
+        citations: [{ ref: "Licence 42" }],
         limitations: "No site visit",
       }),
     );
+  });
+  it("requires a new draft and signing request after editing the opinion", async () => {
+    await mount();
+    await draft();
+    fireEvent.click(screen.getByRole("button", { name: "Create a signature request" }));
+    await screen.findByTestId("signing-payload");
+    fireEvent.change(screen.getByLabelText("Review finding"), { target: { value: "Insufficient evidence" } });
+    expect(screen.queryByTestId("signing-payload")).toBeNull();
+    expect(screen.getByTestId("sign-attestation").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Create a signature request" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Create the draft" }).hasAttribute("disabled")).toBe(false);
   });
   it("shows the signing scope and submits the wallet signature for that one request", async () => {
     const calls = await mount();

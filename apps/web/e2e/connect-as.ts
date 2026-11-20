@@ -100,10 +100,16 @@ export async function signInAfresh(page: Page, label: string, wallet = true): Pr
   expect(await isComplete(page, await subjectOf(label))).toBe(true);
 }
 
+/** Exercise email fallback while the shared browser-test server also hosts Google OIDC journeys. */
+export async function openEmailSignIn(page: Page): Promise<void> {
+  await page.goto("/connect");
+  await page.getByRole("button", { name: "Use an email code instead" }).click();
+}
+
 async function signInByJourney(page: Page, label: string, wallet: boolean): Promise<void> {
   await prepareSignIn(page, label, wallet);
   const email = demoEmail(label);
-  await page.goto("/connect");
+  await openEmailSignIn(page);
   await page.getByLabel("Email address").fill(email);
   await page.getByRole("button", { name: "Send code" }).click();
   await expect(page.getByTestId("code-sent")).toBeVisible();

@@ -67,6 +67,7 @@ export interface Session {
   readonly roleBindings: readonly RoleBinding[];
   /** Roles the subject holds that this session does not meet (priority rule 4). */
   readonly narrowedRoles: readonly { readonly role: string; readonly requiredAal: AuthenticationLevel | null }[];
+  readonly googleRequiresMfa?: boolean;
   readonly projectIds: readonly string[];
   /**
    * Organization ID → project IDs owned by that organization.
@@ -94,7 +95,7 @@ export interface Session {
  * first-factor-only session reaches only MFA, logout and its own session — is the request hook's
  * (server.ts).
  */
-export async function resolveSession(sql: postgres.Sql, row: ResolvedSessionRow): Promise<Session> {
+export async function resolveSession(sql: postgres.Sql, row: ResolvedSessionRow, workspaceRead = false): Promise<Session> {
   const aal = deriveAuthenticationLevel({ firstFactor: row.firstFactor, secondFactor: row.secondFactor });
 
   return {
@@ -103,6 +104,7 @@ export async function resolveSession(sql: postgres.Sql, row: ResolvedSessionRow)
     firstFactor: row.firstFactor,
     secondFactor: row.secondFactor,
     recoveryLimited: row.recoveryLimited,
+    googleRequiresMfa: row.googleRequiresMfa,
     aal,
     subjectId: row.subjectId,
     tenantId: row.tenantId,
@@ -112,6 +114,7 @@ export async function resolveSession(sql: postgres.Sql, row: ResolvedSessionRow)
       // A recovery code proves possession of a printed code, not of an authenticator: until the
       // session enrols or proves one, no role is effective, whatever level it would need.
       if (row.recoveryLimited) return required;
+      if (workspaceRead && row.firstFactor === "google" && required !== null && role !== BREAK_GLASS_ROLE) return true;
       return required !== null && satisfiesAuthenticationLevel(aal, required) ? true : required;
     })),
   };

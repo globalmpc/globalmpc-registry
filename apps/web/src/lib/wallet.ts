@@ -207,6 +207,10 @@ const CHAIN_PARAMS: Readonly<Partial<Record<number, ChainParams>>> = {
   },
 } satisfies Record<SupportedChainId, ChainParams>;
 
+export function chainDisplayName(chainId: number): string {
+  return CHAIN_PARAMS[chainId]?.chainName ?? `chain ${chainId}`;
+}
+
 /**
  * Block explorer URL for a transaction hash.
  *

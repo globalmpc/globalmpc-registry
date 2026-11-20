@@ -164,7 +164,8 @@ export function AccountAdmin({
         </div>
       ) : null}
 
-      <div className="panel" data-testid="admin-invitations">
+      <details className="panel"><summary>Invite a person</summary>
+      <div data-testid="admin-invitations">
         <h2>{C.invitations}</h2>
         <p className="sub" style={{ marginTop: 0 }}>
           {C.invitationsLead}
@@ -213,6 +214,7 @@ export function AccountAdmin({
                   ? `· ${closed(invitation.closedReason)}`
                   : `· ${invitation.state} · expires ${invitation.expiresAt.slice(0, 16).replace("T", " ")}`}
               </span>{" "}
+              {invitation.acceptedSubjectId ? <span>· {nameOf(invitation.acceptedSubjectId)} </span> : null}
               {invitation.state === "pending" && mayInvite ? (
                 <button
                   type="button"
@@ -227,6 +229,8 @@ export function AccountAdmin({
         </ul>
       </div>
 
+      </details>
+      <details className="panel"><summary>Account recovery</summary>
       <div className="panel" data-testid="admin-email-changes">
         <h2>{C.emailChanges}</h2>
         <p className="sub" style={{ marginTop: 0 }}>
@@ -416,6 +420,7 @@ export function AccountAdmin({
           ))}
         </ul>
       </div>
+      </details>
     </>
   );
 }

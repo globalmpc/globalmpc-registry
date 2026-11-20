@@ -152,6 +152,7 @@ export const sessionResponse = z.object({
    * regenerate recovery codes and sign out until it proves one (WP3). Absent: false.
    */
   recoveryLimited: z.boolean().optional(),
+  googleRequiresMfa: z.boolean().optional(),
   /**
    * Actions allowed for this session's roles.
    *

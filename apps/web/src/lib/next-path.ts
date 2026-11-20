@@ -37,6 +37,7 @@ export function explicitNextPath(): string | null {
 export function landingPath(session: SessionInfo | null | undefined, next?: string | null): string {
   const explicit = explicitPath(next);
   if (explicit) return explicit;
+  if (session?.firstFactor === "google" && session.aal === "aal1") return "/w/work";
   return accessPending(session) || rolesAllInactive(session) ? "/w/access-pending" : "/w/projects";
 }
 

@@ -15,6 +15,8 @@ const describeDb = DATABASE_URL ? describe : describe.skip;
  * `CROSS_TENANT` and its migration sets `row_security = off`.
  */
 const CROSS_TENANT = [
+  "core.match_google_workspace_invitation(uuid,text,text,text)",
+  "core.match_google_workspace_invitation(uuid,text,text,text,text)",
   "core.find_person_by_email(text)",
   "core.start_email_challenge(core.email_challenge_purpose,text,text,uuid,bytea,text,text,text)",
   "core.verify_sign_in_code(text,bytea,text,text,uuid,text,integer)",
@@ -26,6 +28,8 @@ const CROSS_TENANT = [
   "core.purge_email_auth_records()",
   "core.start_oidc_transaction(uuid,core.oidc_provider,core.oidc_purpose,text,text,text,bytea,text,uuid,text,text,text)",
   "core.claim_oidc_transaction(text,text,core.oidc_provider,uuid)",
+  "core.link_google_workspace_account(uuid,text,text,text,text)",
+  "core.google_session_requires_mfa(uuid)",
   "core.complete_oidc_sign_in(uuid,text,text,uuid,text,integer)",
   "core.complete_oidc_link(uuid,uuid,text,text,text,text,uuid)",
   "core.complete_oidc_invitation(uuid,text,text,text,text,text,uuid,uuid,uuid,text,integer)",

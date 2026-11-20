@@ -170,7 +170,8 @@ test.describe("a wallet is connected only to sign", () => {
   test("signing in asks no wallet anything, even with one installed, and offers none", async ({ page }) => {
     const { calls } = await installWallets(page, [METAMASK]);
     await page.goto("/connect");
-    await expect(page.getByLabel("Email address")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign in with Google" })).toBeVisible();
+    await expect(page.getByLabel("Email address")).toHaveCount(0);
     await expect(page.getByRole("button", { name: /wallet/i })).toHaveCount(0);
 
     await connectAs(page, PERSON, { wallet: false });

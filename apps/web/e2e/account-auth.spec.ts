@@ -2,7 +2,7 @@ import { BUILT_SERVER, SESSION_COOKIE } from "./server-mode";
 import { openHeaderMenu } from "./header-menu";
 import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
-import { connectAs } from "./connect-as";
+import { openEmailSignIn, connectAs } from "./connect-as";
 import { addVirtualAuthenticator, closeMailbox, invitationLink, mailedCode, totp } from "./mailbox";
 
 /**
@@ -24,6 +24,7 @@ test.afterAll(closeMailbox);
 async function invite(page: Page, email: string): Promise<void> {
   await connectAs(page, "Operator A");
   await page.goto("/w/admin");
+  await page.getByText("Invite a person", { exact: true }).click();
   const panel = page.getByTestId("admin-invitations");
   await panel.getByLabel("Email address").fill(email);
   // The seeded organisation loads asynchronously; its initial text input is
@@ -74,7 +75,7 @@ async function keepRecoveryCodes(page: Page): Promise<void> {
 
 /** Signs in with an emailed code; lands on the second step. */
 async function signInByEmail(page: Page, email: string): Promise<void> {
-  await page.goto("/connect");
+  await openEmailSignIn(page);
   await page.getByLabel("Email address").fill(email);
   await page.getByRole("button", { name: "Send code" }).click();
   await expect(page.getByTestId("code-sent")).toBeVisible();
