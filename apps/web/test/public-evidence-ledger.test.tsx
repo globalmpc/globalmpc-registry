@@ -24,7 +24,7 @@ it("uses one stage selector, published links and resettable search without confu
   expect((screen.getByTestId("assessment-details") as HTMLDetailsElement).open).toBe(false);
   expect(screen.getByRole("heading",{name:/Document review items/})).toBeTruthy();
   expect(screen.getByText("Mining licence")).toBeTruthy();
-  expect(screen.queryByText("Resource estimate")).toBeNull();
+  expect(screen.getByText("Resource estimate")).toBeTruthy();
   fireEvent.click(within(stages).getByRole("button",{name:/Resource definition/}));
   expect(screen.getByText("Resource estimate")).toBeTruthy();
   expect(screen.queryByText("Mining licence")).toBeNull();
@@ -41,6 +41,7 @@ it("uses one stage selector, published links and resettable search without confu
 });
 it("preserves older publications without claiming stage membership or hiding their results", () => {
   render(<PublicEvidenceLedger summary={{...summary,stages:summary.stages.map(({itemClaimTypes:_links,...stage})=>stage)}}/>);
+  fireEvent.click(screen.getByRole("button",{name:/Exploration/}));
   expect(screen.getByText(/does not include item-to-stage links/)).toBeTruthy();
   expect(screen.getByText("Mining licence")).toBeTruthy();
   expect(screen.getByText("Resource estimate")).toBeTruthy();

@@ -15,19 +15,21 @@ test.describe("Administration", () => {
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
+    await page.locator("summary").filter({ hasText: /^Add a person without sign-in$/ }).click();
     await page.getByRole("textbox", { name: "Name" }).fill(name);
     await page.getByRole("button", { name: "Add person" }).click();
 
     await expect(page.getByTestId("admin-subjects")).toContainText(name);
     // Created with neither wallet nor role. Each is a separate, deliberate step.
-    await expect(page.getByTestId("admin-locked")).toContainText(name);
+    await expect(page.getByTestId("admin-subjects").locator("tr", { hasText: name })).toContainText("cannot sign in");
   });
 
-  test("the proposer has no decision button", async ({ page }) => {
+  test("an administrator approves their own role proposal", async ({ page }) => {
     const name = `Grant target ${Date.now()}`;
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
+    await page.locator("summary").filter({ hasText: /^Add a person without sign-in$/ }).click();
     await page.getByRole("textbox", { name: "Name" }).fill(name);
     await page.getByRole("button", { name: "Add person" }).click();
     await expect(page.getByTestId("admin-subjects")).toContainText(name);
@@ -38,16 +40,11 @@ test.describe("Administration", () => {
     await page.getByRole("textbox", { name: "Why" }).fill("Handles evidence registration");
     await page.getByRole("button", { name: "Propose", exact: true }).click();
 
-    // 02 §2.8 — proposal and approval are done by different people. The server blocks it,
-    // but a pressable button that is always rejected makes the screen look broken.
-    const grants = page.getByTestId("admin-role-grants");
-    await expect(grants).toContainText(name);
-    await expect(grants.locator("tr", { hasText: name })).toContainText(
-      "You proposed this — someone else decides.",
-    );
-    await expect(
-      grants.locator("tr", { hasText: name }).getByRole("button", { name: "Approve" }),
-    ).toHaveCount(0);
+    await page.locator("summary").filter({ hasText: /^Role approvals/ }).click();
+    const proposal = page.getByTestId("admin-role-grants").locator("tr", { hasText: name });
+    await proposal.getByRole("button", { name: "Approve" }).click();
+    await expect(row).toContainText("reviewer");
+    await expect(proposal).toHaveCount(0);
   });
 
   test("sets a person's assurance level only with what was checked, and attaches no wallet", async ({ page }) => {
@@ -57,6 +54,7 @@ test.describe("Administration", () => {
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
+    await page.locator("summary").filter({ hasText: /^Add a person without sign-in$/ }).click();
     await page.getByRole("textbox", { name: "Name" }).fill(name);
     await page.getByRole("button", { name: "Add person" }).click();
     const row = page.getByTestId("admin-subjects").locator("tr", { hasText: name });
@@ -78,12 +76,11 @@ test.describe("Administration", () => {
     await expect(row.getByTestId("subject-assurance")).toHaveText("high_assurance");
   });
 
-  test("the proposer of a revocation has no decision button", async ({ page }) => {
+  test("an administrator can reject their own revocation proposal", async ({ page }) => {
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
-    // A seeded person with one non-admin role. Tenant A has no second operator in the E2E seed,
-    // so the proposal stays pending and the role itself is never revoked.
+    // Reject the proposal so the seeded voter retains their role on a retry.
     const row = page.getByTestId("admin-subjects").locator("tr", { hasText: "Voter A" });
     await expect(row).toContainText("project_member");
 
@@ -97,12 +94,13 @@ test.describe("Administration", () => {
       await page.getByRole("button", { name: "Submit revocation" }).click();
     }
 
-    // 02 §2.8 — the same rule as grants: a different person decides.
     await expect(row).toContainText("revocation pending");
+    await page.locator("summary").filter({ hasText: /^Role approvals/ }).click();
     const revocations = page.getByTestId("admin-role-revocations");
     const pending = revocations.locator("tr", { hasText: "Voter A" });
-    await expect(pending).toContainText("You proposed this — someone else decides.");
-    await expect(pending.getByRole("button", { name: "Approve" })).toHaveCount(0);
+    await pending.getByRole("button", { name: "Reject" }).click();
+    await expect(pending).toHaveCount(0);
+    await expect(row).toContainText("project_member");
   });
 
   test("the last approver cannot propose revoking their own role", async ({ page }) => {

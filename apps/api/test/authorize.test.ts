@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ACTION_POLICIES, type ResourceContext } from "@mpc/api-contract";
 import { AppError, RegistrySubjectNotFoundError } from "../src/errors.js";
 import {
+  canActForOrganization,
   assertAuthorized,
   bindingToAuthorizationContext,
   sessionFacts,
@@ -63,6 +64,14 @@ function denialOf(fn: () => void): AppError {
 }
 
 describe("assertAuthorized", () => {
+  it("requires organisation-wide authority to register another project", () => {
+    const binding = { role: "project_member", organizationId: "org-1", projectId: "project-1" };
+    const allowed = (projectId: string | null) => canActForOrganization(
+      { ...GATE_APPROVER, roleBindings: [{ ...binding, projectId }] }, "project.create", "org-1");
+    expect(allowed(binding.projectId)).toBe(false);
+    expect(allowed(null)).toBe(true);
+  });
+
   it("does not turn project-scoped administration or review into tenant authority", () => {
     const tenantResource = { ...RESOURCE, projectId: null };
     for (const [role, action] of [["administrator", "admin.role.approve"], ["administrator", "audit.export"], ["reviewer", "review_registry.approve"], ["reviewer", "authority.review"], ["administrator", "registry.draft"], ["administrator", "registry.revoke"], ["reviewer", "registry.publish"], ["administrator", "anchor.submit"], ["reviewer", "anchor.read"]] as const) {

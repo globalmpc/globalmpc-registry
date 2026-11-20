@@ -82,9 +82,15 @@ reading needs no grant; temporary break-glass access is separate. Role membershi
 never replaces credentials, review assignment, project scope or person separation.
 Migration137 preserves live project reach and historical audit/signature data;
 unapproved requests for old roles are withdrawn and must be proposed again.
-Reviewers/administrators need verified identity and a passkey. Existing stewards
-and voter-only accounts may need an assurance/MFA step-up; the migration does not
-increase anyone's identity assurance. No contract upgrade is involved.
+An invited person signs in with a supported provider or a verified email code.
+Reviewers and administrators need a verified identity. Review signatures require
+the bound wallet; accepting an invitation grants only its recorded role and scope.
+
+A workspace administrator can invite a person with a role and access to one project or
+the organisation’s projects. An administrator invitation grants workspace-wide access.
+A verified first sign-in activates the invitation once. Reviewer and administrator
+invitations record the inviter’s identity verification basis. Account-only invitations
+continue to work for people whose access will be decided later.
 
 Development demo coverage is seeded from project-bound synthetic requirements and the real
 evaluator. Existing demo data and signed/public history are preserved; see

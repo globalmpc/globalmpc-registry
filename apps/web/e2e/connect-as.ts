@@ -87,7 +87,6 @@ export async function connectAs(
 export async function prepareSignIn(page: Page, label: string, wallet = true): Promise<void> {
   if (wallet) await installTestWallet(page, label);
   await page.context().clearCookies({ name: SESSION_COOKIE });
-  await holdPasskey(page, label);
   await allowAnotherCode();
 }
 
@@ -100,17 +99,21 @@ export async function signInAfresh(page: Page, label: string, wallet = true): Pr
   expect(await isComplete(page, await subjectOf(label))).toBe(true);
 }
 
+/** Exercise email fallback while the shared browser-test server also hosts Google OIDC journeys. */
+export async function openEmailSignIn(page: Page): Promise<void> {
+  await page.goto("/connect");
+  await page.getByRole("button", { name: "Use an email code instead" }).click();
+}
+
 async function signInByJourney(page: Page, label: string, wallet: boolean): Promise<void> {
   await prepareSignIn(page, label, wallet);
   const email = demoEmail(label);
-  await page.goto("/connect");
+  await openEmailSignIn(page);
   await page.getByLabel("Email address").fill(email);
   await page.getByRole("button", { name: "Send code" }).click();
   await expect(page.getByTestId("code-sent")).toBeVisible();
   await page.getByLabel(/-digit code$/).fill(await mailedCode(email, "sign_in_code"));
   await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(page).toHaveURL(/\/auth\/mfa/);
-  await page.getByTestId("passkey-prove").click();
   // A person holding no role lands on the access-pending screen (plan §4 journey 1).
   await expect(page).toHaveURL(/\/w\/(projects|access-pending)$/);
   await expectSignedIn(page);
@@ -135,7 +138,6 @@ async function isComplete(page: Page, subjectId: string): Promise<boolean> {
   return (
     session.authenticated === true &&
     session.subjectId === subjectId &&
-    session.aal !== "aal1" &&
     session.recoveryLimited !== true
   );
 }

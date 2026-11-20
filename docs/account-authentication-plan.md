@@ -31,12 +31,12 @@ accounts. Wallets stay, but only as signing keys bound to an account.
 | Identity / case | Namespace and uniqueness | Who may set or change it | Frozen vs live | Result / priority |
 | --- | --- | --- | --- | --- |
 | Account email | Normalised (trim, lower-case domain, NFC); unique per subject, globally unique (D6) | Set by the inviting admin; changed only by a two-person admin change, which revokes all sessions | Live; audit keeps the history | Proof of control is a code sent to it. **It never authorises anything by itself** |
-| Google identity | `(iss = https://accounts.google.com, sub)` | The account holder links it from a session that already passed MFA, or while accepting an invitation (WP4: for an address Google manages — see WP4 decisions) | Live; unlink audited; **revoked by an approved MFA reset or a completed email change** (0123) | Matched only by `(iss, sub)`. Email in the token is display-only |
+| Google identity | `(iss = https://accounts.google.com, sub)` | The account holder links it from a session that already passed MFA, or while accepting an invitation (WP4: for an address Google manages — see WP4 decisions) | Live; unlink audited; **revoked by an approved MFA reset or a completed email change** (0123) | Matched only by `(iss, sub)`. For first registration only, a Google-managed verified address may consume a matching pending invitation. An email match never links an existing account |
 | Microsoft identity | `(tid, oid)` from a v2.0 ID token; issuer must equal `https://login.microsoftonline.com/{tid}/v2.0` for that token's `tid` | Same as Google | Live; revoked by recovery like Google (0123) | Matched only by `(tid, oid)`. `email`, `preferred_username` and `upn` are never used for matching (Microsoft: these values are mutable and must not be used for authorization; identify users by `oid` / `sub`) |
 | Passkey | WebAuthn credential ID, RP ID = web host | Holder enrols from a session at the required level; admin can only revoke | Live; sign counter tracked | Phishing-resistant factor |
 | TOTP secret | One per subject | Holder enrols; admin can only revoke | Live | Second factor, not phishing-resistant |
 | Recovery codes | 10 single-use, hashed | Generated at MFA enrolment; regenerating voids the old set | Each code frozen once used | Restores the second factor only; forces re-enrolment and revokes all sessions |
-| Invitation | Random token, hashed; one email, one tenant, one organisation | Created by an admin action; **roles are not in the invitation** — they are requested through the existing two-person role-grant flow | Single use, expires in 72 h, revocable | Accepting creates the subject. Without a role binding the account sees "access pending" and no private data |
+| Invitation | Random token, hashed; one email, one tenant, one organisation | Created by an admin action; one workspace administrator may authorize a human role and scope with a recorded identity verification basis | Single use, expires in 72 h, revocable | Accepting creates the subject. An account-only invitee sees "access pending" and no private data |
 | Session | Opaque token, hashed; keyed by `subject_id`, carries tenant, first-factor method, second-factor method and time | Issued only by the login flow; revoked by logout, admin, recovery, email change, authenticator removal or unlinking the identity it rests on | Live, re-checked every request | Authentication level (AAL) is derived from what the session proved, **never declared by an admin** |
 | Identity assurance (`assurance_level`) | Per subject (moves from the wallet row) | Admin with justification, as today | Live | Separate dimension from AAL. A role needs **both** its identity-assurance minimum and its AAL minimum |
 | Signing wallet | `(wallet_address, chain_id)`, unique; bound to one subject | Holder binds it by signing a binding message from an MFA session (proof of possession). Admin can only disable | Live; `bound_at`, `disabled_at` | Required for attestation and gate-decision signatures; never a login |
@@ -46,7 +46,7 @@ accounts. Wallets stay, but only as signing keys bound to an account.
 **Priority of overlapping conditions** (evaluated in this order, first match wins):
 
 1. Revoked or expired session, disabled subject, revoked authenticator used by the session → 401.
-2. Session below AAL2 (first factor only) → only MFA enrolment, MFA challenge and logout.
+2. A Google first-factor session opens My Work directly. The My Work, project overview, verification case and administrator screens can read their explicitly listed resources under live role bindings and project scope. Administrative mutations require a second factor when submitted. An invited Google user who deferred first enrolment may enrol from the original live invitation identity after 24 hours, provided no previous confirmed factor, recovery codes, reset, completed email change or approved suspension exists. The session remains AAL1. Other private workspace operations retain their existing step-up requirements. Other first factors follow the original MFA flow.
 3. No role binding → "access pending"; public reads only.
 4. Role binding present but session AAL or identity assurance below the role minimum → that role is not effective for this request (same narrowing rule as today: narrowed, never widened).
 5. Otherwise the existing authorisation rules apply unchanged.
@@ -95,7 +95,7 @@ database functions; the API does the code exchange and ID-token validation (`ope
 | Sign-in | Only for a linked, live identity; unknown keys answer `OIDC_ACCOUNT_NOT_FOUND` whatever the email | §5 nOAuth |
 | Linking | `/link/start` and `/link/callback` need an aal2, non-recovering session, the same one at both ends; an identity linked anywhere (this account, another, another tenant) answers one code, `OIDC_IDENTITY_UNAVAILABLE`; a second identity of the same provider `OIDC_PROVIDER_ALREADY_LINKED` | Linking adds a way in: same bar as adding a factor |
 | Unlinking | aal2, non-recovering; never the last way in (no address and no other identity → `OIDC_LAST_SIGN_IN_METHOD`); ends every session the identity signed in, this one included | |
-| Invitation with a provider | Accepted when the provider vouches for the invited address *now*: Google `email_verified` **and** the address is Gmail (`@gmail.com`, `@googlemail.com`) or in the Workspace domain the token's `hd` names exactly; Microsoft `xms_edov` (optional claim, must be configured on the app registration). A Google-verified address Google does not manage answers `OIDC_EMAIL_CODE_REQUIRED` (security review L7: a consumer Google account's `email_verified` dates from its sign-up and survives the address changing hands); otherwise `OIDC_EMAIL_NOT_VERIFIED` / `OIDC_EMAIL_MISMATCH`. The invitation stays usable with the emailed code in every refusal. Creates the subject (no role, `wallet_only`), links the identity, retires the invitation's outstanding code | **Departs from §3 ("after the email code")** — the provider's verified address replaces the code as proof of control. Needs the coordinator's confirmation; the code path is unchanged |
+| Invitation with a provider | Accepted when the provider vouches for the invited address *now*: Google `email_verified` **and** the address is Gmail (`@gmail.com`, `@googlemail.com`) or in the Workspace domain the token's `hd` names exactly; Microsoft `xms_edov` (optional claim, must be configured on the app registration). A Google-verified address Google does not manage answers `OIDC_EMAIL_CODE_REQUIRED` (security review L7: a consumer Google account's `email_verified` dates from its sign-up and survives the address changing hands); otherwise `OIDC_EMAIL_NOT_VERIFIED` / `OIDC_EMAIL_MISMATCH`. The invitation stays usable with the emailed code in every refusal. Creates the subject with the role and assurance authorized on the invitation (account-only invitations retain `wallet_only`), links the identity, retires the invitation's outstanding code | **Departs from §3 ("after the email code")** — the provider's verified address replaces the code as proof of control. Needs the coordinator's confirmation; the code path is unchanged |
 | Errors | The provider's `error` / `error_description` and token-endpoint text are never echoed or stored; the client sees `OIDC_ACCESS_DENIED`, `OIDC_PROVIDER_ERROR`, `OIDC_TOKEN_INVALID`, `OIDC_PROVIDER_UNAVAILABLE` (503) | Attacker-influenced text |
 | Recovery (security review M3, 0123) | An approved MFA reset and a completed email change revoke every live linked identity of the subject in the same transaction (`revoked_reason` `mfa_reset` / `email_change`); the reset and change notices name the removed providers (never an identifier) and ask for them to be linked again; the holder re-links from an aal2 session | A sign-in someone linked during brief aal2 access would otherwise survive recovery and reach the 24 h enrolment window first |
 | Configuration | Each provider is on only with both its client id and secret (production refuses one without the other); the secrets are optional deployment secrets, not required at synth | Absent is a valid state |
@@ -234,3 +234,37 @@ Status after WP7 (local evidence, 2026-11-02; per-criterion tests in [the accept
 - Independent security review of WP1–WP5 and of the integrated flow (AGENTS.md: authentication changes).
 - Staging: real Resend delivery to Google Workspace and Microsoft 365 mailboxes; real Google and Microsoft apps; SPF/DKIM/DMARC alignment checked on the received mail.
 - Not claimed until done: production readiness (Q4), deliverability at scale.
+
+
+### New-person role invitations (0152)
+
+| Authority and identity | Frozen decision | Live checks and result |
+| --- | --- | --- |
+| Active tenant-wide administrator, high identity assurance, AAL3 | Invited email, organisation, role, optional project and verification basis | The project must belong to the tenant. Project members also require an owning-organisation match; reviewers retain their own firm’s affiliation. The invitation audit records the issuer and decision. |
+| Verified email-code or provider recipient | Only the role saved on the invitation | A pending, unexpired invitation transitions to accepted with its new subject, assurance and binding in one transaction. A repeat login reuses that subject. |
+| Revoked, expired or suspended-inviter invitation | Historical record retained | No acceptance or binding. Existing and account-only invitations retain their original behavior. |
+| Project member or reviewer | Specific project or organisation scope | Membership grants no governance vote. An administrator invitation explicitly covers the workspace. Publication independence and credential checks still apply. |
+| Project-scoped invitee | Issuing administrator selects the organisation and project | The accepted binding keeps both. Project ID limits access; the active organisation counts towards review conflicts even with another firm’s credential. |
+
+### Account sign-in without Registry-managed factors
+
+| Identity and scope | Authority and timing | Decision |
+| --- | --- | --- |
+| Invited person, verified provider or email | Active session and live tenant/project grant | Evaluate role, identity assurance, assignment and conflicts for the requested operation. |
+| Legacy recovery session | Previously restricted, independent of its grants | Require a fresh sign-in. |
+| Service identity | Scoped service token | Retain service-only route and role checks. |
+| Signed evidence | Frozen historical signature and wallet identity | Continue checking the signing wallet and its signature. |
+
+### Single-administrator workspace operations
+
+| Operation | Authority and scope | Evidence retained |
+| --- | --- | --- |
+| Decide a role grant, revocation, or account suspension | An active administrator in the same tenant may decide their own proposal | Original requester, decision actor, reason and version |
+| Activate or release emergency access | The requesting administrator may decide and release the time-limited elevation | Target, expiry, decision, incident and release record |
+| Change a sign-in address | A tenant administrator can request and approve the change, including their own address | The current mailbox authorizes the named destination and the new mailbox proves receipt before the address changes |
+
+### Signing wallet recovery
+
+An administrator recovering their own wallet requests approval from another eligible administrator in the same tenant. If none exists when approval is recorded, the administrator may approve their own mailbox-confirmed request. Eligibility requires an active tenant-wide administrator binding, sufficient identity assurance, an unsuspended person and a sign-in method. Being offline does not affect eligibility. The holder must still sign with the new wallet. At binding, a self-approved recovery rechecks that the holder remains the sole eligible administrator. If another administrator is now eligible, they must approve the request before a new binding challenge. A sole administrator keeps their existing account assurance while the new key records only proof of possession.
+
+A verified account session requests recovery for one new address and chain. Its registered mailbox receives a ten-minute confirmation key. One administrator of that tenant may approve the confirmed address. The holder then signs a fresh binding challenge in the requesting session. Approval expires after 24 hours and is consumed transactionally. A changed mailbox, changed previous wallet version, revoked session, or different replacement address invalidates the authority. Previously blocked wallet addresses remain blocked.

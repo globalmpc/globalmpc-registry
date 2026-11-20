@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const s = vi.hoisted(() => ({
-  sql: { end: vi.fn() },
+  sql: Object.assign(vi.fn(), { end: vi.fn() }),
   migrate: vi.fn(),
   roles: vi.fn(),
   rollback: vi.fn(),
@@ -23,7 +23,7 @@ vi.mock("node:child_process", () => ({ execFileSync: s.git }));
 const exitCode = process.exitCode;
 beforeEach(() => {
   vi.resetModules();
-  for (const f of [s.sql.end, s.migrate, s.roles, s.rollback, s.git, s.list])
+  for (const f of [s.sql, s.sql.end, s.migrate, s.roles, s.rollback, s.git, s.list])
     f.mockReset();
   vi.stubEnv("DATABASE_URL", "postgres://local/test");
   process.exitCode = 0;
@@ -52,6 +52,17 @@ it.each([["001.sql"], []])(
     );
   },
 );
+it.each([
+  ["develop", "5611", "INSERT"],
+  ["production", "5611", "DELETE"],
+  ["develop", "56", "DELETE"],
+])("configures the Google wallet policy for %s on chain %s", async (stage, chain, statement) => {
+  vi.stubEnv("DEPLOY_ENVIRONMENT", stage);
+  vi.stubEnv("CHAIN_ID", chain);
+  s.migrate.mockResolvedValue([]);
+  await import("../src/cli.js");
+  expect(s.sql).toHaveBeenCalledWith([expect.stringContaining(statement)]);
+});
 it("refuses migrations without a database URL", async () => {
   vi.stubEnv("DATABASE_URL", "");
   await expect(import("../src/cli.js")).rejects.toThrow("exit:1");

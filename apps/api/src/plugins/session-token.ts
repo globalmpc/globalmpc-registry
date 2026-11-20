@@ -48,6 +48,7 @@ export interface ResolvedSessionRow {
   readonly secondFactor: SecondFactor | null;
   /** Restored by a recovery code: only re-enrolment, recovery codes and logout (WP3). */
   readonly recoveryLimited: boolean;
+  readonly googleRequiresMfa: boolean;
   /** The subject's current identity assurance. */
   readonly assuranceLevel: AssuranceLevel;
 }
@@ -97,9 +98,13 @@ export async function resolveSessionToken(
       first_factor: FirstFactor;
       second_factor: SecondFactor | null;
       recovery_limited: boolean;
+      google_requires_mfa: boolean;
       assurance_level: AssuranceLevel | null;
     }[]
-  >`SELECT * FROM core.resolve_session(${hashToken(token)})`;
+  >`
+    SELECT s.*
+    FROM core.resolve_session(${hashToken(token)}) s
+  `;
 
   if (!row) return null;
   // Fail closed on anything but an account session. 0125 revoked every SIWE session and refuses a
@@ -115,6 +120,7 @@ export async function resolveSessionToken(
     firstFactor: row.first_factor,
     secondFactor: row.second_factor,
     recoveryLimited: row.recovery_limited,
+    googleRequiresMfa: false,
     assuranceLevel: row.assurance_level,
   };
 }

@@ -243,9 +243,9 @@ export async function bootstrapOperator(
       email,
     });
 
-    const window = await openEnrolmentWindow(tx, tenantId, subjectId);
 
-    return { tenantId, organizationId, subjectId, created, emailBound, roleGranted, ...window };
+
+    return { tenantId, organizationId, subjectId, created, emailBound, roleGranted, enrolmentWindowUntil: null, enrolmentWindowOpened: false };
   }).catch((error: unknown) => {
     if ((error as { code?: string; constraint_name?: string }).code === "23505" &&
         (error as { constraint_name?: string }).constraint_name === "subjects_email_key") {
@@ -335,45 +335,9 @@ async function initializeLegacyOperator(
       )
     `;
   }
-  let window: { enrolmentWindowUntil: Date | null; enrolmentWindowOpened: boolean };
-  if (emailBound) {
-    window = await openEnrolmentWindow(tx, subject.tenant_id, subject.id);
-  } else {
-    // An explicit cutover rerun reports only an existing window; it is not MFA recovery.
-    await tx`SELECT set_config('app.current_tenant', ${subject.tenant_id}, true)`;
-    const [existing] = await tx<{ until: Date | null }[]>`
-      WITH barrier AS (
-        SELECT GREATEST(
-          (SELECT max(r.decided_at) FROM core.subject_suspensions r
-           WHERE r.subject_id = ${subject.id} AND r.action = 'suspend' AND r.state = 'approved'),
-          (SELECT max(c.completed_at) FROM core.email_change_requests c
-           WHERE c.subject_id = ${subject.id} AND c.state = 'completed')
-        ) AS at
-      )
-      SELECT CASE WHEN core.mfa_has_passkey(s.id) OR core.mfa_has_totp(s.id)
-        THEN NULL ELSE (
-          SELECT max(deadline) FROM (
-            SELECT s.created_at + interval '24 hours' AS deadline
-            WHERE core.mfa_creation_window_open(s.id)
-            UNION ALL
-            SELECT r.enrolment_window_until FROM core.mfa_reset_requests r, barrier b
-            WHERE r.tenant_id = s.tenant_id AND r.subject_id = s.id AND r.state = 'approved'
-              AND r.closed_reason IS NULL AND (b.at IS NULL OR r.decided_at > b.at)
-              AND core.mfa_reset_window_open(s.id)
-            UNION ALL
-            SELECT r.enrolment_window_until FROM core.subject_suspensions r, barrier b
-            WHERE r.tenant_id = s.tenant_id AND r.subject_id = s.id
-              AND r.action = 'reinstate' AND r.state = 'approved'
-              AND (b.at IS NULL OR r.decided_at > b.at) AND core.mfa_reset_window_open(s.id)
-          ) deadlines WHERE deadline > now()
-        ) END AS until
-      FROM core.subjects s WHERE s.id = ${subject.id} AND s.tenant_id = ${subject.tenant_id}
-    `;
-    window = { enrolmentWindowUntil: existing!.until, enrolmentWindowOpened: false };
-  }
   return {
     tenantId: subject.tenant_id, organizationId: binding.organization_id, subjectId: subject.id,
-    created: false, emailBound, roleGranted: false, ...window,
+    created: false, emailBound, roleGranted: false, enrolmentWindowUntil: null, enrolmentWindowOpened: false,
   };
 }
 
@@ -415,35 +379,6 @@ async function refuseNewHolder(
         "later people are invited by an admin. Remove BOOTSTRAP_EMAIL from the deploy, or set it to the address of the person who holds it",
     );
   }
-}
-
-/**
- * Opens (or reports) the person's first-enrolment window — see the header. The database decides:
- * `core.open_bootstrap_enrolment_window` refuses once a factor exists, and is not granted to the
- * application role, so only this migration-connection run can call it.
- */
-async function openEnrolmentWindow(
-  tx: postgres.TransactionSql,
-  tenantId: string,
-  subjectId: string,
-): Promise<{ enrolmentWindowUntil: Date | null; enrolmentWindowOpened: boolean }> {
-  const [row] = await tx<{ opened: boolean; reset_id: string | null; window_until: Date | null }[]>`
-    SELECT * FROM core.open_bootstrap_enrolment_window(${subjectId})
-  `;
-  if (row!.opened) {
-    await tx`
-      INSERT INTO audit.events (
-        tenant_id, actor_subject_id, actor_wallet, effective_role,
-        command, resource_type, resource_id, reason, correlation_id, detail
-      ) VALUES (
-        ${tenantId}, NULL, NULL, ${ROLE_DEPLOY_BOUND},
-        'bootstrap.mfa_enrolment_window.opened', 'mfa_reset_request', ${row!.reset_id},
-        'Bootstrap re-run for a person with no second factor', ${randomUUID()},
-        ${tx.json({ subjectId, windowUntil: row!.window_until!.toISOString() })}
-      )
-    `;
-  }
-  return { enrolmentWindowUntil: row!.window_until, enrolmentWindowOpened: row!.opened };
 }
 
 async function upsertTenant(tx: postgres.TransactionSql, input: BootstrapInput): Promise<string> {

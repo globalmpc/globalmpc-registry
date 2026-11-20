@@ -53,14 +53,14 @@ describeDb("deployment under FORCE RLS without BYPASSRLS", () => {
       return tx`SELECT * FROM core.open_bootstrap_enrolment_window(${first.subjectId})`;
     })).rejects.toMatchObject({code: "P0002"});
   });
-  it("opens an expired first-enrolment window and preserves suspension under the scoped owner", async () => {
+  it("keeps the retired enrolment window closed and preserves suspension under the scoped owner", async () => {
     const args = input();
     const first = await bootstrapOperator(sql, args);
     await sql.begin(async tx => {
       await tx`SELECT set_config('app.current_tenant', ${first.tenantId}, true)`;
       await tx`UPDATE core.subjects SET created_at = now() - interval '2 days' WHERE id = ${first.subjectId}`;
     });
-    expect(await bootstrapOperator(sql, args)).toMatchObject({ enrolmentWindowOpened: true, roleGranted: false });
+    expect(await bootstrapOperator(sql, args)).toMatchObject({ enrolmentWindowOpened: false, roleGranted: false });
     await sql.begin(async tx => {
       await tx`SELECT set_config('app.current_tenant', ${first.tenantId}, true)`;
       await tx`UPDATE core.subjects SET suspended_at = now() WHERE id = ${first.subjectId}`;

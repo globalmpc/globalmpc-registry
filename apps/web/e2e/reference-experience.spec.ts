@@ -191,7 +191,7 @@ test("existing authenticated screens retain their journeys in the common desktop
     ).toBe(true);
   }
   await page.goto("/w/work");
-  await expect(page.locator(".work-summary")).toBeVisible();
+  await expect(page.getByTestId("work-assigned")).toBeVisible();
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
     .exclude("nextjs-portal")

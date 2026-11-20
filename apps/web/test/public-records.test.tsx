@@ -112,13 +112,14 @@ it("searches public records, appends a cursor page and clears search without ret
 });
 it("keeps limitations and status at every depth and distinguishes proof inclusion from finality", async () => {
   const proof = {
+    entryVersionId: "v1", confirmationState: "submitted", merkleVerified: true,
     included: false,
     root: "0xroot",
     batchId: "batch1",
     leafHash: "leaf",
-    path: [],
+    proof: [],
     chainId: 56,
-    transactionHash: "0xtx",
+    transactionHash: `0x${"aa".repeat(32)}`,
     proves: ["Bytes unchanged"],
     doesNotProve: ["No factual guarantee"],
   };
@@ -136,7 +137,7 @@ it("keeps limitations and status at every depth and distinguishes proof inclusio
   expect(screen.getByTestId("proof-disclaimer").textContent).toContain(
     "No factual guarantee",
   );
-  mockHttp({ "GET /api/v1/public/proofs/v2": { ...proof, included: true } });
+  mockHttp({ "GET /api/v1/public/proofs/v2": { ...proof, entryVersionId: "v2", confirmationState: "confirmed", included: true } });
   view.rerender(
     <PublicRecord
       entry={{ ...entry, entryVersionId: "v2", revokedAt: "2026-10-20" }}
@@ -146,9 +147,7 @@ it("keeps limitations and status at every depth and distinguishes proof inclusio
 });
 it("does not fabricate metadata or an integrity proof when a version is unanchored", async () => {
   mockHttp({
-    "GET /api/v1/public/proofs/v1": () => {
-      throw new Error("Not anchored");
-    },
+    "GET /api/v1/public/proofs/v1": Response.json({ code: "NOT_FOUND", message: "This version is not anchored yet" }, { status: 404 }),
   });
   render(
     <PublicRecord
@@ -165,7 +164,7 @@ it("does not fabricate metadata or an integrity proof when a version is unanchor
   expect(
     screen.getByText("The published record states no authority scope."),
   ).toBeTruthy();
-  expect(screen.getByText(/Not anchored yet/)).toBeTruthy();
+  expect(await screen.findByText("Not recorded on-chain")).toBeTruthy();
 });
 it("looks up a public key from the URL and allows an explicit registry lookup", async () => {
   window.history.replaceState(
@@ -462,6 +461,7 @@ it("shows the stored anchor contract of each hash match, linked on its chain's e
 it("shows the stored anchor contract in the integrity proof", async () => {
   const contract = `0x${"a1".repeat(20)}`;
   const proof = {
+    entryVersionId: "v1", confirmationState: "confirmed",
     included: true,
     merkleVerified: true,
     root: "0xroot",
@@ -476,6 +476,9 @@ it("shows the stored anchor contract in the integrity proof", async () => {
   };
   mockHttp({ "GET /api/v1/public/proofs/v1": proof });
   render(<PublicRecord entry={entry} />);
+  const txLink = await screen.findByRole("link", {name:"View transaction ↗"});
+  expect(txLink.getAttribute("href")).toBe(`https://testnet.opbnbscan.com/tx/${proof.transactionHash}`);
+  expect(screen.getByText("Confirmed on opBNB Testnet")).toBeTruthy();
   const cell = await screen.findByTestId("proof-contract");
   expect(cell.querySelector("a")?.getAttribute("href")).toBe(`https://testnet.opbnbscan.com/address/${contract}`);
   expect(cell.textContent).toBe(contract);
@@ -483,7 +486,7 @@ it("shows the stored anchor contract in the integrity proof", async () => {
 
 it.each([[false, true], [true, false]])("keeps a negative integrity result visible on compact detail (verified=%s, included=%s)", async (merkleVerified, included) => {
   mockHttp({ "GET /api/v1/public/proofs/v1": {
-    merkleVerified, included, root: "root", batchId: "batch", leafHash: "leaf",
+    entryVersionId: "v1", confirmationState: "reverted", merkleVerified, included, root: "root", batchId: "batch", leafHash: "leaf",
     proof: [], chainId: null, proves: [], doesNotProve: [],
   } });
   render(<PublicRecord entry={entry} browsableEvidence />);
@@ -546,4 +549,24 @@ it("keeps superseded revoked history expanded and labels its retained revocation
   expect(history.textContent).toContain("superseded");
   expect(history.textContent).toContain("Revoked 2026-11-01");
   await act(async () => {});
+});
+
+
+it("recovers from a proof outage and never displays another version’s confirmation", async () => {
+  let tries = 0;
+  mockHttp({ "GET /api/v1/public/proofs/v1": () => {
+    if (++tries === 1) return Response.json({ message: "Unavailable" }, { status: 503 });
+    if (tries === 2) return { entryVersionId: "another-version", confirmationState: "confirmed", included: true };
+    return { entryVersionId: "v1", confirmationState: "created", included: false, merkleVerified: true, proves: [], doesNotProve: [], proof: [] };
+  } });
+  render(<PublicRecord entry={entry} browsableEvidence />);
+  expect(screen.getByText("Checking on-chain status…")).toBeTruthy();
+  for (let i = 0; i < 2; i++) {
+    await screen.findByText("Could not load on-chain status");
+    expect(screen.queryByText("Not recorded on-chain")).toBeNull();
+    expect(screen.queryByRole("link", { name: /View transaction/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry status" }));
+  }
+  await screen.findByText("Batch prepared · awaiting submission");
+  expect((screen.getByTestId("integrity-disclosure") as HTMLDetailsElement).open).toBe(false);
 });

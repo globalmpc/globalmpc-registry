@@ -740,6 +740,9 @@ td .project-stage-roadmap { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* Public detail: one stage selector and the published results for that selection. */
 .public-evidence { margin: 28px 0; }
+.registration-next { border-inline-start: 3px solid var(--positive); }
+.registration-next h2 { margin-bottom: 8px; }
+.registration-next p { margin: 0; }
 .public-evidence-overview { padding: 0; }
 .public-evidence-totals, .public-results-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .public-evidence-totals h2 { font-size: .875rem; font-weight: 400; color: var(--muted-foreground); margin: 0; }
@@ -780,3 +783,41 @@ td .project-stage-roadmap { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .public-record-disclosure.panel:not([open]) { padding: 0; }
 
 .directory-stage-warning { display: inline-block; margin-top: 8px; color: var(--warning); }
+
+/* Google's pre-approved dark web button includes its own border and typography. */
+button.google-sign-in { padding: 0; border: 0; background: transparent; border-radius: 4px; }
+.google-sign-in img { display: block; max-width: 100%; height: auto; }
+
+button.email-sign-in-option { min-width: 24px; min-height: 32px; }
+
+.record-anchor { display: flex; align-items: baseline; flex-wrap: wrap; gap: .4rem 1rem; margin-block: 1rem; }
+.record-anchor strong { font-size: .875rem; }
+
+.workspace-project-list { table-layout: fixed; }
+.workspace-project-list td { overflow-wrap: anywhere; }
+.workspace-project-list td:first-child a { display: block; }
+.workspace-project-list summary { cursor: pointer; }
+.workspace-project-list .project-progress { min-width: 0; }
+.project-mobile-label { display: none; }
+@media (max-width: 720px) {
+  .workspace-project-list thead { position: absolute; clip-path: inset(50%); }
+  .workspace-project-list tbody, .workspace-project-list tr, .workspace-project-list td { display: block; }
+  .workspace-project-list tr { border-top: 1px solid var(--border); padding-block: 12px; }
+  .workspace-project-list td { border: 0; padding: 4px 0; }
+  .project-mobile-label { display: block; color: var(--muted-foreground); font-size: 12px; }
+}
+
+.invitation-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  align-items: end;
+  gap: 16px;
+}
+.invitation-form .field { margin: 0; min-width: 0; }
+.invitation-form input, .invitation-form select { height: 44px; font-size: 1rem; }
+.invitation-form select { color-scheme: dark; }
+.invitation-form select, .invitation-form option {
+  color: var(--popover-foreground);
+  background-color: var(--popover);
+}
+.invitation-form button[type="submit"] { grid-column: 1 / -1; justify-self: start; }

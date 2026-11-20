@@ -20,6 +20,7 @@ export default function EmailChangePage() {
   const { signOut } = useSession();
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState<{ at: number; count: number; minutes: number } | null>(null);
+  const [ownerCode, setOwnerCode] = useState("");
   const [done, setDone] = useState(false);
   // The approval mailed the first code; a new one may be asked for after the usual wait.
   const [openedAt] = useState(() => Date.now());
@@ -67,6 +68,10 @@ export default function EmailChangePage() {
             onChange={(event) => setEmail(event.target.value)}
           />
         </div>
+        <div className="field">
+          <label htmlFor="owner-confirmation">Confirmation key from your current email</label>
+          <input id="owner-confirmation" value={ownerCode} onChange={event => setOwnerCode(event.target.value)} autoComplete="off" />
+        </div>
         <EmailCodeForm
           digits={digits}
           expiresInMinutes={sent?.minutes ?? null}
@@ -75,7 +80,7 @@ export default function EmailChangePage() {
           submitLabel={C.confirm}
           onResend={send}
           onSubmit={async (code) => {
-            await verifyEmailChange(email.trim(), code);
+            await verifyEmailChange(email.trim(), code, ownerCode.trim());
             await signOut();
             setDone(true);
           }}

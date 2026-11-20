@@ -690,15 +690,7 @@ const ROLE_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
    * lost all their factors and opens a 24-hour first-enrolment window. It never adds an
    * authenticator: the person enrols their own. Two people, neither the person reset.
    */
-  "admin.mfa_reset.propose": {
-    action: "admin.mfa_reset.propose",
-    allowedRoles: ["administrator"],
-  },
-  "admin.mfa_reset.approve": {
-    action: "admin.mfa_reset.approve",
-    secondPerson: "proposer ≠ decider, neither is the subject (mfa_reset_two_person, mfa_reset_not_self_target 0115)",
-    allowedRoles: ["administrator"],
-  },
+
   /**
    * Suspending and reinstating a person — journey 6, AUTH-06 (0127). Suspension ends every way
    * in at once and keeps the signed history; reinstatement opens a first-enrolment window. Two

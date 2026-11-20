@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
-import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
+import { bearer, issueTestSession, idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
 import { insertProject, publishProject } from "./helpers/registry.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
@@ -88,8 +88,8 @@ describeDb("notifications", () => {
     // Creates a second person with the same role as steward.
     const secondSubject = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${secondSubject}, ${fx.tenantA}, 'person', 'Second steward')
+      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
+      VALUES (${secondSubject}, ${fx.tenantA}, 'person', 'Second steward', 'high_assurance')
     `;
     await fx.sql`
       INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
@@ -116,6 +116,20 @@ describeDb("notifications", () => {
       WHERE notification_id = ${mine!.id} AND subject_id = ${secondSubject}
     `;
     expect(Number(otherRead!.count)).toBe(0);
+
+    const dev = await buildServer(loadConfig(testEnv({ DEPLOY_ENVIRONMENT: "develop", CHAIN_ID: "5611" })), fx.appSql);
+    try {
+      const token = await issueTestSession(fx.appSql, fx.tenantA, secondSubject, { firstFactor: "google", secondFactor: null });
+      const headers = bearer(token);
+      const inbox = await dev.inject({ url: "/api/v1/notifications", headers });
+      expect(inbox.json().items).toContainEqual(expect.objectContaining({ id: mine!.id, read: false }));
+      const read = await dev.inject({ method: "POST", url: `/api/v1/notifications/${mine!.id}/read`,
+        headers: { ...headers, "idempotency-key": idempotencyKey() } });
+      expect(read.statusCode, read.body).toBe(200);
+      expect(read.json().read).toBe(true);
+    } finally {
+      await dev.close();
+    }
   });
 
   it("notifies operators when a public record is revoked", async () => {

@@ -26,8 +26,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * (AAL) is derived from those factors. These tests hold the plan's priority rules:
  *
  * 1. revoked, expired or idle sessions → no session (401); no wallet session exists at all (WP7);
- * 2. a first-factor-only session reaches only MFA, logout and its own session;
- * 4. a role whose AAL minimum is not met is narrowed out of the session, not 403-everything;
+ * 2. a primary session uses the subject's live human role bindings;
  *
  * and the service token boundary (D7): a token reaches only the routes its scopes name, makes
  * only service roles effective, and a person session never makes a service role effective.
@@ -52,119 +51,25 @@ describeDb("account sessions", () => {
   const get = (url: string, token: string) => app.inject({ method: "GET", url, headers: bearer(token) });
   const session = async (token: string) => (await get("/api/v1/auth/session", token)).json();
 
-  describe("derived authentication level", () => {
-    it("a first-factor-only session reads its own session and nothing else", async () => {
+  describe("human session authorization", () => {
+    it("uses the member's live binding after email sign-in and revokes access on logout", async () => {
       const token = await issueTestSession(fx.appSql, fx.tenantA, memberSubjectId, { firstFactor: "email_code" });
-
       const own = await session(token);
-      expect(own).toMatchObject({
-        authenticated: true,
-        subjectId: memberSubjectId,
-        firstFactor: "email_code",
-        secondFactor: null,
-        aal: "aal1",
-        mfaSatisfied: false,
-      });
-      expect(own).not.toHaveProperty("walletAddress");
-      // Nothing about what the account could do once past MFA: no roles, no narrowed roles, no
-      // actions, no tenant or project ids.
-      expect(own.roleBindings).toEqual([]);
-      for (const hidden of ["narrowedRoles", "actions", "projectIds", "tenantId"]) {
-        expect(own, hidden).not.toHaveProperty(hidden);
-      }
-      // The same subject past MFA does see them.
-      const full = await session(
-        await issueTestSession(fx.appSql, fx.tenantA, memberSubjectId, { firstFactor: "email_code", secondFactor: "totp" }),
-      );
-      expect(full.roleBindings.length).toBeGreaterThan(0);
-      expect(full.actions.length).toBeGreaterThan(0);
-
-      // The same steward with a second factor reads the project; aal1 may not.
-      for (const url of ["/api/v1/projects", `/api/v1/projects/${fx.projectA}`]) {
-        const denied = await get(url, token);
-        expect(denied.statusCode, url).toBe(403);
-        expect(denied.json()).toMatchObject({
-          code: "MFA_REQUIRED",
-          details: { reason: "AUTHENTICATION_LEVEL_INSUFFICIENT", requiredAal: "aal2" },
-        });
-      }
-
+      expect(own).toMatchObject({ authenticated: true, subjectId: memberSubjectId, aal: "aal1", secondFactor: null });
+      expect(own.roleBindings).toContainEqual(expect.objectContaining({ role: "project_member" }));
+      expect((await get(`/api/v1/projects/${fx.projectA}`, token)).statusCode).toBe(200);
+      expect((await get("/api/v1/admin/subjects", token)).statusCode).toBe(403);
       const logout = await app.inject({ method: "POST", url: "/api/v1/auth/logout", headers: bearer(token) });
       expect(logout.json()).toMatchObject({ revoked: true });
       expect((await session(token)).authenticated).toBe(false);
     });
 
-    it("a TOTP session makes an aal2 role effective", async () => {
-      const token = await issueTestSession(fx.appSql, fx.tenantA, memberSubjectId, {
-        firstFactor: "google",
-        secondFactor: "totp",
+    it.each([null, "totp", "passkey"] as const)("resolves the same reviewer binding with historical factor %s", async factor => {
+      const token = await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, {
+        firstFactor: "microsoft", ...(factor ? { secondFactor: factor } : {}),
       });
-      expect(await session(token)).toMatchObject({ aal: "aal2", mfaSatisfied: true, narrowedRoles: [] });
+      expect((await session(token)).roleBindings).toContainEqual(expect.objectContaining({ role: "reviewer" }));
       expect((await get(`/api/v1/projects/${fx.projectA}`, token)).statusCode).toBe(200);
-    });
-
-    it("a TOTP session cannot use a passkey-only role; a passkey session can", async () => {
-      const totp = await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, {
-        firstFactor: "microsoft",
-        secondFactor: "totp",
-      });
-      const view = await session(totp);
-      expect(view.roleBindings).toEqual([]);
-      expect(view.narrowedRoles).toEqual([{ role: "reviewer", requiredAal: "aal3" }]);
-      expect(view.actions).toEqual([]);
-
-      const denied = await get(`/api/v1/projects/${fx.projectA}`, totp);
-      expect(denied.statusCode).toBe(403);
-      expect(denied.json().details).toMatchObject({
-        reason: "AUTHENTICATION_LEVEL_INSUFFICIENT",
-        role: "reviewer",
-        requiredAal: "aal3",
-      });
-
-      const passkey = await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, {
-        firstFactor: "microsoft",
-        secondFactor: "passkey",
-      });
-      expect(await session(passkey)).toMatchObject({ aal: "aal3", narrowedRoles: [] });
-      expect((await get(`/api/v1/projects/${fx.projectA}`, passkey)).statusCode).toBe(200);
-    });
-
-    it("narrows only the role whose minimum is not met — the other roles keep working", async () => {
-      // A steward who is also a gate approver: at aal2 the approver role is narrowed out, the
-      // steward role stays and still reads the project.
-      await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${memberSubjectId}, ${fx.reviewOrgA}, 'reviewer')
-      `;
-      try {
-        const token = await issueTestSession(fx.appSql, fx.tenantA, memberSubjectId, {
-          firstFactor: "email_code",
-          secondFactor: "totp",
-        });
-        const view = await session(token);
-        expect(view.roleBindings.map((binding: { role: string }) => binding.role)).toEqual(["project_member"]);
-        expect(view.narrowedRoles).toEqual([{ role: "reviewer", requiredAal: "aal3" }]);
-        expect(view.actions).not.toContain("gate.decide");
-        expect((await get(`/api/v1/projects/${fx.projectA}`, token)).statusCode).toBe(200);
-      } finally {
-        await fx.sql`
-          UPDATE core.role_bindings SET revoked_at = now()
-          WHERE subject_id = ${memberSubjectId} AND role = 'reviewer' AND revoked_at IS NULL
-        `;
-      }
-    });
-
-    it("an aal1 session cannot read restricted data through any authenticated route", async () => {
-      const token = await issueTestSession(fx.appSql, fx.tenantA, fx.operatorSubjectA, { firstFactor: "email_code" });
-      for (const url of [
-        "/api/v1/admin/subjects",
-        "/api/v1/audit-events/export",
-        `/api/v1/projects/${fx.projectA}/evidence`,
-      ]) {
-        const response = await get(url, token);
-        expect(response.statusCode, url).toBe(403);
-        expect(response.json().code, url).toBe("MFA_REQUIRED");
-      }
     });
   });
 
@@ -436,7 +341,7 @@ describeDb("account sessions", () => {
       `;
       const token = await signIn(app, wallet);
       const view = await session(token);
-      expect(view.aal).toBe("aal3");
+      expect(view.aal).toBe("aal1");
       expect(view.roleBindings).toEqual([]);
       expect(view.narrowedRoles).toEqual([{ role: "scan_service", requiredAal: null }]);
 

@@ -558,7 +558,7 @@ describeDb("Governance — on-chain snapshot", () => {
       });
       const richer = newAccount();
       balances.set(richer.address, 70n);
-      const replaced = await bindWalletByProof(app, passkey, richer.account);
+      const replaced = await bindWalletByProof(app, passkey, richer.account, "rotation", voter.account);
       expect(replaced.statusCode, replaced.body).toBe(200);
       // Rebinding a wallet does not confer identity assurance on its new address.
       await fx.sql`UPDATE core.wallet_identities SET assurance_level = 'identity_bound' WHERE subject_id = ${voterSubject} AND disabled_at IS NULL`;
@@ -583,7 +583,7 @@ describeDb("Governance — on-chain snapshot", () => {
         firstFactor: "email_code",
         secondFactor: "passkey",
       });
-      const rebound = await bindWalletByProof(app, holderPasskey, voter.account);
+      const rebound = await bindWalletByProof(app, holderPasskey, voter.account, "rotation", holder.account);
       expect(rebound.statusCode, rebound.body).toBe(200);
       await fx.sql`UPDATE core.wallet_identities SET assurance_level = 'identity_bound' WHERE subject_id = ${holderSubject} AND disabled_at IS NULL`;
       await syncSubjectAssurance(fx.sql);

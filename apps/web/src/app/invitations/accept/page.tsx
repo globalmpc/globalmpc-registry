@@ -1,5 +1,7 @@
 "use client";
 
+import { landingPath } from "@/lib/next-path";
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -141,8 +143,7 @@ export default function AcceptInvitationPage() {
             onSubmit={async (code) => {
               await verifyInvitationAcceptance(token, code, name);
               pendingInvitation.clear();
-              await refresh();
-              router.push("/auth/mfa");
+              router.push(landingPath(await refresh()));
             }}
           />
         )}

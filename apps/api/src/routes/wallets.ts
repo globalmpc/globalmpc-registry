@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type postgres from "postgres";
 import type { Hex as ViemHex } from "viem";
 import {
-  WALLET_UNAVAILABLE,
+  recoveryId, recoveryProof, WALLET_UNAVAILABLE,
   bindWalletByProofRequest,
   disableOwnWalletRequest,
   walletBindingChallengeRequest,
@@ -15,6 +15,7 @@ import { ROLE_SELF_BOUND, recordAudit } from "../audit.js";
 import type { AppConfig } from "../config.js";
 import { hashUserAgent } from "../device.js";
 import { AppError, badRequest, conflict, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
+import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
 import type { Session } from "../plugins/session.js";
 import {
   humanReadableWalletBinding,
@@ -64,6 +65,7 @@ const DB_REFUSALS: Readonly<Record<string, () => AppError>> = {
     }),
   MFA_RECOVERY_REENROLMENT_REQUIRED: () =>
     forbidden("MFA_RECOVERY_REENROLMENT_REQUIRED", "Enrol a new passkey or authenticator app first"),
+  WALLET_PREVIOUS_SIGNATURE_REQUIRED: () => forbidden("WALLET_PREVIOUS_SIGNATURE_REQUIRED", "Authorize the replacement with your existing signing wallet"),
   WALLET_CHALLENGE_INVALID: () =>
     unauthorized("WALLET_CHALLENGE_INVALID", "No live binding challenge of this session matches; start again"),
   // One answer wherever the address is bound — this account, another one, another tenant.
@@ -151,6 +153,64 @@ export async function registerWalletRoutes(
       ...(entry.signingWallet ? { signingWallet: entry.signingWallet } : {}),
     });
   }
+
+  function recoveryAdmin(request: FastifyRequest) {
+    const ctx = requireAccountSession(request);
+    assertAuthorized(ctx.session, "admin.wallet.manage", tenantResource(ctx.tenantId, { state: "active", statesAllowingAction: ["active"] }), sessionFacts(ctx.session));
+    return ctx;
+  }
+
+  async function listRecoveries(ctx: AccountContext, admin: boolean) {
+    const items = await inTenant(sql, ctx.tenantId, tx => tx`
+      SELECT r.id,s.display_name AS name,r.wallet_address AS address,r.chain_id AS "chainId",
+        (r.approved_by IS NOT NULL AND (r.approved_by <> r.subject_id OR core.wallet_recovery_self_approval_valid(r.subject_id))) AS approved,(r.confirmed_at IS NOT NULL) AS confirmed
+      FROM core.wallet_recoveries r JOIN core.subjects s ON s.id=r.subject_id AND s.tenant_id=r.tenant_id
+      WHERE r.tenant_id=${ctx.tenantId} AND r.created_at>now()-interval '24 hours'
+        AND r.cancelled_at IS NULL AND r.consumed_at IS NULL
+        AND ${admin ? tx`r.confirmed_at IS NOT NULL AND (r.approved_by IS NULL OR (r.approved_by=r.subject_id AND r.subject_id<> ${ctx.subjectId})) AND core.wallet_recovery_session_live(r.id)
+          AND (r.subject_id <> ${ctx.subjectId} OR NOT core.has_other_wallet_recovery_admin(${ctx.subjectId}))` : tx`r.session_id=${ctx.session.sessionId}`}
+      ORDER BY r.created_at DESC`);
+    return { items };
+  }
+
+  app.get("/api/v1/auth/wallet-recoveries", request => listRecoveries(requireAccountSession(request), false));
+  app.get("/api/v1/admin/wallet-recoveries", request => listRecoveries(recoveryAdmin(request), true));
+
+  app.post("/api/v1/auth/wallet-recoveries", async request => {
+    const ctx = requireAccountSession(request);
+    const parsed = walletBindingChallengeRequest.safeParse(request.body);
+    if (!parsed.success) throw invalidRequest(parsed.error.issues);
+    const address = parsed.data.walletAddress.toLowerCase();
+    if (config.chainId !== LOCAL_CHAIN_ID && isPublicDevAddress(address)) throw badRequest("WALLET_PUBLIC_DEV_ADDRESS", "Choose a private signing wallet");
+    const [row] = await inTenant(sql, ctx.tenantId, tx => tx`SELECT core.start_wallet_recovery(${ctx.session.sessionId},${config.chainId},${address}) AS id`);
+    if (!row?.id) throw conflict("WALLET_RECOVERY_UNAVAILABLE", "Check the new wallet address and wait a minute before requesting another email");
+    return { id: row.id };
+  });
+
+  app.post("/api/v1/auth/wallet-recoveries/confirm", async request => {
+    const ctx = requireAccountSession(request);
+    const parsed = recoveryProof.safeParse(request.body);
+    if (!parsed.success) throw invalidRequest(parsed.error.issues);
+    const { id, proof } = parsed.data;
+    const [row] = await inTenant(sql, ctx.tenantId, tx => tx`SELECT core.confirm_wallet_recovery(${ctx.session.sessionId},${id},${proof}) AS confirmed`);
+    if (!row?.confirmed) throw forbidden("WALLET_RECOVERY_INVALID", "Request a new recovery email");
+    return { id };
+  });
+
+  app.post("/api/v1/admin/wallet-recoveries/approve", async request => {
+    const ctx = recoveryAdmin(request);
+    const parsed = recoveryId.safeParse(request.body);
+    if (!parsed.success) throw invalidRequest(parsed.error.issues);
+    const { id } = parsed.data;
+    return inTenant(sql, ctx.tenantId, async tx => {
+      const [row] = await tx`SELECT core.approve_wallet_recovery(${ctx.session.sessionId},${id}) AS approved`;
+      if (!row?.approved) throw conflict("WALLET_RECOVERY_UNAVAILABLE", "No confirmed recovery request is awaiting approval");
+      await recordAudit(tx, { tenantId: ctx.tenantId, session: ctx.session, effectiveRole: "administrator",
+        command: "admin.wallet_recovery.approved", resourceType: "wallet_recovery", resourceId: id,
+        correlationId: request.context.correlationId, requestIp: request.clientIp });
+      return { id };
+    });
+  });
 
   app.get("/api/v1/auth/wallets", async (request) => {
     const context = requireAccountSession(request);
@@ -257,9 +317,7 @@ export async function registerWalletRoutes(
         throw unauthorized("WALLET_CHALLENGE_INVALID", "No live binding challenge of this session matches; start again");
       }
 
-      const signer = await recoverWalletBindingSigner(
-        config,
-        walletBindingMessage({
+      const message = walletBindingMessage({
           tenantId: challenge.tenant_id,
           subjectId: challenge.subject_id,
           walletAddress: challenge.wallet_address,
@@ -267,15 +325,17 @@ export async function registerWalletRoutes(
           nonce: challenge.nonce,
           issuedAt: challenge.issued_at,
           expiresAt: challenge.expires_at,
-        }),
-        parsed.data.signature.toLowerCase() as ViemHex,
-      );
+        });
+      const signer = await recoverWalletBindingSigner(config, message, parsed.data.signature.toLowerCase() as ViemHex);
       // Another key, another chain, another subject or tenant in the signed message, or another
       // nonce: each recovers to some other address.
       if (signer !== challenge.wallet_address) {
         throw badRequest("SIGNATURE_SIGNER_MISMATCH", "The signature is not from the wallet being bound");
       }
 
+      const previousSigner = parsed.data.previousWalletSignature
+        ? await recoverWalletBindingSigner(config, message, parsed.data.previousWalletSignature as ViemHex)
+        : null;
       const walletId = randomUUID();
       const [bound] = await tx<
         {
@@ -292,7 +352,7 @@ export async function registerWalletRoutes(
         SELECT previous_assurance::text, assurance::text, replaced_wallet_id, replaced_wallet_address,
                replaced_chain_id, replaced_bound_via, rebind_of, rebind_same_subject
         FROM core.bind_wallet_by_proof(
-          ${context.session.sessionId}, ${parsed.data.challengeId}, ${signer}, ${walletId}, ${parsed.data.replaceReason}
+          ${context.session.sessionId}, ${parsed.data.challengeId}, ${signer}, ${walletId}, ${parsed.data.replaceReason}, ${previousSigner}
         )
       `;
       const replaced = replacedWallet(

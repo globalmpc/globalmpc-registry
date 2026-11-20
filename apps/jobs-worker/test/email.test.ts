@@ -77,13 +77,23 @@ describe("mail wording", () => {
   const NOTICES: readonly string[] = ["email_changed_notice", "mfa_reset_notice", "account_suspended_notice"];
   const NO_CODE: readonly string[] = [...NOTICES, "account_reinstated_notice"];
   const paramsFor = (template: (typeof EMAIL_TEMPLATES)[number]) =>
-    template === "invitation_link" ? params.link : NO_CODE.includes(template) ? {} : params.code;
+    template === "wallet_recovery" ? { code: "11111111-1111-4111-8111-111111111111", address: "0x"+"a".repeat(40), chainId: 97 } : template === "email_change_owner" ? { code: "11111111-1111-4111-8111-111111111111", destination: "new@example.test" } : template === "invitation_link" ? params.link : NO_CODE.includes(template) ? {} : params.code;
 
   it("never puts a code in a subject, and says when it expires and what to do if unasked", () => {
     for (const template of EMAIL_TEMPLATES) {
       const mail = renderEmail(template, paramsFor(template));
       expect(mail.subject).not.toMatch(/[0-9]{8}/);
       expect(mail.subject).not.toContain("token=");
+      if (template === "wallet_recovery") {
+        expect(mail.text).toContain("chain 97");
+        expect(mail.text).toContain("10 minutes");
+        continue;
+      }
+      if (template === "email_change_owner") {
+        expect(mail.text).toContain("new@example.test");
+        expect(mail.text).toContain("10 minutes");
+        continue;
+      }
       if (template === "email_changed_notice") {
         expect(mail.text).toMatch(/did not ask for this/);
         continue;

@@ -35,6 +35,7 @@ const SECRET_VARIABLES = [
   "MICROSOFT_CLIENT_SECRET",
 ] as const;
 const schema = z.object({
+  DEPLOY_ENVIRONMENT: z.string().optional(),
   PORT: z.coerce.number().int().positive().default(3001),
   DATABASE_URL: z.string().min(1),
   /**
@@ -76,20 +77,6 @@ const schema = z.object({
    * (`oidc-test-relay.ts`). Refused in production and on mainnet, like the demo keys.
    */
   OIDC_TEST_RELAY_URL: z.string().optional(),
-
-  /**
-   * WebAuthn relying party — passkeys (WP3).
-   *
-   * `WEBAUTHN_RP_ID` is the web host passkeys are bound to (`dev-registry.globalmpc.tech`): a
-   * passkey made for one RP ID never signs for another, which is what makes it phishing-
-   * resistant. `WEBAUTHN_ORIGIN` is the exact origin the browser reports
-   * (`https://dev-registry.globalmpc.tech`); an assertion from any other origin is refused.
-   * Required in production, where the origin must be https; development and tests default to
-   * the web origin (`WEB_ORIGIN`) and its host. The ceremony runs on the page an
-   * invitation link opens, so `WEBAUTHN_ORIGIN` must equal the web origin.
-   */
-  WEBAUTHN_RP_ID: z.string().optional(),
-  WEBAUTHN_ORIGIN: z.string().optional(),
 
   /**
    * Request cap — 06 §6.9.
@@ -311,6 +298,7 @@ export interface AppConfig {
   readonly governanceConfirmationDepth: number;
   readonly port: number;
   readonly databaseUrl: string;
+  readonly developmentGoogleWorkspace?: boolean;
   readonly chainId: number;
   readonly sessionSecret: string;
   readonly nodeEnv: "development" | "test" | "production";
@@ -324,7 +312,6 @@ export interface AppConfig {
    */
   readonly oidcTestRelayUrl: string | null;
   /** WebAuthn relying party: the RP ID and the one origin assertions must come from. */
-  readonly webauthn: { readonly rpId: string; readonly origin: string };
   /** Google / Microsoft sign-in (WP4). A provider is `null` when it is turned off. */
   readonly oidc: OidcConfig;
   readonly rateLimitMax: number;
@@ -421,6 +408,7 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
   return {
     port: value.PORT,
     databaseUrl: value.DATABASE_URL,
+    developmentGoogleWorkspace: value.DEPLOY_ENVIRONMENT === "develop" && value.CHAIN_ID === 5611,
     chainId: value.CHAIN_ID,
     creChainId: Number(value.CRE_CHAIN_ID ?? value.CHAIN_ID),
     creChainRpcUrl: value.CRE_CHAIN_RPC_URL ?? (Number(value.CRE_CHAIN_ID ?? value.CHAIN_ID) === value.CHAIN_ID ? value.CHAIN_RPC_URL ?? null : null),
@@ -429,7 +417,6 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv): AppConfig {
     webOrigin: resolveWebOrigin(value),
     emailTransport: resolveEmailTransport(value),
     oidcTestRelayUrl: resolveOidcTestRelay(value),
-    webauthn: resolveWebauthn(value, resolveWebOrigin(value)),
     oidc: resolveOidc(value, resolveWebOrigin(value)),
     rateLimitMax: value.RATE_LIMIT_MAX,
     publicRateLimitMax: value.PUBLIC_RATE_LIMIT_MAX ?? value.RATE_LIMIT_MAX,
@@ -500,55 +487,6 @@ function resolveOidcTestRelay(value: z.infer<typeof schema>): string | null {
     throw new ConfigError("OIDC_TEST_RELAY_URL must name this machine (127.0.0.1, [::1] or localhost)");
   }
   return url.href.replace(/\/+$/, "");
-}
-
-const HOST_NAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
-
-/**
- * The WebAuthn relying party, validated once.
- *
- * The RP ID must be a bare host name, and the origin's host must be it or a subdomain of it — the
- * browser refuses anything else, so a mismatch would only surface as every passkey failing.
- *
- * The origin is also the web app's origin (`webOrigin`, where invitation links land and the
- * ceremony runs): two different values would mean either mail points at a page whose passkeys
- * the API refuses, or the API accepts ceremonies from a page it never links to.
- */
-function resolveWebauthn(
-  value: z.infer<typeof schema>,
-  webOrigin: string,
-): { rpId: string; origin: string } {
-  const production = value.NODE_ENV === "production";
-  if (production && (!value.WEBAUTHN_RP_ID || !value.WEBAUTHN_ORIGIN)) {
-    throw new ConfigError("WEBAUTHN_RP_ID and WEBAUTHN_ORIGIN are required in production");
-  }
-  const rpId = value.WEBAUTHN_RP_ID ?? new URL(webOrigin).hostname;
-  const rawOrigin = value.WEBAUTHN_ORIGIN ?? webOrigin;
-  if (!HOST_NAME.test(rpId)) {
-    throw new ConfigError("WEBAUTHN_RP_ID must be a lower-case host name without scheme, port or path");
-  }
-  let origin: URL;
-  try {
-    origin = new URL(rawOrigin);
-  } catch {
-    throw new ConfigError("WEBAUTHN_ORIGIN must be an origin such as https://registry.example.com");
-  }
-  // The browser reports the origin exactly; anything beyond scheme, host and port could never match.
-  if (origin.origin !== rawOrigin) {
-    throw new ConfigError("WEBAUTHN_ORIGIN must be an origin only — scheme, host and optional port, no path");
-  }
-  if (origin.protocol !== "https:" && (production || origin.protocol !== "http:")) {
-    throw new ConfigError("WEBAUTHN_ORIGIN must use https in production (http only for local development)");
-  }
-  if (origin.hostname !== rpId && !origin.hostname.endsWith(`.${rpId}`)) {
-    throw new ConfigError("WEBAUTHN_ORIGIN's host must be WEBAUTHN_RP_ID or a subdomain of it");
-  }
-  if (origin.origin !== webOrigin) {
-    throw new ConfigError(
-      `WEBAUTHN_ORIGIN must equal the web origin (WEB_ORIGIN): ${webOrigin}`,
-    );
-  }
-  return { rpId, origin: origin.origin };
 }
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
