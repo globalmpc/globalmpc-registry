@@ -5,15 +5,24 @@
  * the whole file) of known earlier revisions. `earlier` lists comment-insensitive checksums of
  * reviewed earlier revisions. `normalized` is the checksum of the revision on disk.
  * `runMigrations` accepts a recorded `full` or `earlier` value only when the file on disk
- * still has checksum `normalized`, then rewrites the record.
+ * still has checksum `normalized`, then rewrites the record. `compatible` pins
+ * alternate applied revisions whose recorded checksum is kept for rollback.
  */
 export interface LegacyChecksum {
   readonly full: readonly string[];
   readonly earlier?: readonly string[];
+  readonly compatible?: readonly string[];
   readonly normalized: string;
 }
 
 export const LEGACY_CHECKSUMS: Readonly<Record<string, LegacyChecksum>> = {
+  // Preserve the historical development checksum for rollback to the image that applied it.
+  // 0156 and 0166 reconcile the OIDC settings and the legacy factor grants.
+  "0155_account_sign_in_without_second_factors.sql": {
+    full: [],
+    compatible: ["64fc9a75ac49a560e249a16b2905502995e74bab89235eec1751834af10fc627"],
+    normalized: "912b3ec54becfd3af292621b0a235e3602bd625cabe1b05a23636dbe8789a605",
+  },
   "0107_anchor_contract_registry.sql": {
     full: [],
     earlier: ["8a5ee5dd96d621f4eb78395cd77e98642fb36dd4d7433e48aa4d21b812bc696c"],

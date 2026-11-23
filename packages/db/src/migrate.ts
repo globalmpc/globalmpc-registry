@@ -180,7 +180,7 @@ export type ChecksumVerdict = "match" | "upgrade" | "mismatch";
 /**
  * Compares a recorded checksum with the file on disk.
  *
- * - `match`: recorded with the current scheme and the code is unchanged.
+ * - `match`: the current checksum matches or a pinned compatible revision was applied.
  * - `upgrade`: the recorded checksum belongs to a known earlier revision of this file, and the
  *   file on disk is exactly the pinned current revision — either the same text under the
  *   full-text scheme, or a reviewed revision listed in `LEGACY_CHECKSUMS`. The caller rewrites
@@ -196,6 +196,9 @@ export function judgeChecksum(input: {
   if (input.recorded === current) return "match";
   if (input.recorded === fullTextChecksum(input.sql)) return "upgrade";
   const { legacy } = input;
+  if (legacy?.normalized === current && legacy.compatible?.includes(input.recorded)) {
+    return "match";
+  }
   const known = legacy
     ? legacy.full.includes(input.recorded) || (legacy.earlier ?? []).includes(input.recorded)
     : false;

@@ -118,6 +118,17 @@ describe("judgeChecksum", () => {
     expect(judgeChecksum({ recorded: "0".repeat(64), sql: current, legacy })).toBe("mismatch");
   });
 
+  it("keeps the recorded checksum of a pinned compatible 0155 revision", () => {
+    const migration = listMigrations().find((item) =>
+      item.name === "0155_account_sign_in_without_second_factors.sql",
+    )!;
+    const legacy = LEGACY_CHECKSUMS[migration.name]!;
+    const recorded = "64fc9a75ac49a560e249a16b2905502995e74bab89235eec1751834af10fc627";
+    expect(judgeChecksum({ recorded, sql: migration.sql, legacy })).toBe("match");
+    expect(judgeChecksum({ recorded, sql: migration.sql + "\nSELECT 1;", legacy })).toBe("mismatch");
+    expect(judgeChecksum({ recorded: "0".repeat(64), sql: migration.sql, legacy })).toBe("mismatch");
+  });
+
   it("upgrades a pinned earlier revision to the pinned current revision", () => {
     const earlier = "CREATE TABLE t (id INT); SELECT 'old text';";
     const revised = "CREATE TABLE t (id INT); SELECT 'new text';";
