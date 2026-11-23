@@ -13,7 +13,7 @@ import { addVirtualAuthenticator, closeMailbox, invitationLink, mailedCode, totp
  * shortcut: every session is issued by the same screens a person uses.
  */
 
-const TENANT_A_ORG = "aaaaaaaa-0000-0000-0000-000000000001";
+const COMPANY_A_ORG = "aaaaaaaa-0000-0000-0000-000000000001";
 
 // A second sign-in by authenticator app must wait for the next 30 s time step (the server refuses a
 // replayed step), so a journey can spend up to 30 s idle on top of its own work.
@@ -30,8 +30,8 @@ async function invite(page: Page, email: string): Promise<void> {
   // The seeded organisation loads asynchronously; its initial text input is
   // replaced by a select. Wait for the ready control instead of racing that swap.
   const organisation = panel.getByRole("combobox", { name: "Organisation", exact: true });
-  await organisation.selectOption(TENANT_A_ORG);
-  await expect(organisation).toHaveValue(TENANT_A_ORG);
+  await organisation.selectOption(COMPANY_A_ORG);
+  await expect(organisation).toHaveValue(COMPANY_A_ORG);
   await panel.getByLabel("Invitation role", { exact: true }).selectOption("");
   await panel.getByRole("button", { name: "Send invitation" }).click();
   await expect(panel.getByTestId("invitation-list")).toContainText(email);

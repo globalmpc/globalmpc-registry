@@ -55,9 +55,9 @@ export function WorkspaceGate({ children }: { readonly children: React.ReactNode
     );
   }
 
-  if (!session.tenantId) {
+  if (!session.workspaceAvailable) {
     return (
-      <div className="panel" data-testid="workspace-no-tenant">
+      <div className="panel" data-testid="workspace-unavailable">
         <h1>This sign-in has no workspace</h1>
         <p className="sub">
           Sign out and sign in again. Published records need no workspace access:{" "}

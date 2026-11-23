@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../src/migrate.js";
-import { withTenant } from "../src/session.js";
+import { withActor } from "../src/session.js";
 
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
@@ -10,8 +10,6 @@ const describeDb = url ? describe : describe.skip;
 describeDb("reviewed claim type catalog", () => {
   let admin: postgres.Sql;
   let app: postgres.Sql;
-  const tenant = randomUUID();
-  const otherTenant = randomUUID();
   const proposer = randomUUID();
   const decider = randomUUID();
   const effectiveFrom = "2026-01-01T00:00:00Z";
@@ -28,12 +26,9 @@ describeDb("reviewed claim type catalog", () => {
     appUrl.username = "mpc_app_login";
     appUrl.password = "app";
     app = postgres(appUrl.toString(), { onnotice: () => {} });
-    for (const id of [tenant, otherTenant]) {
-      await admin`INSERT INTO core.tenants (id, slug, display_name) VALUES (${id}, ${id}, 'Catalog test')`;
-    }
     for (const id of [proposer, decider]) {
-      await admin`INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-        VALUES (${id}, ${tenant}, 'person', 'Reviewer')`;
+      await admin`INSERT INTO core.subjects (id, kind, display_name)
+        VALUES (${id}, 'person', 'Reviewer')`;
     }
   });
 
@@ -46,14 +41,14 @@ describeDb("reviewed claim type catalog", () => {
     const id = randomUUID();
     const proposalId = randomUUID();
     const payload = { claimType: key, displayName: "License", description: null, definition };
-    await withTenant(app, { tenantId: tenant }, async (tx) => {
+    await withActor(app, { subjectId: proposer }, async (tx) => {
       await tx`INSERT INTO core.registry_proposals
-        (id, tenant_id, kind, item_key, item_version, payload, rationale, effective_from, proposed_by_subject_id)
-        VALUES (${proposalId}, ${tenant}, 'claim_type', ${key}, ${options.version ?? 1},
+        (id, kind, item_key, item_version, payload, rationale, effective_from, proposed_by_subject_id)
+        VALUES (${proposalId}, 'claim_type', ${key}, ${options.version ?? 1},
           ${tx.json(payload)}, 'Reviewed field definition', ${effective}, ${proposer})`;
       await tx`INSERT INTO core.claim_types
-        (id, tenant_id, claim_type, catalog_version, display_name, description, definition, effective_from)
-        VALUES (${id}, ${tenant}, ${key}, ${options.version ?? 1},
+        (id, claim_type, catalog_version, display_name, description, definition, effective_from)
+        VALUES (${id}, ${key}, ${options.version ?? 1},
           ${options.mismatched ? "Different" : "License"}, NULL, ${tx.json(definition)}, ${effective})`;
       if (options.approve !== false) {
         await tx`UPDATE core.registry_proposals SET state = 'approved',
@@ -65,13 +60,13 @@ describeDb("reviewed claim type catalog", () => {
     return id;
   }
 
-  it("accepts reviewed definitions and hides them from another tenant", async () => {
+  it("accepts reviewed definitions and hides them from an unknown actor", async () => {
     const id = await materialize("reviewed_license");
-    const own = await withTenant(app, { tenantId: tenant }, (tx) => tx`
+    const own = await withActor(app, { subjectId: proposer }, (tx) => tx`
       SELECT id, definition FROM core.claim_types WHERE id = ${id}`);
     expect(own).toHaveLength(1);
     expect(own[0]?.["definition"]).toEqual(definition);
-    const other = await withTenant(app, { tenantId: otherTenant }, (tx) => tx`
+    const other = await withActor(app, { subjectId: randomUUID() }, (tx) => tx`
       SELECT id FROM core.claim_types WHERE id = ${id}`);
     expect(other).toHaveLength(0);
   });
@@ -89,9 +84,9 @@ describeDb("reviewed claim type catalog", () => {
       version: 3, effectiveFrom: "2025-01-01T00:00:00Z",
     })).rejects.toThrow(/before its predecessor/);
     await expect(materialize("versioned_license", { version: 4 })).rejects.toThrow(/consecutive/);
-    await expect(withTenant(app, { tenantId: tenant }, (tx) => tx`
+    await expect(withActor(app, { subjectId: proposer }, (tx) => tx`
       UPDATE core.claim_types SET display_name = 'Changed' WHERE id = ${id}`)).rejects.toThrow();
-    await expect(withTenant(app, { tenantId: tenant }, (tx) => tx`
+    await expect(withActor(app, { subjectId: proposer }, (tx) => tx`
       DELETE FROM core.claim_types WHERE id = ${id}`)).rejects.toThrow();
     // CASCADE reaches the truncate guard even when claims reference the catalog. Roll back
     // unconditionally so a broken guard cannot destroy shared integration fixtures.
@@ -106,11 +101,11 @@ describeDb("reviewed claim type catalog", () => {
       .rejects.toThrow(/cannot be modified/);
   });
 
-  it("rejects writes outside the active tenant", async () => {
-    await expect(withTenant(app, { tenantId: otherTenant }, (tx) => tx`
+  it("rejects writes without a live actor", async () => {
+    await expect(withActor(app, { subjectId: randomUUID() }, (tx) => tx`
       INSERT INTO core.claim_types
-        (id, tenant_id, claim_type, catalog_version, display_name, definition, effective_from)
-        VALUES (${randomUUID()}, ${tenant}, 'cross_tenant', 1, 'License', ${tx.json(definition)}, ${effectiveFrom})`
+        (id, claim_type, catalog_version, display_name, definition, effective_from)
+        VALUES (${randomUUID()}, 'unknown_actor', 1, 'License', ${tx.json(definition)}, ${effectiveFrom})`
     )).rejects.toThrow(/row-level security/);
   });
 

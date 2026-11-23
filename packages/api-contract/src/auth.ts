@@ -4,7 +4,7 @@ import { isoDateTime } from "./common.js";
 /**
  * Sessions, factors and authentication levels — account authentication.
  *
- * A person signs in with an account (emailed code, Google or Microsoft) and a second factor.
+ * A person signs in with an account (emailed code or Google) and a second factor.
  * Wallets are signing keys bound to an account by proof of possession; no wallet signature
  * signs anyone in (decision D3, WP7).
  */
@@ -15,11 +15,11 @@ export type AssuranceLevel = z.infer<typeof assuranceLevel>;
 /**
  * What a session proved first — account authentication.
  *
- * The database type still holds `siwe_legacy` (PostgreSQL cannot drop an enum value in place),
+ * The database type still holds `siwe_legacy` (kept for the history of revoked wallet sessions),
  * but 0125 revoked every such session and refuses a live one, so no session the API resolves
- * carries it.
+ * carries it. `microsoft` was removed with its sessions in 0171.
  */
-export const firstFactor = z.enum(["email_code", "google", "microsoft"]);
+export const firstFactor = z.enum(["email_code", "google"]);
 export type FirstFactor = z.infer<typeof firstFactor>;
 
 /** What a session proved second. A recovery code restores the second factor and counts as one. */
@@ -129,7 +129,7 @@ export const sessionResponse = z.object({
     z.object({
       role: z.string(),
       governanceScope: z.enum(["protocol", "project", "none"]).optional(),
-      scopeKind: z.enum(["tenant", "organization", "none"]).optional(),
+      scopeKind: z.enum(["registry", "organization", "none"]).optional(),
       organizationId: z.string().nullable(),
       projectId: z.string().nullable(),
     }),

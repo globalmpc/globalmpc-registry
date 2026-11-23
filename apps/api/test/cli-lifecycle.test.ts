@@ -87,7 +87,6 @@ beforeEach(() => {
   s.bootstrap.mockResolvedValue({
     created: true,
     roleGranted: true,
-    tenantId: "t1",
     organizationId: "o1",
     subjectId: "s1",
   });
@@ -102,8 +101,6 @@ afterEach(() => {
 });
 function bootstrapEnv() {
   for (const [k, v] of Object.entries({
-    BOOTSTRAP_TENANT_SLUG: "tenant",
-    BOOTSTRAP_TENANT_NAME: "Tenant",
     BOOTSTRAP_ORG_NAME: "Sponsor",
     BOOTSTRAP_SUBJECT_NAME: "Operator",
     BOOTSTRAP_EMAIL: "operator@example.test",
@@ -165,7 +162,6 @@ it("bootstraps an operator with explicit defaults and emits no personal data", a
   expect(s.bootstrap).toHaveBeenCalledWith(
     s.sql,
     expect.objectContaining({
-      tenantSlug: "tenant",
       email: "operator@example.test",
       jurisdiction: "MNG",
       role: "administrator",
@@ -181,7 +177,7 @@ it("bootstraps an operator with explicit defaults and emits no personal data", a
   expect(written).not.toContain("wallet");
   expect(s.sql.end).toHaveBeenCalledOnce();
 });
-it("delegates ownership validation to tenant-scoped bootstrap without requiring BYPASSRLS", async () => {
+it("delegates the deployment-owner check (ownership and BYPASSRLS) to bootstrap itself", async () => {
   bootstrapEnv();
   s.privileges = { rolsuper: false, rolbypassrls: false };
   await import("../src/bootstrap-cli.js");
@@ -196,17 +192,16 @@ it("bootstraps with a role that has BYPASSRLS but is not a superuser", async () 
 });
 it("reports bootstrap failure and closes its connection", async () => {
   bootstrapEnv();
-  s.bootstrap.mockRejectedValue(new Error("Invalid tenant"));
+  s.bootstrap.mockRejectedValue(new Error("Invalid organization"));
   await import("../src/bootstrap-cli.js");
   expect(process.exitCode).toBe(1);
   expect(process.stderr.write).toHaveBeenCalledWith(
-    expect.stringContaining("Invalid tenant"),
+    expect.stringContaining("Invalid organization"),
   );
   expect(s.sql.end).toHaveBeenCalledOnce();
 });
 function registryEnv(kind: string) {
   vi.spyOn(process, "argv", "get").mockReturnValue(["node", "cli", kind]);
-  vi.stubEnv("BOOTSTRAP_TENANT_SLUG", "tenant");
 }
 it("requires a recognized registry kind", async () => {
   registryEnv("wrong");
@@ -272,7 +267,6 @@ it.each(["inline", "file"])(
     }
     await import("../src/bootstrap-registry-cli.js");
     expect(s.policy).toHaveBeenCalledWith(s.sql, {
-      tenantSlug: "tenant",
       definition: { version: 1 },
       approvedBy: null,
     });

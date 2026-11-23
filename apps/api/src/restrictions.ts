@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { checkRestrictedAction, type DisclosureRestriction } from "@mpc/domain";
 import { AppError } from "./errors.js";
 import { enqueueEvent } from "./outbox.js";
@@ -38,10 +38,9 @@ interface ActiveRestrictionRow {
  */
 export async function lockProjectRestrictions(
   tx: postgres.TransactionSql,
-  tenantId: string,
   projectId: string,
 ): Promise<void> {
-  await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`disclosure:${tenantId}:${projectId}`}, 0))`;
+  await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`disclosure:${projectId}`}, 0))`;
 }
 
 /**
@@ -55,19 +54,18 @@ export async function lockProjectRestrictions(
  */
 export async function assertActionNotRestricted(
   tx: postgres.TransactionSql,
-  tenantId: string,
   projectId: string,
   action: string,
   actorSubjectId: string | null = null,
 ): Promise<void> {
   // Serializes with restriction transitions on this project (`lockProjectRestrictions`). Without
   // it, a check that read no active restriction could commit after an activation it did not see.
-  await lockProjectRestrictions(tx, tenantId, projectId);
+  await lockProjectRestrictions(tx, projectId);
   const rows = await tx<ActiveRestrictionRow[]>`
     SELECT id, subject_scope::text[] AS subject_scope, restricted_action_types, reason,
            authority, effective_at, expected_next_update_at
     FROM core.disclosure_restrictions
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND state = 'active'
+    WHERE project_id = ${projectId} AND state = 'active'
     ORDER BY effective_at, id
   `;
   if (rows.length === 0) return;
@@ -115,12 +113,13 @@ export async function assertActionNotRestricted(
 export function registerBlockedAttemptRecorder(app: FastifyInstance, sql: postgres.Sql): void {
   app.addHook("onError", async (request, _reply, error) => {
     if (!(error instanceof AppError) || error.code !== DISCLOSURE_RESTRICTED) return;
-    const tenantId = request.session?.tenantId;
+    const subjectId = request.session?.subjectId;
     const details = error.details ?? {};
-    if (!tenantId) return;
+    if (!subjectId) return;
+    const actor = { subjectId };
 
     try {
-      await withTenant(sql, { tenantId }, async (tx) => {
+      await withActor(sql, actor, async (tx) => {
         const restrictionId = String(details["restrictionId"]);
         const projectId = String(details["projectId"]);
         const actionType = String(details["actionType"]);
@@ -128,16 +127,15 @@ export function registerBlockedAttemptRecorder(app: FastifyInstance, sql: postgr
 
         await tx`
           INSERT INTO core.disclosure_restriction_events (
-            tenant_id, restriction_id, project_id, event_kind, action_type,
+            restriction_id, project_id, event_kind, action_type,
             actor_subject_id, correlation_id
           ) VALUES (
-            ${tenantId}, ${restrictionId}, ${projectId}, 'blocked_attempt', ${actionType},
+            ${restrictionId}, ${projectId}, 'blocked_attempt', ${actionType},
             ${request.session?.subjectId ?? null}, ${correlationId}
           )
         `;
 
         await enqueueEvent(tx, {
-          tenantId,
           eventType: "disclosure.blackout.blocked_action",
           aggregateId: restrictionId,
           aggregateVersion: 1,

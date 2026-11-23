@@ -72,7 +72,6 @@ const databaseUrl = resolveSecret(
   process.env,
 );
 
-const tenantSlug = required("BOOTSTRAP_TENANT_SLUG");
 const sql = postgres(databaseUrl, { onnotice: () => {} });
 
 try {
@@ -80,7 +79,6 @@ try {
 
   if (kind === "credential") {
     result = await bootstrapCredential(sql, {
-      tenantSlug,
       // The holder: the address `bootstrap` created them with, or a wallet they bound.
       email: process.env["CREDENTIAL_EMAIL"] || null,
       walletAddress: process.env["CREDENTIAL_WALLET"] || null,
@@ -95,7 +93,6 @@ try {
     });
   } else if (kind === "schema") {
     result = await bootstrapAttestationSchema(sql, {
-      tenantSlug,
       schemaKey: required("SCHEMA_KEY"),
       schemaVersion: required("SCHEMA_VERSION"),
       attestationType: required("SCHEMA_ATTESTATION_TYPE"),
@@ -125,7 +122,6 @@ try {
       fail([`Could not read rule set — ${source}`, String(error)]);
     }
     result = await bootstrapPolicySet(sql, {
-      tenantSlug,
       definition,
       approvedBy: approvedBy(),
     });

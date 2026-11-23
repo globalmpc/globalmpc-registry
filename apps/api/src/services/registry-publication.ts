@@ -13,13 +13,13 @@ import {
 
 /** Resolve only identity/scope before returning an idempotent mutation response. */
 export async function registrySubjectProjectId(
-  tx: postgres.TransactionSql, tenantId: string, kind: "project" | "verification", subjectId: string,
+  tx: postgres.TransactionSql, kind: "project" | "verification", subjectId: string,
 ): Promise<string> {
   const rows = kind === "project"
-    ? await tx<{project_id: string}[]>`SELECT id AS project_id FROM core.projects WHERE tenant_id=${tenantId} AND id=${subjectId}`
+    ? await tx<{project_id: string}[]>`SELECT id AS project_id FROM core.projects WHERE id=${subjectId}`
     : await tx<{project_id: string}[]>`SELECT c.project_id FROM core.verification_attestations a
-        JOIN core.verification_cases c ON c.tenant_id=a.tenant_id AND c.id=a.case_id
-        WHERE a.tenant_id=${tenantId} AND a.id=${subjectId}`;
+        JOIN core.verification_cases c ON c.id=a.case_id
+        WHERE a.id=${subjectId}`;
   if (!rows[0]) {
     if (kind === "verification") throw new RegistrySubjectNotFoundError();
     throw notFound("Project not found");
@@ -42,7 +42,6 @@ export async function lockEvidenceLedgerPublicationInputs(tx: postgres.Transacti
 /** A ledger is a separately approved, frozen statement, never a client-authored assessment. */
 export async function assertEvidenceLedgerProjection(
   tx: postgres.TransactionSql,
-  tenantId: string,
   registryType: "project" | "verification",
   projectId: string,
   projection: Readonly<Record<string, unknown>>,
@@ -57,12 +56,12 @@ export async function assertEvidenceLedgerProjection(
   if (typeof snapshotId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(snapshotId)) {
     throw unprocessable("PUBLICATION_LEDGER_INVALID", "An assessed snapshot is required");
   }
-  const stored = await loadEvidenceLedgerSnapshot(tx, tenantId, projectId, snapshotId);
+  const stored = await loadEvidenceLedgerSnapshot(tx, projectId, snapshotId);
   if (!stored || stored.inputSnapshotHash !== ledgerInputHash(stored.inputBasis, stored.evaluatedAt)
       || !sameCanonical(ledger, publicLedgerProjection(stored))) {
     throw unprocessable("PUBLICATION_LEDGER_MISMATCH", "The ledger must match this project's recorded assessment");
   }
-  const current = await computeEvidenceLedger(tx, tenantId, projectId, evaluatedAt);
+  const current = await computeEvidenceLedger(tx, projectId, evaluatedAt);
   if (!current || !sameCanonical(evidenceLedgerSemantic(stored), evidenceLedgerSemantic(current, stored))) {
     throw unprocessable("PUBLICATION_LEDGER_STALE", "Evidence changed since assessment; assess again and prepare a new draft");
   }
@@ -126,18 +125,16 @@ export function weakestCommercialReuse(values: readonly string[]): CommercialReu
 
 export async function resolvePublicationSubject(
   tx: postgres.TransactionSql,
-  tenantId: string,
   registryType: "project" | "verification",
   subjectId: string,
 ): Promise<PublicationSubject> {
   return registryType === "project"
-    ? resolveProject(tx, tenantId, subjectId)
-    : resolveAttestation(tx, tenantId, subjectId);
+    ? resolveProject(tx, subjectId)
+    : resolveAttestation(tx, subjectId);
 }
 
 async function resolveProject(
   tx: postgres.TransactionSql,
-  tenantId: string,
   projectId: string,
 ): Promise<PublicationSubject> {
   const [project] = await tx<
@@ -152,7 +149,7 @@ async function resolveProject(
   >`
     SELECT id, project_key, name, host_country_iso3, minerals, lifecycle_state
     FROM core.projects
-    WHERE tenant_id = ${tenantId} AND id = ${projectId}
+    WHERE id = ${projectId}
   `;
   if (!project) throw notFound("Project not found");
 
@@ -165,15 +162,15 @@ async function resolveProject(
    */
   const claims = await tx<SnapshotClaimRow[]>`
     SELECT id, value_text, grade, catalog_entry_id, catalog_version, structured_values, document_upload_ids FROM core.claims
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+    WHERE project_id = ${projectId}
   `;
   const artifacts = await tx<{ id: string }[]>`
     SELECT id FROM core.artifacts
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND revoked_at IS NULL
+    WHERE project_id = ${projectId} AND revoked_at IS NULL
   `;
   const receipts = await tx<{ id: string; commercial_reuse: string }[]>`
     SELECT id, commercial_reuse FROM core.source_receipts
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+    WHERE project_id = ${projectId}
   `;
 
   const sourceSnapshotHash = hashSnapshotInput({
@@ -216,7 +213,6 @@ const PUBLISHABLE_ATTESTATION_STATES = ["signed", "active"];
 
 async function resolveAttestation(
   tx: postgres.TransactionSql,
-  tenantId: string,
   attestationId: string,
 ): Promise<PublicationSubject> {
   const [attestation] = await tx<
@@ -224,13 +220,13 @@ async function resolveAttestation(
   >`
     SELECT a.id, a.state, a.evidence_snapshot_hash, c.project_id
     FROM core.verification_attestations a
-    JOIN core.verification_cases c ON c.tenant_id = a.tenant_id AND c.id = a.case_id
-    WHERE a.tenant_id = ${tenantId} AND a.id = ${attestationId}
+    JOIN core.verification_cases c ON c.id = a.case_id
+    WHERE a.id = ${attestationId}
   `;
   if (!attestation) {
     throw unprocessable(
       "REGISTRY_SUBJECT_NOT_SIGNED",
-      "A Verification Registry entry must point to a signed attestation in this tenant",
+      "A Verification Registry entry must point to a signed attestation in the Registry",
     );
   }
   if (!PUBLISHABLE_ATTESTATION_STATES.includes(attestation.state)) {
@@ -246,10 +242,10 @@ async function resolveAttestation(
   const sources = await tx<{ commercial_reuse: string | null }[]>`
     SELECT r.commercial_reuse
     FROM core.verification_attestations a
-    JOIN core.claims cl ON cl.tenant_id = a.tenant_id AND cl.id = ANY (a.claim_scope)
+    JOIN core.claims cl ON cl.id = ANY (a.claim_scope)
     LEFT JOIN core.source_receipts r
-      ON r.tenant_id = cl.tenant_id AND r.id = cl.source_receipt_id
-    WHERE a.tenant_id = ${tenantId} AND a.id = ${attestationId}
+      ON r.id = cl.source_receipt_id
+    WHERE a.id = ${attestationId}
   `;
 
   return {

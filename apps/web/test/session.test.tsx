@@ -43,7 +43,7 @@ const accountSession = {
   authenticated: true,
   requestId: "test",
   subjectId: "person",
-  tenantId: "tenant",
+  workspaceAvailable: true,
   firstFactor: "email_code",
   secondFactor: "totp",
   aal: "aal2",

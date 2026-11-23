@@ -6,10 +6,10 @@ import { registerSyntheticProject } from "./evidence-ledger-journey";
 import { connectAs, sessionToken } from "./connect-as";
 import { demoEmail } from "./demo-people";
 import { closeMailbox, invitationLink } from "./mailbox";
-import { approveAtProvider, MOCK_MICROSOFT_TENANT } from "./oidc";
+import { approveAtProvider } from "./oidc";
 
 /**
- * Google and Microsoft in the browser (WP7) — account plan journeys 3 and 5 and the link from
+ * Google in the browser (WP7) — account plan journeys 3 and 5 and the link from
  * settings.
  *
  * Browser → web proxy (cookie BFF) → API → the mock provider over the test relay
@@ -26,7 +26,7 @@ import { approveAtProvider, MOCK_MICROSOFT_TENANT } from "./oidc";
 test.describe.configure({ mode: "serial", timeout: 90_000 });
 test.afterAll(closeMailbox);
 
-const TENANT_A_ORG = "aaaaaaaa-0000-0000-0000-000000000001";
+const COMPANY_A_ORG = "aaaaaaaa-0000-0000-0000-000000000001";
 
 function cookie(cookies: readonly { name: string }[], name: string) {
   return cookies.find((candidate) => candidate.name === name) as
@@ -71,7 +71,7 @@ test("one administrator invites a reviewer who signs in directly to the assigned
   await page.getByText("Invite a person", { exact: true }).click();
   const panel = page.getByTestId("admin-invitations");
   await panel.getByLabel("Email address").fill(email);
-  await panel.getByRole("combobox", { name: "Organisation", exact: true }).selectOption(TENANT_A_ORG);
+  await panel.getByRole("combobox", { name: "Organisation", exact: true }).selectOption(COMPANY_A_ORG);
   await panel.getByLabel("Invitation role", { exact: true }).selectOption("reviewer");
   await panel.getByLabel("Access scope").selectOption("project");
   const scope = panel.getByLabel("Project", { exact: true });
@@ -149,50 +149,24 @@ test("an administrator links Google and uses the resulting session to add a pers
   expect(cookie(await context.cookies(), SESSION_COOKIE)).toBeUndefined();
 });
 
-test("an invited person accepts with Microsoft once the directory vouches for the address (xms_edov)", async ({
-  page,
-  context,
-}) => {
-  const email = `ms-${randomUUID().slice(0, 8)}@contoso.example`;
+test("Microsoft sign-in is gone: no button, and the proxy's routes for it are refused (0171)", async ({ page }) => {
+  await page.goto("/connect");
+  await expect(page.getByTestId("oidc-google")).toBeVisible();
+  await expect(page.getByTestId("oidc-microsoft")).toHaveCount(0);
 
-  // Operator A invites the address.
-  await connectAs(page, "Operator A");
-  await page.goto("/w/admin");
-  await page.getByText("Invite a person", { exact: true }).click();
-  const panel = page.getByTestId("admin-invitations");
-  await panel.getByLabel("Email address").fill(email);
-  // The seeded organisation loads asynchronously; its initial text input is
-  // replaced by a select. Wait for the ready control instead of racing that swap.
-  const organisation = panel.getByRole("combobox", { name: "Organisation", exact: true });
-  await organisation.selectOption(TENANT_A_ORG);
-  await expect(organisation).toHaveValue(TENANT_A_ORG);
-  await panel.getByLabel("Invitation role", { exact: true }).selectOption("");
-  await panel.getByRole("button", { name: "Send invitation" }).click();
-  await expect(panel.getByTestId("invitation-list")).toContainText(email);
-  await signOut(page);
-
-  await page.goto(await invitationLink(email));
-  await expect(page.getByTestId("invitation-accept")).toBeVisible();
-  await page.getByLabel("Your name, as colleagues will see it").fill("Microsoft Person");
-
-  // Without `xms_edov` the directory has not vouched for the address: the invitation is not
-  // accepted, and the emailed code is offered instead.
-  const unverified = await approveAtProvider(page, { email, tid: MOCK_MICROSOFT_TENANT });
-  await page.getByTestId("oidc-microsoft").click();
-  await unverified.visited;
-  await expect(page.getByTestId("oidc-error")).toBeVisible();
-  expect(cookie(await context.cookies(), SESSION_COOKIE)).toBeUndefined();
-
-  // With it, the same invitation is accepted and the person owes a second factor.
-  await page.getByTestId("oidc-error").getByRole("link").click();
-  await expect(page.getByTestId("invitation-accept")).toBeVisible();
-  await page.getByLabel("Your name, as colleagues will see it").fill("Microsoft Person");
-  const vouched = await approveAtProvider(page, { email, tid: MOCK_MICROSOFT_TENANT, xms_edov: true });
-  await page.getByTestId("oidc-microsoft").click();
-  const atProvider = await vouched.visited;
-  expect(atProvider.url.origin).toBe("https://login.microsoftonline.com");
-  expect(cookie(atProvider.cookies, OIDC_COOKIE)).toMatchObject({ httpOnly: true, secure: BUILT_SERVER, sameSite: "Strict" });
-  await expect(page).toHaveURL(/\/w\/access-pending$/);
-  await expect(page.getByTestId("sign-in-method")).toHaveText("Microsoft");
-  await expectStrictSession(context);
+  const answers = await page.evaluate(async () => {
+    const out: { status: number; code: string | undefined }[] = [];
+    for (const path of ["start", "callback"]) {
+      const response = await fetch(`/api/v1/auth/oidc/microsoft/${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ purpose: "sign_in" }),
+      });
+      out.push({ status: response.status, code: ((await response.json().catch(() => ({}))) as { code?: string }).code });
+    }
+    return out;
+  });
+  expect(answers[0]).toEqual({ status: 400, code: "REQUEST_INVALID" });
+  // The callback has no binding cookie for Microsoft and never reaches the API.
+  expect(answers[1]!.status).toBe(400);
 });

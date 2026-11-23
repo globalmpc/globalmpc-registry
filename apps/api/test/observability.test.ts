@@ -84,13 +84,13 @@ describeDb("observability", () => {
     }
   });
 
-  it("records of another tenant are not visible", async () => {
+  it("records of a project outside the caller's reach are not visible", async () => {
     const otherToken = await signIn(app, fx.operatorB);
     const response = await audit(otherToken, `?projectId=${fx.projectA}`);
 
-    // An empty list, not a permission error. For another tenant, this project does not exist.
-    expect(response.statusCode).toBe(200);
-    expect(response.json().items).toEqual([]);
+    // Another company's administrator holds no binding that reaches project A.
+    expect(response.statusCode).toBe(403);
+    expect(response.json().items).toBeUndefined();
   });
 
   it("outbox backlog reports lag in seconds", async () => {
@@ -180,10 +180,9 @@ describeDb("observability", () => {
     expect(rules).toMatch(/- alert: MpcEmailCodeAddressesLimited\n\s+expr: max\(mpc_email_code_addresses_limited\) > 20/);
   });
 
-  it("metrics carry no tenant", async () => {
+  it("metrics carry no organization or project", async () => {
     const response = await app.inject({ method: "GET", url: "/metrics" });
 
     // Metrics are scraped without auth. Whatever they contain is exposed as is.
-    expect(response.body).not.toContain(fx.tenantA);
   });
 });

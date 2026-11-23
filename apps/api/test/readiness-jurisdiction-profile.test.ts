@@ -32,9 +32,9 @@ describeDb("readiness reads the jurisdiction profile (OD-43)", () => {
     // as the only basis these tests vary.
     await fx.sql`
       INSERT INTO core.claims (
-        id, tenant_id, project_id, claim_type, value_text, as_of, source_coordinate, grade
+        id, project_id, claim_type, value_text, as_of, source_coordinate, grade
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${fx.projectA}, 'mining_right_expiry', '2099-12-31',
+        ${randomUUID()}, ${fx.projectA}, 'mining_right_expiry', '2099-12-31',
         '2026-09-01', ${fx.sql.json({ document: "extract" })}, 'verified'
       )
     `;
@@ -46,15 +46,15 @@ describeDb("readiness reads the jurisdiction profile (OD-43)", () => {
   });
 
   /** A synthetic profile key with an effective policy set assessed under it. */
-  async function newJurisdiction(tenantId = fx.tenantA) {
+  async function newJurisdiction() {
     const key = `ZZ-${randomUUID().slice(0, 8)}`;
     const policySetId = randomUUID();
     await fx.sql`
       INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id,
+        id, rule_set_id, rule_set_version, gate_id,
         jurisdiction_profile, effective_from, definition, state
       ) VALUES (
-        ${policySetId}, ${tenantId}, ${`rules-${key}`}, '1.0.0',
+        ${policySetId}, ${`rules-${key}`}, '1.0.0',
         'registry_publication', ${key}, now(),
         ${fx.sql.json(rulesFixture as never)}, 'effective'
       )
@@ -67,14 +67,14 @@ describeDb("readiness reads the jurisdiction profile (OD-43)", () => {
     version: number,
     state: string,
     basis: string | null,
-    options: { tenantId?: string; effectiveFrom?: string } = {},
+    options: { effectiveFrom?: string } = {},
   ) {
     await fx.sql`
       INSERT INTO core.jurisdiction_profiles (
-        id, tenant_id, jurisdiction, profile_version, state,
+        id, jurisdiction, profile_version, state,
         environmental_requirement_basis, effective_from
       ) VALUES (
-        ${randomUUID()}, ${options.tenantId ?? fx.tenantA}, ${key}, ${version}, ${state},
+        ${randomUUID()}, ${key}, ${version}, ${state},
         ${basis}, ${options.effectiveFrom ?? "2026-01-01T00:00:00Z"}
       )
     `;
@@ -142,12 +142,6 @@ describeDb("readiness reads the jurisdiction profile (OD-43)", () => {
       expect(suspended.body.inputSnapshotHash).not.toBe(approved.body.inputSnapshotHash);
     });
 
-    it("another tenant's profile is not visible", async () => {
-      const { key, policySetId } = await newJurisdiction();
-      await addVersion(key, 1, "approved", "Other Tenant Basis", { tenantId: fx.tenantB });
-      const { result } = await assess(policySetId);
-      expect(result("environmental-baseline").reasonCode).toBe("NO_EVALUATION_BASIS");
-    });
   });
 
   describe("the DB keeps versions honest", () => {

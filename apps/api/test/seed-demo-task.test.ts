@@ -27,7 +27,7 @@ describe("development seed container program", () => {
         PATH: `${join(root, "bin")}:${process.env["PATH"]}`, REAL_NODE: process.execPath, OBSERVED: output,
         DEPLOY_ENVIRONMENT: "develop", CHAIN_ID: "5611", DEMO_TASK_ROOT: root,
         DB_USER: "owner", DB_PASSWORD: password, DB_HOST: "db.example.test", DB_PORT: "5432", DB_NAME: "registry", DB_SSLMODE: "require",
-        OBJECT_BUCKET: "evidence", OBJECT_REGION: "ap-northeast-2", DEMO_TENANT_SLUG: "registry",
+        OBJECT_BUCKET: "evidence", OBJECT_REGION: "ap-northeast-2",
         SCAN_SERVICE_TOKEN: "do-not-inherit", BOOTSTRAP_EMAIL: "do-not-inherit@example.test",
       } });
       expect(response.status, response.stderr).toBe(0);

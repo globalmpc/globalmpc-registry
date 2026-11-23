@@ -16,12 +16,11 @@ describeDb("migration 0135: immutable Safe execution history", () => {
   const proposal = randomUUID();
   const as = <T>(role: string, work: (tx: postgres.TransactionSql) => Promise<T>) => sql.begin(async (tx) => {
     await tx.unsafe(`SET LOCAL ROLE ${role}`);
-    await tx`SELECT set_config('app.current_tenant', ${tenant}, true)`;
     return work(tx);
   });
   const insert = (tx: postgres.TransactionSql, hash = HASH) => tx`
-    INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, tenant_id, chain_id, execution_tx_hash)
-    VALUES (${proposal}, ${transaction}, ${tenant}, 31337, ${hash})`;
+    INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, chain_id, execution_tx_hash)
+    VALUES (${proposal}, ${transaction}, 31337, ${hash})`;
   beforeAll(async () => {
     admin = postgres(process.env["DATABASE_URL"]!, { onnotice: () => {} });
     await admin.unsafe(`CREATE DATABASE ${db}`);
@@ -47,12 +46,12 @@ describeDb("migration 0135: immutable Safe execution history", () => {
   });
   it("supports explicit replacement evidence for a frozen rejected proposal", async () => {
     const rejected = randomUUID();
-    await sql`INSERT INTO chain.anchor_proposals (id, tenant_id, transaction_id, chain_id, safe_address, contract_address, calldata, calldata_hash, state)
-      VALUES (${rejected}, ${tenant}, ${transaction}, 31337, ${ADDRESS}, ${ADDRESS}, '0x00', ${OTHER}, 'rejected')`;
-    await expect(sql`INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, tenant_id, chain_id, execution_tx_hash)
-      VALUES (${rejected}, ${transaction}, ${tenant}, 31337, ${OTHER})`).rejects.toMatchObject({ code: "23514" });
-    await sql`INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, tenant_id, chain_id, execution_tx_hash, evidence_kind, evidence_note)
-      VALUES (${rejected}, ${transaction}, ${tenant}, 31337, ${OTHER}, 'nonce_replacement', 'Verified same Safe and nonce in replacement receipt')`;
+    await sql`INSERT INTO chain.anchor_proposals (id, transaction_id, chain_id, safe_address, contract_address, calldata, calldata_hash, state)
+      VALUES (${rejected}, ${transaction}, 31337, ${ADDRESS}, ${ADDRESS}, '0x00', ${OTHER}, 'rejected')`;
+    await expect(sql`INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, chain_id, execution_tx_hash)
+      VALUES (${rejected}, ${transaction}, 31337, ${OTHER})`).rejects.toMatchObject({ code: "23514" });
+    await sql`INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, chain_id, execution_tx_hash, evidence_kind, evidence_note)
+      VALUES (${rejected}, ${transaction}, 31337, ${OTHER}, 'nonce_replacement', 'Verified same Safe and nonce in replacement receipt')`;
     expect(await sql`SELECT 1 FROM chain.safe_execution_history WHERE proposal_id = ${rejected}`).toHaveLength(1);
     await expect(sql`UPDATE chain.anchor_proposals SET state = 'executed' WHERE id = ${rejected}`).rejects.toMatchObject({ code: "23514" });
   });
@@ -71,7 +70,7 @@ describeDb("migration 0135: immutable Safe execution history", () => {
   });
   it("requires a matching executed proposal and lower-case outer hash", async () => {
     await expect(as("mpc_worker", (tx) => insert(tx, HASH.toUpperCase()))).rejects.toMatchObject({ code: "23514" });
-    await expect(as("mpc_worker", (tx) => tx`INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, tenant_id, chain_id, execution_tx_hash)
-      VALUES (${proposal}, ${transaction}, ${tenant}, 5611, ${HASH})`)).rejects.toMatchObject({ code: "23514" });
+    await expect(as("mpc_worker", (tx) => tx`INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, chain_id, execution_tx_hash)
+      VALUES (${proposal}, ${transaction}, 5611, ${HASH})`)).rejects.toMatchObject({ code: "23514" });
   });
 });

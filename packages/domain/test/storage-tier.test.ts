@@ -5,7 +5,7 @@ import { SENSITIVITY_LEVELS } from "../src/disclosure.js";
 /**
  * Storage level gate — OD-17·OD-18 (draft decision of 2026-08-14).
  *
- * The draft storage path uses a provider-managed key, with no per-tenant separation or
+ * The draft storage path uses a provider-managed key, with no per-company separation or
  * destruction procedure. Checks that only material for which that suffices can pass.
  */
 describe("storage level", () => {

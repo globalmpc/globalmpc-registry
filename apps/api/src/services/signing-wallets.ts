@@ -42,7 +42,7 @@ export async function assertSubjectSigner(
 ): Promise<string> {
   const [subject] = await tx<{ suspended_at: Date | null }[]>`
     SELECT suspended_at FROM core.subjects
-    WHERE id = ${input.subjectId} AND tenant_id = core.current_tenant()
+    WHERE id = ${input.subjectId}
     FOR SHARE
   `;
   if (!subject) throw badRequest("SIGNATURE_SIGNER_MISMATCH", input.message);
@@ -62,7 +62,6 @@ export async function assertSubjectSigner(
 
 export interface WalletBindingMessage {
   readonly purpose: typeof WALLET_BINDING_PURPOSE;
-  readonly tenantId: ViemHex;
   readonly subjectId: ViemHex;
   readonly wallet: ViemHex;
   readonly chainId: bigint;
@@ -86,7 +85,6 @@ export function walletBindingDomain(config: AppConfig) {
 
 /** The message, built from the challenge row — never from what the client sends back. */
 export function walletBindingMessage(challenge: {
-  readonly tenantId: string;
   readonly subjectId: string;
   readonly walletAddress: string;
   readonly chainId: number;
@@ -96,7 +94,6 @@ export function walletBindingMessage(challenge: {
 }): WalletBindingMessage {
   return {
     purpose: WALLET_BINDING_PURPOSE,
-    tenantId: uuidToBytes32(challenge.tenantId),
     subjectId: uuidToBytes32(challenge.subjectId),
     wallet: challenge.walletAddress as ViemHex,
     chainId: BigInt(challenge.chainId),

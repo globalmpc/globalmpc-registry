@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   releaseIdempotency,
   releaseIdempotencyAfterFailure,
@@ -28,8 +28,8 @@ describeDb("idempotency reservation release", () => {
   });
 
   function reserve(key: string) {
-    return withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) =>
-      reserveIdempotency(tx, fx.tenantA, key, "hash"),
+    return withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) =>
+      reserveIdempotency(tx, key, "hash"),
     );
   }
 
@@ -37,7 +37,7 @@ describeDb("idempotency reservation release", () => {
     const key = idempotencyKey();
     await reserve(key);
 
-    await expect(releaseIdempotency(fx.appSql, fx.tenantA, key)).resolves.toBeUndefined();
+    await expect(releaseIdempotency(fx.appSql, { subjectId: fx.operatorSubjectA }, key)).resolves.toBeUndefined();
 
     // Released: the same key reserves afresh instead of answering "in progress".
     await expect(reserve(key)).resolves.toEqual({ replay: null });
@@ -46,15 +46,15 @@ describeDb("idempotency reservation release", () => {
   it("never deletes a settled response, even when asked to", async () => {
     const key = idempotencyKey();
     await reserve(key);
-    await withTenant(fx.appSql, { tenantId: fx.tenantA }, async (tx) => {
+    await withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, async (tx) => {
       await tx`
         UPDATE core.idempotency_keys
         SET response_status = 200, response_snapshot = ${tx.json({ done: true })}
-        WHERE key = ${key} AND tenant_id = ${fx.tenantA}
+        WHERE key = ${key}
       `;
     });
 
-    await withTenant(fx.appSql, { tenantId: fx.tenantA }, async (tx) => {
+    await withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, async (tx) => {
       await tx`DELETE FROM core.idempotency_keys WHERE key = ${key}`;
     });
 
@@ -69,7 +69,7 @@ describeDb("idempotency reservation release", () => {
     broken.begin = (() => Promise.reject(new Error("connection lost"))) as never;
 
     await expect(
-      releaseIdempotencyAfterFailure(broken, fx.tenantA, idempotencyKey(), {
+      releaseIdempotencyAfterFailure(broken, { subjectId: fx.operatorSubjectA }, idempotencyKey(), {
         error: (_detail, message) => logged.push(message),
       }),
     ).resolves.toBeUndefined();

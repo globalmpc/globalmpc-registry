@@ -156,7 +156,7 @@ export interface ServerDeps {
    */
   readonly governanceChain?: GovernanceChain;
   /**
-   * How the API reaches Google and Microsoft (discovery, keys, token exchange). Tests run an
+   * How the API reaches Google (discovery, keys, token exchange). Tests run an
    * in-process provider here; unset, the global `fetch`.
    */
   readonly oidcFetch?: OidcFetch;

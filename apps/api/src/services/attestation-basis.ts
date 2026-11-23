@@ -194,22 +194,22 @@ export async function loadEvidenceSubmitters(
   const { claimIds: scopedIds, projectId, frozen, legacyCase, createdAt } = scope;
   const [row] = await tx<{ submitters: string[] | null; unknown_count: string }[]>`
     WITH scoped AS (
-      SELECT id, tenant_id, project_id, submitted_by, source_receipt_id, document_upload_ids FROM core.claims
+      SELECT id, project_id, submitted_by, source_receipt_id, document_upload_ids FROM core.claims
       WHERE id = ANY(${scopedIds as string[]}::uuid[])
         AND (${projectId}::uuid IS NULL OR project_id=${projectId})
     ),
     projects AS (
-      SELECT DISTINCT tenant_id,project_id FROM scoped
-      UNION SELECT tenant_id,id FROM core.projects WHERE id=${liveProjectId}
+      SELECT DISTINCT project_id FROM scoped
+      UNION SELECT id FROM core.projects WHERE id=${liveProjectId}
     ),
-    receipts AS (SELECT DISTINCT tenant_id,source_receipt_id FROM scoped WHERE source_receipt_id IS NOT NULL),
+    receipts AS (SELECT DISTINCT source_receipt_id FROM scoped WHERE source_receipt_id IS NOT NULL),
     scoped_artifacts AS (
       SELECT a.* FROM core.artifacts a
-      WHERE EXISTS (SELECT 1 FROM projects p WHERE p.tenant_id=a.tenant_id AND p.project_id=a.project_id)
+      WHERE EXISTS (SELECT 1 FROM projects p WHERE p.project_id=a.project_id)
         AND (${!legacyCase} OR a.created_at <= ${createdAt})
         AND (CASE WHEN ${!!frozen} THEN a.id=ANY(${frozen?.artifactIds ?? []}::uuid[])
           ELSE a.revoked_at IS NULL OR EXISTS (
-            SELECT 1 FROM receipts r WHERE r.tenant_id=a.tenant_id AND r.source_receipt_id=a.source_receipt_id
+            SELECT 1 FROM receipts r WHERE r.source_receipt_id=a.source_receipt_id
           ) OR (${legacyCase} AND EXISTS (
             SELECT 1 FROM core.verification_cases c WHERE c.id=${snapshotCaseId} AND a.revoked_at >= c.created_at
           )) END)
@@ -218,9 +218,9 @@ export async function loadEvidenceSubmitters(
       SELECT r.id FROM core.source_receipts r
       WHERE CASE WHEN ${!!frozen} THEN r.id=ANY(${frozen?.receiptIds ?? []}::uuid[])
         ELSE (${legacyCase} AND EXISTS (
-          SELECT 1 FROM projects p WHERE p.tenant_id=r.tenant_id AND p.project_id=r.project_id
-        )) OR EXISTS (SELECT 1 FROM receipts x WHERE x.tenant_id=r.tenant_id AND x.source_receipt_id=r.id)
-          OR EXISTS (SELECT 1 FROM scoped_artifacts a WHERE a.tenant_id=r.tenant_id AND a.source_receipt_id=r.id)
+          SELECT 1 FROM projects p WHERE p.project_id=r.project_id
+        )) OR EXISTS (SELECT 1 FROM receipts x WHERE x.source_receipt_id=r.id)
+          OR EXISTS (SELECT 1 FROM scoped_artifacts a WHERE a.source_receipt_id=r.id)
         END AND (${!legacyCase} OR r.created_at <= ${createdAt})
     ),
     contributing_receipts AS (
@@ -228,18 +228,17 @@ export async function loadEvidenceSubmitters(
     ),
     uploads AS (
       SELECT u.id,u.uploaded_by FROM core.object_uploads u
-      JOIN scoped_artifacts a ON a.tenant_id=u.tenant_id AND a.project_id=u.project_id AND a.id=u.promoted_artifact_id
+      JOIN scoped_artifacts a ON a.project_id=u.project_id AND a.id=u.promoted_artifact_id
       UNION
       SELECT u.id,u.uploaded_by FROM scoped s
       CROSS JOIN LATERAL unnest(s.document_upload_ids) document(id)
       LEFT JOIN core.object_uploads u
-        ON u.tenant_id=s.tenant_id AND u.project_id=s.project_id AND u.id=document.id
+        ON u.project_id=s.project_id AND u.id=document.id
       UNION
       SELECT u.id,u.uploaded_by FROM contributing_receipts r
-      LEFT JOIN core.object_uploads u ON u.tenant_id=r.tenant_id
-        AND u.id::text=r.channel_evidence ->> 'documentUploadId'
+      LEFT JOIN core.object_uploads u ON u.id::text=r.channel_evidence ->> 'documentUploadId'
         AND (r.project_id IS NULL OR r.project_id=u.project_id)
-        AND EXISTS (SELECT 1 FROM projects p WHERE p.tenant_id=u.tenant_id AND p.project_id=u.project_id)
+        AND EXISTS (SELECT 1 FROM projects p WHERE p.project_id=u.project_id)
       WHERE r.channel_evidence ? 'documentUploadId'
         OR r.collection_method IN ('verifiable_signed_document','official_bulk_export')
     ),
@@ -257,8 +256,7 @@ export async function loadEvidenceSubmitters(
        (CASE WHEN ${!!frozen} THEN ${frozen?.receiptIds.length ?? 0}-(SELECT count(*) FROM contributing_receipts) ELSE 0 END) +
        (SELECT count(*) FROM uploads WHERE uploaded_by IS NULL) +
        (SELECT count(*) FROM scoped_artifacts a WHERE a.kind='raw_source' AND a.source_receipt_id IS NULL
-         AND NOT EXISTS (SELECT 1 FROM core.object_uploads u WHERE u.tenant_id=a.tenant_id
-           AND u.project_id=a.project_id AND u.promoted_artifact_id=a.id)) +
+         AND NOT EXISTS (SELECT 1 FROM core.object_uploads u WHERE u.project_id=a.project_id AND u.promoted_artifact_id=a.id)) +
        (SELECT count(*) FROM contributing_receipts WHERE collection_method='manual_official_registry_confirmation'
          AND (first_confirmed_by IS NULL OR (result='confirmed_from_source' AND second_confirmed_by IS NULL)
            OR first_confirmed_by=second_confirmed_by)))::text AS unknown_count
@@ -273,6 +271,10 @@ export async function loadEvidenceSubmitters(
  * Organizations a reviewer acts for — current credentials, the selected credential and active role
  * binding's. Rule 2 must see all of them: a reviewer bound to the operator through any role is
  * not independent of it.
+ *
+ * The bindings come from `core.subject_affiliated_organizations` (0170), not the table: RLS shows
+ * the caller only bindings in its own project reach, and a binding on a project the decider cannot
+ * reach still makes the reviewer the operator's.
  */
 export async function loadReviewerOrganizations(
   tx: Tx,
@@ -280,8 +282,7 @@ export async function loadReviewerOrganizations(
   credential?: CredentialFacts,
 ): Promise<string[]> {
   const bindings = await tx<{ organization_id: string }[]>`
-    SELECT DISTINCT organization_id FROM core.role_bindings
-    WHERE subject_id = ${reviewerSubjectId} AND revoked_at IS NULL AND organization_id IS NOT NULL
+    SELECT unnest(core.subject_affiliated_organizations(${reviewerSubjectId})) AS organization_id
     UNION
     SELECT organization_id FROM core.credentials
     WHERE subject_id=${reviewerSubjectId} AND organization_id IS NOT NULL
@@ -363,11 +364,11 @@ export async function reviewAssignmentIndependence(
   };
 }
 
-/** The tenant/schema-key activation clock is captured under the configuration barrier. */
+/** The schema-key activation clock is captured under the configuration barrier. */
 export async function loadSchemaActivationEpoch(tx: Tx, schemaId: string): Promise<string> {
   const [row]=await tx<{epoch:string}[]>`SELECT COALESCE(clock.epoch,0)::text AS epoch
     FROM core.attestation_schemas s LEFT JOIN core.schema_activation_clocks clock
-      ON clock.tenant_id=s.tenant_id AND clock.schema_key=s.schema_key WHERE s.id=${schemaId}`;
+      ON clock.schema_key=s.schema_key WHERE s.id=${schemaId}`;
   if (!row) throw new Error("Attestation schema not found");
   return row.epoch;
 }
@@ -398,7 +399,7 @@ async function restorationEvidenceInvalid(tx: Tx, projectId: string, scope: Cont
         OR EXISTS(SELECT 1 FROM core.document_impacts impact WHERE impact.upload_id=u.id AND impact.resolution='open')
         OR EXISTS(SELECT 1 FROM core.object_uploads upstream
           CROSS JOIN LATERAL core.document_impact_targets(upstream.id) targets
-          WHERE upstream.tenant_id=u.tenant_id AND upstream.project_id=u.project_id AND targets.upload_id=u.id
+          WHERE upstream.project_id=u.project_id AND targets.upload_id=u.id
             AND (upstream.revoked_at IS NOT NULL OR upstream.valid_until < (now() AT TIME ZONE 'UTC')::date
               OR core.document_successor(upstream.id) IS NOT NULL)))
       OR EXISTS(SELECT 1 FROM receipts WHERE result<>'confirmed_from_source')) AS invalid`;
@@ -417,7 +418,7 @@ export async function attestationRestorationBlockers(tx: Tx, attestationId: stri
         AND (c.expires_at IS NULL OR c.expires_at>now())) AS credential_current,
       (s.state='active' AND a.schema_activation_epoch IS NOT NULL
         AND a.schema_activation_epoch=COALESCE((SELECT clock.epoch FROM core.schema_activation_clocks clock
-          WHERE clock.tenant_id=s.tenant_id AND clock.schema_key=s.schema_key),0)) AS schema_current,
+          WHERE clock.schema_key=s.schema_key),0)) AS schema_current,
       (asg.case_id=a.case_id AND asg.revoked_at IS NULL AND asg.independence_reviewed
         AND asg.conflict_status<>'unresolved') AS assignment_current,
       (a.valid_until IS NULL OR a.valid_until>now()) AS review_current

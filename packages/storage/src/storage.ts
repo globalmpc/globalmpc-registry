@@ -16,12 +16,12 @@ import { keccak256, type Hex } from "@mpc/canonical";
  * hashing, quarantine transitions) must be verifiable without a store.
  */
 
-export function quarantineKey(tenantId: string, uploadId: string): string {
-  return `quarantine/${tenantId}/${uploadId}`;
+export function quarantineKey(uploadId: string): string {
+  return `quarantine/${uploadId}`;
 }
 
-export function evidenceKey(tenantId: string, artifactId: string): string {
-  return `evidence/${tenantId}/${artifactId}`;
+export function evidenceKey(artifactId: string): string {
+  return `evidence/${artifactId}`;
 }
 
 export function computeContentHash(bytes: Uint8Array): Hex {

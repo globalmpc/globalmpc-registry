@@ -232,8 +232,8 @@ describeDb("capped lists", () => {
       // One expired-document impact per seeded upload, for 501 of them.
       await fx.sql`
         INSERT INTO core.document_impacts
-          (tenant_id, project_id, upload_id, origin_upload_id, cause, depth, origin_valid_until)
-        SELECT tenant_id, project_id, id, id, 'expired', 0, date '2026-01-01'
+          (project_id, upload_id, origin_upload_id, cause, depth, origin_valid_until)
+        SELECT project_id, id, id, 'expired', 0, date '2026-01-01'
         FROM core.object_uploads
         WHERE project_id = ${fx.projectA}
         ORDER BY uploaded_at LIMIT 501
@@ -267,7 +267,7 @@ describeDb("capped lists", () => {
         WHERE t.id = ${created.json().id as string}
       )
       INSERT INTO core.source_receipts (
-        id, tenant_id, project_id, connection_id,
+        id, project_id, connection_id,
         authority_id, collection_method, result, query_basis,
         endpoint_or_document_ref, authentication_method, raw_hash, raw_object_key,
         source_schema_version, adapter_version, normalization_version, terms_license,
@@ -277,7 +277,7 @@ describeDb("capped lists", () => {
         second_confirmed_at, supersedes_receipt_id, processing_state
       )
       SELECT
-        id, tenant_id, project_id, connection_id,
+        id, project_id, connection_id,
         authority_id, collection_method, result, query_basis,
         endpoint_or_document_ref, authentication_method, raw_hash, raw_object_key,
         source_schema_version, adapter_version, normalization_version, terms_license,
@@ -325,10 +325,10 @@ describeDb("capped lists", () => {
 
       await fx.sql`
         INSERT INTO core.governance_proposals
-          (id, tenant_id, space, proposal_type, title, rationale, proposer_subject_id,
+          (id, space, proposal_type, title, rationale, proposer_subject_id,
            quorum_numerator, quorum_denominator, threshold_numerator, threshold_denominator,
            conflict_disclosure, execution_mode, created_at)
-        SELECT gen_random_uuid(), ${fx.tenantA}, 'protocol', 'parameter_change',
+        SELECT gen_random_uuid(), 'protocol', 'parameter_change',
                'seeded ' || g, 'seeded for the cap', ${fx.operatorSubjectA},
                1, 2, 1, 2, 'No conflict of interest', 'record_only',
                now() - g * interval '1 second'
@@ -341,8 +341,8 @@ describeDb("capped lists", () => {
 
     it("notifications: flags more than 100", async () => {
       await fx.sql`
-        INSERT INTO core.notifications (tenant_id, kind, subject_id, summary, link, occurred_at)
-        SELECT ${fx.tenantA}, 'readiness_gap', ${fx.operatorSubjectA}, 'seeded ' || g, '/w/work',
+        INSERT INTO core.notifications (kind, subject_id, summary, link, occurred_at)
+        SELECT 'readiness_gap', ${fx.operatorSubjectA}, 'seeded ' || g, '/w/work',
                now() - g * interval '1 second'
         FROM generate_series(1, 101) g
       `;
@@ -357,9 +357,9 @@ describeDb("capped lists", () => {
 
       await fx.sql`
         INSERT INTO core.projects
-          (id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id,
+          (id, project_key, name, host_country_iso3, minerals, owner_organization_id,
            updated_at)
-        SELECT gen_random_uuid(), ${fx.tenantA}, 'SEED-CAP-' || g, 'Seeded ' || g, 'MNG',
+        SELECT gen_random_uuid(), 'SEED-CAP-' || g, 'Seeded ' || g, 'MNG',
                ARRAY['copper'], ${fx.orgA}, now() - g * interval '1 second'
         FROM generate_series(1, 51) g
       `;
@@ -374,8 +374,8 @@ describeDb("capped lists", () => {
 
       await fx.sql`
         INSERT INTO core.evidence_stale_signals
-          (id, tenant_id, project_id, target_type, target_id, reason, detected_at)
-        SELECT gen_random_uuid(), ${fx.tenantA}, ${fx.projectA}, 'registry_entry_version',
+          (id, project_id, target_type, target_id, reason, detected_at)
+        SELECT gen_random_uuid(), ${fx.projectA}, 'registry_entry_version',
                gen_random_uuid(), 'seeded ' || g, now() - g * interval '1 second'
         FROM generate_series(1, 51) g
       `;
@@ -393,10 +393,10 @@ describeDb("capped lists", () => {
 
       await fx.sql`
         INSERT INTO chain.anchor_batches
-          (id, tenant_id, batch_id, merkle_root, manifest_hash, manifest_object_key,
+          (id, batch_id, merkle_root, manifest_hash, manifest_object_key,
            schema_version, record_count, created_at)
-        SELECT gen_random_uuid(), ${fx.tenantA},
-               '0x' || encode(sha256(convert_to('w123-batch-' || ${fx.tenantA} || g, 'UTF8')), 'hex'),
+        SELECT gen_random_uuid(), 
+               '0x' || encode(sha256(convert_to('w123-batch-' || ${fx.orgA} || g, 'UTF8')), 'hex'),
                '0x' || repeat('ab', 32), '0x' || repeat('cd', 32), 'seed/manifest/' || g,
                '1', 1, now() - g * interval '1 second'
         FROM generate_series(1, 101) g

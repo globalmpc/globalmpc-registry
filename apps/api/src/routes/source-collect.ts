@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { resolveSecret } from "@mpc/config";
 import {
   adapterStateReason,
@@ -24,7 +24,7 @@ import {
   assertAuthorized,
   projectResource,
   sessionFacts,
-  tenantResource,
+  registryResource,
 } from "../plugins/authorize.js";
 import {
   completeIdempotency,
@@ -160,7 +160,7 @@ export async function registerSourceCollectRoutes(
   app.post<{ Params: { connectionId: string } }>(
     "/api/v1/source-connections/:connectionId/collect",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = collectSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -170,21 +170,21 @@ export async function registerSourceCollectRoutes(
       }
 
       // The receipt is written to the project in the body, so that project is what is
-      // authorized. A tenant-level check let a steward create receipts in any project of the
-      // tenant, including another organization's.
+      // authorized. A Registry-level check let a steward create receipts in any project, including
+      // another organization's.
       const effectiveRole = assertAuthorized(
         session,
         "source.collect",
-        projectResource(tenantId, parsed.data.projectId),
+        projectResource(parsed.data.projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      const [connection] = await withTenant(
+      const [connection] = await withActor(
         sql,
-        { tenantId },
+        actor,
         (tx) =>
           tx<ConnectionRow[]>`
           SELECT c.id, c.connection_key, c.collection_method::text AS collection_method,
@@ -276,8 +276,8 @@ export async function registerSourceCollectRoutes(
        * but the registry receives the request twice. Rate limits and terms of use do not
        * know our retry count.
        */
-      const reservation = await withTenant(sql, { tenantId }, (tx) =>
-        reserveIdempotency<CollectResponse>(tx, tenantId, idempotencyKey, requestHash),
+      const reservation = await withActor(sql, actor, (tx) =>
+        reserveIdempotency<CollectResponse>(tx, idempotencyKey, requestHash),
       );
       if (reservation.replay) return reservation.replay;
 
@@ -293,7 +293,7 @@ export async function registerSourceCollectRoutes(
       } catch (error) {
         // If the reservation is not released, this key stays `IN_FLIGHT` forever and the client
         // has no way to retry.
-        await releaseIdempotencyAfterFailure(sql, tenantId, idempotencyKey, request.log);
+        await releaseIdempotencyAfterFailure(sql, actor, idempotencyKey, request.log);
         throw error;
       }
 
@@ -328,19 +328,19 @@ export async function registerSourceCollectRoutes(
       };
 
       try {
-        return await withTenant(sql, { tenantId }, async (tx) => {
+        return await withActor(sql, actor, async (tx) => {
           const id = randomUUID();
 
           await tx`
             INSERT INTO core.source_receipts (
-              id, tenant_id, project_id, connection_id, authority_id, collection_method,
+              id, project_id, connection_id, authority_id, collection_method,
               result, query_basis, endpoint_or_document_ref, authentication_method,
               raw_hash, source_schema_version, adapter_version,
               terms_license, commercial_reuse, disclosure_permission,
               received_at, as_of, effective_at, freshness_status, correlation_id, limitations,
               channel_evidence
             ) VALUES (
-              ${id}, ${tenantId}, ${parsed.data.projectId}, ${connection.id},
+              ${id}, ${parsed.data.projectId}, ${connection.id},
               ${connection.authority_id}, ${connection.collection_method}, ${result},
               ${tx.json(parsed.data.queryBasis)},
               ${connection.endpoint}, ${connection.authentication_method},
@@ -355,7 +355,6 @@ export async function registerSourceCollectRoutes(
           `;
 
           await recordSourceObservation(tx, {
-            tenantId,
             projectId: parsed.data.projectId,
             connectionId: connection.id,
             receiptId: id,
@@ -376,7 +375,6 @@ export async function registerSourceCollectRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: parsed.data.projectId,
             session,
             command: "source.collected",
@@ -389,7 +387,6 @@ export async function registerSourceCollectRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "source_receipt.received",
             aggregateId: id,
             aggregateVersion: 1,
@@ -413,12 +410,12 @@ export async function registerSourceCollectRoutes(
 
           // Completes in the same transaction. A state where the receipt exists but the response is
           // not stored would make a retry call the source again.
-          await completeIdempotency(tx, tenantId, idempotencyKey, response);
+          await completeIdempotency(tx, idempotencyKey, response);
 
           return response;
         });
       } catch (error) {
-        await releaseIdempotencyAfterFailure(sql, tenantId, idempotencyKey, request.log);
+        await releaseIdempotencyAfterFailure(sql, actor, idempotencyKey, request.log);
         throw error;
       }
     },
@@ -449,7 +446,7 @@ export async function registerSecondReviewRoute(
   app.post<{ Params: { receiptId: string } }>(
     "/api/v1/source-receipts/:receiptId/second-review",
     async (request) => {
-      const { session, tenantId } = requireMutationContext(request);
+      const { session, actor } = requireMutationContext(request);
 
       const parsed = secondReviewSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -466,13 +463,13 @@ export async function registerSecondReviewRoute(
       assertAuthorized(
         session,
         "source.collect",
-        tenantResource(tenantId, reviewResource),
+        registryResource(reviewResource),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
 
-      return withTenant(sql, { tenantId }, async (tx) => {
+      return withActor(sql, actor, async (tx) => {
         const [receipt] = await tx<
           {
             id: string;
@@ -507,14 +504,14 @@ export async function registerSecondReviewRoute(
 
         /**
          * Authorized against the receipt's project — the follow-up is written there too.
-         * A receipt without a project is a tenant-level record, checked as such.
+         * A receipt without a project is a Registry-level record, checked as such.
          */
         const effectiveRole = assertAuthorized(
           session,
           "source.collect",
           receipt.project_id === null
-            ? tenantResource(tenantId, { ...reviewResource, requiresTenantScope: true })
-            : projectResource(tenantId, receipt.project_id, reviewResource),
+            ? registryResource({ ...reviewResource, requiresRegistryScope: true })
+            : projectResource(receipt.project_id, reviewResource),
           sessionFacts(session),
         );
 
@@ -572,7 +569,7 @@ export async function registerSecondReviewRoute(
          */
         await tx`
           INSERT INTO core.source_receipts (
-            id, tenant_id, project_id, connection_id, authority_id, collection_method,
+            id, project_id, connection_id, authority_id, collection_method,
             result, query_basis, endpoint_or_document_ref, authentication_method,
             raw_hash, source_schema_version, adapter_version,
             terms_license, commercial_reuse, disclosure_permission,
@@ -580,7 +577,7 @@ export async function registerSecondReviewRoute(
             channel_evidence, first_confirmed_by, second_confirmed_by, second_confirmed_at,
             supersedes_receipt_id
           ) VALUES (
-            ${id}, ${tenantId}, ${receipt.project_id}, ${receipt.connection_id},
+            ${id}, ${receipt.project_id}, ${receipt.connection_id},
             ${receipt.authority_id}, ${receipt.collection_method}, ${nextResult},
             ${tx.json(receipt.query_basis as never)}, ${receipt.endpoint_or_document_ref},
             ${receipt.authentication_method}, ${receipt.raw_hash},
@@ -604,7 +601,6 @@ export async function registerSecondReviewRoute(
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           session,
           command: "source_receipt.second_reviewed",
           resourceType: "source_receipt",
@@ -620,7 +616,6 @@ export async function registerSecondReviewRoute(
         });
 
         await enqueueEvent(tx, {
-          tenantId,
           eventType: "source_receipt.received",
           aggregateId: id,
           aggregateVersion: 1,

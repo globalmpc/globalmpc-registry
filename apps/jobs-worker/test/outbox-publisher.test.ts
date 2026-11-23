@@ -13,16 +13,10 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 describeDb("outbox publishing", () => {
   let sql: postgres.Sql;
-  let tenant: string;
 
   beforeAll(async () => {
     sql = await connectIsolated("outbox");
 
-    tenant = randomUUID();
-    await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenant}, ${`w-${tenant.slice(0, 8)}`}, 'worker test')
-    `;
   });
 
   afterAll(async () => {
@@ -33,10 +27,10 @@ describeDb("outbox publishing", () => {
     const id = randomUUID();
     await sql`
       INSERT INTO core.outbox (
-        id, tenant_id, event_type, aggregate_id, aggregate_version,
+        id, event_type, aggregate_id, aggregate_version,
         payload, correlation_id, occurred_at
       ) VALUES (
-        ${id}, ${tenant}, 'project.registered', ${randomUUID()}, 1,
+        ${id}, 'project.registered', ${randomUUID()}, 1,
         '{"projectKey":"X"}'::jsonb, ${correlationId},
         ${occurredAt ?? new Date().toISOString()}
       )
@@ -173,15 +167,9 @@ describeDb("consumer deduplication", () => {
 
 describeDb("backlog observation", () => {
   let sql: postgres.Sql;
-  let tenant: string;
 
   beforeAll(async () => {
     sql = await connectIsolated("outbox");
-    tenant = randomUUID();
-    await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenant}, ${`b-${tenant.slice(0, 8)}`}, 'backlog test')
-    `;
   });
 
   afterAll(async () => {
@@ -195,10 +183,10 @@ describeDb("backlog observation", () => {
 
     await sql`
       INSERT INTO core.outbox (
-        id, tenant_id, event_type, aggregate_id, aggregate_version,
+        id, event_type, aggregate_id, aggregate_version,
         payload, correlation_id
       ) VALUES (
-        ${randomUUID()}, ${tenant}, 'project.registered', ${randomUUID()}, 1,
+        ${randomUUID()}, 'project.registered', ${randomUUID()}, 1,
         '{}'::jsonb, ${`backlog-${randomUUID()}`}
       )
     `;

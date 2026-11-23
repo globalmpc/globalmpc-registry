@@ -48,7 +48,7 @@ describeDb("document revocation", () => {
   let reader: string;
   let reviewer: string;
   let scopedSteward: string;
-  let otherTenantOperator: string;
+  let otherCompanyOperator: string;
 
   beforeAll(async () => {
     fx = await setupFixture();
@@ -59,7 +59,7 @@ describeDb("document revocation", () => {
     reader = await signIn(app, fx.readerA);
     reviewer = await signIn(app, fx.reviewerA);
     scopedSteward = await signIn(app, fx.scopedStewardA);
-    otherTenantOperator = await signIn(app, fx.operatorB);
+    otherCompanyOperator = await signIn(app, fx.operatorB);
   });
 
   afterAll(async () => {
@@ -204,13 +204,13 @@ describeDb("document revocation", () => {
     const receiptId = randomUUID();
     await fx.sql`
       INSERT INTO core.source_receipts (
-        id, tenant_id, project_id, connection_id, authority_id, collection_method,
+        id, project_id, connection_id, authority_id, collection_method,
         result, query_basis, endpoint_or_document_ref, authentication_method,
         raw_hash, source_schema_version, adapter_version, terms_license,
         commercial_reuse, disclosure_permission, received_at, as_of,
         freshness_status, correlation_id, channel_evidence
       ) VALUES (
-        ${receiptId}, ${fx.tenantA}, ${fx.projectA}, ${fx.connectionA}, ${fx.authorityA},
+        ${receiptId}, ${fx.projectA}, ${fx.connectionA}, ${fx.authorityA},
         'authenticated_api', 'manual_review_required', '{}'::jsonb, 'document',
         'none', ${`0x${"22".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
         now(), now(), 'fresh', 'test',
@@ -220,10 +220,10 @@ describeDb("document revocation", () => {
     const claimId = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
-        id, tenant_id, project_id, claim_type, value_text, source_coordinate,
+        id, project_id, claim_type, value_text, source_coordinate,
         evidence_tier, verification_state, grade, source_receipt_id
       ) VALUES (
-        ${claimId}, ${fx.tenantA}, ${fx.projectA}, 'lab_accreditation', 'ISO 17025',
+        ${claimId}, ${fx.projectA}, 'lab_accreditation', 'ISO 17025',
         '{"page":"1"}'::jsonb, 'P1', 'analyst_checked', 'verified', ${receiptId}
       )
     `;
@@ -345,25 +345,25 @@ describeDb("document revocation", () => {
       const batchId = randomUUID();
       const hex = (seed: string) => `0x${seed.replace(/-/g, "").repeat(2)}`;
       await fx.sql`
-        INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
-        VALUES (${entryId}, ${fx.tenantA}, 'project', ${fx.projectA}, ${`PRJ-${entryId.slice(0, 8)}`})
+        INSERT INTO core.registry_entries (id, registry_type, subject_id, public_key)
+        VALUES (${entryId}, 'project', ${fx.projectA}, ${`PRJ-${entryId.slice(0, 8)}`})
       `;
       await fx.sql`
         INSERT INTO core.registry_entry_versions (
-          id, tenant_id, entry_id, version, status, public_projection,
+          id, entry_id, version, status, public_projection,
           content_hash, source_snapshot_hash, policy_version, schema_version,
           serialization_version, published_at
         ) VALUES (
-          ${versionId}, ${fx.tenantA}, ${entryId}, 1, 'published', '{}'::jsonb,
+          ${versionId}, ${entryId}, 1, 'published', '{}'::jsonb,
           ${hex(versionId)}, ${hex(entryId)}, '1', '1', '1', now()
         )
       `;
       await fx.sql`
         INSERT INTO chain.anchor_batches (
-          id, tenant_id, batch_id, merkle_root, manifest_hash,
+          id, batch_id, merkle_root, manifest_hash,
           manifest_object_key, schema_version, record_count
         ) VALUES (
-          ${batchId}, ${fx.tenantA}, ${hex(batchId)}, ${hex(versionId)},
+          ${batchId}, ${hex(batchId)}, ${hex(versionId)},
           ${`0x${"33".repeat(32)}`}, 'manifests/revoke.json', '1', 1
         )
       `;
@@ -767,14 +767,14 @@ describeDb("document revocation", () => {
       }
     });
 
-    it("answers 404 where the document is not visible: project out of scope, no role, another tenant, no such id", async () => {
+    it("answers 404 where the document is not visible: project out of scope, no role, another company, no such id", async () => {
       const elsewhere = await promoted(fx.otherProjectA);
 
       const outOfScope = await revoke(elsewhere, undefined, { token: scopedSteward });
       expect(outOfScope.statusCode).toBe(404);
 
-      const otherTenant = await revoke(elsewhere, undefined, { token: otherTenantOperator });
-      expect(otherTenant.statusCode).toBe(404);
+      const otherCompany = await revoke(elsewhere, undefined, { token: otherCompanyOperator });
+      expect(otherCompany.statusCode).toBe(404);
 
       // No role at all: no project is readable, so nothing is confirmed to exist.
       const noRole = await revoke(elsewhere, undefined, { token: reader });
@@ -785,7 +785,7 @@ describeDb("document revocation", () => {
 
       // Same body for all three: nothing tells an existing id from a missing one.
       expect(outOfScope.json().message).toBe(missing.json().message);
-      expect(otherTenant.json().message).toBe(missing.json().message);
+      expect(otherCompany.json().message).toBe(missing.json().message);
 
       // The scoped steward still revokes in the project the binding reaches.
       const here = await promoted();

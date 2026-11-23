@@ -8,7 +8,7 @@ import { buildServer } from "../src/server.js";
 import {loadConfig} from "../src/config.js";
 import { setupFixture, signIn, testEnv, idempotencyKey, type TestFixture } from "./helpers/db.js";
 import { publishProject, projectProjection, draftRegistryEntry, projectKeyOf } from "./helpers/registry.js";
-import { computeEvidenceLedger, persistEvidenceLedger, publicLedgerProjection, withTenant, type LedgerSnapshot } from "@mpc/db";
+import { computeEvidenceLedger, persistEvidenceLedger, publicLedgerProjection, withActor, type LedgerSnapshot } from "@mpc/db";
 const describeDb=process.env['DATABASE_URL']?describe:describe.skip;
 
 describeDb('computed ledger API and approved public boundary',()=>{
@@ -21,10 +21,10 @@ describeDb('computed ledger API and approved public boundary',()=>{
     catalogId=randomUUID();claimType=`ledger_${randomUUID().replaceAll('-','')}`;
     const proposal=randomUUID();const payload={claimType,displayName:'Synthetic licence',description:null,definition:{fields:[{key:'number',label:'Number',type:'string',required:true}]}};
     await fx.sql.begin(async tx=>{
-      await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${proposal},${fx.tenantA},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic test',${new Date(Date.now()-60_000)},${fx.operatorSubjectA})`;
-      await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-        SELECT ${catalogId},tenant_id,item_key,1,'Synthetic licence',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
+      await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+        VALUES(${proposal},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic test',${new Date(Date.now()-60_000)},${fx.operatorSubjectA})`;
+      await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+        SELECT ${catalogId},item_key,1,'Synthetic licence',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic test only',materialized_id=${catalogId},version=2 WHERE id=${proposal}`;
     });
   });
@@ -38,8 +38,8 @@ describeDb('computed ledger API and approved public boundary',()=>{
     const [row]=await fx.sql`SELECT count(*)::int n FROM core.evidence_ledger_snapshots WHERE project_id=${fx.projectA}`;
     expect(row!.n).toBe(0);
   });
-  it('rejects other tenants, out of scope projects and client supplied outcomes',async()=>{
-    expect((await get(fx.projectA,other)).statusCode).toBe(404);
+  it('rejects other companies, out of scope projects and client supplied outcomes',async()=>{
+    expect((await get(fx.projectA,other)).statusCode).toBe(403);
     expect([403,404]).toContain((await get(fx.otherProjectA,scoped)).statusCode);
     expect((await assess(fx.projectA,{currentStage:'stage.production'})).statusCode).toBe(400);
   });
@@ -51,7 +51,7 @@ describeDb('computed ledger API and approved public boundary',()=>{
     expect(snapshot.inputBasis).toHaveProperty('catalog');
     expect(await fx.sql`SELECT * FROM core.project_facts WHERE project_id=${fx.projectA}`).toEqual(before);
     await expect(fx.sql`UPDATE core.evidence_ledger_snapshots SET snapshot='{}' WHERE id=${snapshot.id!}`).rejects.toThrow();
-    const otherRows=await withTenant(fx.appSql,{tenantId:fx.tenantB},tx=>tx`SELECT id FROM core.evidence_ledger_snapshots WHERE id=${snapshot.id!}`);
+    const otherRows=await withActor(fx.appSql, { subjectId: fx.operatorSubjectB },tx=>tx`SELECT id FROM core.evidence_ledger_snapshots WHERE id=${snapshot.id!}`);
     expect(otherRows).toHaveLength(0);
   });
   it('rejects forged and cross-project ledger publication even with a real recorded snapshot',async()=>{
@@ -69,41 +69,41 @@ describeDb('computed ledger API and approved public boundary',()=>{
   it('derives an approved stage from scoped reviewed evidence and warns on expiry without rewriting its public snapshot',async()=>{
     const projectId=randomUUID(),documentId=randomUUID(),artifactId=randomUUID(),claimId=randomUUID();
     const caseId=randomUUID(),assignmentId=randomUUID(),attestationId=randomUUID(),policyId=randomUUID();
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id,reference_status)
-      VALUES(${projectId},${fx.tenantA},${'LED-'+projectId.slice(0,8)},'Synthetic ledger','MNG',ARRAY['copper'],${fx.orgA},'synthetic_test_project')`;
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id,reference_status)
+      VALUES(${projectId},${'LED-'+projectId.slice(0,8)},'Synthetic ledger','MNG',ARRAY['copper'],${fx.orgA},'synthetic_test_project')`;
     const hash='0x'+'ab'.repeat(32);
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity)
-      VALUES(${artifactId},${fx.tenantA},${projectId},'raw_source',${hash},'restricted')`;
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,promoted_artifact_id,valid_until)
-      VALUES(${documentId},${fx.tenantA},${projectId},${documentId},${hash},123,'application/pdf','restricted','promoted',${artifactId},current_date)`;
-    await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
-      VALUES(${claimId},${fx.tenantA},${projectId},${claimType},'Private licence number','{}','verified',${catalogId},1,'{"number":"private-123"}',${[documentId]}::uuid[],current_date)`;
-    await fx.sql`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id,state)
-      VALUES(${caseId},${fx.tenantA},${projectId},${fx.schemaA},'signed')`;
-    await fx.sql`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id)
-      VALUES(${assignmentId},${fx.tenantA},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity)
+      VALUES(${artifactId},${projectId},'raw_source',${hash},'restricted')`;
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,promoted_artifact_id,valid_until)
+      VALUES(${documentId},${projectId},${documentId},${hash},123,'application/pdf','restricted','promoted',${artifactId},current_date)`;
+    await fx.sql`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
+      VALUES(${claimId},${projectId},${claimType},'Private licence number','{}','verified',${catalogId},1,'{"number":"private-123"}',${[documentId]}::uuid[],current_date)`;
+    await fx.sql`INSERT INTO core.verification_cases(id,project_id,schema_id,state)
+      VALUES(${caseId},${projectId},${fx.schemaA},'signed')`;
+    await fx.sql`INSERT INTO core.assignments(id,case_id,subject_id,credential_id)
+      VALUES(${assignmentId},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
     // The API evaluates at a millisecond JS asOf, while PostgreSQL now() has microseconds and can
     // fall later in that millisecond. Effective dates are not the boundary under test here, so the
     // signature and v1 policy use a known past time; v2 below stays strictly newer than v1.
     const eligibleAt=new Date(Date.now()-60_000);
-    await fx.sql`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
+    await fx.sql`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
       evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-      VALUES(${attestationId},${fx.tenantA},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${[claimId]}::uuid[],
+      VALUES(${attestationId},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${[claimId]}::uuid[],
       ${hash},'Licence number only; no legal validity opinion','{"status":"valid"}','1','1',${hash},${'0x'+'12'.repeat(65)},${fx.reviewerA.address},${eligibleAt},'signed')`;
     const definition={ruleSetId:'synthetic-ledger',version:'1.0.0',effectiveFrom:'2020-01-01T00:00:00Z',supersededBy:null,jurisdictionProfile:'MNG',gateId:'stage.exploration',retroactive:false,
       requirements:[{requirementId:'synthetic-licence',label:'Synthetic licence',appliesWhen:{op:'eq',path:'referenceStatus',value:'synthetic_test_project'},requiredClaimTypes:[claimType],minimumGrade:'verified',freshnessThresholdDays:null,requiredAttestations:['professional_signoff'],blockingConflictTypes:['contradiction'],notEvaluableWhen:{op:'never'},watchWhen:null},
         {requirementId:'inapplicable-licence',label:'Inapplicable synthetic licence',appliesWhen:{op:'never'},requiredClaimTypes:[claimType],minimumGrade:'verified',freshnessThresholdDays:null,requiredAttestations:[],blockingConflictTypes:[],notEvaluableWhen:{op:'never'},watchWhen:null}]};
-    await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-      VALUES(${policyId},${fx.tenantA},'synthetic-ledger','1.0.0','stage.exploration','MNG',${eligibleAt},${fx.sql.json(definition)},'effective')`;
+    await fx.sql`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+      VALUES(${policyId},'synthetic-ledger','1.0.0','stage.exploration','MNG',${eligibleAt},${fx.sql.json(definition)},'effective')`;
     const assessed=await assess(projectId);expect(assessed.statusCode,assessed.body).toBe(200);
     const snapshot=assessed.json().snapshot;
     expect(snapshot.stages[0]).toMatchObject({reviewedItems:'1',requiredItems:'1'});
     expect(snapshot.currentStage).toBe('stage.exploration');expect(snapshot.items[0].status).toBe('reviewed');
     // Model a pending pre-upgrade assessment without rewriting any recorded snapshot.
-    await withTenant(fx.appSql,{tenantId:fx.tenantA},async tx=>{
-      const legacy = await persistEvidenceLedger(tx,fx.tenantA,{...snapshot,stages:snapshot.stages.map(({itemClaimTypes:_links,...stage}:LedgerSnapshot['stages'][number])=>stage)});
+    await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },async tx=>{
+      const legacy = await persistEvidenceLedger(tx, {...snapshot,stages:snapshot.stages.map(({itemClaimTypes:_links,...stage}:LedgerSnapshot['stages'][number])=>stage)});
       const frozen = publicLedgerProjection(legacy);
-      await assertEvidenceLedgerProjection(tx,fx.tenantA,'project',projectId,{evidenceLedger:frozen},new Date());
+      await assertEvidenceLedgerProjection(tx,'project',projectId,{evidenceLedger:frozen},new Date());
       const [retained] = await tx`SELECT snapshot FROM core.evidence_ledger_snapshots WHERE id=${legacy.id}`;
       expect(retained!.snapshot).toEqual(legacy);
       expect(frozen.stages[0]).not.toHaveProperty('itemClaimTypes');
@@ -120,15 +120,15 @@ describeDb('computed ledger API and approved public boundary',()=>{
     for(const grade of ['verified','self_reported']){
       await expect(fx.sql.begin(async tx=>{
         const addedId=randomUUID();
-        await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
-          SELECT ${addedId},tenant_id,project_id,claim_type,value_text,source_coordinate,${grade},catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of
+        await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
+          SELECT ${addedId},project_id,claim_type,value_text,source_coordinate,${grade},catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of
           FROM core.claims WHERE id=${claimId}`;
-        await tx`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
+        await tx`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
           evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-          SELECT ${randomUUID()},tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,${[addedId]}::uuid[],
+          SELECT ${randomUUID()},case_id,assignment_id,credential_id,schema_id,attestation_type,${[addedId]}::uuid[],
             evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state
           FROM core.verification_attestations WHERE id=${attestationId}`;
-        const current=await computeEvidenceLedger(tx,fx.tenantA,projectId,new Date());
+        const current=await computeEvidenceLedger(tx, projectId,new Date());
         expect(current!.items[0]!.status).toBe('reviewed');
         expect(current!.currentStage).toBe(grade==='verified'?'stage.exploration':null);
         expect(current!.stages[0]!.status).toBe(grade==='verified'?'ok':'gap');
@@ -144,18 +144,18 @@ describeDb('computed ledger API and approved public boundary',()=>{
     await expect(fx.sql.begin(async tx=>{
       const freshnessDefinition={...definition,requirements:definition.requirements.map(requirement=>({...requirement,freshnessThresholdDays:'180'}))};
       await tx`UPDATE core.compliance_policy_sets SET definition=${tx.json(freshnessDefinition)} WHERE id=${policyId}`;
-      const presentEvidence=await computeEvidenceLedger(tx,fx.tenantA,projectId,new Date());
+      const presentEvidence=await computeEvidenceLedger(tx, projectId,new Date());
       expect(presentEvidence!.currentStage,JSON.stringify(presentEvidence)).toBe('stage.exploration');
       const futureClaimId=randomUUID();
-      await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
-        SELECT ${futureClaimId},tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,'2099-01-01'
+      await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
+        SELECT ${futureClaimId},project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,'2099-01-01'
         FROM core.claims WHERE id=${claimId}`;
-      await tx`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
+      await tx`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
         evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-        SELECT ${randomUUID()},tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,${[futureClaimId]}::uuid[],
+        SELECT ${randomUUID()},case_id,assignment_id,credential_id,schema_id,attestation_type,${[futureClaimId]}::uuid[],
           evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state
         FROM core.verification_attestations WHERE id=${attestationId}`;
-      const futureEvidence=await computeEvidenceLedger(tx,fx.tenantA,projectId,new Date());
+      const futureEvidence=await computeEvidenceLedger(tx, projectId,new Date());
       expect(futureEvidence!.currentStage).toBeNull();
       expect(futureEvidence!.items[0]!.status).toBe('needs_re_review');
       const [live]=await tx`SELECT core.public_evidence_ledger_current(${publication.json().id}) AS current`;
@@ -167,8 +167,8 @@ describeDb('computed ledger API and approved public boundary',()=>{
     // Stage rules use the actual conflict type, rather than converting every open conflict
     // into each policy's configured blocking type. The item still truthfully shows conflict.
     const conflictId=randomUUID();
-    await fx.sql`INSERT INTO core.claim_conflicts(id,tenant_id,claim_id,conflict_type)
-      VALUES(${conflictId},${fx.tenantA},${claimId},'administrative_note')`;
+    await fx.sql`INSERT INTO core.claim_conflicts(id,claim_id,conflict_type)
+      VALUES(${conflictId},${claimId},'administrative_note')`;
     const nonblocking=await get(projectId);
     expect(nonblocking.json().snapshot.items[0].status).toBe('conflicting');
     expect(nonblocking.json().snapshot.currentStage).toBe('stage.exploration');
@@ -179,9 +179,9 @@ describeDb('computed ledger API and approved public boundary',()=>{
     // warn publicly without changing the approved projection or its content hash.
     const exclusionRollback=new Error('Rollback synthetic manual exclusion');
     await expect(fx.sql.begin(async tx=>{
-      await tx`INSERT INTO core.project_fact_versions(id,tenant_id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
-        VALUES(${randomUUID()},${fx.tenantA},${projectId},${claimType},1,'not_applicable','Synthetic manual exclusion',${fx.operatorSubjectA})`;
-      const excluded=await computeEvidenceLedger(tx,fx.tenantA,projectId,new Date());
+      await tx`INSERT INTO core.project_fact_versions(id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
+        VALUES(${randomUUID()},${projectId},${claimType},1,'not_applicable','Synthetic manual exclusion',${fx.operatorSubjectA})`;
+      const excluded=await computeEvidenceLedger(tx, projectId,new Date());
       expect(excluded!.items[0]!.status).toBe('not_applicable');
       expect(excluded!.currentStage).toBeNull();
       expect(excluded!.stages[0]).toMatchObject({status:'gap',reviewedItems:'0',requiredItems:'0'});
@@ -197,15 +197,15 @@ describeDb('computed ledger API and approved public boundary',()=>{
     const isolatedDemo=randomUUID(),scopedPolicy=randomUUID(),scopeProposal=randomUUID();
     const scopedAt=new Date(Date.now()-1000);
     const scopedDefinition={...definition,ruleSetId:'isolated-demo-regression',version:'99.0.0',effectiveFrom:scopedAt.toISOString().replace(/\.\d{3}Z$/,'Z')};
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id,reference_status)
-      VALUES(${isolatedDemo},${fx.tenantA},${'SCOPE-'+isolatedDemo},'Synthetic isolated demo','MNG',ARRAY['copper'],${fx.orgA},'synthetic_test_project')`;
-    await fx.sql`INSERT INTO audit.events(tenant_id,command,resource_type,resource_id,reason,correlation_id)
-      VALUES(${fx.tenantA},'dev_demo.started','project',${isolatedDemo},'Synthetic regression only',${randomUUID()})`;
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id,reference_status)
+      VALUES(${isolatedDemo},${'SCOPE-'+isolatedDemo},'Synthetic isolated demo','MNG',ARRAY['copper'],${fx.orgA},'synthetic_test_project')`;
+    await fx.sql`INSERT INTO audit.events(command,resource_type,resource_id,reason,correlation_id)
+      VALUES('dev_demo.started','project',${isolatedDemo},'Synthetic regression only',${randomUUID()})`;
     await fx.sql.begin(async tx=>{
-      await tx`INSERT INTO core.compliance_policy_sets(id,tenant_id,project_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-        VALUES(${scopedPolicy},${fx.tenantA},${isolatedDemo},'isolated-demo-regression','99.0.0','stage.exploration','MNG',${scopedAt},${tx.json(scopedDefinition)},'effective')`;
-      await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${scopeProposal},${fx.tenantA},'policy_set','isolated-demo-regression',1,${tx.json({definition:scopedDefinition,projectId:isolatedDemo})},'Synthetic regression only',${scopedAt},${fx.operatorSubjectA})`;
+      await tx`INSERT INTO core.compliance_policy_sets(id,project_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+        VALUES(${scopedPolicy},${isolatedDemo},'isolated-demo-regression','99.0.0','stage.exploration','MNG',${scopedAt},${tx.json(scopedDefinition)},'effective')`;
+      await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+        VALUES(${scopeProposal},'policy_set','isolated-demo-regression',1,${tx.json({definition:scopedDefinition,projectId:isolatedDemo})},'Synthetic regression only',${scopedAt},${fx.operatorSubjectA})`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic regression only',materialized_id=${scopedPolicy},version=2 WHERE id=${scopeProposal}`;
     });
     expect((await get(projectId)).json().snapshot.stages[0].policySetId).toBe(policyId);
@@ -213,13 +213,13 @@ describeDb('computed ledger API and approved public boundary',()=>{
     expect(unaffectedPublic.json().evidenceLedgerCurrent.warnings).toEqual([]);
     expect(unaffectedPublic.json().evidenceLedger).toEqual(projection);
     for(const ignored of [
-      {tenantId:fx.tenantB,jurisdiction:'MNG',version:'90.0.0',effectiveFrom:'2020-01-01T00:00:00Z'},
-      {tenantId:fx.tenantA,jurisdiction:'AUS',version:'91.0.0',effectiveFrom:'2020-01-01T00:00:00Z'},
-      {tenantId:fx.tenantA,jurisdiction:'MNG',version:'92.0.0',effectiveFrom:'2099-01-01T00:00:00Z'},
+      {jurisdiction:'MNG',version:'90.0.0',effectiveFrom:'2020-01-01T00:00:00Z'},
+      {jurisdiction:'AUS',version:'91.0.0',effectiveFrom:'2020-01-01T00:00:00Z'},
+      {jurisdiction:'MNG',version:'92.0.0',effectiveFrom:'2099-01-01T00:00:00Z'},
     ]){
       const ignoredDefinition={...definition,version:ignored.version,jurisdictionProfile:ignored.jurisdiction,effectiveFrom:ignored.effectiveFrom};
-      await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-        VALUES(${randomUUID()},${ignored.tenantId},'synthetic-ledger',${ignored.version},'stage.exploration',${ignored.jurisdiction},${ignored.effectiveFrom},${fx.sql.json(ignoredDefinition)},'effective')`;
+      await fx.sql`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+        VALUES(${randomUUID()},'synthetic-ledger',${ignored.version},'stage.exploration',${ignored.jurisdiction},${ignored.effectiveFrom},${fx.sql.json(ignoredDefinition)},'effective')`;
     }
     expect((await get(projectId)).json().snapshot.currentStage).toBe('stage.exploration');
     const ignoredPublic=await app.inject({method:'GET',url:`/api/v1/public/registries/project/LED-${projectId.slice(0,8)}`});
@@ -229,8 +229,8 @@ describeDb('computed ledger API and approved public boundary',()=>{
     // Already effective at the next request's millisecond asOf, yet strictly newer than v1.
     const nextEffectiveAt=new Date(Date.now()-1000);
     expect(nextEffectiveAt.getTime()).toBeGreaterThan(eligibleAt.getTime());
-    await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-      VALUES(${nextPolicy},${fx.tenantA},'synthetic-ledger','2.0.0','stage.exploration','MNG',${nextEffectiveAt},${fx.sql.json(nextDefinition)},'effective')`;
+    await fx.sql`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+      VALUES(${nextPolicy},'synthetic-ledger','2.0.0','stage.exploration','MNG',${nextEffectiveAt},${fx.sql.json(nextDefinition)},'effective')`;
     const changedPolicy=await get(projectId);
     expect(changedPolicy.json().snapshot.currentStage).toBeNull();
     expect(changedPolicy.json().snapshot.stages[0].policySetId).toBe(nextPolicy);
@@ -242,8 +242,8 @@ describeDb('computed ledger API and approved public boundary',()=>{
     expect(afterPolicy).toEqual(before);
     // A newly submitted claim under an approved item changes live standing, not frozen disclosure.
     const addedClaim=randomUUID();
-    await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids)
-      VALUES(${addedClaim},${fx.tenantA},${projectId},${claimType},'New private number','{}','unverified',${catalogId},1,'{"number":"private-added"}',${[documentId]}::uuid[])`;
+    await fx.sql`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids)
+      VALUES(${addedClaim},${projectId},${claimType},'New private number','{}','unverified',${catalogId},1,'{"number":"private-added"}',${[documentId]}::uuid[])`;
     const [undatedHealth]=await fx.sql`SELECT as_of,stale FROM core.ledger_claim_health(${projectId},now()) WHERE id=${addedClaim}`;
     expect(undatedHealth).toMatchObject({as_of:null,stale:false});
     const addedCurrent=await get(projectId);
@@ -267,8 +267,8 @@ describeDb('computed ledger API and approved public boundary',()=>{
       // first pages. Drive one full paginated pass at the same future clock (bounded), stopping
       // once this project has been reassessed.
       const [eligible]=await futureWorker<{count:string}[]>`SELECT count(*)::text AS count FROM core.projects p
-        WHERE EXISTS(SELECT 1 FROM core.claims c WHERE c.tenant_id=p.tenant_id AND c.project_id=p.id AND c.catalog_entry_id IS NOT NULL)
-          OR EXISTS(SELECT 1 FROM core.evidence_ledger_snapshots s WHERE s.tenant_id=p.tenant_id AND s.project_id=p.id)`;
+        WHERE EXISTS(SELECT 1 FROM core.claims c WHERE c.project_id=p.id AND c.catalog_entry_id IS NOT NULL)
+          OR EXISTS(SELECT 1 FROM core.evidence_ledger_snapshots s WHERE s.project_id=p.id)`;
       const pages=Math.ceil(Number(eligible!.count)/DEFAULT_LEDGER_BATCH_SIZE);
       expect(pages).toBeGreaterThan(0);
       const sweep=createLedgerSweep(futureWorker,0,()=>futureTimestamp);
@@ -313,9 +313,9 @@ describeDb('computed ledger API and approved public boundary',()=>{
     expect(after).toEqual(before);
     // A valid review must not hide a second, disputed review on a newly added claim.
     for (const state of ['signed','disputed']) {
-      await fx.sql`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
+      await fx.sql`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
         evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-        SELECT ${randomUUID()},tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,${[addedClaim]}::uuid[],
+        SELECT ${randomUUID()},case_id,assignment_id,credential_id,schema_id,attestation_type,${[addedClaim]}::uuid[],
           evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,${state}
         FROM core.verification_attestations WHERE id=${attestationId}`;
     }
@@ -325,8 +325,8 @@ describeDb('computed ledger API and approved public boundary',()=>{
     expect(disputedPublic.json().evidenceLedger).toEqual(projection);
   });
   it('warns when an approved exclusion is withdrawn without claims, preserving the approved snapshot',async()=>{
-    await fx.sql`INSERT INTO core.project_fact_versions(id,tenant_id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.projectA},${claimType},1,'not_applicable','Excluded before approval',${fx.operatorSubjectA})`;
+    await fx.sql`INSERT INTO core.project_fact_versions(id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
+      VALUES(${randomUUID()},${fx.projectA},${claimType},1,'not_applicable','Excluded before approval',${fx.operatorSubjectA})`;
     const assessed=await assess(fx.projectA);expect(assessed.statusCode,assessed.body).toBe(200);
     expect(assessed.json().snapshot.items.find((item:{claimType:string})=>item.claimType===claimType)).toMatchObject({status:'not_applicable',claimIds:[]});
     const publication=await publishProject(app,fx.sql,{drafter:token,publisher},fx.projectA,{projection:await projectProjection(fx.sql,fx.projectA,{evidenceLedger:assessed.json().publicProjection})});
@@ -336,14 +336,14 @@ describeDb('computed ledger API and approved public boundary',()=>{
     expect(response.statusCode,response.body).toBe(200);
     expect(response.json().evidenceLedgerCurrent.warnings).toEqual([]);
     // An unchanged exclusion decision must remain quiet, even when recorded again.
-    await fx.sql`INSERT INTO core.project_fact_versions(id,tenant_id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.projectA},${claimType},2,'not_applicable','Exclusion reconfirmed',${fx.operatorSubjectA})`;
-    await fx.sql`INSERT INTO core.project_fact_versions(id,tenant_id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.otherProjectA},${claimType},1,'pending','Another project must not affect this exclusion',${fx.operatorSubjectA})`;
+    await fx.sql`INSERT INTO core.project_fact_versions(id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
+      VALUES(${randomUUID()},${fx.projectA},${claimType},2,'not_applicable','Exclusion reconfirmed',${fx.operatorSubjectA})`;
+    await fx.sql`INSERT INTO core.project_fact_versions(id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
+      VALUES(${randomUUID()},${fx.otherProjectA},${claimType},1,'pending','Another project must not affect this exclusion',${fx.operatorSubjectA})`;
     const unchanged=await app.inject({method:'GET',url:`/api/v1/public/registries/project/${await projectKeyOf(fx.sql,fx.projectA)}`});
     expect(unchanged.json().evidenceLedgerCurrent.warnings).toEqual([]);
-    await fx.sql`INSERT INTO core.project_fact_versions(id,tenant_id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.projectA},${claimType},3,'pending','Exclusion withdrawn',${fx.operatorSubjectA})`;
+    await fx.sql`INSERT INTO core.project_fact_versions(id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
+      VALUES(${randomUUID()},${fx.projectA},${claimType},3,'pending','Exclusion withdrawn',${fx.operatorSubjectA})`;
     const current=await get(fx.projectA);
     expect(current.json().snapshot.items.find((item:{claimType:string})=>item.claimType===claimType)).toMatchObject({status:'missing',claimIds:[]});
     const withdrawn=await app.inject({method:'GET',url:`/api/v1/public/registries/project/${await projectKeyOf(fx.sql,fx.projectA)}`});
@@ -357,38 +357,38 @@ describeDb('computed ledger API and approved public boundary',()=>{
     const projectId=fx.otherProjectA,otherCatalog=randomUUID(),otherType=`extra_${randomUUID().replaceAll('-','')}`;
     const proposal=randomUUID(),payload={claimType:otherType,displayName:'Unrelated synthetic evidence',description:null,definition:{fields:[]}};
     await fx.sql.begin(async tx=>{
-      await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${proposal},${fx.tenantA},'claim_type',${otherType},1,${tx.json(payload)},'Synthetic test',${new Date(Date.now()-60_000)},${fx.operatorSubjectA})`;
-      await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-        SELECT ${otherCatalog},tenant_id,item_key,1,payload->>'displayName',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
+      await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+        VALUES(${proposal},'claim_type',${otherType},1,${tx.json(payload)},'Synthetic test',${new Date(Date.now()-60_000)},${fx.operatorSubjectA})`;
+      await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+        SELECT ${otherCatalog},item_key,1,payload->>'displayName',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic test only',materialized_id=${otherCatalog},version=2 WHERE id=${proposal}`;
     });
     const documentId=randomUUID(),artifactId=randomUUID(),hash='0x'+'cd'.repeat(32),claimIds=[randomUUID(),randomUUID()];
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity)
-      VALUES(${artifactId},${fx.tenantA},${projectId},'raw_source',${hash},'restricted')`;
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,promoted_artifact_id)
-      VALUES(${documentId},${fx.tenantA},${projectId},${documentId},${hash},123,'application/pdf','restricted','promoted',${artifactId})`;
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity)
+      VALUES(${artifactId},${projectId},'raw_source',${hash},'restricted')`;
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,promoted_artifact_id)
+      VALUES(${documentId},${projectId},${documentId},${hash},123,'application/pdf','restricted','promoted',${artifactId})`;
     for(const [index,entry] of [{type:claimType,catalog:catalogId,grade:'verified',values:{number:'private-primary'}},{type:otherType,catalog:otherCatalog,grade:'self_reported',values:{}}].entries()){
-      await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
-        VALUES(${claimIds[index]!},${fx.tenantA},${projectId},${entry.type},'Private synthetic input','{}',${entry.grade},${entry.catalog},1,${fx.sql.json(entry.values)},${[documentId]}::uuid[],current_date)`;
+      await fx.sql`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
+        VALUES(${claimIds[index]!},${projectId},${entry.type},'Private synthetic input','{}',${entry.grade},${entry.catalog},1,${fx.sql.json(entry.values)},${[documentId]}::uuid[],current_date)`;
     }
     // PostgreSQL now() has microseconds; an immediate JS evaluation can still be at
     // the start of that millisecond. Eligibility is not the boundary under test here.
     const eligibleAt=new Date(Date.now()-1000);
     const caseId=randomUUID(),assignmentId=randomUUID();
-    await fx.sql`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id,state)
-      VALUES(${caseId},${fx.tenantA},${projectId},${fx.schemaA},'signed')`;
-    await fx.sql`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id)
-      VALUES(${assignmentId},${fx.tenantA},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
-    await fx.sql`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
+    await fx.sql`INSERT INTO core.verification_cases(id,project_id,schema_id,state)
+      VALUES(${caseId},${projectId},${fx.schemaA},'signed')`;
+    await fx.sql`INSERT INTO core.assignments(id,case_id,subject_id,credential_id)
+      VALUES(${assignmentId},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
+    await fx.sql`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
       evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-      VALUES(${randomUUID()},${fx.tenantA},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${claimIds}::uuid[],
+      VALUES(${randomUUID()},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${claimIds}::uuid[],
       ${hash},'Synthetic scope only','{"status":"valid"}','1','1',${hash},${'0x'+'12'.repeat(65)},${fx.reviewerA.address},${eligibleAt},'signed')`;
     const definition={ruleSetId:'synthetic-unrelated',version:'1.0.0',effectiveFrom:'2020-01-01T00:00:00Z',supersededBy:null,jurisdictionProfile:'MNG',gateId:'stage.production',retroactive:false,
       requirements:[{requirementId:'primary',label:'Primary',appliesWhen:{op:'always'},requiredClaimTypes:[claimType],minimumGrade:'verified',freshnessThresholdDays:null,requiredAttestations:['professional_signoff'],blockingConflictTypes:[],notEvaluableWhen:{op:'never'},watchWhen:null},
         {requirementId:'unrelated',label:'Not applicable',appliesWhen:{op:'eq',path:'referenceStatus',value:'not_this_project'},requiredClaimTypes:[otherType],minimumGrade:'verified',freshnessThresholdDays:null,requiredAttestations:[],blockingConflictTypes:[],notEvaluableWhen:{op:'never'},watchWhen:null}]};
-    await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-      VALUES(${randomUUID()},${fx.tenantA},'synthetic-unrelated','1.0.0','stage.production','MNG',${eligibleAt},${fx.sql.json(definition)},'effective')`;
+    await fx.sql`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+      VALUES(${randomUUID()},'synthetic-unrelated','1.0.0','stage.production','MNG',${eligibleAt},${fx.sql.json(definition)},'effective')`;
     const assessed=await assess(projectId);expect(assessed.statusCode,assessed.body).toBe(200);
     expect(assessed.json().snapshot.currentStage).toBe('stage.production');
     expect(assessed.json().snapshot.items.find((item:{claimType:string})=>item.claimType===otherType)).toMatchObject({status:'reviewed',grade:'self_reported'});
@@ -399,9 +399,9 @@ describeDb('computed ledger API and approved public boundary',()=>{
     expect(response.json().evidenceLedgerCurrent.warnings).toEqual([]);
     const exclusionRollback=new Error('Rollback unrelated manual exclusion');
     await expect(fx.sql.begin(async tx=>{
-      await tx`INSERT INTO core.project_fact_versions(id,tenant_id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
-        VALUES(${randomUUID()},${fx.tenantA},${projectId},${otherType},1,'not_applicable','Unrelated synthetic exclusion',${fx.operatorSubjectA})`;
-      expect((await computeEvidenceLedger(tx,fx.tenantA,projectId,new Date()))!.currentStage).toBe('stage.production');
+      await tx`INSERT INTO core.project_fact_versions(id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
+        VALUES(${randomUUID()},${projectId},${otherType},1,'not_applicable','Unrelated synthetic exclusion',${fx.operatorSubjectA})`;
+      expect((await computeEvidenceLedger(tx, projectId,new Date()))!.currentStage).toBe('stage.production');
       const [live]=await tx`SELECT core.public_evidence_ledger_current(${publication.json().id}) AS current`;
       expect(live!.current.warnings).toEqual([]);
       throw exclusionRollback;
@@ -410,12 +410,8 @@ describeDb('computed ledger API and approved public boundary',()=>{
   it('worker persists changed outcomes with its restricted database role and reuses stable outcomes',async()=>{
     // Runtime import exercises the deployed worker without adding it to the API build graph.
     const {createLedgerSweep}=await import(new URL('../../jobs-worker/src/evidence-ledger.ts',import.meta.url).href);
-    await fx.sql`INSERT INTO core.jurisdiction_profiles(id,tenant_id,jurisdiction,profile_version,state,environmental_requirement_basis,effective_from)
-      VALUES(${randomUUID()},${fx.tenantA},'MNG',1,'approved','Own tenant basis','2020-01-01')`;
-    await fx.sql`INSERT INTO core.jurisdiction_profiles(id,tenant_id,jurisdiction,profile_version,state,environmental_requirement_basis,effective_from)
-      VALUES(${randomUUID()},${fx.tenantB},'MNG',1,'approved','Other tenant private basis','2020-01-01')`;
-    await fx.sql`INSERT INTO core.jurisdiction_profiles(id,tenant_id,jurisdiction,profile_version,state,environmental_requirement_basis,effective_from)
-      VALUES(${randomUUID()},${fx.tenantB},'MNG',2,'suspended','Other tenant private basis','2020-01-01')`;
+    await fx.sql`INSERT INTO core.jurisdiction_profiles(id,jurisdiction,profile_version,state,environmental_requirement_basis,effective_from)
+      VALUES(${randomUUID()},'MNG',1,'approved','Registry basis','2020-01-01')`;
     let now=Date.now();
     const worker=postgres(process.env['DATABASE_URL']!,{max:1,connection:{options:'-c role=mpc_worker'},onnotice:()=>{}});
     try{
@@ -429,33 +425,32 @@ describeDb('computed ledger API and approved public boundary',()=>{
       // Exercise multiple small pages, then repeat the entire cycle at one evaluation clock.
       const batchSize=2;
       const [eligible]=await worker<{count:string}[]>`SELECT count(*)::text AS count FROM core.projects p
-        WHERE EXISTS(SELECT 1 FROM core.claims c WHERE c.tenant_id=p.tenant_id AND c.project_id=p.id AND c.catalog_entry_id IS NOT NULL)
-          OR EXISTS(SELECT 1 FROM core.evidence_ledger_snapshots s WHERE s.tenant_id=p.tenant_id AND s.project_id=p.id)`;
+        WHERE EXISTS(SELECT 1 FROM core.claims c WHERE c.project_id=p.id AND c.catalog_entry_id IS NOT NULL)
+          OR EXISTS(SELECT 1 FROM core.evidence_ledger_snapshots s WHERE s.project_id=p.id)`;
       const pages=Math.ceil(Number(eligible!.count)/batchSize);
       expect(pages).toBeGreaterThan(1);
       const drain=createLedgerSweep(worker,0,()=>now,batchSize);
       for(let page=0;page<pages;page++)expect((await drain()).ran).toBe(true);
       for(let page=0;page<pages;page++)expect(await drain()).toEqual({ran:true,recorded:0});
-      const events=await fx.sql`SELECT id FROM audit.events WHERE tenant_id=${fx.tenantA} AND command='evidence_ledger.assessed' AND detail->>'actor'='jobs_worker'`;
+      const events=await fx.sql`SELECT id FROM audit.events WHERE command='evidence_ledger.assessed' AND detail->>'actor'='jobs_worker'`;
       expect(events.length).toBeGreaterThan(0);
-      const [latest]=await fx.sql`SELECT snapshot FROM core.evidence_ledger_snapshots WHERE tenant_id=${fx.tenantA}
+      const [latest]=await fx.sql`SELECT snapshot FROM core.evidence_ledger_snapshots
         ORDER BY created_at DESC,id DESC LIMIT 1`;
-      expect(latest!.snapshot.inputBasis.profile).toEqual([{state:'approved',environmental_requirement_basis:'Own tenant basis',profile_version:'1'}]);
-      expect(JSON.stringify(latest!.snapshot)).not.toContain('Other tenant private basis');
+      expect(latest!.snapshot.inputBasis.profile).toEqual([{state:'approved',environmental_requirement_basis:'Registry basis',profile_version:'1'}]);
     }finally{await worker.end();}
   });
   it('worker revisits recorded projects without structured claims after catalog changes',async()=>{
     const projectId=randomUUID();
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-      VALUES(${projectId},${fx.tenantA},${'EMPTY-'+projectId.slice(0,8)},'Empty assessed project','MNG',ARRAY['copper'],${fx.orgA})`;
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+      VALUES(${projectId},${'EMPTY-'+projectId.slice(0,8)},'Empty assessed project','MNG',ARRAY['copper'],${fx.orgA})`;
     const initial=await assess(projectId);expect(initial.statusCode,initial.body).toBe(200);
     const proposal=randomUUID(),catalog=randomUUID(),newType='new_'+randomUUID().replaceAll('-','');
     const payload={claimType:newType,displayName:'New catalog requirement',description:null,definition:{fields:[]}};
     await fx.sql.begin(async tx=>{
-    await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-      VALUES(${proposal},${fx.tenantA},'claim_type',${newType},1,${tx.json(payload)},'Synthetic test',${new Date(Date.now()-60_000)},${fx.operatorSubjectA})`;
-    await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-      SELECT ${catalog},tenant_id,item_key,1,'New catalog requirement',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
+    await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+      VALUES(${proposal},'claim_type',${newType},1,${tx.json(payload)},'Synthetic test',${new Date(Date.now()-60_000)},${fx.operatorSubjectA})`;
+    await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+      SELECT ${catalog},item_key,1,'New catalog requirement',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
     await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic test only',materialized_id=${catalog},version=2 WHERE id=${proposal}`;
     });
     const {createLedgerSweep,DEFAULT_LEDGER_BATCH_SIZE}=await import(new URL('../../jobs-worker/src/evidence-ledger.ts',import.meta.url).href);
@@ -464,8 +459,8 @@ describeDb('computed ledger API and approved public boundary',()=>{
       // The sweep is global and pages by project ID, so earlier suites' projects can fill the
       // first pages. Drive one full paginated pass (bounded), stopping once this project is revisited.
       const [eligible]=await worker<{count:string}[]>`SELECT count(*)::text AS count FROM core.projects p
-        WHERE EXISTS(SELECT 1 FROM core.claims c WHERE c.tenant_id=p.tenant_id AND c.project_id=p.id AND c.catalog_entry_id IS NOT NULL)
-          OR EXISTS(SELECT 1 FROM core.evidence_ledger_snapshots s WHERE s.tenant_id=p.tenant_id AND s.project_id=p.id)`;
+        WHERE EXISTS(SELECT 1 FROM core.claims c WHERE c.project_id=p.id AND c.catalog_entry_id IS NOT NULL)
+          OR EXISTS(SELECT 1 FROM core.evidence_ledger_snapshots s WHERE s.project_id=p.id)`;
       const pages=Math.ceil(Number(eligible!.count)/DEFAULT_LEDGER_BATCH_SIZE);
       expect(pages).toBeGreaterThan(0);
       const sweep=createLedgerSweep(worker,0);

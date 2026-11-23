@@ -189,13 +189,13 @@ describeDb("document relations", () => {
     const receiptId = randomUUID();
     await fx.sql`
       INSERT INTO core.source_receipts (
-        id, tenant_id, project_id, connection_id, authority_id, collection_method,
+        id, project_id, connection_id, authority_id, collection_method,
         result, query_basis, endpoint_or_document_ref, authentication_method,
         raw_hash, source_schema_version, adapter_version, terms_license,
         commercial_reuse, disclosure_permission, received_at, as_of,
         freshness_status, correlation_id, channel_evidence
       ) VALUES (
-        ${receiptId}, ${fx.tenantA}, ${fx.projectA}, ${fx.connectionA}, ${fx.authorityA},
+        ${receiptId}, ${fx.projectA}, ${fx.connectionA}, ${fx.authorityA},
         'authenticated_api', 'manual_review_required', '{}'::jsonb, 'document',
         'none', ${`0x${"11".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
         now(), now(), 'fresh', 'test',
@@ -205,10 +205,10 @@ describeDb("document relations", () => {
     const claimId = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
-        id, tenant_id, project_id, claim_type, value_text, source_coordinate,
+        id, project_id, claim_type, value_text, source_coordinate,
         evidence_tier, verification_state, grade, source_receipt_id
       ) VALUES (
-        ${claimId}, ${fx.tenantA}, ${fx.projectA}, 'lab_accreditation', 'ISO 17025',
+        ${claimId}, ${fx.projectA}, 'lab_accreditation', 'ISO 17025',
         '{"page":"1"}'::jsonb, 'P1', 'analyst_checked', 'verified', ${receiptId}
       )
     `;
@@ -268,9 +268,9 @@ describeDb("document relations", () => {
       // The database refuses it too — FK checks bypass RLS, so the keys carry the scope.
       await expect(fx.sql`
         INSERT INTO core.document_links (
-          tenant_id, project_id, upstream_upload_id, downstream_upload_id, kind, origin, created_by
+          project_id, upstream_upload_id, downstream_upload_id, kind, origin, created_by
         ) VALUES (
-          ${fx.tenantA}, ${fx.projectA}, ${here.id}, ${elsewhere.id}, 'depends_on', 'user',
+          ${fx.projectA}, ${here.id}, ${elsewhere.id}, 'depends_on', 'user',
           ${fx.operatorSubjectA}
         )
       `).rejects.toThrow();
@@ -641,7 +641,7 @@ describeDb("document relations", () => {
         headers: headers(steward),
         payload: { upstreamType: licenseType, downstreamType: reportType, kind: "depends_on" },
       });
-      // A rule writes into every project of the tenant; an organization-scoped role cannot.
+      // A rule writes into every project of the Registry; an organization-scoped role cannot.
       expect(bySteward.statusCode).toBe(403);
 
       const created = await app.inject({

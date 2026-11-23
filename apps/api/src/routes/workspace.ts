@@ -1,11 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   assertAuthorized,
   holdsActionRole,
   sessionFacts,
-  tenantResource,
+  registryResource,
   visibleProjectScope,
 } from "../plugins/authorize.js";
 import { requireMutationContext, requireReadContext } from "./shared.js";
@@ -43,7 +43,7 @@ function visibleNotificationFilter(tx: postgres.TransactionSql, session: Session
  * Workspace aggregates — spec 11 §11.2.
  *
  * These two screens were missing not for lack of data but because **the structure only showed
- * things once a single project was opened**. "What was published in this tenant" and "what
+ * things once a single project was opened**. "What was published in the Registry" and "what
  * do I need to do now" are not questions to answer by opening projects one by one.
  *
  * Everything here is a read. State-changing paths belong to each domain route — once an
@@ -72,11 +72,11 @@ export async function registerWorkspaceRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   app.get("/api/v1/registry-entries", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "registry.read",
-      tenantResource(tenantId, {
+      registryResource({
         state: "active",
         statesAllowingAction: ["active"],
         filteredByProjectScope: true,
@@ -88,7 +88,7 @@ export async function registerWorkspaceRoutes(
     const visible = visibleProjectScope(session, "registry.read");
 
     const { requestId, asOf } = request.context;
-    const rows = await withTenant(sql, { tenantId }, (tx) => tx<
+    const rows = await withActor(sql, actor, (tx) => tx<
       {
         entry_id: string;
         registry_type: "project" | "verification" | "asset";
@@ -118,8 +118,7 @@ export async function registerWorkspaceRoutes(
       FROM core.registry_entries e
       JOIN core.registry_entry_versions v ON v.entry_id = e.id
       LEFT JOIN core.projects p ON p.id = e.subject_id
-      WHERE e.tenant_id = ${tenantId}
-        AND ${visible === "all" ? tx`TRUE` : tx`p.id = ANY(${visible as string[]}::uuid[])`}
+      WHERE ${visible === "all" ? tx`TRUE` : tx`p.id = ANY(${visible as string[]}::uuid[])`}
       ORDER BY e.id, v.version DESC
     `);
 
@@ -141,11 +140,11 @@ export async function registerWorkspaceRoutes(
   });
 
   app.get("/api/v1/my-work", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "project.read",
-      tenantResource(tenantId, {
+      registryResource({
         state: "active",
         statesAllowingAction: ["active"],
         filteredByProjectScope: true,
@@ -157,7 +156,7 @@ export async function registerWorkspaceRoutes(
     const subjectId = session.subjectId;
     const visible = visibleProjectScope(session, "project.read");
 
-    return withTenant(sql, { tenantId }, async (tx) => {
+    return withActor(sql, actor, async (tx) => {
       /**
        * Reviews assigned to me.
        *
@@ -180,8 +179,7 @@ export async function registerWorkspaceRoutes(
             FROM core.assignments a
             JOIN core.verification_cases c ON c.id = a.case_id
             JOIN core.projects p ON p.id = c.project_id
-            WHERE a.tenant_id = ${tenantId}
-              AND a.subject_id = ${subjectId}
+            WHERE a.subject_id = ${subjectId}
               AND a.revoked_at IS NULL
               AND ${visible === "all" ? tx`TRUE` : tx`c.project_id = ANY(${visible as string[]}::uuid[])`}
               -- A finished case is not a to-do. registered/declined/cancelled/
@@ -197,8 +195,7 @@ export async function registerWorkspaceRoutes(
             SELECT g.id, g.role, s.display_name AS subject_name, g.requested_at
             FROM core.role_grant_requests g
             JOIN core.subjects s ON s.id = g.subject_id
-            WHERE g.tenant_id = ${tenantId}
-              AND g.state = 'pending'
+            WHERE g.state = 'pending'
               AND g.requested_by_subject_id = ${subjectId}
             ORDER BY g.requested_at
           `
@@ -215,7 +212,7 @@ export async function registerWorkspaceRoutes(
       >`
         SELECT id, project_id, reason, detected_at
         FROM core.evidence_stale_signals
-        WHERE tenant_id = ${tenantId} AND resolution = 'open'
+        WHERE resolution = 'open'
           AND ${visible === "all" ? tx`TRUE` : tx`project_id = ANY(${visible as string[]}::uuid[])`}
         ORDER BY detected_at, id
         LIMIT ${UNASSIGNED_SIGNAL_LIMIT + 1}
@@ -230,16 +227,14 @@ export async function registerWorkspaceRoutes(
         SELECT g.id, g.role, s.display_name AS subject_name, g.requested_at
         FROM core.role_grant_requests g
         JOIN core.subjects s ON s.id = g.subject_id
-        WHERE g.tenant_id = ${tenantId}
-          AND g.state = 'pending'
+        WHERE g.state = 'pending'
           AND (${subjectId}::uuid IS NULL OR g.requested_by_subject_id <> ${subjectId})
         ORDER BY g.requested_at
       `;
 
       const [{ has_projects }] = await tx<[{ has_projects: boolean }]>`
         SELECT EXISTS (
-          SELECT 1 FROM core.projects p WHERE p.tenant_id = ${tenantId}
-            AND ${visible === "all" ? tx`TRUE` : tx`p.id = ANY(${visible as string[]}::uuid[])`}
+          SELECT 1 FROM core.projects p WHERE ${visible === "all" ? tx`TRUE` : tx`p.id = ANY(${visible as string[]}::uuid[])`}
         ) AS has_projects
       `;
       return {
@@ -293,11 +288,11 @@ export async function registerWorkspaceRoutes(
    * first — without it, there is nothing to send whichever channel is chosen.
    */
   app.get("/api/v1/notifications", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "project.read",
-      tenantResource(tenantId, {
+      registryResource({
         state: "active",
         statesAllowingAction: ["active"],
         filteredByProjectScope: true,
@@ -308,7 +303,7 @@ export async function registerWorkspaceRoutes(
     const { requestId, asOf } = request.context;
     const subjectId = session.subjectId;
 
-    const rows = await withTenant(sql, { tenantId }, (tx) => tx<
+    const rows = await withActor(sql, actor, (tx) => tx<
       {
         id: string;
         kind: "review_assigned" | "readiness_gap" | "evidence_stale" | "registry_revoked";
@@ -327,8 +322,7 @@ export async function registerWorkspaceRoutes(
       FROM core.notifications n
       LEFT JOIN core.notification_reads r
         ON r.notification_id = n.id AND r.subject_id = ${subjectId}
-      WHERE n.tenant_id = ${tenantId}
-        AND ${visibleNotificationFilter(tx, session)}
+      WHERE ${visibleNotificationFilter(tx, session)}
       ORDER BY n.occurred_at DESC, n.id DESC
       LIMIT ${NOTIFICATION_LIST_LIMIT + 1}
     `);
@@ -356,11 +350,11 @@ export async function registerWorkspaceRoutes(
   app.post<{ Params: { notificationId: string } }>(
     "/api/v1/notifications/:notificationId/read",
     async (request) => {
-      const { session, tenantId } = requireMutationContext(request);
+      const { session, actor } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
         "project.read",
-        tenantResource(tenantId, {
+        registryResource({
           state: "active",
           statesAllowingAction: ["active"],
           filteredByProjectScope: true,
@@ -371,7 +365,7 @@ export async function registerWorkspaceRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const subjectId = session.subjectId;
 
-      return withTenant(sql, { tenantId }, async (tx) => {
+      return withActor(sql, actor, async (tx) => {
         const [found] = await tx<
           {
             id: string;
@@ -387,7 +381,7 @@ export async function registerWorkspaceRoutes(
           SELECT n.id, n.kind, n.subject_id, n.audience_role, n.project_id,
                  n.summary, n.link, n.occurred_at
           FROM core.notifications n
-          WHERE n.tenant_id = ${tenantId} AND n.id = ${request.params.notificationId}
+          WHERE n.id = ${request.params.notificationId}
             AND ${visibleNotificationFilter(tx, session)}
         `;
         // A hidden notification answers exactly like a missing one — no body, no read row.
@@ -400,8 +394,8 @@ export async function registerWorkspaceRoutes(
          * when I did not handle it.
          */
         const inserted = await tx`
-          INSERT INTO core.notification_reads (notification_id, subject_id, tenant_id)
-          VALUES (${found.id}, ${subjectId}, ${tenantId})
+          INSERT INTO core.notification_reads (notification_id, subject_id)
+          VALUES (${found.id}, ${subjectId})
           ON CONFLICT DO NOTHING
           RETURNING notification_id
         `;
@@ -410,7 +404,6 @@ export async function registerWorkspaceRoutes(
         // (02 §2.7). Only the first read is recorded; a repeat changes nothing.
         if (inserted.length > 0) {
           await recordAudit(tx, {
-            tenantId,
             ...(found.project_id ? { projectId: found.project_id } : {}),
             session,
             effectiveRole,

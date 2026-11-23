@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { createConnectionSecurityReviewRequest } from "@mpc/api-contract";
 import { badRequest, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { assertVersionMatches, requireIfMatch, requireMutationContext } from "./shared.js";
@@ -139,14 +139,14 @@ export async function registerConnectionReviewRoutes(
   app.post<{ Params: { connectionId: string } }>(
     "/api/v1/source-connections/:connectionId/security-reviews",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       // The version reviewed is the version the reviewer read. Reviewing "whatever is there now"
       // would approve a configuration changed after the reviewer looked.
       const expected = requireIfMatch(request);
       const effectiveRole = assertAuthorized(
         session,
         "connection.security_review",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
 
@@ -158,8 +158,8 @@ export async function registerConnectionReviewRoutes(
       }
 
       const { requestId, asOf, correlationId } = request.context;
-      const result = await withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      const result = await withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [connection] = await tx<{ id: string; version: number; state: string }[]>`
             SELECT id, version, state::text AS state FROM core.source_connections
             WHERE id = ${request.params.connectionId}
@@ -171,17 +171,16 @@ export async function registerConnectionReviewRoutes(
           const id = randomUUID();
           const [row] = await tx<{ reviewed_at: Date }[]>`
             INSERT INTO core.connection_security_reviews (
-              id, tenant_id, connection_id, connection_version, decision, reason,
+              id, connection_id, connection_version, decision, reason,
               reviewed_by_subject_id
             ) VALUES (
-              ${id}, ${tenantId}, ${connection.id}, ${connection.version}, ${parsed.data.decision},
+              ${id}, ${connection.id}, ${connection.version}, ${parsed.data.decision},
               ${parsed.data.reason}, ${session.subjectId}
             )
             RETURNING reviewed_at
           `;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: `source_connection.security_review_${parsed.data.decision}`,

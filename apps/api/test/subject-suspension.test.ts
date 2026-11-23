@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { bearer, idempotencyKey, issueTestSession, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
@@ -62,12 +62,12 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     return mail.params.code;
   }
 
-  /** A person in tenant A with an address, `ageHours` old (past the first-enrolment window by default). */
+  /** A person of company A with an address, `ageHours` old (past the first-enrolment window by default). */
   async function person(email = freshEmail(), ageHours = 72): Promise<string> {
     const id = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, email, created_at)
-      VALUES (${id}, ${fx.tenantA}, 'person', ${`Person ${id.slice(0, 6)}`}, ${email},
+      INSERT INTO core.subjects (id, kind, display_name, email, created_at)
+      VALUES (${id}, 'person', ${`Person ${id.slice(0, 6)}`}, ${email},
               now() - make_interval(hours => ${ageHours}))
     `;
     return id;
@@ -76,14 +76,14 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
   async function admin(role: "administrator" | "administrator" = "administrator") {
     const subjectId = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-      VALUES (${subjectId}, ${fx.tenantA}, 'person', ${`Admin ${subjectId.slice(0, 4)}`}, 'high_assurance')
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+      VALUES (${subjectId}, 'person', ${`Admin ${subjectId.slice(0, 4)}`}, 'high_assurance')
     `;
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, ${role})
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, ${role})
     `;
-    const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, { firstFactor: "email_code", secondFactor: "passkey" });
+    const token = await issueTestSession(fx.appSql, subjectId, { firstFactor: "email_code", secondFactor: "passkey" });
     return { subjectId, token };
   }
 
@@ -130,8 +130,8 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
   it("one administrator ends every session, factor and linked identity at once, and tells the address", async () => {
     const email = freshEmail("suspended");
     const target = await person(email);
-    const byCode = await issueTestSession(fx.appSql, fx.tenantA, target, { firstFactor: "email_code", secondFactor: "passkey" });
-    const byGoogle = await issueTestSession(fx.appSql, fx.tenantA, target, { firstFactor: "google", secondFactor: "totp" });
+    const byCode = await issueTestSession(fx.appSql, target, { firstFactor: "email_code", secondFactor: "passkey" });
+    const byGoogle = await issueTestSession(fx.appSql, target, { firstFactor: "google", secondFactor: "totp" });
     expect(await live("external_identities", target)).toBe(1);
 
     const proposer = await admin("administrator");
@@ -218,21 +218,21 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
 
   it("no path creates a session for a suspended person, and one that exists does not resolve", async () => {
     const target = await person();
-    const token = await issueTestSession(fx.appSql, fx.tenantA, target, { firstFactor: "email_code", secondFactor: "passkey" });
+    const token = await issueTestSession(fx.appSql, target, { firstFactor: "email_code", secondFactor: "passkey" });
     // Set directly, as a restore or a missed revocation would leave it: the resolver still refuses.
     await fx.sql`UPDATE core.subjects SET suspended_at = now() WHERE id = ${target}`;
     expect(await alive(token)).toBe(false);
     // Through the code and provider functions: refused as a wrong code / unknown identity.
     await expect(
-      issueTestSession(fx.appSql, fx.tenantA, target, { firstFactor: "email_code", secondFactor: "passkey" }),
+      issueTestSession(fx.appSql, target, { firstFactor: "email_code", secondFactor: "passkey" }),
     ).rejects.toThrow(/code_invalid/);
     await expect(
-      issueTestSession(fx.appSql, fx.tenantA, target, { firstFactor: "google", secondFactor: "passkey" }),
+      issueTestSession(fx.appSql, target, { firstFactor: "google", secondFactor: "passkey" }),
     ).rejects.toThrow(/not_found/);
     // Written straight into the table, even by the table owner: the trigger refuses it first.
     await expect(fx.sql`
-      INSERT INTO core.sessions (id, token_hash, subject_id, tenant_id, first_factor, expires_at)
-      VALUES (${randomUUID()}, ${"f".repeat(64)}, ${target}, ${fx.tenantA}, 'email_code', now() + interval '1 hour')
+      INSERT INTO core.sessions (id, token_hash, subject_id, first_factor, expires_at)
+      VALUES (${randomUUID()}, ${"f".repeat(64)}, ${target}, 'email_code', now() + interval '1 hour')
     `).rejects.toThrow(/ACCOUNT_SUSPENDED/);
   });
 
@@ -253,19 +253,19 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     const policySetId = randomUUID();
     await fx.sql`
       INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id, jurisdiction_profile, effective_from, definition, state
+        id, rule_set_id, rule_set_version, gate_id, jurisdiction_profile, effective_from, definition, state
       ) VALUES (
-        ${policySetId}, ${fx.tenantA}, 'registry-publication-gate', '1.0.0', 'registry_publication', 'MNG', now(),
+        ${policySetId}, 'registry-publication-gate', '1.0.0', 'registry_publication', 'MNG', now(),
         ${fx.sql.json(rulesFixture as never)}, 'effective'
       )
     `;
     const assessmentId = randomUUID();
     await fx.sql`
       INSERT INTO core.compliance_assessments (
-        id, tenant_id, project_id, gate_id, policy_set_id, input_snapshot_hash, evaluated_as_of, status,
+        id, project_id, gate_id, policy_set_id, input_snapshot_hash, evaluated_as_of, status,
         requirement_results, canonical_result_hash, evidence_actor_ids
       ) VALUES (
-        ${assessmentId}, ${fx.tenantA}, ${fx.projectA}, 'registry_publication', ${policySetId}, ${"0x" + "a1".repeat(32)},
+        ${assessmentId}, ${fx.projectA}, 'registry_publication', ${policySetId}, ${"0x" + "a1".repeat(32)},
         now(), 'ok', ${fx.sql.json([{ requirementId: "req-0", status: "gap", applicable: true, reasonCode: "REQUIREMENT_SATISFIED", missing: [] }] as never)},
         ${"0x" + "b2".repeat(32)}, '{}'::uuid[]
       )
@@ -312,44 +312,44 @@ describeDb("suspending a person (AUTH-06)", { timeout: 30_000 }, () => {
     expect(selfDecided.json().code).toBe("SUSPENSION_SELF_TARGET");
 
     // An administrator role authorizes a proposal.
-    const steward = await issueTestSession(fx.appSql, fx.tenantA, await person(), { firstFactor: "email_code", secondFactor: "passkey" });
+    const steward = await issueTestSession(fx.appSql, await person(), { firstFactor: "email_code", secondFactor: "passkey" });
     expect((await propose(steward, target)).statusCode).toBe(403);
     const aal2Subject = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-      VALUES (${aal2Subject}, ${fx.tenantA}, 'person', 'Admin aal2', 'high_assurance')
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+      VALUES (${aal2Subject}, 'person', 'Admin aal2', 'high_assurance')
     `;
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${aal2Subject}, ${fx.orgA}, 'administrator')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${aal2Subject}, ${fx.orgA}, 'administrator')
     `;
-    const aal2 = await issueTestSession(fx.appSql, fx.tenantA, aal2Subject, { firstFactor: "email_code", secondFactor: "totp" });
+    const aal2 = await issueTestSession(fx.appSql, aal2Subject, { firstFactor: "email_code", secondFactor: "totp" });
     expect((await propose(aal2, await person())).statusCode).toBe(200);
 
     // Whatever the API checks, the database refuses one person deciding, and the person deciding.
     const id = randomUUID();
-    await withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
-      INSERT INTO core.subject_suspensions (id, tenant_id, subject_id, action, reason, requested_by_subject_id)
-      VALUES (${id}, ${fx.tenantA}, ${target}, 'suspend', 'x', ${proposer.subjectId})
+    await withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
+      INSERT INTO core.subject_suspensions (id, subject_id, action, reason, requested_by_subject_id)
+      VALUES (${id}, ${target}, 'suspend', 'x', ${proposer.subjectId})
     `);
     await expect(
-      withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) =>
+      withActor(fx.appSql, { subjectId: target }, (tx) =>
         tx`SELECT * FROM core.decide_subject_suspension(${id}, ${target}, true, 'x', 1)`,
       ),
     ).rejects.toThrow(/SUSPENSION_SELF_TARGET/);
 
     // The application role cannot write the mark itself, nor insert a decided request.
     await expect(
-      withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`UPDATE core.subjects SET suspended_at = now() WHERE id = ${target}`),
+      withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`UPDATE core.subjects SET suspended_at = now() WHERE id = ${target}`),
     ).rejects.toThrow(/permission denied/);
     const other = await person();
     const decider = await admin("administrator");
     await expect(
-      withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
+      withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
         INSERT INTO core.subject_suspensions (
-          id, tenant_id, subject_id, action, reason, requested_by_subject_id, state, decided_by_subject_id, decided_at
+          id, subject_id, action, reason, requested_by_subject_id, state, decided_by_subject_id, decided_at
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${other}, 'suspend', 'x', ${proposer.subjectId}, 'approved',
+          ${randomUUID()}, ${other}, 'suspend', 'x', ${proposer.subjectId}, 'approved',
           ${decider.subjectId}, now()
         )
       `),

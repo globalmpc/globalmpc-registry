@@ -49,9 +49,9 @@ describeDb("notifications", () => {
     // **whatever path they come in by**.
     await fx.sql`
       INSERT INTO core.evidence_stale_signals (
-        id, tenant_id, project_id, target_type, target_id, reason
+        id, project_id, target_type, target_id, reason
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${fx.projectA}, 'registry_entry_version',
+        ${randomUUID()}, ${fx.projectA}, 'registry_entry_version',
         ${randomUUID()}, ${reason}
       )
     `;
@@ -79,21 +79,21 @@ describeDb("notifications", () => {
     const reason = `shared-${randomUUID().slice(0, 8)}`;
     await fx.sql`
       INSERT INTO core.evidence_stale_signals (
-        id, tenant_id, project_id, target_type, target_id, reason
+        id, project_id, target_type, target_id, reason
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${fx.projectA}, 'registry_entry_version',
+        ${randomUUID()}, ${fx.projectA}, 'registry_entry_version',
         ${randomUUID()}, ${reason}
       )
     `;
     // Creates a second person with the same role as steward.
     const secondSubject = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-      VALUES (${secondSubject}, ${fx.tenantA}, 'person', 'Second steward', 'high_assurance')
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+      VALUES (${secondSubject}, 'person', 'Second steward', 'high_assurance')
     `;
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${secondSubject}, ${fx.orgA}, 'reviewer')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${secondSubject}, ${fx.orgA}, 'reviewer')
     `;
 
     const mine = ((await list(stewardToken)).json().items as { id: string; summary: string }[]).find(
@@ -119,7 +119,7 @@ describeDb("notifications", () => {
 
     const dev = await buildServer(loadConfig(testEnv({ DEPLOY_ENVIRONMENT: "develop", CHAIN_ID: "5611" })), fx.appSql);
     try {
-      const token = await issueTestSession(fx.appSql, fx.tenantA, secondSubject, { firstFactor: "google", secondFactor: null });
+      const token = await issueTestSession(fx.appSql, secondSubject, { firstFactor: "google", secondFactor: null });
       const headers = bearer(token);
       const inbox = await dev.inject({ url: "/api/v1/notifications", headers });
       expect(inbox.json().items).toContainEqual(expect.objectContaining({ id: mine!.id, read: false }));
@@ -138,7 +138,7 @@ describeDb("notifications", () => {
       app,
       fx.sql,
       { drafter: operatorToken, publisher: await signIn(app, fx.disclosureApproverA) },
-      await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, publicKey),
+      await insertProject(fx.sql, { organizationId: fx.orgA }, publicKey),
     );
     expect(published.statusCode).toBe(200);
 
@@ -153,7 +153,7 @@ describeDb("notifications", () => {
     expect(items.some((item) => item.summary.includes(publicKey))).toBe(true);
   });
 
-  it("another tenant's notifications are not visible", async () => {
+  it("another company's notifications are not visible", async () => {
     const operatorB = await signIn(app, fx.operatorB);
     const mine = (await list(operatorToken)).json().items as { id: string }[];
     const theirs = (await list(operatorB)).json().items as { id: string }[];
@@ -183,15 +183,15 @@ describeDb("notifications", () => {
       const reason = `hidden-${randomUUID().slice(0, 8)}`;
       await fx.sql`
         INSERT INTO core.evidence_stale_signals (
-          id, tenant_id, project_id, target_type, target_id, reason
+          id, project_id, target_type, target_id, reason
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${projectId}, 'registry_entry_version',
+          ${randomUUID()}, ${projectId}, 'registry_entry_version',
           ${randomUUID()}, ${reason}
         )
       `;
       const [row] = await fx.sql<{ id: string }[]>`
         SELECT id FROM core.notifications
-        WHERE tenant_id = ${fx.tenantA} AND summary LIKE ${`%${reason}%`}
+        WHERE summary LIKE ${`%${reason}%`}
       `;
       return { id: row!.id, reason };
     }

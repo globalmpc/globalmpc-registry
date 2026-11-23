@@ -36,7 +36,6 @@ const METAMASK: FakeWallet = {
   mode: "desktop",
 };
 
-const E2E_TENANT_C = "e0000000-0000-4000-8000-00000000000c";
 
 test.afterAll(closeMailbox);
 
@@ -54,11 +53,10 @@ async function installWallets(
   const subjectId = randomUUID();
   const person = `Wallet holder ${subjectId}`;
   await database().begin(async tx => {
-    await tx`SELECT set_config('app.current_tenant', ${E2E_TENANT_C}, true)`;
-    await tx`INSERT INTO core.subjects(id,tenant_id,kind,display_name,email)
-      VALUES (${subjectId},${E2E_TENANT_C},'person',${person},${demoEmail(person)})`;
-    await tx`INSERT INTO core.wallet_identities(id,tenant_id,subject_id,wallet_address,chain_id,assurance_level,bound_at)
-      VALUES (${randomUUID()},${E2E_TENANT_C},${subjectId},${previous.address.toLowerCase()},31337,'wallet_only',now())`;
+    await tx`INSERT INTO core.subjects(id,kind,display_name,email)
+      VALUES (${subjectId},'person',${person},${demoEmail(person)})`;
+    await tx`INSERT INTO core.wallet_identities(id,subject_id,wallet_address,chain_id,assurance_level,bound_at)
+      VALUES (${randomUUID()},${subjectId},${previous.address.toLowerCase()},31337,'wallet_only',now())`;
   });
   const calls: string[] = [];
   await page.exposeFunction("__e2eWalletCall", (call: string) => {

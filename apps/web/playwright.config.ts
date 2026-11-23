@@ -85,26 +85,21 @@ process.env["E2E_APP_DATABASE_URL"] = APP_URL;
 const WEB_PORT = Number(process.env["E2E_WEB_PORT"] ?? 3000);
 const API_PORT = Number(process.env["E2E_API_PORT"] ?? 3001);
 const WEB_ORIGIN = `http://localhost:${WEB_PORT}`;
-/** The mock Google / Microsoft (`e2e/oidc-relay.ts`); 3102 unless `E2E_OIDC_PORT` says otherwise. */
+/** The mock Google (`e2e/oidc-relay.ts`); 3102 unless `E2E_OIDC_PORT` says otherwise. */
 const OIDC_PORT = Number(process.env["E2E_OIDC_PORT"] ?? 3102);
 process.env["E2E_WEB_PORT"] = String(WEB_PORT);
 process.env["E2E_API_PORT"] = String(API_PORT);
 process.env["E2E_OIDC_PORT"] = String(OIDC_PORT);
 
 /**
- * The OIDC clients the mock provider serves — the values of `TEST_GOOGLE_CLIENT` and
- * `TEST_MICROSOFT_CLIENT` in `apps/api/test/helpers/mock-oidc.ts`, which the relay runs. Test
- * values for a provider that exists only in this process tree; written out because that module
+ * The OIDC client the mock provider serves — the value of `TEST_GOOGLE_CLIENT` in
+ * `apps/api/test/helpers/mock-oidc.ts`, which the relay runs. Test values for a provider that exists only in this process tree; written out because that module
  * is ESM-only and this config is loaded as CommonJS.
  */
 const MOCK_OIDC_ENV = {
   OIDC_TEST_RELAY_URL: `http://127.0.0.1:${OIDC_PORT}`,
   GOOGLE_CLIENT_ID: "test-google-client.apps.example",
   GOOGLE_CLIENT_SECRET: "test-google-client-secret",
-  MICROSOFT_CLIENT_ID: "5b4f3a2c-0000-4000-8000-00000000c1d1",
-  MICROSOFT_CLIENT_SECRET: "test-microsoft-client-secret",
-  // The directory the mock's Microsoft tokens name (`e2e/oidc.ts` MOCK_MICROSOFT_TENANT).
-  MICROSOFT_ALLOWED_TENANTS: "11111111-1111-4111-8111-111111111111",
 };
 
 export default defineConfig({
@@ -158,7 +153,7 @@ export default defineConfig({
 
   webServer: [
     {
-      // Google and Microsoft for the account specs: the provider's back channel for the API and
+      // Google for the account specs: the provider's back channel for the API and
       // the person's approval for the specs. Loopback only; never built or deployed.
       command: "node e2e/server-process.mjs oidc pnpm exec tsx e2e/oidc-relay.ts",
       stdout: "pipe",
@@ -185,7 +180,7 @@ export default defineConfig({
         WEB_ORIGIN,
         // Sign-in codes go to `core.email_outbox`, which the account specs read (`e2e/mailbox.ts`).
         EMAIL_TRANSPORT: "log",
-        // Google and Microsoft through the mock provider (`e2e/oidc-relay.ts`). The relay URL is
+        // Google through the mock provider (`e2e/oidc-relay.ts`). The relay URL is
         // refused in production by the API's own config check.
         ...MOCK_OIDC_ENV,
         CHAIN_ID: "31337",

@@ -4,8 +4,8 @@ import { runMigrations } from "@mpc/db";
 /**
  * Connects to a database dedicated to this file.
  *
- * **The outbox query crosses tenant boundaries.** By design the worker publishes events for every
- * tenant (0012). Sharing a DB with another test file lets that file's rows fill the `LIMIT` first
+ * **The outbox query crosses project boundaries.** By design the worker publishes events for every
+ * project (0012). Sharing a DB with another test file lets that file's rows fill the `LIMIT` first
  * and push this file's rows out of the batch — an intermittent failure where publishing works but
  * the assertion breaks.
  *

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   ACTION_POLICIES,
   createRoleRevocationRequest,
@@ -9,7 +9,7 @@ import {
   ROLE_MINIMUM_ASSURANCE,
 } from "@mpc/api-contract";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import {
@@ -38,7 +38,7 @@ import {
  * same role list would add no restriction, only a second place for the two to drift apart.
  *
  * **The last approver cannot be revoked.** A revocation that would leave no one able to approve
- * role changes is refused, at proposal and again at decision. Otherwise the tenant can only be
+ * role changes is refused, at proposal and again at decision. Otherwise the Registry can only be
  * recovered with the `bootstrap` CLI on the server.
  */
 
@@ -106,11 +106,11 @@ function invalidRequest(issues: unknown) {
   return badRequest("REQUEST_INVALID", "Request format is invalid", { issues });
 }
 
-function activeTenant(tenantId: string) {
-  return tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] });
+function activeRegistry() {
+  return registryResource({ state: "active", statesAllowingAction: ["active"] });
 }
 
-function readRevocations(tx: Tx, tenantId: string, revocationId?: string) {
+function readRevocations(tx: Tx, revocationId?: string) {
   return tx<RevocationRow[]>`
     SELECT r.id, r.role_binding_id, b.subject_id, s.display_name AS subject_name, b.role,
            b.project_id, r.reason_code, r.reason, r.requested_by_subject_id, r.requested_at,
@@ -118,27 +118,26 @@ function readRevocations(tx: Tx, tenantId: string, revocationId?: string) {
     FROM core.role_revocation_requests r
     JOIN core.role_bindings b ON b.id = r.role_binding_id
     JOIN core.subjects s ON s.id = b.subject_id
-    WHERE r.tenant_id = ${tenantId}
-      AND (${revocationId ?? null}::uuid IS NULL OR r.id = ${revocationId ?? null})
+    WHERE (${revocationId ?? null}::uuid IS NULL OR r.id = ${revocationId ?? null})
     ORDER BY r.requested_at DESC
   `;
 }
 
 /**
- * One revocation at a time per tenant.
+ * One revocation at a time in the Registry.
  *
  * The last-approver check counts holders and then acts on that count. Two revocations decided
  * at once would each see the other's target still active, and both would pass. Taken first in
  * both routes, so the order of locks is always the same and the routes cannot deadlock.
  */
-async function serializeRoleChanges(tx: Tx, tenantId: string): Promise<void> {
-  await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`role_revocation:${tenantId}`}, 0))`;
+async function serializeRoleChanges(tx: Tx): Promise<void> {
+  await tx`SELECT pg_advisory_xact_lock(hashtextextended(${"role_revocation"}, 0))`;
 }
 
-async function lockBinding(tx: Tx, tenantId: string, bindingId: string): Promise<BindingRow> {
+async function lockBinding(tx: Tx, bindingId: string): Promise<BindingRow> {
   const [binding] = await tx<BindingRow[]>`
     SELECT id, subject_id, role, revoked_at FROM core.role_bindings
-    WHERE tenant_id = ${tenantId} AND id = ${bindingId}
+    WHERE id = ${bindingId}
     FOR UPDATE
   `;
   if (!binding) throw notFound("Role binding not found");
@@ -158,15 +157,14 @@ async function lockBinding(tx: Tx, tenantId: string, bindingId: string): Promise
  * count. Wallets are optional signing keys, not account login methods. The subject must also
  * meet the role’s assurance: a weaker subject can sign in but cannot exercise that role.
  */
-async function assertApproverRemains(tx: Tx, tenantId: string, binding: BindingRow): Promise<void> {
+async function assertApproverRemains(tx: Tx, binding: BindingRow): Promise<void> {
   if (!APPROVER_ROLES.includes(binding.role)) return;
 
   const [row] = await tx<{ holders: number }[]>`
     SELECT count(DISTINCT b.subject_id)::int AS holders
     FROM core.role_bindings b
-    WHERE b.tenant_id = ${tenantId}
-      AND b.id <> ${binding.id}
-      AND b.project_id IS NULL AND COALESCE(b.scope_kind, 'tenant') = 'tenant' AND b.jurisdiction IS NULL
+    WHERE b.id <> ${binding.id}
+      AND b.project_id IS NULL AND COALESCE(b.scope_kind, 'registry') = 'registry' AND b.jurisdiction IS NULL
       AND b.revoked_at IS NULL
       AND b.role = ANY(${[...APPROVER_ROLES]})
       AND EXISTS (
@@ -176,7 +174,7 @@ async function assertApproverRemains(tx: Tx, tenantId: string, binding: BindingR
           ${[...APPROVER_ROLES]}::text[],
           ${[...APPROVER_MINIMUM_ASSURANCE]}::core.assurance_level[]
         ) AS need(role, minimum) ON need.role = b.role
-        WHERE s.tenant_id = b.tenant_id AND s.id = b.subject_id
+        WHERE s.id = b.subject_id
           AND s.kind = 'person' AND s.suspended_at IS NULL
           AND s.assurance_level >= need.minimum
           AND (
@@ -191,7 +189,7 @@ async function assertApproverRemains(tx: Tx, tenantId: string, binding: BindingR
     throw unprocessable(
       "ROLE_REVOCATION_LAST_APPROVER",
       "This revocation would leave no one able to approve role changes",
-      { hint: "Grant an approving role to another person first. Otherwise only the bootstrap CLI can recover this tenant" },
+      { hint: "Grant an approving role to another person first. Otherwise only the bootstrap CLI can recover the Registry" },
     );
   }
 }
@@ -201,20 +199,20 @@ export async function registerRoleRevocationRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   app.get("/api/v1/admin/role-revocations", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
-    assertAuthorized(session, "admin.read", activeTenant(tenantId), sessionFacts(session));
+    const { session, actor } = requireReadContext(request);
+    assertAuthorized(session, "admin.read", activeRegistry(), sessionFacts(session));
 
     const { requestId, asOf } = request.context;
-    const rows = await withTenant(sql, { tenantId }, (tx) => readRevocations(tx, tenantId));
+    const rows = await withActor(sql, actor, (tx) => readRevocations(tx));
     return { items: rows.map((row) => toRevocation(row, requestId, asOf)), requestId, asOf };
   });
 
   app.post("/api/v1/admin/role-revocations", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "admin.role.propose",
-      activeTenant(tenantId),
+      activeRegistry(),
       sessionFacts(session),
     );
 
@@ -222,20 +220,20 @@ export async function registerRoleRevocationRoutes(
     if (!parsed.success) throw invalidRequest(parsed.error.issues);
 
     const { requestId, asOf, correlationId } = request.context;
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-        await serializeRoleChanges(tx, tenantId);
-        const binding = await lockBinding(tx, tenantId, parsed.data.roleBindingId);
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+        await serializeRoleChanges(tx);
+        const binding = await lockBinding(tx, parsed.data.roleBindingId);
         // Checked at proposal too: a proposal no one could ever approve only waits forever.
-        await assertApproverRemains(tx, tenantId, binding);
+        await assertApproverRemains(tx, binding);
 
         const id = randomUUID();
         try {
           await tx`
             INSERT INTO core.role_revocation_requests (
-              id, tenant_id, role_binding_id, reason_code, reason, requested_by_subject_id
+              id, role_binding_id, reason_code, reason, requested_by_subject_id
             ) VALUES (
-              ${id}, ${tenantId}, ${binding.id}, ${parsed.data.reasonCode},
+              ${id}, ${binding.id}, ${parsed.data.reasonCode},
               ${parsed.data.reason}, ${session.subjectId}
             )
           `;
@@ -252,7 +250,6 @@ export async function registerRoleRevocationRoutes(
         }
 
         await recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: "admin.role_revocation.proposed",
@@ -264,7 +261,7 @@ export async function registerRoleRevocationRoutes(
           detail: { roleBindingId: binding.id, role: binding.role },
         });
 
-        const [row] = await readRevocations(tx, tenantId, id);
+        const [row] = await readRevocations(tx, id);
         return toRevocation(row!, requestId, asOf);
       }),
     );
@@ -273,11 +270,11 @@ export async function registerRoleRevocationRoutes(
   app.post<{ Params: { revocationId: string } }>(
     "/api/v1/admin/role-revocations/:revocationId/decision",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
         "admin.role.approve",
-        tenantResource(tenantId, { state: "pending", statesAllowingAction: ["pending"] }),
+        registryResource({ state: "pending", statesAllowingAction: ["pending"] }),
         sessionFacts(session),
       );
 
@@ -288,15 +285,15 @@ export async function registerRoleRevocationRoutes(
       if (!parsed.success) throw invalidRequest(parsed.error.issues);
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          await serializeRoleChanges(tx, tenantId);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          await serializeRoleChanges(tx);
           const [current] = await tx<
             Pick<RevocationRow, "id" | "role_binding_id" | "requested_by_subject_id" | "state" | "version">[]
           >`
             SELECT id, role_binding_id, requested_by_subject_id, state, version
             FROM core.role_revocation_requests
-            WHERE tenant_id = ${tenantId} AND id = ${request.params.revocationId}
+            WHERE id = ${request.params.revocationId}
             FOR UPDATE
           `;
           if (!current) throw notFound("Proposal not found");
@@ -311,12 +308,12 @@ export async function registerRoleRevocationRoutes(
           const approved = parsed.data.decision === "approve";
           if (approved) {
             // Holders may have changed since the proposal — a wallet disabled, a role revoked.
-            const binding = await lockBinding(tx, tenantId, current.role_binding_id);
-            await assertApproverRemains(tx, tenantId, binding);
+            const binding = await lockBinding(tx, current.role_binding_id);
+            await assertApproverRemains(tx, binding);
             await tx`
               UPDATE core.role_bindings
               SET revoked_at = now(), version = version + 1
-              WHERE tenant_id = ${tenantId} AND id = ${binding.id}
+              WHERE id = ${binding.id}
             `;
           }
 
@@ -327,11 +324,10 @@ export async function registerRoleRevocationRoutes(
                 decided_at = now(),
                 decision_reason = ${parsed.data.reason},
                 version = version + 1
-            WHERE tenant_id = ${tenantId} AND id = ${current.id}
+            WHERE id = ${current.id}
           `;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: approved ? "admin.role_revocation.approved" : "admin.role_revocation.rejected",
@@ -345,7 +341,7 @@ export async function registerRoleRevocationRoutes(
           });
 
           reply.header("etag", etagOf(current.version + 1));
-          const [row] = await readRevocations(tx, tenantId, current.id);
+          const [row] = await readRevocations(tx, current.id);
           return toRevocation(row!, requestId, asOf);
         }),
       );

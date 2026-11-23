@@ -57,7 +57,7 @@ const account = {
   authenticated: true,
   requestId: "r",
   subjectId: "person",
-  tenantId: "t",
+  workspaceAvailable: true,
   firstFactor: "email_code",
   secondFactor: "passkey",
   aal: "aal3",
@@ -108,7 +108,6 @@ function routes(overrides: Record<string, unknown> = {}): Record<string, unknown
     "GET /api/v1/auth/methods": {
       emailCode: true,
       google: true,
-      microsoft: true,
       emailCodeDigits: 8,
       emailCodeTtlMinutes: 10,
     },
@@ -119,7 +118,6 @@ function routes(overrides: Record<string, unknown> = {}): Record<string, unknown
           id: "id1",
           provider: "google",
           issuer: "https://accounts.google.com",
-          idpTenant: null,
           linkedVia: "invitation",
           createdAt: "z",
           lastUsedAt: null,
@@ -198,25 +196,31 @@ describe("account settings", () => {
     expect(screen.queryByTestId("passkey-list")).toBeNull();
     const identities = await screen.findByTestId("settings-identities");
     await within(identities).findByText(/linked when you accepted the invitation/);
-    // Google is linked already; only Microsoft is offered.
+    // Google is linked already, and it is the only provider: nothing else is offered.
     expect(screen.queryByTestId("link-google")).toBeNull();
-    expect(screen.getByTestId("link-microsoft")).toBeTruthy();
+    expect(screen.queryByTestId("link-microsoft")).toBeNull();
     expect((await screen.findByTestId("wallet-list")).textContent).toContain("bound by you");
   });
 
-  it("unlinks an identity and links another through the provider", async () => {
+  it("unlinks an identity and links Google again through the provider", async () => {
     const assign = vi.spyOn(navigation, "assign").mockImplementation(() => undefined);
+    const linked = (routes()["GET /api/v1/auth/identities"] as { items: unknown[] }).items;
+    let unlinked = false;
     const calls = mount(
       routes({
-        "POST /api/v1/auth/identities/id1/unlink": { revokedSessions: 1, currentSessionEnded: false },
-        "POST /api/v1/auth/oidc/microsoft/link/start": { authorizationUrl: "https://login.microsoftonline.com/l", expiresAt: "z" },
+        "GET /api/v1/auth/identities": () => Response.json({ items: unlinked ? [] : linked, requestId: "r", asOf: "z" }),
+        "POST /api/v1/auth/identities/id1/unlink": () => {
+          unlinked = true;
+          return Response.json({ revokedSessions: 1, currentSessionEnded: false });
+        },
+        "POST /api/v1/auth/oidc/google/link/start": { authorizationUrl: "https://accounts.google.com/l", expiresAt: "z" },
       }),
     );
     const identities = await screen.findByTestId("settings-identities");
     fireEvent.click(await within(identities).findByRole("button", { name: "Unlink" }));
     await waitFor(() => expect(posted(calls, "/id1/unlink")).toHaveLength(1));
-    fireEvent.click(screen.getByTestId("link-microsoft"));
-    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://login.microsoftonline.com/l"));
+    fireEvent.click(await screen.findByTestId("link-google"));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://accounts.google.com/l"));
     expect(s.signOut).not.toHaveBeenCalled();
   });
 

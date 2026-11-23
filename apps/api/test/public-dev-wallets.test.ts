@@ -40,7 +40,7 @@ describeDb("public development wallets off the local chain", () => {
 
     beforeAll(async () => {
       // An account session: binding is the holder's own act (WP5), from an MFA session.
-      account = await issueTestSession(fx.appSql, fx.tenantA, fx.stewardSubjectA, {
+      account = await issueTestSession(fx.appSql, fx.stewardSubjectA, {
         firstFactor: "email_code",
         secondFactor: "totp",
       });

@@ -19,13 +19,13 @@ try {
   const scanTimeoutMs = Number(process.env["DEMO_SCAN_TIMEOUT_MS"] ?? "240000");
   if (!Number.isSafeInteger(scanTimeoutMs) || scanTimeoutMs < 1000 || scanTimeoutMs > 240000) throw new DemoSeedError("DEMO_SCAN_TIMEOUT_MS must be between 1000 and 240000");
   const result = await seedDevDemo(sql, store, {
-    environment, chainId, includeStageProjects: true, includeDocumentProjects: includeDocuments === "true", scanTimeoutMs, tenantSlug: required("DEMO_TENANT_SLUG"),
+    environment, chainId, includeStageProjects: true, includeDocumentProjects: includeDocuments === "true", scanTimeoutMs,
     ...(process.env["DEMO_OWNER_ORGANIZATION_NAME"] ? { ownerOrganizationName: process.env["DEMO_OWNER_ORGANIZATION_NAME"] } : {}),
   });
   process.stdout.write(`${JSON.stringify({ msg: "dev_demo.complete", ...result })}\n`);
 } catch (error) {
   // SQL, connection and signing failures can contain secret material. Never echo them.
-  const reason = error instanceof DemoSeedError ? error.message : "verify tenant/owner, database, object storage and scan worker; details omitted";
+  const reason = error instanceof DemoSeedError ? error.message : "verify owner, database, object storage and scan worker; details omitted";
   process.stderr.write(`dev_demo.failed: ${reason}\n`);
   process.exitCode = 1;
 } finally {

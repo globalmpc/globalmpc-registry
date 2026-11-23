@@ -54,9 +54,9 @@ psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM audit.eve
 #
 # `audit.events` is append-only and the app path has no UPDATE/DELETE. Rows growing here while
 # a backup runs is the normal production state.
-seed_tenant=$(psql "$DATABASE_URL" -X -tAc "SELECT id FROM core.tenants LIMIT 1")
-if [ -z "$seed_tenant" ]; then
-  echo "No tenant — cannot generate write load. Run the seed first" >&2
+seeded=$(psql "$DATABASE_URL" -X -tAc "SELECT 1 FROM core.schema_migrations LIMIT 1")
+if [ -z "$seeded" ]; then
+  echo "No migrated schema — cannot generate write load. Run the seed first" >&2
   exit 1
 fi
 
@@ -69,9 +69,9 @@ fi
 # while rows keep growing behind it — that actually happened (61 rows in 3 seconds).
 writer() {
   exec psql "$DATABASE_URL" -X -q >/dev/null 2>&1 <<SQL
-INSERT INTO audit.events (tenant_id, command, resource_type, resource_id,
+INSERT INTO audit.events (command, resource_type, resource_id,
                           effective_role, correlation_id)
-VALUES ('$seed_tenant', 'backup.drill', 'drill', gen_random_uuid(),
+VALUES ('backup.drill', 'drill', gen_random_uuid(),
         'system', 'backup-drill');
 \watch 0.05
 SQL

@@ -18,15 +18,9 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  */
 describeDb("outbox delivery", () => {
   let sql: postgres.Sql;
-  let tenant: string;
 
   beforeAll(async () => {
     sql = await connectIsolated("outbox_delivery");
-    tenant = randomUUID();
-    await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenant}, ${`d-${tenant.slice(0, 8)}`}, 'delivery test')
-    `;
   });
 
   beforeEach(async () => {
@@ -41,9 +35,9 @@ describeDb("outbox delivery", () => {
     const id = randomUUID();
     await sql`
       INSERT INTO core.outbox (
-        id, tenant_id, event_type, aggregate_id, aggregate_version, payload, correlation_id
+        id, event_type, aggregate_id, aggregate_version, payload, correlation_id
       ) VALUES (
-        ${id}, ${tenant}, ${eventType}, ${randomUUID()}, 1, '{}'::jsonb, ${`c-${id}`}
+        ${id}, ${eventType}, ${randomUUID()}, 1, '{}'::jsonb, ${`c-${id}`}
       )
     `;
     return id;
@@ -234,7 +228,6 @@ describeDb("outbox delivery", () => {
       expect(result.items).toEqual([
         {
           eventId: id,
-          tenantId: tenant,
           eventType: "anchor.failed",
           status: "dead_lettered",
           handlers: [
@@ -323,8 +316,8 @@ describeDb("outbox delivery", () => {
       await tx`INSERT INTO core.inbox (event_id, handler_version) VALUES (${id}, 'log@1')`;
       await tx`UPDATE core.outbox SET attempts = 1 WHERE id = ${id}`;
       await tx`
-        INSERT INTO audit.events (tenant_id, effective_role, command, resource_type, correlation_id)
-        VALUES (${tenant}, 'deploy_bound', 'outbox.event.replayed', 'outbox_event', 'grant-check')
+        INSERT INTO audit.events (effective_role, command, resource_type, correlation_id)
+        VALUES ('deploy_bound', 'outbox.event.replayed', 'outbox_event', 'grant-check')
       `;
       // Replay may add audit rows, never change them.
       await expect(

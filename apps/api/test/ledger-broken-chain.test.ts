@@ -71,10 +71,10 @@ describeDb("broken evidence chains in the published ledger", () => {
         definition: { fields: [{ key: "number", label: "Number", type: "string", required: true }] },
       };
       await fx.sql.begin(async (tx) => {
-        await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-          VALUES(${proposal},${fx.tenantA},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic test','2020-01-01T00:00:00Z',${fx.operatorSubjectA})`;
-        await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-          SELECT ${entry},tenant_id,item_key,1,payload->>'displayName',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
+        await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+          VALUES(${proposal},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic test','2020-01-01T00:00:00Z',${fx.operatorSubjectA})`;
+        await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+          SELECT ${entry},item_key,1,payload->>'displayName',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
         await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),
           decision_reason='Synthetic test only',materialized_id=${entry},version=2 WHERE id=${proposal}`;
       });
@@ -104,8 +104,8 @@ describeDb("broken evidence chains in the published ledger", () => {
       retroactive: false,
       requirements: [requirement(requirementA, typeA), requirement(requirementB, typeB)],
     };
-    await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-      VALUES(${policyId},${fx.tenantA},${definition.ruleSetId},'1.0.0','stage.exploration','MNG','2020-01-01T00:00:00Z',${fx.sql.json(definition)},'effective')`;
+    await fx.sql`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+      VALUES(${policyId},${definition.ruleSetId},'1.0.0','stage.exploration','MNG','2020-01-01T00:00:00Z',${fx.sql.json(definition)},'effective')`;
   });
 
   afterAll(async () => {
@@ -208,13 +208,13 @@ describeDb("broken evidence chains in the published ledger", () => {
     const assignmentId = randomUUID();
     const attestationId = randomUUID();
     const hash = `0x${"ab".repeat(32)}`;
-    await fx.sql`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id,state)
-      VALUES(${caseId},${fx.tenantA},${projectId},${fx.schemaA},'signed')`;
-    await fx.sql`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id)
-      VALUES(${assignmentId},${fx.tenantA},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
-    await fx.sql`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
+    await fx.sql`INSERT INTO core.verification_cases(id,project_id,schema_id,state)
+      VALUES(${caseId},${projectId},${fx.schemaA},'signed')`;
+    await fx.sql`INSERT INTO core.assignments(id,case_id,subject_id,credential_id)
+      VALUES(${assignmentId},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
+    await fx.sql`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
       evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-      VALUES(${attestationId},${fx.tenantA},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${[claimId]}::uuid[],
+      VALUES(${attestationId},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${[claimId]}::uuid[],
       ${hash},'Synthetic scope; no legal validity opinion','{"status":"valid"}','1','1',${hash},${`0x${"12".repeat(65)}`},${fx.reviewerA.address},
       '2026-01-01T00:00:00Z',${state})`;
     return attestationId;
@@ -222,9 +222,9 @@ describeDb("broken evidence chains in the published ledger", () => {
 
   async function catalogClaim(projectId: string, claimType: string, documents: string[], receiptId: string | null = null) {
     const claimId = randomUUID();
-    await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,
+    await fx.sql`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,
       structured_values,document_upload_ids,as_of,source_receipt_id)
-      VALUES(${claimId},${fx.tenantA},${projectId},${claimType},${`Private value ${suffix}`},'{}','verified',${catalog[claimType]!},1,
+      VALUES(${claimId},${projectId},${claimType},${`Private value ${suffix}`},'{}','verified',${catalog[claimType]!},1,
       ${fx.sql.json({ number: `private-${claimId}` })},${documents}::uuid[],current_date,${receiptId})`;
     return claimId;
   }
@@ -233,13 +233,13 @@ describeDb("broken evidence chains in the published ledger", () => {
   async function receiptOn(projectId: string, document: Upload): Promise<string> {
     const receiptId = randomUUID();
     await fx.sql`INSERT INTO core.source_receipts (
-        id, tenant_id, project_id, connection_id, authority_id, collection_method,
+        id, project_id, connection_id, authority_id, collection_method,
         result, query_basis, endpoint_or_document_ref, authentication_method,
         raw_hash, source_schema_version, adapter_version, terms_license,
         commercial_reuse, disclosure_permission, received_at, as_of,
         freshness_status, correlation_id, channel_evidence
       ) VALUES (
-        ${receiptId}, ${fx.tenantA}, ${projectId}, ${fx.connectionA}, ${fx.authorityA},
+        ${receiptId}, ${projectId}, ${fx.connectionA}, ${fx.authorityA},
         'authenticated_api', 'manual_review_required', '{}'::jsonb, 'document',
         'none', ${`0x${"11".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
         now(), now(), 'fresh', 'test', ${fx.sql.json({ documentUploadId: document.id })}
@@ -254,8 +254,8 @@ describeDb("broken evidence chains in the published ledger", () => {
   async function published(options: { receiptB?: boolean } = {}): Promise<Published> {
     const projectId = randomUUID();
     const projectKey = `CHAIN-${projectId.slice(0, 8)}`;
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id,reference_status)
-      VALUES(${projectId},${fx.tenantA},${projectKey},'Synthetic broken chain','MNG',ARRAY['copper'],${fx.orgA},'synthetic_test_project')`;
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id,reference_status)
+      VALUES(${projectId},${projectKey},'Synthetic broken chain','MNG',ARRAY['copper'],${fx.orgA},'synthetic_test_project')`;
     const a = await promoted(projectId);
     const b = await promoted(projectId);
     const claimA = await catalogClaim(projectId, typeA, [a.id]);
@@ -451,8 +451,8 @@ describeDb("broken evidence chains in the published ledger", () => {
     // the existing document-revocation chain, which opens a signal on the published version.
     const legacyDocument = await promoted(record.projectId);
     const legacyClaim = randomUUID();
-    await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,source_receipt_id)
-      VALUES(${legacyClaim},${fx.tenantA},${record.projectId},'lab_accreditation',${`Legacy private ${suffix}`},'{}','verified',
+    await fx.sql`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,source_receipt_id)
+      VALUES(${legacyClaim},${record.projectId},'lab_accreditation',${`Legacy private ${suffix}`},'{}','verified',
       ${await receiptOn(record.projectId, legacyDocument)})`;
     const legacyReview = await signedReview(record.projectId, legacyClaim, "active");
     await revoke(legacyDocument);
@@ -477,8 +477,8 @@ describeDb("broken evidence chains in the published ledger", () => {
     const record = await published();
     const signal = async (origin: string | null) => {
       const id = randomUUID();
-      await fx.sql`INSERT INTO core.evidence_stale_signals(id,tenant_id,project_id,target_type,target_id,origin_attestation_id,reason)
-        VALUES(${id},${fx.tenantA},${record.projectId},'registry_entry_version',${record.versionId},${origin},'Synthetic version signal')`;
+      await fx.sql`INSERT INTO core.evidence_stale_signals(id,project_id,target_type,target_id,origin_attestation_id,reason)
+        VALUES(${id},${record.projectId},'registry_entry_version',${record.versionId},${origin},'Synthetic version signal')`;
       return id;
     };
     const dismiss = (id: string) => fx.sql`UPDATE core.evidence_stale_signals

@@ -15,7 +15,7 @@ import type { RouteDefinition } from "./routes.js";
  * - **Binding** is the holder's own act: from their account session, at the level of the
  *   strongest factor they hold (aal3 while a passkey is active, else aal2), they ask for a
  *   challenge and sign it with the wallet (EIP-712, `WALLET_BINDING_EIP712_TYPES`). The message
- *   names the purpose, tenant, subject, wallet, chain and a single-use nonce; it lives five
+ *   names the purpose, subject, wallet, chain and a single-use nonce; it lives five
  *   minutes. An address active on any account is refused with one code, `WALLET_UNAVAILABLE`; a
  *   disabled address can be bound again, by the same person or a new holder — unless it was ever
  *   disabled as compromised (directly or as a replace cause) or by an admin, which is refused
@@ -51,7 +51,6 @@ export const WALLET_BINDING_PURPOSE = "bind-wallet";
 export const WALLET_BINDING_EIP712_TYPES = {
   WalletBinding: [
     { name: "purpose", type: "string" },
-    { name: "tenantId", type: "bytes32" },
     { name: "subjectId", type: "bytes32" },
     { name: "wallet", type: "address" },
     { name: "chainId", type: "uint256" },

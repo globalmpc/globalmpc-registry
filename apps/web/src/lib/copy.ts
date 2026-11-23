@@ -159,7 +159,7 @@ export const AUTH_COPY = {
     noInvitation:
       "Accounts are created by invitation. If you have not received one, ask your organisation's administrator.",
   },
-  providers: { google: "Google", microsoft: "Microsoft" } as Record<string, string>,
+  providers: { google: "Google" } as Record<string, string>,
   oidc: {
     completing: "Completing sign-in…",
     failedHeading: "Sign-in did not complete",
@@ -224,7 +224,7 @@ export const AUTH_COPY = {
     heading: "Account settings",
     lead: "Manage your sign-in methods, signing wallets and active sessions.",
     navLabel: "Account",
-    identities: "Google and Microsoft sign-in",
+    identities: "Google sign-in",
     identitiesLead:
       "A linked account signs you in by its provider's identifier, never by the email address it reports.",
     noIdentities: "None linked.",
@@ -322,7 +322,7 @@ export const AUTH_COPY = {
     noInvitations: "No invitations.",
     emailChanges: "Email address changes",
     emailChangesLead:
-      "Approval sends a code to the new address; completing it signs the person out everywhere and removes their linked Google / Microsoft sign-in.",
+      "Approval sends a code to the new address; completing it signs the person out everywhere and removes their linked Google sign-in.",
     proposeEmailChange: "Propose email change",
     proposeMfaReset: "Propose factor reset",
     person: "Person",
@@ -356,7 +356,6 @@ export const AUTH_COPY = {
     methodLabels: {
       email: "email",
       google: "Google",
-      microsoft: "Microsoft",
     } as Record<string, string>,
     noMethod: "no way to sign in",
     lockedTitle: (n: number) => `${n} account${n === 1 ? "" : "s"} cannot sign in`,
@@ -420,7 +419,6 @@ export const AUTH_COPY = {
     OIDC_PROVIDER_DISABLED: "This sign-in provider is not available.",
     OIDC_STATE_INVALID: "This sign-in link is no longer valid. Start again.",
     OIDC_TOKEN_INVALID: "The sign-in could not be verified. Start again.",
-    OIDC_TENANT_NOT_ALLOWED: "Accounts of your organisation's directory cannot sign in here.",
     OIDC_BINDING_MISSING: "This sign-in was not started in this browser. Start again.",
     OIDC_LAST_SIGN_IN_METHOD: "This is your only way to sign in. It cannot be unlinked.",
     WALLET_UNAVAILABLE: "This wallet cannot be bound.",

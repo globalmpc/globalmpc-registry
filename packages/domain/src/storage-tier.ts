@@ -4,11 +4,11 @@ import type { Sensitivity } from "./disclosure.js";
  * Storage path decision — OD-17·OD-18 (draft decision of 2026-08-14).
  *
  * The draft stage has **only one storage path**: a single bucket encrypted with a
- * provider-managed key, with no per-tenant key separation and no rotation runbook. Only
+ * provider-managed key, with no per-company key separation and no rotation runbook. Only
  * material for which that suffices may pass through it.
  *
  * When real contracts or personal data must be uploaded, a **separate secured route** is built,
- * deciding per-tenant key separation, rotation, and crypto-shredding together (OD-18 re-decision).
+ * deciding per-company key separation, rotation, and crypto-shredding together (OD-18 re-decision).
  *
  * **Why build the gate now:** build only the simple path and add the gate later, and sensitive
  * material uploaded in between goes straight through the simple path. Storage can be undone, but
@@ -50,7 +50,7 @@ export function admitToStorage(sensitivity: Sensitivity): StorageAdmission {
     requiredTier: "secured",
     reason:
       `${sensitivity} material is not accepted by the draft storage path. ` +
-      "Current storage uses a provider-managed key, with no per-tenant key separation or destruction procedure",
+      "Current storage uses a provider-managed key, with no per-company key separation or destruction procedure",
     nextAction:
       "Upload after the secured route opens. That route is built together with the OD-18 re-decision (key ownership, rotation, " +
       "crypto-shredding)",

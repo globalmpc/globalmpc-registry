@@ -34,7 +34,7 @@ const ANCHOR_NOTE =
   "current on-chain role holders. Check the contract's role events for those.";
 
 const LIMITATIONS = [
-  "Holder counts come from this service's active role bindings across all tenants; they are not on-chain facts",
+  "Holder counts come from this service's active role bindings across the Registry; they are not on-chain facts",
   "The criteria for moving between stages have no decided values, so no transition date or threshold is shown",
   "This page describes who holds a power, not whether any use of it was proper",
 ] as const;

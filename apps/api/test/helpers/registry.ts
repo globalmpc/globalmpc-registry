@@ -118,7 +118,7 @@ export async function publishProject(
  */
 export async function insertProject(
   sql: postgres.Sql,
-  scope: { tenantId: string; organizationId: string },
+  scope: { organizationId: string },
   projectKey: string,
   fields: {
     name?: string | undefined;
@@ -129,9 +129,9 @@ export async function insertProject(
   const projectId = randomUUID();
   await sql`
     INSERT INTO core.projects (
-      id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+      id, project_key, name, host_country_iso3, minerals, owner_organization_id
     ) VALUES (
-      ${projectId}, ${scope.tenantId}, ${projectKey}, ${fields.name ?? "Registry fixture"},
+      ${projectId}, ${projectKey}, ${fields.name ?? "Registry fixture"},
       ${fields.hostCountryIso3 ?? "MNG"}, ${fields.minerals ?? ["copper"]},
       ${scope.organizationId}
     )

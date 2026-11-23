@@ -29,18 +29,18 @@ async function createSourceFixture(): Promise<string> {
   await sql.begin(async (tx) => {
     await tx`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove, recognized_scope,
+        id, name, jurisdiction, proves, does_not_prove, recognized_scope,
         verification_method, public_disclosure_level, valid_from, valid_until, state
-      ) SELECT ${authorityId}, tenant_id, name, jurisdiction, proves, does_not_prove,
+      ) SELECT ${authorityId}, name, jurisdiction, proves, does_not_prove,
                recognized_scope, verification_method, public_disclosure_level,
                valid_from, valid_until, state
         FROM core.authorities WHERE id = 'cccccccc-0000-0000-0000-000000000001'
     `;
     await tx`
       INSERT INTO core.source_connections (
-        id, tenant_id, authority_id, connection_key, collection_method, access_basis,
+        id, authority_id, connection_key, collection_method, access_basis,
         secret_reference, state, endpoint, authentication_method, adapter_version, source_schema_version
-      ) SELECT ${connectionId}, tenant_id, ${authorityId}, ${`golden-${connectionId}`},
+      ) SELECT ${connectionId}, ${authorityId}, ${`golden-${connectionId}`},
                collection_method, access_basis, secret_reference, 'active', endpoint,
                authentication_method, adapter_version, source_schema_version
         FROM core.source_connections WHERE id = 'cccccccc-0000-0000-0000-000000000002'
@@ -64,7 +64,7 @@ test.describe("golden path", () => {
     await page.getByRole("textbox", { name: "Project key" }).fill(projectKey);
     await page.getByRole("textbox", { name: "Name" }).fill("Golden Path mine");
     await page.getByRole("textbox", { name: "Minerals (comma separated)" }).fill("copper");
-    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    // Company A's operator also may register for the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
     await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
@@ -172,7 +172,7 @@ test.describe("golden path", () => {
 
     // --- 3. Review assignment (reviewer) ------------------------------
     await page.goto(`/w/projects/${projectId}/verification`);
-    // Reviewer, credential, and schema come from this tenant's rows, not fixed ids.
+    // Reviewer, credential, and schema come from the Registry's rows, not fixed ids.
     // The seed has one reviewer with one valid credential and one active schema, so each is
     // preselected with those rows.
     await expect(page.getByRole("combobox", { name: "Reviewer" })).toHaveValue(
@@ -225,7 +225,7 @@ test.describe("golden path", () => {
     // --- 5. Readiness assessment (reviewer) ---------------------------
     await connectAs(page, "Steward A");
     await page.goto(`/w/projects/${projectId}/readiness`);
-    // Other complete specs install additional policies in the shared E2E tenant.
+    // Other complete specs install additional policies in the shared E2E Registry.
     // Select this journey's publication policy instead of relying on a sole option.
     await page.getByRole("combobox", { name: "Rule set" }).selectOption("dddddddd-0000-0000-0000-000000000001");
     await page.getByRole("button", { name: "Recompute" }).click();

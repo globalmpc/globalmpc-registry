@@ -14,7 +14,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  *
  * - concurrent requests with the same Idempotency-Key apply only once
  * - concurrent mutations do not skip or overwrite versions
- * - RLS does not mix tenants under load
+ * - RLS does not mix actors under load
  * - pool exhaustion does not silently turn errors into success
  *
  * None of these show up in sequential runs, hence a separate file.
@@ -129,10 +129,10 @@ describeDb("invariants under concurrency", () => {
     expect(row!.version).toBe(claim.version + 1);
   });
 
-  it("tenants do not mix under concurrent load", async () => {
+  it("companies do not mix under concurrent load", async () => {
     const stamp = Date.now();
 
-    // Two tenants alternate requests. They share the pool, so a leaking session variable
+    // Two companies alternate requests. They share the pool, so a leaking session variable
     // shows up here.
     await Promise.all(
       Array.from({ length: 20 }, (_, index) =>
@@ -156,15 +156,17 @@ describeDb("invariants under concurrency", () => {
       ),
     );
 
-    const listA = await app.inject({
+    // Operator B administers company B only; operator A is Registry-wide.
+    const listB = await app.inject({
       method: "GET",
       url: "/api/v1/projects",
-      headers: { authorization: `Bearer ${operatorToken}` },
+      headers: { authorization: `Bearer ${operatorBToken}` },
     });
 
-    const keys = (listA.json().items as { projectKey: string }[]).map((item) => item.projectKey);
+    const keys = (listB.json().items as { projectKey: string }[]).map((item) => item.projectKey);
     // Even one mixed row means RLS broke under load.
-    expect(keys.filter((key) => key.startsWith(`LOAD-B-${stamp}`))).toEqual([]);
+    expect(keys.filter((key) => key.startsWith(`LOAD-A-${stamp}`))).toEqual([]);
+    expect(keys.filter((key) => key.startsWith(`LOAD-B-${stamp}`)).length).toBeGreaterThan(0);
   });
 
   it("handles concurrent reads without errors", async () => {

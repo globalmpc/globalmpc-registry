@@ -118,7 +118,7 @@ export default function LegalPage() {
           </dd>
           <dt className="mono">Encryption key ownership</dt>
           <dd style={{ color: "var(--muted-foreground)" }}>
-            Who holds the keys that would protect sensitive material, and whether a tenant can have
+            Who holds the keys that would protect sensitive material, and whether a company can have
             its data made unreadable on request, is unresolved (OD-18). That is why sensitive
             uploads are refused rather than accepted and protected badly.
           </dd>
@@ -146,7 +146,7 @@ export default function LegalPage() {
           <dt>You cannot get in, or you lost a key</dt>
           <dd style={{ color: "var(--muted-foreground)" }}>
             A lost or compromised key is disabled and a new one bound by an administrator of your
-            tenant. Past signatures are not removed by that — they stay, with the reason the key was
+            organization or of the Registry. Past signatures are not removed by that — they stay, with the reason the key was
             disabled recorded alongside.
           </dd>
           <dt>A security problem</dt>

@@ -1,9 +1,10 @@
+import type { ActorContext } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
 import type { Hex as ViemHex } from "viem";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   attestationMachine,
   canTransition,
@@ -22,7 +23,7 @@ import {
   assertAuthorized,
   projectResource,
   sessionFacts,
-  tenantResource,
+  registryResource,
 } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { ROLE_ASSIGNMENT_BOUND, recordAudit } from "../audit.js";
@@ -131,10 +132,10 @@ const submitSignatureSchema = z.object({
  */
 async function caseProjectId(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   caseId: string,
 ): Promise<string> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, actor, (tx) =>
     tx<{ project_id: string }[]>`
       SELECT project_id FROM core.verification_cases WHERE id = ${caseId}
     `,
@@ -145,10 +146,10 @@ async function caseProjectId(
 
 async function attestationProjectId(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   attestationId: string,
 ): Promise<string> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, actor, (tx) =>
     tx<{ project_id: string }[]>`
       SELECT vc.project_id
       FROM core.verification_attestations a
@@ -175,17 +176,17 @@ function assertEvidenceIndependence(
  *
  * The response carries the draft's typed data and human-readable payload, and the request row is
  * the only way to sign. Inside the block a replay of the assignee's key would return that response
- * to anyone in the tenant without running these checks.
+ * to anyone without running these checks.
  *
  * Ownership comes first, so a non-assignee cannot learn whether someone else's draft is signed.
  */
 async function authorizeSignatureRequest(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   attestationId: string,
   session: ReturnType<typeof requireMutationContext>["session"],
 ): Promise<ReturnType<typeof assertAuthorized>> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, actor, (tx) =>
     tx<
       {
         state: string;
@@ -230,7 +231,7 @@ async function authorizeSignatureRequest(
   const effectiveRole = assertAuthorized(
     session,
     "attestation.sign",
-    projectResource(tenantId, row.project_id, {
+    projectResource(row.project_id, {
       state: row.case_state,
       statesAllowingAction: SIGNABLE_CASE_STATES,
       requiresCredential: true,
@@ -243,18 +244,18 @@ async function authorizeSignatureRequest(
       conflictStatus: row.conflict_status,
     }),
   );
-  const submitters = await withTenant(sql, { tenantId }, tx => loadEvidenceSubmitters(tx, row.claim_scope, row.case_id));
+  const submitters = await withActor(sql, actor, tx => loadEvidenceSubmitters(tx, row.claim_scope, row.case_id));
   assertEvidenceIndependence(session.subjectId, submitters);
-  await withTenant(sql, { tenantId }, tx => assertReviewerOrganizationIndependence(tx, row.assignment_subject, row.credential_id, row.project_id));
+  await withActor(sql, actor, tx => assertReviewerOrganizationIndependence(tx, row.assignment_subject, row.credential_id, row.project_id));
   return effectiveRole;
 }
 
 async function disputeProjectId(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   disputeId: string,
 ): Promise<string> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, actor, (tx) =>
     tx<{ project_id: string }[]>`
       SELECT vc.project_id
       FROM core.attestation_disputes d
@@ -360,7 +361,6 @@ async function assertSupersedable(
 async function supersedePredecessor(
   tx: postgres.TransactionSql,
   input: {
-    readonly tenantId: string;
     readonly predecessorId: string;
     readonly successorId: string;
     readonly actorSubjectId: string | null;
@@ -395,17 +395,17 @@ async function supersedePredecessor(
     `;
     await tx`
       INSERT INTO core.verification_case_transitions (
-        id, tenant_id, case_id, from_state, to_state, reason, actor_subject_id
+        id, case_id, from_state, to_state, reason, actor_subject_id
       ) VALUES (
-        ${randomUUID()}, ${input.tenantId}, ${predecessor.case_id}, ${predecessor.case_state},
+        ${randomUUID()}, ${predecessor.case_id}, ${predecessor.case_state},
         'superseded', ${`Superseded by attestation ${input.successorId}`}, ${input.actorSubjectId}
       )
     `;
   }
 
   await tx`
-    INSERT INTO core.lineage_edges (id, tenant_id, from_id, to_id, relation_type)
-    VALUES (${randomUUID()}, ${input.tenantId}, ${input.successorId}, ${predecessor.id}, 'supersedes')
+    INSERT INTO core.lineage_edges (id, from_id, to_id, relation_type)
+    VALUES (${randomUUID()}, ${input.successorId}, ${predecessor.id}, 'supersedes')
     ON CONFLICT (from_id, to_id, relation_type) DO NOTHING
   `;
 
@@ -422,7 +422,7 @@ export async function registerVerificationRoutes(
   // --- Verification Case ---------------------------------------------------
 
   app.post("/api/v1/verification-cases", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
 
     const parsed = createCaseSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -434,7 +434,7 @@ export async function registerVerificationRoutes(
     const effectiveRole = assertAuthorized(
       session,
       "claim.curate",
-      projectResource(tenantId, parsed.data.projectId),
+      projectResource(parsed.data.projectId),
       sessionFacts(session),
     );
 
@@ -442,16 +442,16 @@ export async function registerVerificationRoutes(
     const requestHash = hashRequest(request);
     const data = parsed.data;
 
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, requestHash, async () => {
         const snapshot = await buildEvidenceSnapshot(tx, data.projectId, data.claimIds, { effectiveReceipts: true });
 
         const caseId = randomUUID();
         await tx`
           INSERT INTO core.verification_cases (
-            id, tenant_id, project_id, schema_id, state, evidence_snapshot_hash, evidence_snapshot
+            id, project_id, schema_id, state, evidence_snapshot_hash, evidence_snapshot
           ) VALUES (
-            ${caseId}, ${tenantId}, ${data.projectId}, ${data.schemaId},
+            ${caseId}, ${data.projectId}, ${data.schemaId},
             'assigned', ${snapshot.hash}, ${tx.json(snapshot.manifest)}
           )
         `;
@@ -460,15 +460,14 @@ export async function registerVerificationRoutes(
         // restore what it was (0011).
         for (const claimId of snapshot.claimIds) {
           await tx`
-            INSERT INTO core.verification_case_claims (tenant_id, case_id, claim_id)
-            VALUES (${tenantId}, ${caseId}, ${claimId})
+            INSERT INTO core.verification_case_claims (case_id, claim_id)
+            VALUES (${caseId}, ${claimId})
           `;
         }
 
         // The server judges independence and the credential basis (02 §2.4, AC-16); it used to
         // write `independence_reviewed = true` without looking.
         const assignment = await assignReviewer(tx, {
-          tenantId,
           caseId,
           projectId: data.projectId,
           claimIds: snapshot.claimIds,
@@ -481,7 +480,6 @@ export async function registerVerificationRoutes(
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           projectId: data.projectId,
           session,
           command: "verification.case.assigned",
@@ -498,7 +496,6 @@ export async function registerVerificationRoutes(
         });
 
         await enqueueEvent(tx, {
-          tenantId,
           eventType: "verification.case.assigned",
           aggregateId: caseId,
           aggregateVersion: 1,
@@ -531,24 +528,24 @@ export async function registerVerificationRoutes(
    *
    * The assigner (`reviewer`) and the signer (reviewer) are different people.
    * Without a list the reviewer has no way to reach their assignment. RLS limits reads to the
-   * tenant; whether signing is allowed is judged separately when the attestation is created —
+   * projects the actor reaches; whether signing is allowed is judged separately when the attestation is created —
    * what one can see and what one can do are different questions.
    */
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/verification-cases",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
 
       assertAuthorized(
         session,
         "verification.read",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf } = request.context;
 
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
+      const rows = await withActor(sql, actor, (tx) =>
         tx<
           {
             id: string;
@@ -655,7 +652,7 @@ export async function registerVerificationRoutes(
   app.post<{ Params: { caseId: string } }>(
     "/api/v1/verification-cases/:caseId/transitions",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const parsed = transitionSchema.safeParse(request.body);
@@ -668,7 +665,7 @@ export async function registerVerificationRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "claim.curate",
-        projectResource(tenantId, await caseProjectId(sql, tenantId, request.params.caseId)),
+        projectResource(await caseProjectId(sql, actor, request.params.caseId)),
         sessionFacts(session),
       );
 
@@ -676,8 +673,8 @@ export async function registerVerificationRoutes(
       const requestHash = hashRequest(request);
       const { toState, reason } = parsed.data;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [current] = await tx<
             { id: string; state: VerificationCaseState; version: number; project_id: string }[]
           >`
@@ -716,16 +713,15 @@ export async function registerVerificationRoutes(
           // basis for judgment.
           await tx`
             INSERT INTO core.verification_case_transitions (
-              id, tenant_id, case_id, from_state, to_state, reason, actor_subject_id
+              id, case_id, from_state, to_state, reason, actor_subject_id
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${current.id}, ${current.state},
+              ${randomUUID()}, ${current.id}, ${current.state},
               ${toState}, ${reason}, ${session.subjectId ?? null}
             )
           `;
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: current.project_id,
             session,
             command: "verification.case.transitioned",
@@ -740,7 +736,6 @@ export async function registerVerificationRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "verification.case.transitioned",
             aggregateId: current.id,
             aggregateVersion: current.version + 1,
@@ -782,7 +777,7 @@ export async function registerVerificationRoutes(
   app.post<{ Params: { attestationId: string } }>(
     "/api/v1/attestations/:attestationId/disputes",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = disputeSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -794,9 +789,7 @@ export async function registerVerificationRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "attestation.dispute",
-        projectResource(
-          tenantId,
-          await attestationProjectId(sql, tenantId, request.params.attestationId),
+        projectResource(await attestationProjectId(sql, actor, request.params.attestationId),
         ),
         sessionFacts(session),
       );
@@ -804,8 +797,8 @@ export async function registerVerificationRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [attestation] = await tx<
             { id: string; state: AttestationState; payload_hash: string; case_id: string; claim_scope: string[] }[]
           >`
@@ -835,9 +828,9 @@ export async function registerVerificationRoutes(
 
           await tx`
             INSERT INTO core.attestation_disputes (
-              id, tenant_id, attestation_id, reason_code, detail, raised_by_subject_id
+              id, attestation_id, reason_code, detail, raised_by_subject_id
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${attestation.id}, ${parsed.data.reasonCode},
+              ${randomUUID()}, ${attestation.id}, ${parsed.data.reasonCode},
               ${parsed.data.detail}, ${session.subjectId ?? null}
             )
           `;
@@ -855,7 +848,6 @@ export async function registerVerificationRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "verification.attestation.disputed",
             resourceType: "verification_attestation",
@@ -866,7 +858,6 @@ export async function registerVerificationRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "verification_attestation.disputed",
             aggregateId: attestation.id,
             aggregateVersion: 1,
@@ -894,21 +885,19 @@ export async function registerVerificationRoutes(
   app.get<{ Params: { attestationId: string } }>(
     "/api/v1/attestations/:attestationId/disputes",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
 
       assertAuthorized(
         session,
         "verification.read",
-        projectResource(
-          tenantId,
-          await attestationProjectId(sql, tenantId, request.params.attestationId),
+        projectResource(await attestationProjectId(sql, actor, request.params.attestationId),
         ),
         sessionFacts(session),
       );
 
       const { requestId, asOf } = request.context;
 
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
+      const rows = await withActor(sql, actor, (tx) =>
         tx<
           {
             id: string;
@@ -966,7 +955,7 @@ export async function registerVerificationRoutes(
   app.post<{ Params: { disputeId: string } }>(
     "/api/v1/disputes/:disputeId/resolution",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = resolveSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -978,21 +967,19 @@ export async function registerVerificationRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "attestation.dispute.resolve",
-        projectResource(
-          tenantId,
-          await disputeProjectId(sql, tenantId, request.params.disputeId),
+        projectResource(await disputeProjectId(sql, actor, request.params.disputeId),
         ),
         sessionFacts(session),
       );
 
-      await withTenant(sql, { tenantId }, tx => independentDisputeResolver(tx, request.params.disputeId, session.subjectId));
+      await withActor(sql, actor, tx => independentDisputeResolver(tx, request.params.disputeId, session.subjectId));
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
       const { outcome, resolution } = parsed.data;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const context = await independentDisputeResolver(tx, request.params.disputeId, session.subjectId, true);
           const [dispute] = await tx<
             { id: string; attestation_id: string; resolved_at: Date | null }[]
@@ -1038,7 +1025,6 @@ export async function registerVerificationRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "verification.dispute.resolved",
             resourceType: "attestation_dispute",
@@ -1072,7 +1058,7 @@ export async function registerVerificationRoutes(
   app.post<{ Params: { caseId: string } }>(
     "/api/v1/verification-cases/:caseId/attestations",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = createAttestationSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -1085,8 +1071,8 @@ export async function registerVerificationRoutes(
       const requestHash = hashRequest(request);
       const data = parsed.data;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [context] = await tx<
             {
               case_state: string;
@@ -1123,7 +1109,7 @@ export async function registerVerificationRoutes(
            * checks the recovered address against the assignee's wallets, so it stops short of a
            * forged signature, but until then findings under someone else's name remain.
            *
-           * A role check cannot stop this — every reviewer in the same tenant has the same
+           * A role check cannot stop this — every reviewer on the project has the same
            * role.
            */
           if (context.assignment_subject !== session.subjectId) {
@@ -1137,7 +1123,7 @@ export async function registerVerificationRoutes(
           const effectiveRole = assertAuthorized(
             session,
             "attestation.sign",
-            projectResource(tenantId, context.project_id, {
+            projectResource(context.project_id, {
               state: context.case_state,
               statesAllowingAction: SIGNABLE_CASE_STATES,
               requiresCredential: true,
@@ -1232,13 +1218,13 @@ export async function registerVerificationRoutes(
 
           await tx`
             INSERT INTO core.verification_attestations (
-              id, tenant_id, case_id, assignment_id, credential_id, schema_id,
+              id, case_id, assignment_id, credential_id, schema_id,
               attestation_type, claim_scope, evidence_snapshot_hash,
               findings, citations, limitations, credential_status_snapshot,
               method_version, policy_version, payload_hash, signature,
               signer_wallet_address, signed_at, state, supersedes_id
             ) VALUES (
-              ${attestationId}, ${tenantId}, ${request.params.caseId}, ${data.assignmentId},
+              ${attestationId}, ${request.params.caseId}, ${data.assignmentId},
               ${context.credential_id}, ${context.schema_id}, ${data.attestationType},
               ${data.claimScope as string[]}::uuid[],
               (SELECT evidence_snapshot_hash FROM core.verification_cases WHERE id = ${request.params.caseId}),
@@ -1260,7 +1246,6 @@ export async function registerVerificationRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: context.project_id,
             session,
             command: "verification.attestation.drafted",
@@ -1295,18 +1280,18 @@ export async function registerVerificationRoutes(
   app.post<{ Params: { attestationId: string } }>(
     "/api/v1/attestations/:attestationId/signature-requests",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
       const effectiveRole = await authorizeSignatureRequest(
         sql,
-        tenantId,
+        actor,
         request.params.attestationId,
         session,
       );
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [attestation] = await tx<
             {
               id: string;
@@ -1371,10 +1356,10 @@ export async function registerVerificationRoutes(
 
           await tx`
             INSERT INTO core.attestation_signature_requests (
-              id, tenant_id, attestation_id, nonce, evidence_snapshot_hash,
+              id, attestation_id, nonce, evidence_snapshot_hash,
               payload_hash, issued_at, expires_at
             ) VALUES (
-              ${requestRowId}, ${tenantId}, ${attestation.id}, ${nonce},
+              ${requestRowId}, ${attestation.id}, ${nonce},
               ${attestation.evidence_snapshot_hash}, ${attestation.payload_hash},
               to_timestamp(${Number(issuedAt)}), to_timestamp(${Number(expiresAt)})
             )
@@ -1382,7 +1367,6 @@ export async function registerVerificationRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: attestation.project_id,
             session,
             command: "verification.signature_request.created",
@@ -1431,7 +1415,7 @@ export async function registerVerificationRoutes(
   app.post<{ Params: { attestationId: string } }>(
     "/api/v1/attestations/:attestationId/signatures",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = submitSignatureSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -1441,8 +1425,8 @@ export async function registerVerificationRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           // Consumes the request atomically. A second submission finds no row.
           const [signatureRequest] = await tx<
             {
@@ -1620,7 +1604,6 @@ export async function registerVerificationRoutes(
 
           const superseded = attestation.supersedes_id
             ? await supersedePredecessor(tx, {
-                tenantId,
                 predecessorId: attestation.supersedes_id,
                 successorId: attestation.id,
                 actorSubjectId: session.subjectId ?? null,
@@ -1638,7 +1621,6 @@ export async function registerVerificationRoutes(
 
           await recordAudit(tx, {
             effectiveRole: ROLE_ASSIGNMENT_BOUND,
-            tenantId,
             projectId: attestation.project_id,
             session,
             command: "verification.case.signed",
@@ -1661,7 +1643,6 @@ export async function registerVerificationRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "verification_attestation.signed",
             aggregateId: attestation.id,
             aggregateVersion: 1,
@@ -1673,7 +1654,6 @@ export async function registerVerificationRoutes(
           if (superseded) {
             await recordAudit(tx, {
               effectiveRole: ROLE_ASSIGNMENT_BOUND,
-              tenantId,
               projectId: attestation.project_id,
               session,
               command: "verification.attestation.superseded",
@@ -1684,7 +1664,6 @@ export async function registerVerificationRoutes(
               detail: { supersededBy: attestation.id, fromState: superseded.fromState },
             });
             await enqueueEvent(tx, {
-              tenantId,
               eventType: "verification_attestation.superseded",
               aggregateId: superseded.id,
               aggregateVersion: 1,
@@ -1697,7 +1676,6 @@ export async function registerVerificationRoutes(
           for (const claim of reassessed) {
             if (claim.fromState === claim.toState) continue;
             await enqueueEvent(tx, {
-              tenantId,
               eventType: "provenance.grade.changed",
               aggregateId: claim.claimId,
               aggregateVersion: claim.version,

@@ -10,7 +10,7 @@ import { ErrorNotice } from "@/components/ErrorNotice";
  * My Activity.
  *
  * Record of what the subject bound to this wallet did. **Visible only to that subject.** It asks a
- * different question from the tenant-wide Audit log — that one asks "what happened here", this one
+ * different question from the Registry-wide Audit log — that one asks "what happened here", this one
  * "what did I do". So it opens for any subject, even without a role.
  */
 export default function MyActivityPage() {
@@ -60,7 +60,7 @@ export default function MyActivityPage() {
           <h1>My Activity</h1>
           <p className="sub">
             What this account has done: uploads, claims, reviews, decisions, and votes, newest
-            first. Only you see this list. The tenant-wide record is under Audit.
+            first. Only you see this list. The Registry audit log is under Audit.
           </p>
         </div>
       </div>

@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { resolveSecret } from "@mpc/config";
 import { createMemoryObjectStore, createS3ObjectStore } from "@mpc/storage";
 import { DEFAULT_SCANNER_OPTIONS, scanBytes, scannerAvailable } from "./scanner.js";
-import { resolveScanTenant, scanBacklog, scanOnce } from "./scan-worker.js";
+import { resolveScanSubject, scanBacklog, scanOnce } from "./scan-worker.js";
 import { createApiClient } from "./api-client.js";
 import { createUnauthorizedBackoff } from "./auth-backoff.js";
 import { createHeartbeat } from "@mpc/db";
@@ -50,9 +50,6 @@ const scannerOptions = {
 };
 
 const baseUrl = required("API_BASE_URL");
-// One tenant per deployment: the tenant the service token was registered for. The API refuses a
-// report on another tenant's upload, so the worker leases only this tenant's.
-const tenantSlug = required("SCAN_SERVICE_TENANT_SLUG");
 // Generated with `service-token generate` and registered by the deploy (`service-token ensure`).
 // A secret reference (`file:`/`aws-sm:`) is resolved like every other secret; the value is never
 // printed.
@@ -93,9 +90,12 @@ const store =
 // cached plan's result shape mismatch and kills the loop.
 const sql = postgres(databaseUrl, { onnotice: () => {}, prepare: false });
 
-const tenantId = await resolveScanTenant(sql, tenantSlug);
-if (!tenantId) {
-  process.stderr.write(`SCAN_SERVICE_TENANT_SLUG names no tenant (${tenantSlug}); bootstrap it first\n`);
+// The worker acts as its token's service subject; the database shows it what that subject reaches.
+const subjectId = await resolveScanSubject(sql, serviceToken);
+if (!subjectId) {
+  process.stderr.write(
+    "SCAN_SERVICE_TOKEN is not a live scan_result service token; register it (`service-token ensure`) first\n",
+  );
   await sql.end();
   process.exit(1);
 }
@@ -116,7 +116,6 @@ emit({
   objectStore: process.env["OBJECT_STORE"] ?? "memory",
   // The token is a secret; only the kind of identity is logged.
   identity: "service_token",
-  tenant: tenantSlug,
   maxAttempts,
 });
 
@@ -143,7 +142,7 @@ const beat = (detail: Record<string, unknown>) => heartbeat({
   ...(backoff.failures > 0 ? { status: "unauthorized", unauthorizedFailures: backoff.failures } : {}),
 });
 const reportStuck = async () => {
-  const backlog = await scanBacklog(sql, maxAttempts, tenantId);
+  const backlog = await scanBacklog(sql, maxAttempts, subjectId);
   if (backlog.stuck > 0) {
     // Uploads at the attempt cap do not recover on their own. Left silent, they stay
     // unscanned and nobody knows.
@@ -183,7 +182,7 @@ while (running) {
         );
       },
       {
-        tenantId, maxAttempts, leaseMs, scannerTimeoutMs: scannerOptions.timeoutMs,
+        subjectId, maxAttempts, leaseMs, scannerTimeoutMs: scannerOptions.timeoutMs,
         scannerAvailable: probeAndBeat,
       },
       emit,

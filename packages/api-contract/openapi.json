@@ -89,8 +89,7 @@
                           "type": "string",
                           "enum": [
                             "email_code",
-                            "google",
-                            "microsoft"
+                            "google"
                           ]
                         },
                         "secondFactor": {
@@ -172,7 +171,7 @@
                               "scopeKind": {
                                 "type": "string",
                                 "enum": [
-                                  "tenant",
+                                  "registry",
                                   "organization",
                                   "none"
                                 ]
@@ -620,8 +619,7 @@
                           "type": "string",
                           "enum": [
                             "email_code",
-                            "google",
-                            "microsoft"
+                            "google"
                           ]
                         },
                         "secondFactor": {
@@ -703,7 +701,7 @@
                               "scopeKind": {
                                 "type": "string",
                                 "enum": [
-                                  "tenant",
+                                  "registry",
                                   "organization",
                                   "none"
                                 ]
@@ -1143,8 +1141,7 @@
                                 "type": "string",
                                 "enum": [
                                   "email_code",
-                                  "google",
-                                  "microsoft"
+                                  "google"
                                 ]
                               },
                               "secondFactor": {
@@ -1869,9 +1866,6 @@
                         "google": {
                           "type": "boolean"
                         },
-                        "microsoft": {
-                          "type": "boolean"
-                        },
                         "emailCodeDigits": {
                           "type": "integer",
                           "exclusiveMinimum": 0,
@@ -1889,7 +1883,6 @@
                       "required": [
                         "emailCode",
                         "google",
-                        "microsoft",
                         "emailCodeDigits",
                         "emailCodeTtlMinutes",
                         "requestId"
@@ -2619,8 +2612,7 @@
                           "type": "string",
                           "enum": [
                             "email_code",
-                            "google",
-                            "microsoft"
+                            "google"
                           ]
                         },
                         "secondFactor": {
@@ -2702,7 +2694,7 @@
                               "scopeKind": {
                                 "type": "string",
                                 "enum": [
-                                  "tenant",
+                                  "registry",
                                   "organization",
                                   "none"
                                 ]
@@ -3611,8 +3603,7 @@
                           "type": "string",
                           "enum": [
                             "email_code",
-                            "google",
-                            "microsoft"
+                            "google"
                           ]
                         },
                         "secondFactor": {
@@ -3694,7 +3685,7 @@
                               "scopeKind": {
                                 "type": "string",
                                 "enum": [
-                                  "tenant",
+                                  "registry",
                                   "organization",
                                   "none"
                                 ]
@@ -4967,7 +4958,7 @@
     "/api/v1/admin/invitations": {
       "get": {
         "operationId": "listInvitations",
-        "summary": "List invitations of this tenant",
+        "summary": "List invitations",
         "tags": [
           "workspace"
         ],
@@ -6430,7 +6421,7 @@
     "/api/v1/admin/email-changes": {
       "get": {
         "operationId": "listEmailChangeRequests",
-        "summary": "List email change requests of this tenant",
+        "summary": "List email change requests",
         "tags": [
           "workspace"
         ],
@@ -9389,7 +9380,7 @@
     "/api/v1/auth/oidc/{provider}/start": {
       "post": {
         "operationId": "startOidcSignIn",
-        "summary": "Start Google / Microsoft sign-in, or accepting an invitation with it",
+        "summary": "Start Google sign-in, or accepting an invitation with it",
         "tags": [
           "public"
         ],
@@ -9401,8 +9392,7 @@
             "schema": {
               "type": "string",
               "enum": [
-                "google",
-                "microsoft"
+                "google"
               ]
             }
           }
@@ -9828,7 +9818,7 @@
     "/api/v1/auth/oidc/{provider}/callback": {
       "post": {
         "operationId": "completeOidcSignIn",
-        "summary": "Finish Google / Microsoft sign-in — an aal1 session for a linked identity only",
+        "summary": "Finish Google sign-in — an aal1 session for a linked identity only",
         "tags": [
           "public"
         ],
@@ -9840,8 +9830,7 @@
             "schema": {
               "type": "string",
               "enum": [
-                "google",
-                "microsoft"
+                "google"
               ]
             }
           }
@@ -9891,8 +9880,7 @@
                           "type": "string",
                           "enum": [
                             "email_code",
-                            "google",
-                            "microsoft"
+                            "google"
                           ]
                         },
                         "secondFactor": {
@@ -9974,7 +9962,7 @@
                               "scopeKind": {
                                 "type": "string",
                                 "enum": [
-                                  "tenant",
+                                  "registry",
                                   "organization",
                                   "none"
                                 ]
@@ -10415,7 +10403,6 @@
           "OIDC_EMAIL_NOT_VERIFIED",
           "OIDC_EMAIL_CODE_REQUIRED",
           "OIDC_EMAIL_MISMATCH",
-          "OIDC_TENANT_NOT_ALLOWED",
           "INVITATION_INVALID"
         ],
         "requestBody": {
@@ -10491,7 +10478,7 @@
     "/api/v1/auth/oidc/{provider}/link/start": {
       "post": {
         "operationId": "startOidcLink",
-        "summary": "Start linking a Google / Microsoft identity to this account — needs aal2",
+        "summary": "Start linking a Google identity to this account — needs aal2",
         "tags": [
           "workspace"
         ],
@@ -10503,8 +10490,7 @@
             "schema": {
               "type": "string",
               "enum": [
-                "google",
-                "microsoft"
+                "google"
               ]
             }
           }
@@ -10850,8 +10836,7 @@
             "schema": {
               "type": "string",
               "enum": [
-                "google",
-                "microsoft"
+                "google"
               ]
             }
           }
@@ -10885,18 +10870,11 @@
                         "provider": {
                           "type": "string",
                           "enum": [
-                            "google",
-                            "microsoft"
+                            "google"
                           ]
                         },
                         "issuer": {
                           "type": "string"
-                        },
-                        "idpTenant": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
                         },
                         "linkedVia": {
                           "type": "string",
@@ -10936,7 +10914,6 @@
                         "id",
                         "provider",
                         "issuer",
-                        "idpTenant",
                         "linkedVia",
                         "createdAt",
                         "lastUsedAt",
@@ -11271,7 +11248,6 @@
           "OIDC_PROVIDER_ERROR",
           "OIDC_IDENTITY_UNAVAILABLE",
           "OIDC_PROVIDER_ALREADY_LINKED",
-          "OIDC_TENANT_NOT_ALLOWED",
           "MFA_STEP_UP_REQUIRED"
         ],
         "requestBody": {
@@ -11347,7 +11323,7 @@
     "/api/v1/auth/identities": {
       "get": {
         "operationId": "listExternalIdentities",
-        "summary": "The Google / Microsoft identities linked to this account",
+        "summary": "The Google identities linked to this account",
         "tags": [
           "workspace"
         ],
@@ -11386,18 +11362,11 @@
                               "provider": {
                                 "type": "string",
                                 "enum": [
-                                  "google",
-                                  "microsoft"
+                                  "google"
                                 ]
                               },
                               "issuer": {
                                 "type": "string"
-                              },
-                              "idpTenant": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
                               },
                               "linkedVia": {
                                 "type": "string",
@@ -11437,7 +11406,6 @@
                               "id",
                               "provider",
                               "issuer",
-                              "idpTenant",
                               "linkedVia",
                               "createdAt",
                               "lastUsedAt",
@@ -16298,7 +16266,7 @@
       },
       "get": {
         "operationId": "listProjects",
-        "summary": "List projects in the current tenant — filters narrow within the caller's scope",
+        "summary": "List projects in the caller's scope — filters narrow within it",
         "tags": [
           "workspace"
         ],
@@ -74016,8 +73984,7 @@
                               "type": "string",
                               "enum": [
                                 "email",
-                                "google",
-                                "microsoft"
+                                "google"
                               ]
                             }
                           },
@@ -74512,8 +74479,7 @@
                             "type": "string",
                             "enum": [
                               "email",
-                              "google",
-                              "microsoft"
+                              "google"
                             ]
                           }
                         },
@@ -75095,8 +75061,7 @@
                             "type": "string",
                             "enum": [
                               "email",
-                              "google",
-                              "microsoft"
+                              "google"
                             ]
                           }
                         },
@@ -75688,8 +75653,7 @@
                             "type": "string",
                             "enum": [
                               "email",
-                              "google",
-                              "microsoft"
+                              "google"
                             ]
                           }
                         },
@@ -77514,7 +77478,7 @@
                               {
                                 "type": "string",
                                 "enum": [
-                                  "tenant",
+                                  "registry",
                                   "organization",
                                   "none"
                                 ]
@@ -77981,7 +77945,7 @@
                             {
                               "type": "string",
                               "enum": [
-                                "tenant",
+                                "registry",
                                 "organization",
                                 "none"
                               ]
@@ -78441,7 +78405,7 @@
                       "scopeKind": {
                         "type": "string",
                         "enum": [
-                          "tenant",
+                          "registry",
                           "organization",
                           "none"
                         ]
@@ -78582,7 +78546,7 @@
                             {
                               "type": "string",
                               "enum": [
-                                "tenant",
+                                "registry",
                                 "organization",
                                 "none"
                               ]

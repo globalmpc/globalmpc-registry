@@ -44,7 +44,7 @@ describeDb("public anchor contract", () => {
 
     const operator = await signIn(app, fx.operatorA);
     const approver = await signIn(app, fx.disclosureApproverA);
-    const projectId = await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, `CTR-${randomUUID().slice(0, 8)}`);
+    const projectId = await insertProject(fx.sql, { organizationId: fx.orgA }, `CTR-${randomUUID().slice(0, 8)}`);
     const published = await publishProject(
       app,
       fx.sql,
@@ -136,8 +136,8 @@ describeDb("public anchor contract", () => {
     // A later transaction row for the batch, written before the worker stored the contract.
     const legacyHash = hash();
     await fx.sql`
-      INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, tx_hash, created_at)
-      SELECT ${randomUUID()}, b.tenant_id, b.id, ${`legacy-${randomUUID()}`}, 31337, ${legacyHash}, now() + interval '1 second'
+      INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, tx_hash, created_at)
+      SELECT ${randomUUID()}, b.id, ${`legacy-${randomUUID()}`}, 31337, ${legacyHash}, now() + interval '1 second'
       FROM chain.anchor_batches b WHERE b.id = ${batchRowId}
     `;
     expect(await proofOf()).toMatchObject({ chainId: 31337, contractAddress: null, transactionHash: legacyHash });

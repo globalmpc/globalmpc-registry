@@ -2,7 +2,9 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import postgres from "postgres";
 import type { FastifyInstance } from "fastify";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { runMigrations, withTenant } from "@mpc/db";
+import { inject } from "vitest";
+import { withActor } from "@mpc/db";
+import { prepareTemplate } from "./template.js";
 import {
   hashToken,
   newSessionToken,
@@ -14,66 +16,70 @@ import { issueServiceToken } from "../../src/service-tokens.js";
  * Test DB helpers.
  *
  * Unlike the `packages/db` helpers, these do not drop the schema. Tests at this layer verify
- * behavior on top of the schema, not its lifecycle, so **each file isolates itself with its
- * own tenant**. Dropping would break other tests sharing the same instance.
+ * behavior on top of the schema, not its lifecycle, so **each fixture gets its own database**,
+ * cloned from a migrated template and dropped by `close()`. The Registry has no tenant to
+ * isolate a test by any more, and its catalog keys (schema keys, claim types, policy sets) are
+ * unique across the whole database, so two fixtures in one database would collide.
  */
 export interface TestFixture {
   /** Superuser connection. Used for seeding. */
   readonly sql: postgres.Sql;
   /** Application role connection. RLS applies. */
   readonly appSql: postgres.Sql;
-  readonly tenantA: string;
-  readonly tenantB: string;
   readonly orgA: string;
   readonly orgB: string;
-  /** tenant A · administrator · high_assurance */
+  /** administrator, Registry-wide · high_assurance */
   readonly operatorA: TestAccount;
-  /** tenant B · administrator · high_assurance */
+  /**
+   * Company B: administrator of `orgB` only (an organization-scoped binding) · high_assurance.
+   * Reaches the projects orgB owns and nothing of company A's.
+   */
   readonly operatorB: TestAccount;
-  /** tenant A · no role · wallet_only */
+  readonly operatorSubjectB: string;
+  /** no role · wallet_only */
   readonly readerA: TestAccount;
   /** A key bound to no subject. `signIn` refuses it: a wallet alone signs nobody in (WP7). */
   readonly unknownWallet: TestAccount;
-  /** tenant A · reviewer · high_assurance */
+  /** reviewer · high_assurance */
   readonly reviewerA: TestAccount;
-  /** tenant A · reviewer · high_assurance */
+  /** reviewer · high_assurance */
   readonly approverA: TestAccount;
-  /** tenant A · reviewer · identity_bound. handles evidence and claims (02 §2.3) */
+  /** reviewer · identity_bound. handles evidence and claims (02 §2.3) */
   readonly stewardA: TestAccount;
   /**
-   * tenant A · reviewer · **binding scoped to projectA only**.
+   * reviewer · **binding scoped to projectA only**.
    *
    * Both are needed to test organization-level versus project-level bindings.
    * This account is a steward in `projectA` but nothing in `otherProjectA`.
    */
   readonly scopedStewardA: TestAccount;
   /**
-   * tenant A · scan_service, a **service** subject. Holds no wallet and cannot `signIn`; it
+   * scan_service, a **service** subject. Holds no wallet and cannot `signIn`; it
    * authenticates with `scanServiceToken` (D7).
    */
   readonly scanServiceA: TestAccount;
   /** Service token of the scan service, scoped to `scan_result`. */
   readonly scanServiceToken: string;
   readonly scanServiceSubjectA: string;
-  /** tenant A · project_member. Creates governance proposals */
+  /** project_member. Creates governance proposals */
   readonly proposerA: TestAccount;
-  /** tenant A · project_member. Only votes */
+  /** project_member. Only votes */
   readonly voterA: TestAccount;
-  /** tenant A · administrator. Decides authority approval (02 §2.8) */
+  /** administrator. Decides authority approval (02 §2.8) */
   readonly auditorA: TestAccount;
-  /** tenant A · reviewer. Publishes what an operator drafted (02 §2.8) */
+  /** reviewer. Publishes what an operator drafted (02 §2.8) */
   readonly disclosureApproverA: TestAccount;
   /** operatorA's subject id. Used to check whether registrant and approver are the same */
   readonly operatorSubjectA: string;
-  /** Pre-created project in tenant A */
+  /** Pre-created project owned by orgA */
   readonly projectA: string;
-  /** Another project in the same tenant. Tests access outside project scope */
+  /** Another project of orgA. Tests access outside project scope */
   readonly otherProjectA: string;
-  /** Accepted authority of tenant A */
+  /** Accepted authority */
   readonly authorityA: string;
-  /** Active source connection of tenant A */
+  /** Active source connection */
   readonly connectionA: string;
-  /** Active attestation schema of tenant A */
+  /** Active attestation schema */
   readonly schemaA: string;
   /** Valid credential of reviewerA, issued by `issuerAuthorityA` */
   readonly credentialA: string;
@@ -122,8 +128,8 @@ export function newAccount(): TestAccount {
  * `app` is unused and kept so the signature matches the old helper's call sites.
  */
 export async function signIn(_app: FastifyInstance, account: TestAccount): Promise<string> {
-  const [holder] = await seedConnection()<{ subject_id: string; tenant_id: string }[]>`
-    SELECT w.subject_id, w.tenant_id
+  const [holder] = await seedConnection()<{ subject_id: string }[]>`
+    SELECT w.subject_id
     FROM core.wallet_identities w
     JOIN core.subjects s ON s.id = w.subject_id AND s.kind = 'person'
     WHERE w.wallet_address = ${account.address} AND w.disabled_at IS NULL
@@ -135,40 +141,55 @@ export async function signIn(_app: FastifyInstance, account: TestAccount): Promi
       `signIn: ${account.address} is not an active wallet of any person — a key bound to nobody signs nobody in`,
     );
   }
-  return issueTestSession(appConnection(), holder.tenant_id, holder.subject_id, {
+  return issueTestSession(appConnection(), holder.subject_id, {
     firstFactor: "email_code",
   });
 }
 
 /** Migration-role connection the session helper seeds with. Opened on first use. */
-let seedSql: postgres.Sql | null = null;
+let seedSql: { url: string; sql: postgres.Sql } | null = null;
 function seedConnection(): postgres.Sql {
   const url = process.env["DATABASE_URL"];
   if (!url) throw new Error("DATABASE_URL is required");
-  seedSql ??= postgres(url, { onnotice: () => {}, max: 1, idle_timeout: 2 });
-  return seedSql;
+  if (seedSql?.url !== url) {
+    void seedSql?.sql.end();
+    seedSql = { url, sql: postgres(url, { onnotice: () => {}, max: 1, idle_timeout: 2 }) };
+  }
+  return seedSql.sql;
 }
 
 /**
  * Application-role connection `signIn` issues sessions over — the role the API itself uses, as
  * `issueTestSession` expects. `setupFixture` creates the login role first. Opened on first use.
  */
-let appSqlShared: postgres.Sql | null = null;
+let appSqlShared: { url: string; sql: postgres.Sql } | null = null;
 function appConnection(): postgres.Sql {
   const url = process.env["DATABASE_URL"];
   if (!url) throw new Error("DATABASE_URL is required");
-  const appUrl = new URL(url);
-  appUrl.username = "mpc_app_login";
-  appUrl.password = "app";
-  appSqlShared ??= postgres(appUrl.toString(), { onnotice: () => {}, max: 2, idle_timeout: 2 });
-  return appSqlShared;
+  if (appSqlShared?.url !== url) {
+    void appSqlShared?.sql.end();
+    const appUrl = new URL(url);
+    appUrl.username = "mpc_app_login";
+    appUrl.password = "app";
+    appSqlShared = { url, sql: postgres(appUrl.toString(), { onnotice: () => {}, max: 2, idle_timeout: 2 }) };
+  }
+  return appSqlShared.sql;
+}
+
+/** Closes the shared connections of a fixture database before it is dropped. */
+async function endSharedConnections(url: string): Promise<void> {
+  for (const shared of [seedSql, appSqlShared]) {
+    if (shared?.url === url) await shared.sql.end();
+  }
+  if (seedSql?.url === url) seedSql = null;
+  if (appSqlShared?.url === url) appSqlShared = null;
 }
 
 /**
  * Issues a session for a subject through the real database path a login flow uses. Use it to
  * test what a session at a given AAL may do.
  *
- * - `google` / `microsoft`: the login-transaction path itself (0121). Such a session exists only
+ * - `google`: the login-transaction path itself (0121). Such a session exists only
  *   when a transaction was completed for its subject in the same transaction, so the helper links
  *   a fixture identity to the subject if it has none of that provider (over the migration
  *   connection), then starts, claims and completes a sign-in transaction through the functions
@@ -191,27 +212,26 @@ function appConnection(): postgres.Sql {
  */
 export async function issueTestSession(
   sql: postgres.Sql,
-  tenantId: string,
   subjectId: string,
   factors: {
-    readonly firstFactor: "email_code" | "google" | "microsoft";
+    readonly firstFactor: "email_code" | "google";
     readonly secondFactor?: "passkey" | "totp" | "recovery_code" | null;
   },
 ): Promise<string> {
   const firstFactor = factors.firstFactor;
   if (firstFactor !== "email_code") {
-    const issued = await oidcTestSession(sql, tenantId, subjectId, firstFactor);
-    if (factors.secondFactor) await elevate(sql, tenantId, issued.sessionId, factors.secondFactor);
+    const issued = await oidcTestSession(sql, subjectId, firstFactor);
+    if (factors.secondFactor) await elevate(sql, subjectId, issued.sessionId, factors.secondFactor);
     return issued.token;
   }
 
   const seed = seedConnection();
   const [subject] = await seed<{ email: string }[]>`
     UPDATE core.subjects SET email = COALESCE(email, ${`session-${subjectId}@example.test`})
-    WHERE id = ${subjectId} AND tenant_id = ${tenantId} AND kind = 'person'
+    WHERE id = ${subjectId} AND kind = 'person'
     RETURNING email
   `;
-  if (!subject) throw new Error(`no person subject ${subjectId} in tenant ${tenantId}`);
+  if (!subject) throw new Error(`no person subject ${subjectId}`);
 
   const hmac = randomBytes(32);
   const challengeId = randomUUID();
@@ -234,27 +254,23 @@ export async function issueTestSession(
   `;
   if (verified?.status !== "session_created") throw new Error(`no session: ${verified?.status}`);
 
-  if (factors.secondFactor) await elevate(sql, tenantId, sessionId, factors.secondFactor);
+  if (factors.secondFactor) await elevate(sql, subjectId, sessionId, factors.secondFactor);
   return token;
 }
-
-/** The Microsoft directory fixture identities live in. */
-export const FIXTURE_MICROSOFT_TENANT = "0f0f0f0f-0000-4000-8000-000000000001";
 
 const sha256Hex = (value: string) => createHash("sha256").update(value).digest("hex");
 
 /** A sign-in session for `subjectId` through 0121's functions; see `issueTestSession`. */
 async function oidcTestSession(
   sql: postgres.Sql,
-  tenantId: string,
   subjectId: string,
-  provider: "google" | "microsoft",
+  provider: "google",
 ): Promise<{ token: string; sessionId: string }> {
   const seed = seedConnection();
   const [person] = await seed`
-    SELECT 1 FROM core.subjects WHERE id = ${subjectId} AND tenant_id = ${tenantId} AND kind = 'person'
+    SELECT 1 FROM core.subjects WHERE id = ${subjectId} AND kind = 'person'
   `;
-  if (!person) throw new Error(`no person subject ${subjectId} in tenant ${tenantId}`);
+  if (!person) throw new Error(`no person subject ${subjectId}`);
   const [existing] = await seed<{ issuer: string; subject_key: string }[]>`
     SELECT issuer, subject_key FROM core.external_identities
     WHERE subject_id = ${subjectId} AND provider = ${provider} AND revoked_at IS NULL
@@ -262,17 +278,14 @@ async function oidcTestSession(
   let identity = existing;
   if (!identity) {
     identity = {
-      issuer: provider === "google"
-        ? "https://accounts.google.com"
-        : `https://login.microsoftonline.com/${FIXTURE_MICROSOFT_TENANT}/v2.0`,
-      subject_key: provider === "google" ? `fixture-${subjectId}` : subjectId,
+      issuer: "https://accounts.google.com",
+      subject_key: `fixture-${subjectId}`,
     };
     await seed`
       INSERT INTO core.external_identities (
-        id, tenant_id, subject_id, provider, issuer, subject_key, idp_tenant, linked_via
+        id, subject_id, provider, issuer, subject_key, linked_via
       ) VALUES (
-        ${randomUUID()}, ${tenantId}, ${subjectId}, ${provider}, ${identity.issuer}, ${identity.subject_key},
-        ${provider === "microsoft" ? FIXTURE_MICROSOFT_TENANT : null}, 'link'
+        ${randomUUID()}, ${subjectId}, ${provider}, ${identity.issuer}, ${identity.subject_key}, 'link'
       )
     `;
   }
@@ -305,107 +318,18 @@ async function oidcTestSession(
   return { token, sessionId };
 }
 
-/** Raises a session through the test-only elevation below, in the session's tenant. */
+/** Raises a session through the test-only elevation below, acting as the session's subject. */
 async function elevate(
   sql: postgres.Sql,
-  tenantId: string,
+  subjectId: string,
   sessionId: string,
   factor: "passkey" | "totp" | "recovery_code",
 ): Promise<void> {
-  await withTenant(sql, { tenantId }, (tx) =>
+  await withActor(sql, { subjectId }, (tx) =>
     tx`SELECT test_support.elevate_session(${sessionId}, ${factor}::core.session_second_factor)`,
   );
 }
 
-/**
- * The test-only elevation behind `issueTestSession`. Created over the superuser connection, owned
- * by it, and granted to the application role; it bypasses no check the table holds — it writes
- * the proof rows a ceremony writes. The fixture passkey and TOTP are per subject and reused, and
- * their key material is random filler: nothing ever verifies against them.
- */
-const TEST_ELEVATION_SQL = `
-  CREATE SCHEMA IF NOT EXISTS test_support;
-  GRANT USAGE ON SCHEMA test_support TO mpc_app;
-  CREATE OR REPLACE FUNCTION test_support.elevate_session(
-    p_session UUID, p_factor core.session_second_factor
-  ) RETURNS VOID
-  LANGUAGE plpgsql SECURITY DEFINER SET search_path = core, pg_temp AS $fn$
-  DECLARE
-    v core.sessions;
-    v_proof UUID := gen_random_uuid();
-    v_challenge UUID := gen_random_uuid();
-    v_credential UUID;
-    v_totp UUID;
-    v_code UUID := gen_random_uuid();
-  BEGIN
-    SELECT * INTO v FROM core.sessions
-    WHERE id = p_session AND tenant_id = core.current_tenant() FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION 'no session % in the current tenant', p_session; END IF;
-
-    IF p_factor = 'passkey' THEN
-      SELECT id INTO v_credential FROM core.webauthn_credentials
-      WHERE credential_id = 'fixture-' || replace(v.subject_id::text, '-', '');
-      IF v_credential IS NULL THEN
-        v_credential := gen_random_uuid();
-        INSERT INTO core.webauthn_credentials (
-          id, tenant_id, subject_id, credential_id, public_key, aaguid, user_verified, device_type,
-          backed_up, name
-        ) VALUES (
-          v_credential, v.tenant_id, v.subject_id, 'fixture-' || replace(v.subject_id::text, '-', ''),
-          (uuid_send(gen_random_uuid()) || uuid_send(gen_random_uuid())), '00000000-0000-0000-0000-000000000000', true, 'singleDevice', false,
-          'Fixture passkey'
-        );
-      END IF;
-      INSERT INTO core.webauthn_challenges (
-        id, tenant_id, subject_id, session_id, purpose, challenge, expires_at, consumed_at,
-        consumed_by_session_id
-      ) VALUES (
-        v_challenge, v.tenant_id, v.subject_id, v.id, 'authentication',
-        rtrim(translate(encode((uuid_send(gen_random_uuid()) || uuid_send(gen_random_uuid())), 'base64'), '+/', '-_'), '='),
-        now() + interval '5 minutes', now(), v.id
-      );
-      INSERT INTO core.session_factor_proofs (
-        id, tenant_id, subject_id, session_id, factor, webauthn_challenge_id, webauthn_credential_id
-      ) VALUES (v_proof, v.tenant_id, v.subject_id, v.id, 'passkey', v_challenge, v_credential);
-    ELSIF p_factor = 'totp' THEN
-      SELECT id INTO v_totp FROM core.totp_authenticators
-      WHERE subject_id = v.subject_id AND confirmed_at IS NOT NULL AND revoked_at IS NULL;
-      IF v_totp IS NULL THEN
-        v_totp := gen_random_uuid();
-        INSERT INTO core.totp_authenticators (
-          id, tenant_id, subject_id, secret_ciphertext, secret_nonce, pending_expires_at, confirmed_at
-        ) VALUES (
-          v_totp, v.tenant_id, v.subject_id, (uuid_send(gen_random_uuid()) || uuid_send(gen_random_uuid())),
-          substring(uuid_send(gen_random_uuid()) FROM 1 FOR 12), now(), now()
-        );
-      END IF;
-      INSERT INTO core.session_factor_proofs (
-        id, tenant_id, subject_id, session_id, factor, totp_authenticator_id, totp_step
-      ) VALUES (
-        v_proof, v.tenant_id, v.subject_id, v.id, 'totp', v_totp,
-        (extract(epoch FROM clock_timestamp()) * 1000000)::bigint
-      );
-    ELSE
-      INSERT INTO core.recovery_codes (
-        id, tenant_id, subject_id, set_id, code_hash, consumed_at, consumed_by_session_id
-      ) VALUES (
-        v_code, v.tenant_id, v.subject_id, gen_random_uuid(), encode(sha256(uuid_send(gen_random_uuid())), 'hex'),
-        now(), v.id
-      );
-      INSERT INTO core.session_factor_proofs (
-        id, tenant_id, subject_id, session_id, factor, recovery_code_id
-      ) VALUES (v_proof, v.tenant_id, v.subject_id, v.id, 'recovery_code', v_code);
-    END IF;
-
-    UPDATE core.sessions
-    SET second_factor = p_factor, second_factor_at = now(), second_factor_proof_id = v_proof,
-        recovery_limited = (p_factor = 'recovery_code')
-    WHERE id = v.id;
-  END
-  $fn$;
-  REVOKE EXECUTE ON FUNCTION test_support.elevate_session(UUID, core.session_second_factor) FROM PUBLIC;
-  GRANT EXECUTE ON FUNCTION test_support.elevate_session(UUID, core.session_second_factor) TO mpc_app;
-`;
 
 /**
  * Issues a service token the way the operator CLI does (`service-token-cli.ts`), over the
@@ -414,7 +338,6 @@ const TEST_ELEVATION_SQL = `
 export async function issueTestServiceToken(
   sql: postgres.Sql,
   input: {
-    readonly tenantId: string;
     readonly subjectId: string;
     readonly scopes: readonly ("scan_result" | "cre_report")[];
     readonly label?: string;
@@ -422,7 +345,6 @@ export async function issueTestServiceToken(
   },
 ): Promise<string> {
   const { token } = await issueServiceToken(sql, {
-    tenantId: input.tenantId,
     subjectId: input.subjectId,
     scopes: input.scopes,
     label: input.label ?? "test-service",
@@ -454,82 +376,141 @@ export function bearer(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
 }
 
-export async function setupFixture(): Promise<TestFixture> {
-  const url = process.env["DATABASE_URL"];
-  if (!url) throw new Error("DATABASE_URL is required");
+/**
+ * The database a test run was pointed at. Fixtures never write to it: it only hosts the migrated
+ * template and creates and drops the per-fixture copies.
+ */
+const BASE_DATABASE_URL = process.env["DATABASE_URL"];
+let templateReady: Promise<string> | null = null;
 
+/** The template the project's global setup migrated, or one this process migrates itself. */
+function templateFor(admin: postgres.Sql, base: URL): Promise<string> {
+  const provided = inject("apiTemplate");
+  if (provided) return Promise.resolve(provided);
+  // Run outside the root configuration (no global setup): migrate it here, once per process.
+  templateReady ??= prepareTemplate(admin, base);
+  return templateReady;
+}
+
+/** A fresh database for one fixture, cloned from the migrated template. */
+async function createFixtureDatabase(): Promise<{ url: string; drop(): Promise<void> }> {
+  if (!BASE_DATABASE_URL) throw new Error("DATABASE_URL is required");
+  const base = new URL(BASE_DATABASE_URL);
+  const admin = postgres(BASE_DATABASE_URL, { onnotice: () => {}, max: 1 });
+  try {
+    const template = await templateFor(admin, base);
+    const name = `${template.replace(/_api_template$/, "")}_fx_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+    await admin.unsafe(`CREATE DATABASE "${name}" TEMPLATE "${template}"`);
+    const url = new URL(base);
+    url.pathname = `/${name}`;
+    return {
+      url: url.toString(),
+      async drop() {
+        const dropper = postgres(BASE_DATABASE_URL!, { onnotice: () => {}, max: 1 });
+        try {
+          await dropper.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+        } finally {
+          await dropper.end();
+        }
+      },
+    };
+  } catch (error) {
+    templateReady = null;
+    throw error;
+  } finally {
+    await admin.end();
+  }
+}
+
+/** A migrated Registry with nothing in it: no organization, person or role. */
+export interface BareRegistry {
+  /** Superuser connection. Used for seeding. */
+  readonly sql: postgres.Sql;
+  /** Application role connection. RLS applies. */
+  readonly appSql: postgres.Sql;
+  close(): Promise<void>;
+}
+
+/**
+ * A database of its own with no fixture rows, for tests that need a Registry holding exactly
+ * what they seed (the last administrator, a first bootstrap). Like `setupFixture`, it points
+ * `DATABASE_URL` at itself until `close()`.
+ */
+export async function setupBareRegistry(): Promise<BareRegistry> {
+  const database = await createFixtureDatabase();
+  const previousUrl = process.env["DATABASE_URL"];
+  // Everything a test builds after this — the app's config (`testEnv`), the session helpers,
+  // its own connections — reaches this database.
+  process.env["DATABASE_URL"] = database.url;
+  const url = database.url;
   const sql = postgres(url, { onnotice: () => {} });
-  await runMigrations(sql);
-
-  await sql.unsafe(`
-    DO $$
-    BEGIN
-      CREATE ROLE mpc_app_login LOGIN PASSWORD 'app' IN ROLE mpc_app;
-    EXCEPTION
-      WHEN duplicate_object THEN NULL;
-    END
-    $$;
-    GRANT USAGE ON SCHEMA core, chain, audit TO mpc_app_login;
-  `);
-  await sql.unsafe(TEST_ELEVATION_SQL);
-
   const appUrl = new URL(url);
   appUrl.username = "mpc_app_login";
   appUrl.password = "app";
   const appSql = postgres(appUrl.toString(), { onnotice: () => {} });
+  return {
+    sql,
+    appSql,
+    async close() {
+      await appSql.end();
+      await sql.end();
+      await endSharedConnections(url);
+      if (process.env["DATABASE_URL"] === url) process.env["DATABASE_URL"] = previousUrl;
+      await database.drop();
+    },
+  };
+}
 
-  const tenantA = randomUUID();
-  const tenantB = randomUUID();
+export async function setupFixture(): Promise<TestFixture> {
+  const registry = await setupBareRegistry();
+  const { sql, appSql } = registry;
+
   const orgA = randomUUID();
   const orgB = randomUUID();
   const operatorA = newAccount();
   const operatorB = newAccount();
   const readerA = newAccount();
-  let operatorSubjectA = "";
+  const operatorSubjectA = randomUUID();
+  const operatorSubjectB = randomUUID();
 
-  for (const [tenant, org, wallet, label, role] of [
-    [tenantA, orgA, operatorA, "Operator A", "administrator"],
-    [tenantB, orgB, operatorB, "Operator B", "administrator"],
+  // Operator A administers the Registry; operator B administers company B only.
+  for (const [subject, org, wallet, label, scope] of [
+    [operatorSubjectA, orgA, operatorA, "Operator A", "registry"],
+    [operatorSubjectB, orgB, operatorB, "Operator B", "organization"],
   ] as const) {
     await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenant}, ${`t-${tenant.slice(0, 8)}`}, ${label})
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${org}, ${`Org ${label}`}, 'MNG')
     `;
     await sql`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${org}, ${tenant}, ${`Org ${label}`}, 'MNG')
-    `;
-    const subject = randomUUID();
-    if (tenant === tenantA) operatorSubjectA = subject;
-    await sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-      VALUES (${subject}, ${tenant}, 'person', ${label}, 'high_assurance')
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+      VALUES (${subject}, 'person', ${label}, 'high_assurance')
     `;
     await sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${tenant}, ${subject}, ${wallet.address}, 31337, 'high_assurance', now()
+        ${randomUUID()}, ${subject}, ${wallet.address}, 31337, 'high_assurance', now()
       )
     `;
     await sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${tenant}, ${subject}, ${org}, ${role})
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role, scope_kind)
+      VALUES (${randomUUID()}, ${subject}, ${org}, 'administrator', ${scope})
     `;
   }
 
-  // Subject in tenant A with no role. Needed to tell 401 (unregistered) apart from
+  // A person with no role. Needed to tell 401 (unregistered) apart from
   // 403 (insufficient permission).
   const readerSubject = randomUUID();
   await sql`
-    INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-    VALUES (${readerSubject}, ${tenantA}, 'person', 'Reader A')
+    INSERT INTO core.subjects (id, kind, display_name)
+    VALUES (${readerSubject}, 'person', 'Reader A')
   `;
   await sql`
     INSERT INTO core.wallet_identities (
-      id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+      id, subject_id, wallet_address, chain_id, assurance_level, bound_at
     ) VALUES (
-      ${randomUUID()}, ${tenantA}, ${readerSubject}, ${readerA.address}, 31337, 'wallet_only', now()
+      ${randomUUID()}, ${readerSubject}, ${readerA.address}, 31337, 'wallet_only', now()
     )
   `;
 
@@ -563,8 +544,8 @@ export async function setupFixture(): Promise<TestFixture> {
 
   const reviewOrgA = randomUUID();
   await sql`
-    INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-    VALUES (${reviewOrgA}, ${tenantA}, 'Independent Review Firm A', 'AUS')
+    INSERT INTO core.organizations (id, legal_name, jurisdiction)
+    VALUES (${reviewOrgA}, 'Independent Review Firm A', 'AUS')
   `;
 
   for (const [subject, wallet, label, role, assurance] of [
@@ -589,33 +570,33 @@ export async function setupFixture(): Promise<TestFixture> {
     // The scan service is a service subject (D7): it holds a service token, not a wallet.
     const service = subject === scanServiceSubject;
     await sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-      VALUES (${subject}, ${tenantA}, ${service ? "service" : "person"}, ${label}, ${assurance})
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+      VALUES (${subject}, ${service ? "service" : "person"}, ${label}, ${assurance})
     `;
     if (!service) {
       await sql`
         INSERT INTO core.wallet_identities (
-          id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+          id, subject_id, wallet_address, chain_id, assurance_level, bound_at
         ) VALUES (
-          ${randomUUID()}, ${tenantA}, ${subject}, ${wallet.address}, 31337, ${assurance}, now()
+          ${randomUUID()}, ${subject}, ${wallet.address}, 31337, ${assurance}, now()
         )
       `;
     }
     const organization = subject === reviewerSubjectA ? reviewOrgA : orgA;
     await sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role, scope_kind)
-      VALUES (${randomUUID()}, ${tenantA}, ${subject}, ${organization}, ${role},
-        ${subject === stewardSubject || role === "project_member" ? "organization" : "tenant"})
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role, scope_kind)
+      VALUES (${randomUUID()}, ${subject}, ${organization}, ${role},
+        ${subject === stewardSubject || role === "project_member" ? "organization" : "registry"})
     `;
   }
 
   const issuerAuthorityA = randomUUID();
   await sql`
     INSERT INTO core.authorities (
-      id, tenant_id, name, jurisdiction, proves, does_not_prove,
+      id, name, jurisdiction, proves, does_not_prove,
       recognized_scope, verification_method, public_disclosure_level, valid_from, state
     ) VALUES (
-      ${issuerAuthorityA}, ${tenantA}, 'Professional Institute', 'AUS',
+      ${issuerAuthorityA}, 'Professional Institute', 'AUS',
       ARRAY['member_competence'],
       ARRAY['opinion_accuracy','rights_completeness'],
       ARRAY['resource_estimate','mining_right_registration'],
@@ -626,10 +607,10 @@ export async function setupFixture(): Promise<TestFixture> {
   const credentialA = randomUUID();
   await sql`
     INSERT INTO core.credentials (
-      id, tenant_id, subject_id, organization_id, issuer_reference, issuer_authority_id,
+      id, subject_id, organization_id, issuer_reference, issuer_authority_id,
       credential_type, credential_scope, jurisdiction, issued_at, expires_at, current_status
     ) VALUES (
-      ${credentialA}, ${tenantA}, ${reviewerSubjectA}, ${reviewOrgA}, 'AusIMM',
+      ${credentialA}, ${reviewerSubjectA}, ${reviewOrgA}, 'AusIMM',
       ${issuerAuthorityA}, 'competent_person', ARRAY['resource_estimate','mining_right_registration'],
       ARRAY['MNG'], now() - interval '1 year', now() + interval '1 year', 'valid'
     )
@@ -638,9 +619,9 @@ export async function setupFixture(): Promise<TestFixture> {
   const projectA = randomUUID();
   await sql`
     INSERT INTO core.projects (
-      id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+      id, project_key, name, host_country_iso3, minerals, owner_organization_id
     ) VALUES (
-      ${projectA}, ${tenantA}, ${`FIX-${projectA.slice(0, 8)}`}, 'Fixture Project',
+      ${projectA}, ${`FIX-${projectA.slice(0, 8)}`}, 'Fixture Project',
       'MNG', ARRAY['copper'], ${orgA}
     )
   `;
@@ -648,41 +629,41 @@ export async function setupFixture(): Promise<TestFixture> {
   const otherProjectA = randomUUID();
   await sql`
     INSERT INTO core.projects (
-      id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+      id, project_key, name, host_country_iso3, minerals, owner_organization_id
     ) VALUES (
-      ${otherProjectA}, ${tenantA}, ${`FIX-${otherProjectA.slice(0, 8)}`}, 'Other Project',
+      ${otherProjectA}, ${`FIX-${otherProjectA.slice(0, 8)}`}, 'Other Project',
       'MNG', ARRAY['copper'], ${orgA}
     )
   `;
 
   // Project-level binding. With `project_id` set, it has no effect outside that project.
   await sql`
-    INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-    VALUES (${scopedStewardSubject}, ${tenantA}, 'person', 'Scoped Steward A', 'high_assurance')
+    INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+    VALUES (${scopedStewardSubject}, 'person', 'Scoped Steward A', 'high_assurance')
   `;
   await sql`
     INSERT INTO core.wallet_identities (
-      id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+      id, subject_id, wallet_address, chain_id, assurance_level, bound_at
     ) VALUES (
-      ${randomUUID()}, ${tenantA}, ${scopedStewardSubject}, ${scopedStewardA.address},
+      ${randomUUID()}, ${scopedStewardSubject}, ${scopedStewardA.address},
       31337, 'identity_bound', now()
     )
   `;
   await sql`
     INSERT INTO core.role_bindings (
-      id, tenant_id, subject_id, organization_id, project_id, role
+      id, subject_id, organization_id, project_id, role
     ) VALUES (
-      ${randomUUID()}, ${tenantA}, ${scopedStewardSubject}, ${orgA}, ${projectA}, 'reviewer'
+      ${randomUUID()}, ${scopedStewardSubject}, ${orgA}, ${projectA}, 'reviewer'
     )
   `;
 
   const authorityA = randomUUID();
   await sql`
     INSERT INTO core.authorities (
-      id, tenant_id, name, jurisdiction, proves, does_not_prove,
+      id, name, jurisdiction, proves, does_not_prove,
       recognized_scope, verification_method, public_disclosure_level, valid_from, state
     ) VALUES (
-      ${authorityA}, ${tenantA}, 'Mineral Resources Authority', 'MNG',
+      ${authorityA}, 'Mineral Resources Authority', 'MNG',
       ARRAY['mining_right_registration'],
       ARRAY['economic_viability','rights_completeness','investment_suitability'],
       ARRAY['mining_license'], 'authenticated_api', 'public', '2015-01-01', 'accepted'
@@ -692,13 +673,13 @@ export async function setupFixture(): Promise<TestFixture> {
   const connectionA = randomUUID();
   await sql`
     INSERT INTO core.source_connections (
-      id, tenant_id, authority_id, connection_key, collection_method,
+      id, authority_id, connection_key, collection_method,
       access_basis, secret_reference, state,
       endpoint, authentication_method, adapter_version, source_schema_version,
       schema_fingerprint, response_record_absent_field, response_record_absent_value,
       response_business_error_field
     ) VALUES (
-      ${connectionA}, ${tenantA}, ${authorityA}, ${`conn-${connectionA.slice(0, 8)}`},
+      ${connectionA}, ${authorityA}, ${`conn-${connectionA.slice(0, 8)}`},
       'authenticated_api', 'data sharing agreement 2026-01', 'vault://mn/registry', 'active',
       -- .test is a reserved TLD and never resolves, so a test address is not mistaken for a real
       -- authority address. Tests inject fetch, so no request goes out.
@@ -710,7 +691,6 @@ export async function setupFixture(): Promise<TestFixture> {
   `;
 
   const scanServiceToken = await issueTestServiceToken(sql, {
-    tenantId: tenantA,
     subjectId: scanServiceSubject,
     scopes: ["scan_result"],
     label: "scan-worker",
@@ -719,11 +699,11 @@ export async function setupFixture(): Promise<TestFixture> {
   const schemaA = randomUUID();
   await sql`
     INSERT INTO core.attestation_schemas (
-      id, tenant_id, schema_key, schema_version, attestation_type,
+      id, schema_key, schema_version, attestation_type,
       required_evidence, accepted_authority_types, mandatory_limitations,
       jurisdiction_profile, state
     ) VALUES (
-      ${schemaA}, ${tenantA}, 'mining-right-review', '1',
+      ${schemaA}, 'mining-right-review', '1',
       'professional_signoff', ARRAY['mining_right_registration'],
       ARRAY['government_registry'], ARRAY['legal_effect_not_determined'], 'MNG', 'active'
     )
@@ -732,13 +712,12 @@ export async function setupFixture(): Promise<TestFixture> {
   return {
     sql,
     appSql,
-    tenantA,
-    tenantB,
     orgA,
     orgB,
     operatorA,
     operatorSubjectA,
     operatorB,
+    operatorSubjectB,
     readerA,
     unknownWallet: newAccount(),
     reviewerA,
@@ -762,10 +741,7 @@ export async function setupFixture(): Promise<TestFixture> {
     reviewOrgA,
     reviewerSubjectA,
     stewardSubjectA: stewardSubject,
-    async close() {
-      await appSql.end();
-      await sql.end();
-    },
+    close: () => registry.close(),
   };
 }
 

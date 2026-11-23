@@ -14,7 +14,7 @@ import { mockHttp } from "./support/http";
 const auth = vi.hoisted(() => ({
   token: "session" as string | null,
   session: {
-    tenantId: "tenant-a",
+    workspaceAvailable: true,
     subjectId: "operator-a",
     actions: ["readiness.recompute", "registry.read", "gate.decide"],
   },
@@ -66,7 +66,7 @@ async function mount(gate = false) {
     );
   });
 }
-it("uses the actual tenant policy rather than a seed UUID", async () => {
+it("uses the actual Registry policy rather than a seed UUID", async () => {
   const calls = mockHttp({
     [url]: { items: [policy()] },
     "POST /api/v1/projects/p1/readiness-assessments": result,

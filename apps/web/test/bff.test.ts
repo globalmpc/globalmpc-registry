@@ -372,12 +372,12 @@ describe("OIDC browser binding", () => {
   });
 
   it("records a link flow as such, started by the signed-in person", async () => {
-    const sent = stubApi(() => Response.json({ authorizationUrl: "https://login.microsoftonline.com/x", browserBinding: BINDING }));
+    const sent = stubApi(() => Response.json({ authorizationUrl: "https://accounts.google.com/x", browserBinding: BINDING }));
     const response = await proxy(
-      req("/api/v1/auth/oidc/microsoft/link/start", { headers: { ...sameOrigin, cookie: `mpc_session=${TOKEN}` } }),
+      req("/api/v1/auth/oidc/google/link/start", { headers: { ...sameOrigin, cookie: `mpc_session=${TOKEN}` } }),
     );
-    expect(setCookies(response)[0]).toContain(`mpc_oidc=microsoft.link.${BINDING}`);
-    expect(sent[0]!.url).toBe("http://api.internal:3001/api/v1/auth/oidc/microsoft/link/start");
+    expect(setCookies(response)[0]).toContain(`mpc_oidc=google.link.${BINDING}`);
+    expect(sent[0]!.url).toBe("http://api.internal:3001/api/v1/auth/oidc/google/link/start");
     expect(sent[0]!.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
   });
 
@@ -399,7 +399,7 @@ describe("OIDC browser binding", () => {
   });
 
   it.each([
-    ["another provider", `mpc_oidc=microsoft.sign_in.${BINDING}`],
+    ["another provider", `mpc_oidc=github.sign_in.${BINDING}`],
     ["a malformed value", "mpc_oidc=google.sign_in.short"],
     ["an unknown purpose", `mpc_oidc=google.admin.${BINDING}`],
   ])("refuses a callback whose binding names %s", async (_case, cookie) => {
@@ -440,14 +440,14 @@ describe("OIDC browser binding", () => {
   });
 
   it("completes a link flow on the link route and issues no session", async () => {
-    const sent = stubApi(() => Response.json({ provider: "microsoft", linked: true }));
+    const sent = stubApi(() => Response.json({ provider: "google", linked: true }));
     const response = await proxy(
-      req("/api/v1/auth/oidc/microsoft/callback", {
-        headers: { ...sameOrigin, cookie: `mpc_oidc=microsoft.link.${BINDING}; mpc_session=${TOKEN}` },
+      req("/api/v1/auth/oidc/google/callback", {
+        headers: { ...sameOrigin, cookie: `mpc_oidc=google.link.${BINDING}; mpc_session=${TOKEN}` },
         body: { state: "s", code: "c" },
       }),
     );
-    expect(sent[0]!.url).toBe("http://api.internal:3001/api/v1/auth/oidc/microsoft/link/callback");
+    expect(sent[0]!.url).toBe("http://api.internal:3001/api/v1/auth/oidc/google/link/callback");
     expect(sent[0]!.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
     expect(response.headers.get("x-mpc-oidc-purpose")).toBe("link");
     expect(setCookies(response).some((cookie) => cookie.startsWith("mpc_session="))).toBe(false);
@@ -488,7 +488,6 @@ describe("encoded paths (review M1, L1)", () => {
     "/api/v1/auth/email/%76erify",
     "/api/v1/auth/invitations/accept/%76erify",
     "/api/v1/auth/oidc/google/%73tart",
-    "/api/v1/auth/oidc/microsoft/%73tart",
     "/api/v1/auth/oidc/google/link/%73tart",
     "/api/v1/auth/oidc/google/%63allback",
     "/api/v1/auth/oidc/google/link/%63allback",

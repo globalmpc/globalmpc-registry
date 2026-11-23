@@ -10,7 +10,7 @@ import { ReviewRegistryPanel } from "@/components/ReviewRegistryPanel";
 /**
  * Registries — spec 11 §11.2.
  *
- * Publication state used to be visible only inside a project. Answering "what has this tenant
+ * Publication state used to be visible only inside a project. Answering "what has this Registry
  * published" then meant opening projects one by one, which is not an answer.
  *
  * **Publication and anchor stay in separate columns.** Merged, they read as "published, so it is

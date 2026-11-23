@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   createProjectPartyRequest,
   createRegistrationRequest,
@@ -72,19 +72,19 @@ export async function registerProjectPartyRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   function readAuthorized(request: FastifyRequest<{ Params: { projectId: string } }>) {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "project.read",
-      projectResource(tenantId, request.params.projectId),
+      projectResource(request.params.projectId),
       sessionFacts(session),
     );
-    return { session, tenantId };
+    return { session, actor };
   }
 
-  async function assertProjectExists(tx: postgres.TransactionSql, tenantId: string, projectId: string) {
+  async function assertProjectExists(tx: postgres.TransactionSql, projectId: string) {
     const [row] = await tx<{ id: string }[]>`
-      SELECT id FROM core.projects WHERE tenant_id = ${tenantId} AND id = ${projectId}
+      SELECT id FROM core.projects WHERE id = ${projectId}
     `;
     if (!row) throw notFound("Project not found");
   }
@@ -94,13 +94,13 @@ export async function registerProjectPartyRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/facts",
     async (request) => {
-      const { tenantId } = readAuthorized(request);
+      const { actor } = readAuthorized(request);
       const { requestId, asOf } = request.context;
-      return withTenant(sql, { tenantId }, async (tx) => {
-        await assertProjectExists(tx, tenantId, request.params.projectId);
+      return withActor(sql, actor, async (tx) => {
+        await assertProjectExists(tx, request.params.projectId);
         return {
           projectId: request.params.projectId,
-          items: await readFacts(tx, tenantId, request.params.projectId),
+          items: await readFacts(tx, request.params.projectId),
           notMeaning: MATRIX_NOT_MEANING,
           requestId,
           asOf,
@@ -119,7 +119,7 @@ export async function registerProjectPartyRoutes(
   app.post<{ Params: { projectId: string; factKey: string } }>(
     "/api/v1/projects/:projectId/facts/:factKey/confirmations",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
       const { projectId, factKey } = request.params;
       const data = parseBody(recordFactConfirmationRequest, request);
@@ -127,19 +127,19 @@ export async function registerProjectPartyRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "project.fact.record",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          await assertProjectExists(tx, tenantId, projectId);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          await assertProjectExists(tx, projectId);
           if (isProjectFactKey(factKey)) {
             if (data.factScope === "catalog") throw unprocessable("CLAIM_TYPE_RESERVED", "This key belongs only to the legacy confirmation matrix");
             const [collision] = await tx<{ id: string }[]>`
               SELECT id FROM core.claim_types
-              WHERE tenant_id = ${tenantId} AND core.project_definition_applies(project_id,${projectId}) AND claim_type = ${factKey} LIMIT 1
+              WHERE core.project_definition_applies(project_id,${projectId}) AND claim_type = ${factKey} LIMIT 1
             `;
             // Older catalog entries may share this URL with a fixed matrix row. Refuse an
             // ambiguous write rather than let a catalog applicability decision alter a gate.
@@ -148,7 +148,7 @@ export async function registerProjectPartyRoutes(
             if (data.factScope === "legacy") throw unprocessable("FACT_SCOPE_INVALID", "This key belongs to the catalog, not the legacy confirmation matrix");
             const [catalog] = await tx<{ id: string }[]>`
               SELECT id FROM core.claim_types
-              WHERE tenant_id = ${tenantId} AND core.project_definition_applies(project_id,${projectId}) AND claim_type = ${factKey} AND effective_from <= now()
+              WHERE core.project_definition_applies(project_id,${projectId}) AND claim_type = ${factKey} AND effective_from <= now()
               LIMIT 1
             `;
             if (!catalog) throw badRequest("FACT_KEY_UNKNOWN", "Unknown or not yet effective catalog fact", { factKey });
@@ -157,23 +157,23 @@ export async function registerProjectPartyRoutes(
           await tx`SELECT pg_advisory_xact_lock(hashtext(${`${projectId}:${factKey}`}))`;
           const [latest] = await tx<{ version: number }[]>`
             SELECT version FROM core.project_fact_versions
-            WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND fact_key = ${factKey}
+            WHERE project_id = ${projectId} AND fact_key = ${factKey}
             ORDER BY version DESC LIMIT 1
           `;
           const currentVersion = latest?.version ?? 0;
           assertVersionMatches(expected, currentVersion, "project_fact");
 
           if (data.evidence) {
-            await assertEvidenceUsable(tx, tenantId, projectId, data.evidence, data.status);
+            await assertEvidenceUsable(tx, projectId, data.evidence, data.status);
           }
 
           const version = currentVersion + 1;
           await tx`
             INSERT INTO core.project_fact_versions (
-              id, tenant_id, project_id, fact_key, version, status, evidence_kind, evidence_ref,
+              id, project_id, fact_key, version, status, evidence_kind, evidence_ref,
               as_of, reason, recorded_by_subject_id
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${projectId}, ${factKey}, ${version}, ${data.status},
+              ${randomUUID()}, ${projectId}, ${factKey}, ${version}, ${data.status},
               ${data.evidence?.kind ?? null}, ${data.evidence?.id ?? null}, ${data.asOf},
               ${data.reason}, ${session.subjectId}
             )
@@ -182,10 +182,10 @@ export async function registerProjectPartyRoutes(
           // A catalog key must never manufacture or overwrite a legacy readiness/gate fact.
           if (isProjectFactKey(factKey)) await tx`
             INSERT INTO core.project_facts (
-              id, tenant_id, project_id, fact_key, status, evidence_ref, evidence_kind, as_of,
+              id, project_id, fact_key, status, evidence_ref, evidence_kind, as_of,
               note, version, recorded_by_subject_id, recorded_at
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${projectId}, ${factKey}, ${data.status},
+              ${randomUUID()}, ${projectId}, ${factKey}, ${data.status},
               ${data.evidence?.id ?? null}, ${data.evidence?.kind ?? null}, ${data.asOf},
               ${data.reason}, ${version}, ${session.subjectId}, now()
             )
@@ -198,7 +198,6 @@ export async function registerProjectPartyRoutes(
           `;
 
           await recordAudit(tx, {
-            tenantId,
             projectId,
             session,
             effectiveRole,
@@ -212,7 +211,6 @@ export async function registerProjectPartyRoutes(
             detail: { factKey, status: data.status, evidence: data.evidence },
           });
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "project.fact.recorded",
             aggregateId: projectId,
             aggregateVersion: version,
@@ -221,7 +219,7 @@ export async function registerProjectPartyRoutes(
             correlationId,
           });
 
-          const fact = (await readFacts(tx, tenantId, projectId)).find(
+          const fact = (await readFacts(tx, projectId)).find(
             (item) => item.factKey === factKey,
           )!;
           reply.header("etag", etagOf(version));
@@ -236,12 +234,12 @@ export async function registerProjectPartyRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/parties",
     async (request) => {
-      const { tenantId } = readAuthorized(request);
+      const { actor } = readAuthorized(request);
       const { requestId, asOf } = request.context;
-      return withTenant(sql, { tenantId }, async (tx) => {
-        await assertProjectExists(tx, tenantId, request.params.projectId);
+      return withActor(sql, actor, async (tx) => {
+        await assertProjectExists(tx, request.params.projectId);
         return {
-          items: await readParties(tx, tenantId, request.params.projectId),
+          items: await readParties(tx, request.params.projectId),
           requestId,
           asOf,
         };
@@ -252,28 +250,28 @@ export async function registerProjectPartyRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/parties",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const data = parseBody(createProjectPartyRequest, request);
       const { projectId } = request.params;
 
       const effectiveRole = assertAuthorized(
         session,
         "project.party.submit",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          await assertProjectExists(tx, tenantId, projectId);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          await assertProjectExists(tx, projectId);
           if (data.organizationId !== null) {
             const [org] = await tx<{ id: string }[]>`
               SELECT id FROM core.organizations
-              WHERE tenant_id = ${tenantId} AND id = ${data.organizationId}
+              WHERE id = ${data.organizationId}
             `;
             if (!org) {
-              throw unprocessable("ORGANIZATION_NOT_FOUND", "No such organization in this tenant");
+              throw unprocessable("ORGANIZATION_NOT_FOUND", "No such organization in the Registry");
             }
           }
 
@@ -281,17 +279,16 @@ export async function registerProjectPartyRoutes(
           // Always pending. Submitting a party is a self-statement, not a confirmation (05 §5.11).
           await tx`
             INSERT INTO core.project_parties (
-              id, tenant_id, project_id, party_role, legal_name, organization_id, jurisdiction,
+              id, project_id, party_role, legal_name, organization_id, jurisdiction,
               status, submitted_by_subject_id
             ) VALUES (
-              ${id}, ${tenantId}, ${projectId}, ${data.partyRole}, ${data.legalName},
+              ${id}, ${projectId}, ${data.partyRole}, ${data.legalName},
               ${data.organizationId}, ${data.jurisdiction?.toUpperCase() ?? null}, 'pending',
               ${session.subjectId}
             )
           `;
 
           await recordAudit(tx, {
-            tenantId,
             projectId,
             session,
             effectiveRole,
@@ -304,7 +301,6 @@ export async function registerProjectPartyRoutes(
             detail: { partyRole: data.partyRole },
           });
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "project.party.submitted",
             aggregateId: id,
             aggregateVersion: 1,
@@ -313,7 +309,7 @@ export async function registerProjectPartyRoutes(
             correlationId,
           });
 
-          const [party] = await readParties(tx, tenantId, projectId, id);
+          const [party] = await readParties(tx, projectId, id);
           return { ...party!, requestId, responseAsOf: asOf };
         }),
       );
@@ -323,7 +319,7 @@ export async function registerProjectPartyRoutes(
   app.post<{ Params: { projectId: string; partyId: string } }>(
     "/api/v1/projects/:projectId/parties/:partyId/confirmations",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
       const data = parseBody(recordConfirmationRequest, request);
       const { projectId, partyId } = request.params;
@@ -331,23 +327,23 @@ export async function registerProjectPartyRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "project.fact.record",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [party] = await tx<{ id: string; version: number }[]>`
             SELECT id, version FROM core.project_parties
-            WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND id = ${partyId}
+            WHERE project_id = ${projectId} AND id = ${partyId}
             FOR UPDATE
           `;
           if (!party) throw notFound("Party not found");
           assertVersionMatches(expected, party.version, "project_party");
 
           if (data.evidence) {
-            await assertEvidenceUsable(tx, tenantId, projectId, data.evidence, data.status);
+            await assertEvidenceUsable(tx, projectId, data.evidence, data.status);
           }
 
           const version = party.version + 1;
@@ -356,21 +352,20 @@ export async function registerProjectPartyRoutes(
             SET status = ${data.status}, evidence_kind = ${data.evidence?.kind ?? null},
                 evidence_ref = ${data.evidence?.id ?? null}, as_of = ${data.asOf},
                 version = ${version}, updated_at = now()
-            WHERE tenant_id = ${tenantId} AND id = ${party.id}
+            WHERE id = ${party.id}
           `;
           await tx`
             INSERT INTO core.project_party_versions (
-              id, tenant_id, party_id, version, status, evidence_kind, evidence_ref, as_of,
+              id, party_id, version, status, evidence_kind, evidence_ref, as_of,
               reason, recorded_by_subject_id
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${party.id}, ${version}, ${data.status},
+              ${randomUUID()}, ${party.id}, ${version}, ${data.status},
               ${data.evidence?.kind ?? null}, ${data.evidence?.id ?? null}, ${data.asOf},
               ${data.reason}, ${session.subjectId}
             )
           `;
 
           await recordAudit(tx, {
-            tenantId,
             projectId,
             session,
             effectiveRole,
@@ -385,7 +380,6 @@ export async function registerProjectPartyRoutes(
             detail: { status: data.status, evidence: data.evidence },
           });
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "project.party.confirmation_recorded",
             aggregateId: party.id,
             aggregateVersion: version,
@@ -394,7 +388,7 @@ export async function registerProjectPartyRoutes(
             correlationId,
           });
 
-          const [view] = await readParties(tx, tenantId, projectId, party.id);
+          const [view] = await readParties(tx, projectId, party.id);
           reply.header("etag", etagOf(version));
           return { ...view!, requestId, responseAsOf: asOf };
         }),
@@ -407,12 +401,12 @@ export async function registerProjectPartyRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/registration-requests",
     async (request) => {
-      const { tenantId } = readAuthorized(request);
+      const { actor } = readAuthorized(request);
       const { requestId, asOf } = request.context;
-      return withTenant(sql, { tenantId }, async (tx) => {
-        await assertProjectExists(tx, tenantId, request.params.projectId);
+      return withActor(sql, actor, async (tx) => {
+        await assertProjectExists(tx, request.params.projectId);
         return {
-          items: await readRegistrationRequests(tx, tenantId, request.params.projectId),
+          items: await readRegistrationRequests(tx, request.params.projectId),
           requestId,
           asOf,
         };
@@ -423,29 +417,28 @@ export async function registerProjectPartyRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/registration-requests",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const data = parseBody(createRegistrationRequest, request);
       const { projectId } = request.params;
 
       const effectiveRole = assertAuthorized(
         session,
         "project.registration.request",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          await assertProjectExists(tx, tenantId, projectId);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          await assertProjectExists(tx, projectId);
           const id = randomUUID();
           await tx`
             INSERT INTO core.project_registration_requests (
-              id, tenant_id, project_id, note, requested_by_subject_id
-            ) VALUES (${id}, ${tenantId}, ${projectId}, ${data.note}, ${session.subjectId})
+              id, project_id, note, requested_by_subject_id
+            ) VALUES (${id}, ${projectId}, ${data.note}, ${session.subjectId})
           `;
           await recordAudit(tx, {
-            tenantId,
             projectId,
             session,
             effectiveRole,
@@ -456,7 +449,6 @@ export async function registerProjectPartyRoutes(
             requestIp: request.clientIp,
           });
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "project.registration.requested",
             aggregateId: id,
             aggregateVersion: 1,
@@ -464,7 +456,7 @@ export async function registerProjectPartyRoutes(
             payload: {},
             correlationId,
           });
-          const view = (await readRegistrationRequests(tx, tenantId, projectId)).find(
+          const view = (await readRegistrationRequests(tx, projectId)).find(
             (item) => item.id === id,
           )!;
           return { ...view, requestId, asOf };
@@ -478,12 +470,12 @@ export async function registerProjectPartyRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/stakeholder-events",
     async (request) => {
-      const { tenantId } = readAuthorized(request);
+      const { actor } = readAuthorized(request);
       const { requestId, asOf } = request.context;
-      return withTenant(sql, { tenantId }, async (tx) => {
-        await assertProjectExists(tx, tenantId, request.params.projectId);
+      return withActor(sql, actor, async (tx) => {
+        await assertProjectExists(tx, request.params.projectId);
         return {
-          items: await readStakeholderEvents(tx, tenantId, request.params.projectId),
+          items: await readStakeholderEvents(tx, request.params.projectId),
           requestId,
           asOf,
         };
@@ -494,14 +486,14 @@ export async function registerProjectPartyRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/stakeholder-events",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const data = parseBody(createStakeholderEventRequest, request);
       const { projectId } = request.params;
 
       const effectiveRole = assertAuthorized(
         session,
         "project.stakeholder.record",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
@@ -515,24 +507,24 @@ export async function registerProjectPartyRoutes(
         assertAuthorized(
           session,
           "project.fact.record",
-          projectResource(tenantId, projectId),
+          projectResource(projectId),
           sessionFacts(session),
         );
       }
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          await assertProjectExists(tx, tenantId, projectId);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          await assertProjectExists(tx, projectId);
           if (data.evidence) {
-            await assertEvidenceUsable(tx, tenantId, projectId, data.evidence, data.status);
+            await assertEvidenceUsable(tx, projectId, data.evidence, data.status);
           }
           if (data.supersedesId !== null) {
             const [previous] = await tx<{ id: string; successor: string | null }[]>`
               SELECT e.id, s.id AS successor
               FROM core.project_stakeholder_events e
               LEFT JOIN core.project_stakeholder_events s ON s.supersedes_id = e.id
-              WHERE e.tenant_id = ${tenantId} AND e.project_id = ${projectId}
+              WHERE e.project_id = ${projectId}
                 AND e.id = ${data.supersedesId}
             `;
             if (!previous) throw unprocessable("EVENT_NOT_FOUND", "No such event in this project");
@@ -547,10 +539,10 @@ export async function registerProjectPartyRoutes(
           try {
             await tx`
               INSERT INTO core.project_stakeholder_events (
-                id, tenant_id, project_id, category, summary, occurred_on, status, evidence_kind,
+                id, project_id, category, summary, occurred_on, status, evidence_kind,
                 evidence_ref, supersedes_id, recorded_by_subject_id
               ) VALUES (
-                ${id}, ${tenantId}, ${projectId}, ${data.category}, ${data.summary},
+                ${id}, ${projectId}, ${data.category}, ${data.summary},
                 ${data.occurredOn}, ${data.status}, ${data.evidence?.kind ?? null},
                 ${data.evidence?.id ?? null}, ${data.supersedesId}, ${session.subjectId}
               )
@@ -567,7 +559,6 @@ export async function registerProjectPartyRoutes(
             throw caught;
           }
           await recordAudit(tx, {
-            tenantId,
             projectId,
             session,
             effectiveRole,
@@ -579,7 +570,6 @@ export async function registerProjectPartyRoutes(
             detail: { category: data.category, status: data.status, supersedesId: data.supersedesId },
           });
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "project.stakeholder_event.recorded",
             aggregateId: id,
             aggregateVersion: 1,
@@ -587,7 +577,7 @@ export async function registerProjectPartyRoutes(
             payload: { category: data.category, status: data.status },
             correlationId,
           });
-          const view = (await readStakeholderEvents(tx, tenantId, projectId)).find(
+          const view = (await readStakeholderEvents(tx, projectId)).find(
             (item) => item.id === id,
           )!;
           return { ...view, requestId, asOf };
@@ -608,22 +598,22 @@ export async function registerProjectPartyRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/overview",
     async (request) => {
-      const { session, tenantId } = readAuthorized(request);
+      const { session, actor } = readAuthorized(request);
       const { projectId } = request.params;
       const { requestId, asOf } = request.context;
 
-      return withTenant(sql, { tenantId }, async (tx) => {
-        const [item] = await listProjectItems(tx, tenantId, "all", {}, session.subjectId, projectId);
+      return withActor(sql, actor, async (tx) => {
+        const [item] = await listProjectItems(tx, "all", {}, session.subjectId, projectId);
         if (!item) throw notFound("Project not found");
 
-        const facts = await readFacts(tx, tenantId, projectId);
-        const parties = await readParties(tx, tenantId, projectId);
+        const facts = await readFacts(tx, projectId);
+        const parties = await readParties(tx, projectId);
         const lifecycle = await tx<
           { from_state: string; to_state: string; reason: string; occurred_at: Date }[]
         >`
           SELECT from_state, to_state, reason, occurred_at
           FROM core.project_lifecycle_transitions
-          WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+          WHERE project_id = ${projectId}
           ORDER BY occurred_at
         `;
         const registries = await tx<
@@ -642,7 +632,7 @@ export async function registerProjectPartyRoutes(
                  ) AS anchored
           FROM core.registry_entries e
           JOIN core.registry_entry_versions v ON v.entry_id = e.id
-          WHERE e.tenant_id = ${tenantId} AND e.subject_id = ${projectId}
+          WHERE e.subject_id = ${projectId}
           ORDER BY e.registry_type, v.created_at DESC, v.version DESC
         `;
         const assessments = await tx<
@@ -655,7 +645,7 @@ export async function registerProjectPartyRoutes(
         >`
           SELECT DISTINCT ON (gate_id) gate_id, status, generated_at, requirement_results
           FROM core.compliance_assessments
-          WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+          WHERE project_id = ${projectId}
           ORDER BY gate_id, generated_at DESC
         `;
         const decisions = await tx<
@@ -668,24 +658,24 @@ export async function registerProjectPartyRoutes(
         >`
           SELECT DISTINCT ON (gate_id) gate_id, decision, decision_authority, signed_at
           FROM core.gate_decisions
-          WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+          WHERE project_id = ${projectId}
           ORDER BY gate_id, signed_at DESC
         `;
         const [sources] = await tx<{ newest: Date | null; oldest: Date | null; count: number }[]>`
           SELECT max(as_of) AS newest, min(as_of) AS oldest, count(*)::int AS count
           FROM core.source_receipts
-          WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+          WHERE project_id = ${projectId}
         `;
-        const registrationRequests = await readRegistrationRequests(tx, tenantId, projectId);
+        const registrationRequests = await readRegistrationRequests(tx, projectId);
         const [events] = await tx<{ count: number }[]>`
           SELECT count(*)::int AS count FROM core.project_stakeholder_events
-          WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+          WHERE project_id = ${projectId}
         `;
         const activity = await tx<
           { command: string; effective_role: string | null; occurred_at: Date }[]
         >`
           SELECT command, effective_role, occurred_at FROM audit.events
-          WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+          WHERE project_id = ${projectId}
           ORDER BY occurred_at DESC, id DESC
           LIMIT 10
         `;

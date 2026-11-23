@@ -15,8 +15,8 @@ import { ErrorNotice } from "@/components/ErrorNotice";
  * Project registration.
  *
  * The owner organization comes from `GET /api/v1/organizations`, which applies the same rule
- * as project creation: a party role sees its own organization, a tenant operations role sees
- * every organization in the tenant. One option is preselected; with several, the choice is left
+ * as project creation: a party role sees its own organization, a Registry-wide operations role
+ * sees every organization. One option is preselected; with several, the choice is left
  * to the person — registering under the wrong organization makes another company a party.
  */
 export default function NewProjectPage() {

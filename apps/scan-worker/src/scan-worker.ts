@@ -1,5 +1,6 @@
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { keccak256 } from "viem";
+import { withActor } from "@mpc/db";
 import { MAX_SCAN_BYTES, scanDeadlineMs, type ScanVerdict } from "./scanner.js";
 
 /**
@@ -51,10 +52,11 @@ export type Log = (record: Record<string, unknown>) => void;
 
 export interface ScanOptions {
   /**
-   * The only tenant this worker scans for: the tenant of its service token. The API refuses a
-   * report for another tenant's upload (404), so leasing one would only burn its attempts.
+   * The service subject of this worker's token ({@link resolveScanSubject}). Every queue
+   * transaction acts as it, so the database shows exactly the uploads its live bindings reach —
+   * the same identity, and the same reach, the API checks its reports against.
    */
-  readonly tenantId: string;
+  readonly subjectId: string;
   readonly maxAttempts: number;
   /** Lease duration. Must comfortably exceed scan + report time. */
   readonly leaseMs: number;
@@ -77,7 +79,6 @@ export interface ScanStepResult {
 
 interface LeasedUpload {
   readonly id: string;
-  readonly tenant_id: string;
   readonly object_key: string;
   readonly version: number;
   readonly byte_size: string;
@@ -91,17 +92,22 @@ interface LeasedUpload {
  * `FOR UPDATE SKIP LOCKED` holds only within this short transaction. After it closes,
  * `scan_leased_until` prevents duplicates — no other worker claims the row before expiry, and
  * after expiry it can be taken, so a dead worker's file is not stranded forever.
+ *
+ * Every queue statement names the service subject's reach (`core.actor_project_ids()`) as well
+ * as relying on RLS: the deployed worker login (`mpc_worker_login`) bypasses RLS for the jobs and
+ * anchor workers, so the policy alone would not stop it leasing an upload its subject cannot
+ * report on.
  */
 async function leaseOne(
   sql: postgres.Sql,
   options: ScanOptions,
 ): Promise<LeasedUpload | undefined> {
-  const rows = (await withTenant(sql, { tenantId: options.tenantId }, async (tx) => {
+  const rows = (await withActor(sql, { subjectId: options.subjectId }, async (tx) => {
     const [row] = await tx<LeasedUpload[]>`
-      SELECT id, tenant_id, object_key, version, byte_size
+      SELECT id, object_key, version, byte_size
       FROM core.object_uploads
       WHERE state = 'quarantined'
-        AND tenant_id = ${options.tenantId}
+        AND project_id = ANY((SELECT core.actor_project_ids())::uuid[])
         AND scan_attempts < ${options.maxAttempts}
         AND (scan_leased_until IS NULL OR scan_leased_until < now())
       ORDER BY uploaded_at
@@ -122,8 +128,8 @@ async function leaseOne(
       UPDATE core.object_uploads
       SET scan_attempts = scan_attempts + 1,
           scan_leased_until = now() + ${`${Math.max(1, Math.ceil(leaseMs / 1000))} seconds`}::interval
-      WHERE id = ${row.id} AND tenant_id = ${options.tenantId}
-      RETURNING id, tenant_id, object_key, version, byte_size, scan_attempts,
+      WHERE id = ${row.id} AND project_id = ANY((SELECT core.actor_project_ids())::uuid[])
+      RETURNING id, object_key, version, byte_size, scan_attempts,
                 scan_leased_until::text AS lease_token
     `;
 
@@ -136,16 +142,18 @@ async function leaseOne(
 /** Release only this exact lease; a late worker must not change a replacement worker's budget. */
 async function recordFailure(
   sql: postgres.Sql,
+  subjectId: string,
   row: LeasedUpload,
   reason: string,
   refundAttempt = false,
 ): Promise<void> {
-  await withTenant(sql, { tenantId: row.tenant_id }, async tx => {
+  await withActor(sql, { subjectId }, async tx => {
     await tx`
       UPDATE core.object_uploads
       SET rejection_reason = ${reason.slice(0, 300)}, scan_leased_until = NULL,
           scan_attempts = scan_attempts - ${refundAttempt ? 1 : 0}
-      WHERE tenant_id = ${row.tenant_id} AND id = ${row.id} AND state = 'quarantined' AND version = ${row.version}
+      WHERE id = ${row.id} AND state = 'quarantined' AND version = ${row.version}
+        AND project_id = ANY((SELECT core.actor_project_ids())::uuid[])
         AND scan_attempts = ${row.scan_attempts}
         AND scan_leased_until = ${row.lease_token}::text::timestamptz
     `;
@@ -176,20 +184,20 @@ export async function scanOnce(
     bytes = await store.get(row.object_key, controller.signal);
     controller.signal.throwIfAborted();
   } catch {
-    await recordFailure(sql, row, "scan_error: object read failed or timed out");
+    await recordFailure(sql, options.subjectId, row, "scan_error: object read failed or timed out");
     log({ level: "error", msg: "scan.object_read_failed", uploadId: row.id });
     return { handled: true, uploadId: row.id, verdict: "error" };
   } finally { clearTimeout(timer); }
   if (!bytes) {
     // The DB has the row but the object is missing. No automatic cleanup — a storage outage and
     // an actual loss are indistinguishable here.
-    await recordFailure(sql, row, "scan_error: object missing");
+    await recordFailure(sql, options.subjectId, row, "scan_error: object missing");
     log({ level: "error", msg: "scan.object_missing", uploadId: row.id });
     return { handled: true, uploadId: row.id, verdict: "error" };
   }
 
   if (bytes.byteLength !== Number(row.byte_size)) {
-    await recordFailure(sql, row, "scan_error: object size does not match upload metadata");
+    await recordFailure(sql, options.subjectId, row, "scan_error: object size does not match upload metadata");
     return { handled: true, uploadId: row.id, verdict: "error" };
   }
   const verdict = await scan(bytes);
@@ -197,13 +205,13 @@ export async function scanOnce(
   if (verdict.kind === "error" && verdict.unavailable) {
     // No connection accepted these bytes. Refund a pre-connect outage, but never a reset or
     // timeout after connection: a pathological upload may itself have killed the parser.
-    await recordFailure(sql, row, "scan_unavailable", true);
+    await recordFailure(sql, options.subjectId, row, "scan_unavailable", true);
     log({ level: "warn", msg: "scan.unavailable", uploadId: row.id });
     return { handled: false, scannerUnavailable: true, uploadId: row.id, verdict: "error" };
   }
 
   if (verdict.kind === "error") {
-    await recordFailure(sql, row, `scan_error: ${verdict.reason}`);
+    await recordFailure(sql, options.subjectId, row, `scan_error: ${verdict.reason}`);
     log({ level: "warn", msg: "scan.failed", uploadId: row.id, reason: verdict.reason });
     return { handled: true, uploadId: row.id, verdict: "error" };
   }
@@ -225,7 +233,7 @@ export async function scanOnce(
       // back, so the file is retried once the token works instead of reaching the attempt cap and
       // needing a person.
       const unauthorized = (error as { status?: unknown }).status === 401;
-      await recordFailure(sql, row, `report_error: ${String(error)}`, unauthorized);
+      await recordFailure(sql, options.subjectId, row, `report_error: ${String(error)}`, unauthorized);
       log({
         level: "error",
         msg: unauthorized ? "scan.report_unauthorized" : "scan.report_failed",
@@ -256,11 +264,11 @@ export async function scanOnce(
 }
 
 /** Scan queue stats. Uploads at the attempt cap need a person to look at them. */
-export async function scanBacklog(sql: postgres.Sql, maxAttempts: number, tenantId: string): Promise<{
+export async function scanBacklog(sql: postgres.Sql, maxAttempts: number, subjectId: string): Promise<{
   readonly pending: number;
   readonly stuck: number;
 }> {
-  return withTenant(sql, { tenantId }, async tx => {
+  return withActor(sql, { subjectId }, async tx => {
     const [row] = await tx<{ pending: string; stuck: string }[]>`
       SELECT
         count(*) FILTER (WHERE state = 'quarantined' AND scan_attempts < ${maxAttempts})
@@ -268,7 +276,7 @@ export async function scanBacklog(sql: postgres.Sql, maxAttempts: number, tenant
         count(*) FILTER (WHERE state = 'quarantined' AND scan_attempts >= ${maxAttempts})
           AS stuck
       FROM core.object_uploads
-      WHERE tenant_id = ${tenantId}
+      WHERE project_id = ANY((SELECT core.actor_project_ids())::uuid[])
     `;
 
     return { pending: Number(row?.pending ?? 0), stuck: Number(row?.stuck ?? 0) };
@@ -276,10 +284,16 @@ export async function scanBacklog(sql: postgres.Sql, maxAttempts: number, tenant
 }
 
 /**
- * The tenant id for the scan worker's tenant slug — the tenant its service token was registered
- * for (`service-token ensure <slug> scan-worker …`). Undefined when no such tenant exists.
+ * The service subject this worker acts as: the one its token belongs to.
+ *
+ * Resolved through `core.resolve_service_token`, the function the API authenticates the same token
+ * with, so the database and the API agree on who the worker is. Nothing is configured besides the
+ * token, and nothing about the token is returned or logged. `undefined` when the token is unknown,
+ * revoked or expired.
  */
-export async function resolveScanTenant(sql: postgres.Sql, slug: string): Promise<string | undefined> {
-  const [row] = await sql<{ id: string }[]>`SELECT id FROM core.tenants WHERE slug = ${slug}`;
-  return row?.id;
+export async function resolveScanSubject(sql: postgres.Sql, serviceToken: string): Promise<string | undefined> {
+  const [row] = await sql<{ subject_id: string; scopes: string[] }[]>`
+    SELECT subject_id, scopes FROM core.resolve_service_token(${keccak256(new TextEncoder().encode(serviceToken))})
+  `;
+  return row?.scopes.includes("scan_result") ? row.subject_id : undefined;
 }

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { auditExportQuery } from "@mpc/api-contract";
 import { recordAudit } from "../audit.js";
 import { badRequest, forbidden, notFound } from "../errors.js";
@@ -12,7 +12,7 @@ import {
   assertAuthorized,
   projectResource,
   sessionFacts,
-  tenantResource,
+  registryResource,
 } from "../plugins/authorize.js";
 import { requireMutationContext, requireReadContext } from "./shared.js";
 
@@ -77,11 +77,11 @@ export async function registerExportRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   app.get("/api/v1/audit-events/export", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "audit.export",
-      tenantResource(tenantId),
+      registryResource(),
       sessionFacts(session),
     );
 
@@ -94,15 +94,14 @@ export async function registerExportRoutes(
     const { projectId, from, to, afterId, limit } = parsed.data;
     const { requestId, asOf, correlationId } = request.context;
 
-    return withTenant(sql, { tenantId }, async (tx) => {
+    return withActor(sql, actor, async (tx) => {
       // One row past the page tells whether another page exists without a count query.
       const rows = await tx<AuditRow[]>`
         SELECT id::text, occurred_at, project_id, actor_subject_id, actor_wallet, effective_role,
                command, resource_type, resource_id, before_version, after_version, reason,
                correlation_id, signature_or_tx
         FROM audit.events
-        WHERE tenant_id = ${tenantId}
-          AND (${projectId ?? null}::uuid IS NULL OR project_id = ${projectId ?? null})
+        WHERE (${projectId ?? null}::uuid IS NULL OR project_id = ${projectId ?? null})
           AND (${from ?? null}::timestamptz IS NULL OR occurred_at >= ${from ?? null})
           AND (${to ?? null}::timestamptz IS NULL OR occurred_at < ${to ?? null})
           AND (${afterId ?? null}::bigint IS NULL OR id > ${afterId ?? null}::bigint)
@@ -141,14 +140,13 @@ export async function registerExportRoutes(
         jsonl,
         asOf,
         // The subject is who took the copy; a sign-in wallet no longer identifies anyone. A
-        // tenant-bound session always has one (0108 sessions_subject_and_tenant_together).
+        // session always has one.
         generatedBy: session.subjectId as string,
       });
 
       // Who took a copy of the trail, and which copy, is part of the trail (07 §7.9). The hash
       // lets a later reader tie a file in hand to this row.
       await recordAudit(tx, {
-        tenantId,
         ...(projectId ? { projectId } : {}),
         session,
         effectiveRole,
@@ -170,7 +168,7 @@ export async function registerExportRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/exports",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const { projectId } = request.params;
       if (!uuid.safeParse(projectId).success) throw notFound("Project not found");
 
@@ -178,7 +176,7 @@ export async function registerExportRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "project.export",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         facts,
       );
 
@@ -194,28 +192,24 @@ export async function registerExportRoutes(
       // else's job. The body is not read, so it is not hashed either.
       const requestHash = hashRequest(request, null);
 
-      const result = await withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-          const [project] = await tx<{ id: string }[]>`
-            SELECT id FROM core.projects WHERE id = ${projectId}
-          `;
-          if (!project) throw notFound("Project not found");
-
+      const result = await withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const id = randomUUID();
           const [row] = await tx<ExportRow[]>`
-            INSERT INTO core.project_exports (
-              id, tenant_id, project_id, requested_by_subject_id, requested_by_wallet,
+            INSERT INTO core.project_export_jobs (
+              id, project_id, requested_by_subject_id, requested_by_wallet,
               sensitivity_clearance
-            ) VALUES (
-              ${id}, ${tenantId}, ${projectId}, ${subjectId}, NULL,
-              ${facts.sensitivityClearance as string[]}
             )
+            SELECT ${id}, project.id, ${subjectId}, NULL,
+                   ${facts.sensitivityClearance as string[]}
+            FROM core.projects AS project
+            WHERE project.id = ${projectId}
             RETURNING id, project_id, requested_by_subject_id, sensitivity_clearance, state,
                       package, manifest_hash, failure_reason, requested_at, completed_at
           `;
+          if (!row) throw notFound("Project not found");
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "project.export.requested",
             aggregateId: id,
             aggregateVersion: 1,
@@ -225,7 +219,6 @@ export async function registerExportRoutes(
           });
 
           await recordAudit(tx, {
-            tenantId,
             projectId,
             session,
             effectiveRole,
@@ -237,7 +230,7 @@ export async function registerExportRoutes(
             detail: { sensitivityClearance: facts.sensitivityClearance },
           });
 
-          return toExportView(row!);
+          return toExportView(row);
         }),
       );
 
@@ -249,7 +242,7 @@ export async function registerExportRoutes(
   app.get<{ Params: { projectId: string; exportId: string } }>(
     "/api/v1/projects/:projectId/exports/:exportId",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { projectId, exportId } = request.params;
       if (!uuid.safeParse(projectId).success || !uuid.safeParse(exportId).success) {
         throw notFound("Export not found");
@@ -258,27 +251,23 @@ export async function registerExportRoutes(
       assertAuthorized(
         session,
         "project.export",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
-      const [row] = await withTenant(sql, { tenantId }, (tx) =>
+      // The package was redacted to its requester's clearance. Match the requester
+      // in the query so another account's package never enters this API response path.
+      const [row] = await withActor(sql, actor, (tx) =>
         tx<ExportRow[]>`
           SELECT id, project_id, requested_by_subject_id, sensitivity_clearance, state,
                  package, manifest_hash, failure_reason, requested_at, completed_at
-          FROM core.project_exports
+          FROM core.project_export_jobs
           WHERE id = ${exportId} AND project_id = ${projectId}
+            AND requested_by_subject_id = ${session.subjectId}
         `,
       );
 
-      /**
-       * Only the requester reads a package. It was redacted to their clearance; handing it to
-       * someone else would show them what their own clearance hides. Someone else's job answers
-       * exactly like a missing one.
-       */
-      if (!row || row.requested_by_subject_id !== session.subjectId) {
-        throw notFound("Export not found");
-      }
+      if (!row) throw notFound("Export not found");
 
       return { ...toExportView(row), requestId: request.context.requestId, asOf: request.context.asOf };
     },

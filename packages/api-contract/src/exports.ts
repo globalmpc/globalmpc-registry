@@ -6,7 +6,7 @@ import { isoDateTime } from "./common.js";
  *
  * Two different things share the word.
  *
- * - **Audit export** — the append-only audit trail for a tenant, optionally narrowed to a
+ * - **Audit export** — the append-only audit trail of the Registry, optionally narrowed to a
  *   project and a time range, as JSON Lines with a hash manifest. Read by auditors and security
  *   operators; the export itself is recorded in the same trail.
  * - **Project export package** — an asynchronous job that assembles what an outside reviewer

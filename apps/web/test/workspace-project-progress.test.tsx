@@ -62,9 +62,9 @@ it("caps explicit requests across 50 rows and cancels removed queued rows", asyn
 it("discards the previous account result when the cookie marker and project ID are unchanged", async () => {
   let release!:(value:unknown)=>void;
   const calls=mockHttp({"GET /api/v1/projects/p1/evidence-ledger":()=>new Promise(resolve=>{release=resolve;})});
-  const view=render(<WorkspaceProjectProgress key="tenant:old-subject" token="cookie-session" projectId="p1" />);
+  const view=render(<WorkspaceProjectProgress key="registry:old-subject" token="cookie-session" projectId="p1" />);
   fireEvent.click(screen.getByRole("button",{name:"Load progress"}));
-  view.rerender(<WorkspaceProjectProgress key="tenant:new-subject" token="cookie-session" projectId="p1" />);
+  view.rerender(<WorkspaceProjectProgress key="registry:new-subject" token="cookie-session" projectId="p1" />);
   await act(async()=>release({snapshot}));
   expect(screen.queryByText("Stage not configured")).toBeNull();
   expect(calls).toHaveLength(1);

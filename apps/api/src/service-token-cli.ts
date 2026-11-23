@@ -15,35 +15,35 @@ import {
 /**
  * Service token operator CLI — decision D7.
  *
- *   pnpm --filter @mpc/api service-token create-subject <tenantSlug> <displayName> <role>
- *   pnpm --filter @mpc/api service-token issue <tenantSlug> <subjectId> <label> <scope,...> [ttlDays]
+ *   pnpm --filter @mpc/api service-token create-subject <displayName> <role>
+ *   pnpm --filter @mpc/api service-token issue <subjectId> <label> <scope,...> [ttlDays]
  *   pnpm --filter @mpc/api service-token rotate <tokenId> [overlapHours] [ttlDays]
  *   pnpm --filter @mpc/api service-token revoke <tokenId>
- *   pnpm --filter @mpc/api service-token list <tenantSlug>
+ *   pnpm --filter @mpc/api service-token list
  *   pnpm --filter @mpc/api service-token generate
- *   SERVICE_TOKEN=… pnpm --filter @mpc/api service-token ensure <tenantSlug> <label> <role> <scope,...> [ttlDays] [overlapHours]
+ *   SERVICE_TOKEN=… pnpm --filter @mpc/api service-token ensure <label> <role> <scope,...> [ttlDays] [overlapHours]
  *
  * Runs over the migration connection (`DATABASE_URL`, superuser or BYPASSRLS), like `bootstrap`:
- * tokens are tenant rows and the runner is not a session. **`issue` and `rotate` print the raw
+ * the runner is not a session. **`issue` and `rotate` print the raw
  * token once, on stdout, as the only line of JSON with a `token` field.** Put it straight into the
  * service's secret store; it cannot be shown again.
  *
  * `generate` prints a new token — the token and a newline, nothing else — and touches no
  * database. `ensure` registers such a token, read from `SERVICE_TOKEN` (never from the command
- * line, which process listings and logs show), for the service named by tenant, label and role:
+ * line, which process listings and logs show), for the service named by label and role:
  * the deploy-time step for a token kept in the environment's secret store. It prints what it did,
  * never the token.
  */
 
 const USAGE = [
   "Usage:",
-  "  service-token create-subject <tenantSlug> <displayName> <role>",
-  "  service-token issue <tenantSlug> <subjectId> <label> <scope,...> [ttlDays=90]",
+  "  service-token create-subject <displayName> <role>",
+  "  service-token issue <subjectId> <label> <scope,...> [ttlDays=90]",
   "  service-token rotate <tokenId> [overlapHours=24] [ttlDays=90]",
   "  service-token revoke <tokenId>",
-  "  service-token list <tenantSlug>",
+  "  service-token list",
   "  service-token generate",
-  "  SERVICE_TOKEN=… service-token ensure <tenantSlug> <label> <role> <scope,...> [ttlDays=365] [overlapHours=24]",
+  "  SERVICE_TOKEN=… service-token ensure <label> <role> <scope,...> [ttlDays=365] [overlapHours=24]",
   "",
   "Roles: scan_service, cre_reporter. Scopes: scan_result, cre_report.",
   "",
@@ -55,13 +55,6 @@ function number(value: string | undefined, fallback: number, name: string): numb
   if (value === undefined) return fallback;
   if (!/^[0-9]+$/.test(value)) throw new ServiceTokenError(`${name} must be a whole number`);
   return Number(value);
-}
-
-async function tenantId(sql: postgres.Sql, slug: string | undefined): Promise<string> {
-  if (!slug) throw new ServiceTokenError("tenant slug is required");
-  const [row] = await sql<{ id: string }[]>`SELECT id FROM core.tenants WHERE slug = ${slug}`;
-  if (!row) throw new ServiceTokenError(`no tenant ${slug}`);
-  return row.id;
 }
 
 const [command, ...args] = process.argv.slice(2);
@@ -95,18 +88,15 @@ const sql = postgres(
 const print = (record: object) => process.stdout.write(`${JSON.stringify(record)}\n`);
 
 try {
-  // Deploy-time ensure establishes tenant scope and verifies table ownership itself.
-  // Other operator commands retain their existing cross-tenant connection contract.
-  if (command !== "ensure") {
-    const problem = rlsBypassProblem(await readConnectingRole(sql));
-    if (problem) throw new ServiceTokenError(problem);
-  }
+  // Every command reads and writes the whole Registry's tokens: the connection must bypass RLS.
+  // `ensure` also verifies table ownership itself (`requireDeploymentOwner`).
+  const problem = rlsBypassProblem(await readConnectingRole(sql));
+  if (problem) throw new ServiceTokenError(problem);
 
   switch (command) {
     case "create-subject": {
-      const [slug, displayName, role] = args;
+      const [displayName, role] = args;
       const result = await createServiceSubject(sql, {
-        tenantId: await tenantId(sql, slug),
         displayName: displayName ?? "",
         role: role ?? "",
       });
@@ -114,10 +104,9 @@ try {
       break;
     }
     case "issue": {
-      const [slug, subjectId, label, scopes, ttlDays] = args;
+      const [subjectId, label, scopes, ttlDays] = args;
       if (!subjectId || !label || !scopes) throw new ServiceTokenError("subjectId, label and scopes are required");
       const issued = await issueServiceToken(sql, {
-        tenantId: await tenantId(sql, slug),
         subjectId,
         label,
         scopes: scopes.split(",").map((scope) => scope.trim()).filter(Boolean),
@@ -144,10 +133,9 @@ try {
       break;
     }
     case "ensure": {
-      const [slug, label, role, scopes, ttlDays, overlapHours] = args;
+      const [label, role, scopes, ttlDays, overlapHours] = args;
       if (!label || !role || !scopes) throw new ServiceTokenError("label, role and scopes are required");
       const ensured = await ensureServiceToken(sql, {
-        tenantId: await tenantId(sql, slug),
         label,
         role,
         scopes: scopes.split(",").map((scope) => scope.trim()).filter(Boolean),
@@ -165,8 +153,7 @@ try {
       break;
     }
     case "list": {
-      const [slug] = args;
-      for (const token of await listServiceTokens(sql, await tenantId(sql, slug))) print(token);
+      for (const token of await listServiceTokens(sql)) print(token);
       break;
     }
   }

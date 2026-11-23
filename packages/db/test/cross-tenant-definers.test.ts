@@ -31,8 +31,8 @@ const CROSS_TENANT = [
   "core.link_google_workspace_account(uuid,text,text,text,text)",
   "core.google_session_requires_mfa(uuid)",
   "core.complete_oidc_sign_in(uuid,text,text,uuid,text,integer)",
-  "core.complete_oidc_link(uuid,uuid,text,text,text,text,uuid,text)",
-  "core.complete_oidc_invitation(uuid,text,text,text,text,text,uuid,uuid,uuid,text,integer)",
+  "core.complete_oidc_link(uuid,uuid,text,text,text,uuid,text)",
+  "core.complete_oidc_invitation(uuid,text,text,text,text,uuid,uuid,uuid,text,integer)",
   "core.purge_oidc_records()",
   "core.purge_auth_records()",
   "core.resolve_session(text)",
@@ -46,6 +46,16 @@ const CROSS_TENANT = [
   "core.revoke_session(text)",
   "core.resolve_service_token(text)",
   "core.resolve_role_bindings(uuid)",
+  // 0168: the actor's project reach, read before any project is known; reading nothing would
+  // silently narrow a person to no projects (0168), or call a live actor unknown (0169).
+  "core.actor_live_bindings()",
+  "core.actor_registry_wide()",
+  "core.actor_project_ids()",
+  "core.actor_reaches_project(uuid,uuid,text)",
+  "core.actor_live()",
+  // 0170: review independence reads every affiliation of the person judged, not the caller's.
+  "core.subject_affiliated_organizations(uuid)",
+  "core.subject_holder_organization(uuid)",
 ];
 
 /** Audited (0112–0130): act inside the tenant context the caller set — see 0131's header. */
@@ -82,7 +92,7 @@ const SAME_TENANT = [
   "core.list_external_identities(uuid)",
   "core.unlink_external_identity(uuid,uuid)",
   "core.disable_own_wallet(uuid,uuid,text,text)",
-  "core.revoke_subject_identities(uuid,uuid,text)",
+  "core.revoke_subject_identities(uuid,text)",
   "core.subject_sign_in_providers(uuid[])",
   "core.list_own_sessions(uuid)",
   "core.revoke_own_session(uuid,uuid)",
@@ -218,29 +228,27 @@ describeDb("cross-tenant SECURITY DEFINER functions (0131)", () => {
   });
 
   /**
-   * 0132 (F5): the two same-tenant guards that used to answer "not suspended" when they read no
-   * row now refuse. A reset request is inserted with no tenant set, so an owner filtered by RLS
+   * 0132 (F5): the two caller-scope guards that used to answer "not suspended" when they read no
+   * row now refuse. A reset request is inserted with no actor set, so an owner filtered by RLS
    * reads nothing; under the bypassing owner the same insert passes.
    */
   it("the actor and reset guards refuse when an owner without BYPASSRLS reads nothing", async () => {
-    const tenant = crypto.randomUUID();
     const [target, proposer] = [crypto.randomUUID(), crypto.randomUUID()];
     const role = `m0132_nobypass_${process.pid}`;
     const rollback = new Error("rollback");
     const outcomes: Record<string, string> = {};
     const insertReset = (tx: postgres.TransactionSql) =>
       tx.savepoint((sp) => sp`
-        INSERT INTO core.mfa_reset_requests (id, tenant_id, subject_id, reason, requested_by_subject_id)
-        VALUES (${crypto.randomUUID()}, ${tenant}, ${target}, 'lost', ${proposer})
+        INSERT INTO core.mfa_reset_requests (id, subject_id, reason, requested_by_subject_id)
+        VALUES (${crypto.randomUUID()}, ${target}, 'lost', ${proposer})
       `).then(() => "ok", (error: Error) => error.message);
 
     await expect(
       sql.begin(async (tx) => {
-        await tx`INSERT INTO core.tenants (id, slug, display_name) VALUES (${tenant}, ${`m0132-${tenant.slice(0, 8)}`}, 'Probe')`;
         for (const id of [target, proposer]) {
           await tx`
-            INSERT INTO core.subjects (id, tenant_id, kind, display_name, created_at)
-            VALUES (${id}, ${tenant}, 'person', 'Probe', now() - interval '10 days')
+            INSERT INTO core.subjects (id, kind, display_name, created_at)
+            VALUES (${id}, 'person', 'Probe', now() - interval '10 days')
           `;
         }
         outcomes["bypassing owner"] = await insertReset(tx);

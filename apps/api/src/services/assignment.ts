@@ -27,7 +27,6 @@ import {
 type Tx = postgres.TransactionSql;
 
 export interface AssignReviewerInput {
-  readonly tenantId: string;
   readonly caseId: string;
   readonly projectId: string;
   readonly claimIds: readonly string[];
@@ -97,10 +96,10 @@ export async function assignReviewer(tx: Tx, input: AssignReviewerInput): Promis
   const id = randomUUID();
   await tx`
     INSERT INTO core.assignments (
-      id, tenant_id, case_id, subject_id, credential_id,
+      id, case_id, subject_id, credential_id,
       independence_reviewed, independence_basis, conflict_status, assigned_by
     ) VALUES (
-      ${id}, ${input.tenantId}, ${input.caseId}, ${input.reviewerSubjectId},
+      ${id}, ${input.caseId}, ${input.reviewerSubjectId},
       ${input.credentialId}, ${independence.review.reviewed},
       ${tx.json(independence.basis as never)}, ${input.conflictStatus},
       ${input.assignerSubjectId}

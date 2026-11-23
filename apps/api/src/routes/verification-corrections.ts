@@ -1,7 +1,8 @@
+import type { ActorContext } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   attestationMachine,
   canChangeCredentialStatus,
@@ -18,7 +19,7 @@ import {
   revokeAttestationRequest,
 } from "@mpc/api-contract";
 import { badRequest, conflict, forbidden, notFound } from "../errors.js";
-import { assertAuthorized, projectResource, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, projectResource, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
@@ -54,10 +55,10 @@ function invalidRequest(issues: unknown): never {
 
 async function assignmentContext(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   assignmentId: string,
 ): Promise<{ projectId: string }> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, actor, (tx) =>
     tx<{ project_id: string }[]>`
       SELECT vc.project_id FROM core.assignments a
       JOIN core.verification_cases vc ON vc.id = a.case_id
@@ -71,7 +72,6 @@ async function assignmentContext(
 async function recordCaseTransition(
   tx: Tx,
   input: {
-    tenantId: string;
     caseId: string;
     from: VerificationCaseState;
     to: VerificationCaseState;
@@ -83,9 +83,9 @@ async function recordCaseTransition(
   await tx`UPDATE core.verification_cases SET state = ${input.to} WHERE id = ${input.caseId}`;
   await tx`
     INSERT INTO core.verification_case_transitions (
-      id, tenant_id, case_id, from_state, to_state, reason, actor_subject_id
+      id, case_id, from_state, to_state, reason, actor_subject_id
     ) VALUES (
-      ${randomUUID()}, ${input.tenantId}, ${input.caseId}, ${input.from}, ${input.to},
+      ${randomUUID()}, ${input.caseId}, ${input.from}, ${input.to},
       ${input.reason}, ${input.actorSubjectId}
     )
   `;
@@ -111,11 +111,11 @@ export async function registerVerificationCorrectionRoutes(
   app.post<{ Params: { attestationId: string } }>(
     "/api/v1/attestations/:attestationId/revoke",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const parsed = revokeAttestationRequest.safeParse(request.body);
       if (!parsed.success) invalidRequest(parsed.error.issues);
 
-      const [owner] = await withTenant(sql, { tenantId }, (tx) =>
+      const [owner] = await withActor(sql, actor, (tx) =>
         tx<{ project_id: string; signer_subject: string }[]>`
           SELECT vc.project_id, asg.subject_id AS signer_subject
           FROM core.verification_attestations a
@@ -133,15 +133,15 @@ export async function registerVerificationCorrectionRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "attestation.revoke",
-        projectResource(tenantId, owner.project_id),
+        projectResource(owner.project_id),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const { reason } = parsed.data;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [attestation] = await tx<
             {
               id: string;
@@ -175,7 +175,6 @@ export async function registerVerificationCorrectionRoutes(
           `;
 
           const caseRevoked = await recordCaseTransition(tx, {
-            tenantId,
             caseId: attestation.case_id,
             from: attestation.case_state,
             to: "revoked",
@@ -191,7 +190,6 @@ export async function registerVerificationCorrectionRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: owner.project_id,
             session,
             command: "verification.attestation.revoked",
@@ -213,7 +211,6 @@ export async function registerVerificationCorrectionRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "verification_attestation.revoked",
             aggregateId: attestation.id,
             aggregateVersion: 1,
@@ -223,7 +220,6 @@ export async function registerVerificationCorrectionRoutes(
           });
           if (caseRevoked) {
             await enqueueEvent(tx, {
-              tenantId,
               eventType: "verification.case.revoked",
               aggregateId: attestation.case_id,
               aggregateVersion: 1,
@@ -263,23 +259,23 @@ export async function registerVerificationCorrectionRoutes(
   app.post<{ Params: { assignmentId: string } }>(
     "/api/v1/assignments/:assignmentId/revoke",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const parsed = revokeAssignmentRequest.safeParse(request.body);
       if (!parsed.success) invalidRequest(parsed.error.issues);
 
-      const { projectId } = await assignmentContext(sql, tenantId, request.params.assignmentId);
+      const { projectId } = await assignmentContext(sql, actor, request.params.assignmentId);
       const effectiveRole = assertAuthorized(
         session,
         "claim.curate",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const { reason } = parsed.data;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const current = await lockAssignment(tx, request.params.assignmentId);
           if (current.subject_id === session.subjectId) {
             throw forbidden("ASSIGNMENT_SELF_REASSIGNMENT", "Another reviewer must change your assignment");
@@ -294,7 +290,6 @@ export async function registerVerificationCorrectionRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId,
             session,
             command: "verification.assignment.revoked",
@@ -307,7 +302,6 @@ export async function registerVerificationCorrectionRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "verification.assignment.revoked",
             aggregateId: current.case_id,
             aggregateVersion: 1,
@@ -340,23 +334,23 @@ export async function registerVerificationCorrectionRoutes(
   app.post<{ Params: { assignmentId: string } }>(
     "/api/v1/assignments/:assignmentId/reassignments",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const parsed = reassignReviewerRequest.safeParse(request.body);
       if (!parsed.success) invalidRequest(parsed.error.issues);
 
-      const { projectId } = await assignmentContext(sql, tenantId, request.params.assignmentId);
+      const { projectId } = await assignmentContext(sql, actor, request.params.assignmentId);
       const effectiveRole = assertAuthorized(
         session,
         "claim.curate",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const data = parsed.data;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const current = await lockAssignment(tx, request.params.assignmentId);
           if (current.subject_id === session.subjectId) {
             throw forbidden("ASSIGNMENT_SELF_REASSIGNMENT", "Another reviewer must change your assignment");
@@ -383,7 +377,6 @@ export async function registerVerificationCorrectionRoutes(
           `;
 
           const assignment = await assignReviewer(tx, {
-            tenantId,
             caseId: current.case_id,
             projectId,
             claimIds: claims.map((row) => row.claim_id),
@@ -395,7 +388,6 @@ export async function registerVerificationCorrectionRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId,
             session,
             command: "verification.assignment.reassigned",
@@ -414,7 +406,6 @@ export async function registerVerificationCorrectionRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "verification.case.assigned",
             aggregateId: current.case_id,
             aggregateVersion: 1,
@@ -456,7 +447,7 @@ export async function registerVerificationCorrectionRoutes(
   app.post<{ Params: { credentialId: string } }>(
     "/api/v1/credentials/:credentialId/status",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
       const parsed = changeCredentialStatusRequest.safeParse(request.body);
       if (!parsed.success) invalidRequest(parsed.error.issues);
@@ -464,7 +455,7 @@ export async function registerVerificationCorrectionRoutes(
       let effectiveRole = assertAuthorized(
         session,
         "credential.status.change",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
 
@@ -474,7 +465,7 @@ export async function registerVerificationCorrectionRoutes(
       if (toStatus !== "revoked" && toStatus !== "suspended" && effectiveRole === "administrator" &&
         session.roleBindings.some(binding => binding.role === "reviewer")) {
         effectiveRole = assertAuthorized({ ...session, roleBindings: session.roleBindings.filter(binding => binding.role === "reviewer") },
-          "credential.status.change", tenantResource(tenantId), sessionFacts(session));
+          "credential.status.change", registryResource(), sessionFacts(session));
       }
 
       if (
@@ -488,8 +479,8 @@ export async function registerVerificationCorrectionRoutes(
         );
       }
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [credential] = await tx<
             {
               id: string;
@@ -544,16 +535,15 @@ export async function registerVerificationCorrectionRoutes(
 
           await tx`
             INSERT INTO core.credential_status_events (
-              id, tenant_id, credential_id, from_status, to_status, reason, actor_subject_id
+              id, credential_id, from_status, to_status, reason, actor_subject_id
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${credential.id}, ${credential.current_status},
+              ${randomUUID()}, ${credential.id}, ${credential.current_status},
               ${toStatus}, ${reason}, ${session.subjectId ?? null}
             )
           `;
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "credential.status.changed",
             resourceType: "credential",
@@ -572,7 +562,6 @@ export async function registerVerificationCorrectionRoutes(
           const liftsSuspension = toStatus === "valid" && credential.current_status === "suspended";
           if (toStatus === "suspended" || liftsSuspension) {
             await enqueueEvent(tx, {
-              tenantId,
               eventType: `credential.${liftsSuspension ? "reinstated" : "suspended"}`,
               aggregateId: credential.id,
               aggregateVersion: updated!.version,

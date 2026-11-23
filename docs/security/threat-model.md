@@ -39,7 +39,7 @@ In priority order. Further down, losses become recoverable.
                  │
      ┌───────────▼───────────┐   boundary 2: role and action permissions
      │  /api/v1/* (the rest) │   the 7 ACTION_POLICIES conditions + RLS
-     │  Workspace pages      │   tenant and project scope diverge here
+     │  Workspace pages      │   company and project reach diverge here
      └───────────┬───────────┘
                  │
      ┌───────────▼───────────┐   boundary 3: system identity
@@ -57,14 +57,14 @@ PostgreSQL   object store   BNB Chain     notification sinks
 Boundary 2 is drawn as planned in [`../account-authentication-plan.md`](../account-authentication-plan.md):
 an invitation-only account session keyed by subject, with wallets kept only as signing keys.
 WP1 (account core) is implemented: sessions are keyed by subject and carry an AAL derived from
-their factors, and workers use service tokens; WP2–WP5 (email code, second factors, Google /
-Microsoft, wallets as signing keys) are implemented in the API, and the web signs in with them
+their factors, and workers use service tokens; WP2–WP5 (email code, second factors, Google —
+Microsoft was removed in 0171 — and wallets as signing keys) are implemented in the API, and the web signs in with them
 (WP6): the browser's session token is an HttpOnly cookie the web proxy turns into the API's bearer,
 never visible to page script. WP7 removed the wallet (SIWE) sign-in: no route issues a session for
 a wallet signature, and migration 0125 revoked any such session left and forbids new ones. T10
 lists the threats the change introduces and which controls are in the code.
 
-**Boundary 1 is the most dangerous.** There is no session, so RLS tenant isolation does not
+**Boundary 1 is the most dangerous.** There is no session, so actor-based RLS does not
 apply, and what the `SECURITY DEFINER` functions return is the public scope. The `WHERE` clauses
 of those functions are the entire public boundary.
 
@@ -144,16 +144,25 @@ public · bypass of the projection allowlist · internal identifiers in error me
 - With OD-17 and OD-18 unresolved, the jurisdiction in which originals reside is not settled.
   **This is what blocks the production deployment.**
 
-### T3 · Tenant boundary bypass (Elevation) — A3 · A5
+### T3 · Project boundary bypass (Elevation) — A3 · A5
 
-**How it happens:** a query that trusts the session's tenant · a path without RLS · careless use
-of `SECURITY DEFINER` functions.
+The Registry has no tenant (0169). Reach comes from the actor's live role bindings: a
+Registry-wide binding reaches every project, an organization binding its organization's
+projects, a project binding its project, a jurisdiction limit narrows either.
+
+**How it happens:** a query that trusts a client-supplied actor or project · a path without RLS ·
+careless use of `SECURITY DEFINER` functions · a definer keyed by a session or decider that does
+not check it is the authenticated actor's.
 
 **Blocked now**
 
-- RLS + `FORCE ROW LEVEL SECURITY` on every tenant-owned table. The application role sees only
-  through `core.current_tenant()`.
-- Authorization is decided by 7 conditions (`ACTION_POLICIES`) — role, assurance, tenant, project,
+- RLS + `FORCE ROW LEVEL SECURITY` on every project-scoped table. The application role sees
+  only the projects `core.actor_project_ids()` / `core.actor_registry_wide()` give the
+  transaction's actor (`app.actor_subject_id`, set by `withActor` from the authenticated
+  session); no actor sees nothing.
+- Session-keyed and decision definers act only for the authenticated actor: a session id of
+  anyone else is "no live session", and a decider other than the actor is refused (0169).
+- Authorization is decided by 7 conditions (`ACTION_POLICIES`) — role, assurance, scope, project,
   sensitivity, state, conflict of interest. Refusal reasons are returned distinctly.
 - Two-person rule: proposer ≠ approver.
 - Suspension is done by one person, but **the person who suspended cannot reinstate** (migration 0031).
@@ -204,7 +213,7 @@ not running.
 | Worker reports a verdict | Existing scan-service identity and authorization | Matching quarantined document and successful scanner response | Clean result is required for promotion |
 | Scanner unavailable before accepting bytes | Live scanner PING; worker owns any acquired lease | Unreachable daemon before lease, or a connection failure before INSTREAM | Keep quarantine and preserve upload attempt budget; pause until recovery |
 | Scanner accepts a file but cannot complete it | Live bounded response; file can trigger parser failure | Timeout, reset, malformed or oversized verdict after connection | Keep quarantine and count a bounded attempt, preventing one file from retrying indefinitely |
-| Published evidence and Registry state | Existing approval and immutable hash rules | No change to frozen evidence, tenant authority or CRE reports | Container changes confer no new approval authority |
+| Published evidence and Registry state | Existing approval and immutable hash rules | No change to frozen evidence, Registry authority or CRE reports | Container changes confer no new approval authority |
 
 ### T5 · Public API abuse (Denial of Service) — A6
 
@@ -284,8 +293,8 @@ not running.
 [`../account-authentication-plan.md`](../account-authentication-plan.md) §5. Listing them before
 they exist means each change is reviewed against a fixed target rather than its own rationale.
 
-- **Implemented (WP1):** subject sessions (`core.sessions` keyed by subject and tenant, minted and
-  revoked only inside the subject's tenant context, absolute TTL 8 h, idle timeout 30 min, purged
+- **Implemented (WP1):** subject sessions (`core.sessions` keyed by subject, minted and
+  revoked only for the authenticated subject, absolute TTL 8 h, idle timeout 30 min, purged
   by the jobs worker); AAL derived from the recorded factors, never admin-set; the MFA-bypass
   priority rules (a first-factor session reaches only its own session view, without roles or
   actions, plus logout; a role whose AAL or identity-assurance minimum is not met is narrowed
@@ -361,8 +370,8 @@ they exist means each change is reviewed against a fixed target rather than its 
     the sessions (0132, F3; before it the decisions locked the request first and a suspension could
     deadlock with them) — so two calls about one person serialize instead of deadlocking. A
     suspension also closes rows of other people it names (what they proposed or approved); it
-    takes those after its own subject lock and never a second subject lock. A Google /
-    Microsoft sign-in takes `FOR KEY SHARE` on the identity's person before it locks the identity
+    takes those after its own subject lock and never a second subject lock. A Google
+    sign-in takes `FOR KEY SHARE` on the identity's person before it locks the identity
     (0133, N1; before it, a sign-in holding the identity and a reset holding the person could
     deadlock). Tests: `apps/api/test/account-state-races.test.ts` ("F3", "0133"). A deadlock or
     serialization abort that still happens anywhere answers 409 `CONCURRENT_REQUEST`, retryable.
@@ -375,13 +384,12 @@ they exist means each change is reviewed against a fixed target rather than its 
   `apps/api/test/bootstrap.test.ts`, `apps/api/test/email-auth.test.ts`,
   `apps/api/test/error-handler.test.ts`, `apps/api/test/observability.test.ts`,
   `apps/jobs-worker/test/email.test.ts`.
-- **Implemented (WP4):** Google / Microsoft sign-in by authorization code + PKCE S256 with
+- **Implemented (WP4):** Google sign-in by authorization code + PKCE S256 with
   `state`, `nonce` and a browser binding (login CSRF), all stored as hashes; the PKCE verifier
   and nonce sealed under an HKDF key and deleted at the claim; ID token signature checked
-  against the provider's keys, `iss`, `aud`, `azp`, expiry and nonce; Microsoft on the
-  `organizations` endpoint, `iss` bound to the token's own `tid`, personal accounts and
-  directories outside `MICROSOFT_ALLOWED_TENANTS` refused; identities matched only by
-  `(iss, sub)` / `(tid, oid)`, never by email; linking and unlinking from an aal2 session only,
+  against the provider's keys, `iss`, `aud`, `azp`, expiry and nonce; identities matched only
+  by `(iss, sub)`, never by email; Microsoft sign-in, which also shipped in 0120–0121, was
+  removed with its rows in 0171 and its routes answer as for an unknown provider; linking and unlinking from an aal2 session only,
   one generic code for an identity linked anywhere, never the last way in; invitation acceptance
   only for a provider-verified invited address — for Google only a Gmail address or one in the
   token's `hd` Workspace domain, otherwise `OIDC_EMAIL_CODE_REQUIRED` (security review L7);
@@ -397,14 +405,14 @@ they exist means each change is reviewed against a fixed target rather than its 
   `apps/jobs-worker/test/auth-purge.test.ts`.
 - **Implemented (WP5, migration 0122):** wallets are signing keys, bound only by their holder.
   - *Binding by proof.* A person binds a key to their own account by signing an EIP-712
-    `WalletBinding` (purpose, tenant, subject, address, chain, nonce, issued/expires; domain
+    `WalletBinding` (purpose, subject, address, chain, nonce, issued/expires; domain
     "MPC Wallet Binding" with the chain id and a fixed salt) from an account session at the level
     of the strongest factor they hold (aal3 once a passkey exists, else aal2), never
     recovery-limited and never a legacy wallet session. The challenge is per session, single use,
     5 minutes, replaced by the next request; the API rebuilds the signed message from the
     challenge row only, and the database consumes the challenge and inserts the wallet in one
     function (`core.bind_wallet_by_proof`). An address bound anywhere — this account, another
-    subject, another tenant, an operator-bound key — answers one generic `WALLET_UNAVAILABLE`.
+    subject, an operator-bound key — answers one generic `WALLET_UNAVAILABLE`.
     EOA signatures only (no EIP-1271).
   - *No admin attach.* The admin bind route is removed (404), and the application role has no
     INSERT or UPDATE on `core.wallet_identities` beyond `disabled_at` / `version` (and since
@@ -439,13 +447,13 @@ they exist means each change is reviewed against a fixed target rather than its 
     holder of a wallet that already voted is refused (`GOVERNANCE_WALLET_ALREADY_VOTED`).
   - *Compromised keys stay out.* A key ever disabled as `key_compromised` (directly or as the
     cause of a replace) or disabled by an admin is never bound again, by anyone, the same person
-    included — the history is read across tenants, and the refusal is the same
+    included — the history is read across the Registry, and the refusal is the same
     `WALLET_UNAVAILABLE` as an address active elsewhere. A lost key (directly or as a replace
     cause), a consolidated wallet and a disabled row with no event come back only to their own
     subject; only `rotation` / `offboarding` keys pass to another holder. NULL subjects and
     deciders refuse. The bind reads the history with `row_security = off`, so an owner that does
-    not bypass RLS errors rather than narrowing the check to the current tenant. The bind is not
-    the only such reader: every definer function that reads across tenants (sign-in, address and
+    not bypass RLS errors rather than narrowing the check to the rows the actor sees. The bind is not
+    the only such reader: every definer function that reads past the actor's reach (sign-in, address and
     identity uniqueness, session and service-token lookups, purges, the vote pin) gets the same setting in `0131`, and
     `packages/db/test/cross-tenant-definers.test.ts` requires every definer to be classified. A replace records why
     (`replace_cause`). Replacing an operator-verified wallet lowers assurance to `wallet_only`, as
@@ -522,7 +530,7 @@ they exist means each change is reviewed against a fixed target rather than its 
     (15 minutes, renewable only by keeping up the requests). Watched by
     `mpc_email_code_addresses_limited` and the `MpcEmailCodeAddressesLimited` alert.
   - *A compromised API process can mint provider sign-ins.* The application role runs start →
-    claim → complete itself, so code running as the API can create an aal1 Google / Microsoft
+    claim → complete itself, so code running as the API can create an aal1 Google
     session for any subject with a linked identity without the provider. The same class as
     email codes (the API holds the code key) and wallet-signature verification (the API checks
     the signature): the database bounds what such a session can do (aal1 only, MFA still
@@ -545,7 +553,7 @@ they exist means each change is reviewed against a fixed target rather than its 
     per person. The application role inserts only the proposal's columns and cannot write
     `subjects.suspended_at`; only `core.decide_subject_suspension` decides.
   - *Every way in ends.* Approval sets `suspended_at` and in the same transaction revokes every
-    session, passkey, authenticator app, recovery code and linked Google / Microsoft identity,
+    session, passkey, authenticator app, recovery code and linked Google identity,
     removes open login, binding and passkey challenges, supersedes pending sign-in codes, and
     mails `account_suspended_notice`.
   - *Refused like an unknown account.* While suspended, the code request answers as for an
@@ -635,12 +643,12 @@ someone else's subject · using a service credential on a person's route.
 
 | Threat | Planned control | Test that will prove it |
 |---|---|---|
-| **Account takeover** — someone else ends up acting as a subject | Login only by an invited email's code or a linked Google / Microsoft identity, always followed by a second factor; session level (AAL) derived from proven factors, never set by an admin; recovery, email change, suspension and authenticator removal revoke every session of the subject; recovery and email change also revoke every linked identity (0123) | Revocation tests per trigger: every session of the subject returns 401 afterwards, signed history unchanged |
+| **Account takeover** — someone else ends up acting as a subject | Login only by an invited email's code or a linked Google identity, always followed by a second factor; session level (AAL) derived from proven factors, never set by an admin; recovery, email change, suspension and authenticator removal revoke every session of the subject; recovery and email change also revoke every linked identity (0123) | Revocation tests per trigger: every session of the subject returns 401 afterwards, signed history unchanged |
 | **Phishing** of the login | Passkey (WebAuthn, RP ID = web host) required for the roles the contract marks phishing-resistant MFA (plan D8); TOTP alone leaves those roles ineffective | TOTP session cannot exercise a passkey-only role; step-up to a passkey makes it effective |
 | **Email-code brute force** | 8 random digits, 10-minute TTL, 5 attempts per code, per-email and per-IP limits, HMAC-hashed, single use, constant-time compare | API negative tests: 6th attempt refused, reused code refused, expired code refused, per-email limit holds across IPs |
 | **Account enumeration** through the code request | Identical response and timing for invited and uninvited addresses | Response-equality test for invited vs uninvited addresses |
-| **Identity-provider misbinding** (nOAuth-style email matching) | Identities link only by Google `(iss, sub)` or Microsoft `(tid, oid)`, and only from an already authenticated flow. `email`, `preferred_username` and `upn` are display-only | A Microsoft token with a matching email but unknown `oid` does not sign in; a Google token with a matching email but unknown `sub` does not sign in |
-| **OIDC flow attacks** — CSRF, code injection or replay, token substitution | Authorization code + PKCE; `state` and `nonce` bound to a short-lived HttpOnly cookie; exact redirect URI; issuer and audience checks; Microsoft issuer checked per token `tid` | Tests for wrong state, replayed code, wrong issuer, wrong audience, missing nonce |
+| **Identity-provider misbinding** (nOAuth-style email matching) | Identities link only by Google `(iss, sub)`, and only from an already authenticated flow. `email`, `preferred_username` and `upn` are display-only | a Google token with a matching email but unknown `sub` does not sign in |
+| **OIDC flow attacks** — CSRF, code injection or replay, token substitution | Authorization code + PKCE; `state` and `nonce` bound to a short-lived HttpOnly cookie; exact redirect URI; issuer and audience checks | Tests for wrong state, replayed code, wrong issuer, wrong audience, missing nonce |
 | **Session theft** — a token readable by script can be carried away by an injected script | Token in an HttpOnly, Secure, `SameSite=Strict` `__Host-` cookie on the web origin; the same-origin proxy forwards it to the API as the bearer; mutations require `Sec-Fetch-Site: same-origin` or a same-origin `Origin`; absolute TTL 8 h, idle timeout 30 min (WP6) | `apps/web/test/bff.test.ts`; E2E `account-auth.spec.ts`: cookie HttpOnly/Strict, not in `document.cookie` or storage, cross-site POST refused |
 | **MFA bypass** — acting with only the first factor, or a weaker factor than the role needs | Priority rules in plan §3: a first-factor session reaches only MFA enrolment, challenge and logout; a role whose AAL or identity-assurance minimum is not met is not effective for the request | First-factor session cannot read restricted data or act; TOTP session cannot use a passkey-only role |
 | **Recovery abuse** — a recovery code used as a full login replacement | A recovery code restores only the second factor, forces re-enrolment and revokes sessions; full recovery (lost everything) is a two-person admin action | Recovery tests: code is single use, regeneration voids the old set, sessions revoked, one admin alone cannot complete full recovery |
@@ -648,13 +656,13 @@ someone else's subject · using a service credential on a person's route.
 | **Invitation abuse** — a leaked or forwarded invitation link | Token random and hashed, single use, expires in 72 h, revocable, tied to the invited email (the code to that address is still required); roles are never in the invitation and still need the two-person grant | Tests: reused token, expired token, revoked token, acceptance by a different email refused; accepted account sees "access pending" and no private data |
 | **Admin attaches their own login to another subject** | Admins cannot add emails, identities or authenticators to another subject; new subjects come only from invitations, and email change is a two-person action that revokes all sessions | Negative API tests for each of email, identity and authenticator on another subject |
 | **Service-token misuse** — a stolen or over-scoped worker credential | Opaque, hashed, bound to a `service` subject, route-scoped, expiring, rotated by CLI with overlap; never accepted on a person-only route (plan D7) | Service token refused on a person-only route and outside its route scope; expired and rotated-out tokens refused |
-| **Personal-data handling of email and identity data** | Stored minimally (email, provider ids, display name); excluded from public projections and exports. Production storage, and use of Resend / Google / Microsoft as processors, is **gated on OD-17 and OD-18** | Projection and export allowlist tests; production cut-over stays blocked until OD-17 / OD-18 are answered |
+| **Personal-data handling of email and identity data** | Stored minimally (email, provider ids, display name); excluded from public projections and exports. Production storage, and use of Resend / Google as processors, is **gated on OD-17 and OD-18** | Projection and export allowlist tests; production cut-over stays blocked until OD-17 / OD-18 are answered |
 
 **Not blocked yet**
 
 - The scan worker and the CRE workflow use `scan_result` and `cre_report` service tokens.
-- The Google and Microsoft journeys are proven in the browser against a mock provider
-  (`apps/web/e2e/oidc.spec.ts`); real Google and Microsoft apps are a staging check (plan §9).
+- The Google journeys are proven in the browser against a mock provider
+  (`apps/web/e2e/oidc.spec.ts`); a real Google app is a staging check (plan §9).
 - Email deliverability and the identity providers themselves are outside the repository. A
   compromised mailbox or provider account still yields the first factor; the second factor is
   what stops it.
@@ -694,13 +702,13 @@ while the current matrix client declares the namespace on every write.
 
 Computed ledger snapshots are separate from manual project confirmations and existing
 readiness or gate decisions. Their private input basis contains evidence and rule inputs,
-so snapshot reads require project authorization and tenant RLS. Recompute requests accept
+so snapshot reads require project authorization and actor-based RLS. Recompute requests accept
 no caller-provided results or evaluation time. Snapshots reject update, delete and truncate.
 Publication checks the recorded input commitment, the exact public summary, and the current
 private basis and outcomes, at both draft and independent approval time.
 
 `core.public_evidence_ledger_current` is a new `SECURITY DEFINER` boundary. It resolves only
-published project versions, joins their recorded snapshot in the same tenant and project,
+published project versions, joins their recorded snapshot in the same project,
 and returns fixed warning codes for the already published item/version basis. It returns
 no new claims, document references, private inputs, natural-person names or free-text reasons.
 Signed limitations and pseudonymous review qualifications enter the frozen public summary
@@ -710,8 +718,8 @@ overlay is explicitly outside the anchored content and cannot change an old cont
 The existing jobs worker can read the required assessment inputs and insert immutable
 snapshots and audit events. It gains no authority to edit claims, manual facts, policies,
 approvals or published versions. Because the worker bypasses RLS, every project-specific
-input query must also constrain the tenant explicitly; a regression test covers competing
-jurisdiction profiles in two tenants using the actual worker role. Worker failures are
+input query must also constrain the project explicitly; jurisdiction profiles are Registry
+definitions with consecutive versions, and a regression test covers the worker role's reads. Worker failures are
 reported and retried; request-time health checks prevent an overdue sweep from hiding an
 expired or revoked evidence basis.
 
@@ -729,9 +737,9 @@ change, write "checked, nothing changed" with the date.
 ### Evidence-ledger publication concurrency
 
 Ledger publication takes transaction-scoped advisory locks before reading current evidence:
-a shared tenant-configuration lock and an exclusive tenant/project lock. It also locks the
+a shared Registry-configuration lock and an exclusive project lock. It also locks the
 project row with `FOR UPDATE NOWAIT`, catching lifecycle writers that have not reached their
-write trigger. The invoker-rights function checks tenant access, has a fixed search path,
+write trigger. The invoker-rights function checks the actor's project reach, has a fixed search path,
 returns no rows and is executable only by the application role. Failed advisory-lock attempts
 or a locked project row return a retryable publication error; rollback removes the request's
 idempotency record so the same key remains usable. The assessment clock is refreshed after
@@ -739,12 +747,12 @@ acquisition.
 
 Database row triggers make API, worker and direct SQL writes participate in the same barrier,
 including inserts. Project inputs acquire the matching exclusive project lock; shared
-definitions acquire an exclusive tenant-configuration lock. Authorities, including credential issuers
+definitions acquire an exclusive Registry-configuration lock. Authorities, including credential issuers
 without source connections, participate as configuration inputs (0142). Role-binding grants and
 revocations also participate because their organizations affect live review independence (0143). Moves lock both old and new scopes
 in deterministic order. Covered input tables reject `TRUNCATE`, which cannot be scoped by row.
-Plain reads, unrelated projects' evidence writes and other tenants' configuration writes can
-continue. Same-tenant configuration writes wait for publications, while publication fails fast
+Plain reads and unrelated projects' evidence writes can continue. Configuration writes (one
+configuration for the Registry since 0169) wait for publications, while publication fails fast
 when a conflicting writer already holds the barrier. Changes to evaluator input relations must
 update the trigger coverage and concurrency regression tests.
 
@@ -763,10 +771,10 @@ Source collection is separate: a real authority API is not required to relay our
 state. Mock-source and mock-forwarder checks do not establish a live official integration or
 DON authentication.
 
-The API enforces existing project permissions and tenant isolation and serializes concurrent
+The API enforces existing project permissions and actor-based project isolation and serializes concurrent
 requests sharing an idempotency key. Reports retain immutable approved content while carrying
 adverse live state separately. Their sequence is scoped to the project, avoiding a public
-counter of other tenants' activity. The consumer authenticates the pinned forwarder and
+counter of other projects' activity. The consumer authenticates the pinned forwarder and
 workflow ID/owner, binds chain and receiver, rejects replay/version rollback/hash replacement,
 and stops treating a positive observation as current when its transport TTL expires.
 Health is evaluated using an explicit clock sampled after blocking publication/report locks.
@@ -780,7 +788,7 @@ The workflow is limited to the local Anvil chain. A positive observation describ
 its recorded time, not a guarantee through its TTL, a passing stage or legal/factual approval.
 The forwarder, workflow and Registry API remain trusted sources of the reported state; a
 compromised trusted workflow can lie. Confidential source documents, source-query identifiers,
-tenant IDs and credentials are excluded from the onchain report. Live DON execution, public
+internal IDs and credentials are excluded from the onchain report. Live DON execution, public
 chain deployment and production credential/data handling require separate verification.
 
 ## Upgradeable CRE Receiver
@@ -797,10 +805,10 @@ chain. RPC tracing also excludes CRE endpoint origins, including credentials.
 
 ### Schema activation chronology (0141)
 
-A schema activation or reactivation advances its tenant/schema-key clock through
+A schema activation or reactivation advances its schema-key clock through
 `core.record_schema_activation()`. This narrowly privileged trigger writes only chronology for
-the RLS-authorized schema row; consumers keep ordinary tenant-scoped access. The clock table uses
-FORCE RLS and tenant USING/WITH CHECK, with only SELECT granted to the application role. A signing
+the RLS-authorized schema row; consumers keep ordinary actor-scoped access. The clock table uses
+FORCE RLS and live-actor USING/WITH CHECK, with only SELECT granted to the application role. A signing
 transaction captures the epoch under the configuration/project barrier; the signed epoch is
 immutable and historical NULLs are never backfilled. Coexisting versions active before signing do
 not invalidate a review; later activation requires reassessment. Final dispute dismissal preserves

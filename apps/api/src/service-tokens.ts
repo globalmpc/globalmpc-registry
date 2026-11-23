@@ -15,7 +15,7 @@ import { SERVICE_TOKEN_PREFIX, generateServiceToken, hashToken } from "./plugins
  *
  * The API only resolves tokens (`core.resolve_service_token`); issuing, rotating and revoking
  * happen here, run by someone with deployment access — the same trust as `bootstrap`. Every
- * change is written to the tenant's audit trail as `deploy_bound`: the runner is not a subject
+ * change is written to the audit trail as `deploy_bound`: the runner is not a subject
  * the application knows, so no actor is invented.
  *
  * The raw token is returned once, to be stored in the service's secret store. Only its hash is
@@ -96,14 +96,14 @@ function assertServiceRole(role: string): void {
 
 async function audit(
   tx: postgres.TransactionSql,
-  input: { tenantId: string; command: string; tokenId: string; detail: Record<string, unknown> },
+  input: { command: string; tokenId: string; detail: Record<string, unknown> },
 ): Promise<void> {
   await tx`
     INSERT INTO audit.events (
-      tenant_id, actor_subject_id, actor_wallet, effective_role,
+      actor_subject_id, actor_wallet, effective_role,
       command, resource_type, resource_id, correlation_id, detail
     ) VALUES (
-      ${input.tenantId}, NULL, NULL, ${ROLE_DEPLOY_BOUND},
+      NULL, NULL, ${ROLE_DEPLOY_BOUND},
       ${input.command}, 'service_token', ${input.tokenId}, ${`cli:${randomUUID()}`},
       ${tx.json(input.detail as never)}
     )
@@ -118,7 +118,7 @@ async function audit(
  */
 export async function createServiceSubject(
   sql: postgres.Sql,
-  input: { tenantId: string; displayName: string; role: string },
+  input: { displayName: string; role: string },
 ): Promise<{ subjectId: string }> {
   assertServiceRole(input.role);
   if (input.displayName.trim() === "") throw new ServiceTokenError("display name is required");
@@ -128,23 +128,22 @@ export async function createServiceSubject(
 
 async function insertServiceSubject(
   tx: postgres.TransactionSql,
-  input: { tenantId: string; displayName: string; role: string },
+  input: { displayName: string; role: string },
 ): Promise<{ subjectId: string }> {
   {
     const subjectId = randomUUID();
     await tx`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level)
       VALUES (
-        ${subjectId}, ${input.tenantId}, 'service', ${input.displayName},
+        ${subjectId}, 'service', ${input.displayName},
         ${ROLE_MINIMUM_ASSURANCE[input.role] ?? "high_assurance"}
       )
     `;
     await tx`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, role)
-      VALUES (${randomUUID()}, ${input.tenantId}, ${subjectId}, ${input.role})
+      INSERT INTO core.role_bindings (id, subject_id, role)
+      VALUES (${randomUUID()}, ${subjectId}, ${input.role})
     `;
     await audit(tx, {
-      tenantId: input.tenantId,
       command: "service_subject.created",
       tokenId: subjectId,
       detail: { subjectId, role: input.role },
@@ -162,7 +161,6 @@ export interface IssuedServiceToken {
 export async function issueServiceToken(
   sql: postgres.Sql,
   input: {
-    tenantId: string;
     subjectId: string;
     scopes: readonly string[];
     label: string;
@@ -184,7 +182,6 @@ export async function issueServiceToken(
 async function insertToken(
   tx: postgres.TransactionSql,
   input: {
-    tenantId: string;
     subjectId: string;
     scopes: readonly ServiceScope[];
     label: string;
@@ -198,16 +195,15 @@ async function insertToken(
   const tokenId = randomUUID();
   const [row] = await tx<{ expires_at: Date }[]>`
     INSERT INTO core.service_tokens (
-      id, tenant_id, subject_id, label, token_hash, scopes, expires_at, rotated_from
+      id, subject_id, label, token_hash, scopes, expires_at, rotated_from
     ) VALUES (
-      ${tokenId}, ${input.tenantId}, ${input.subjectId}, ${input.label}, ${hash},
+      ${tokenId}, ${input.subjectId}, ${input.label}, ${hash},
       ${[...input.scopes]}::text[], now() + make_interval(secs => ${input.ttlSeconds}),
       ${input.rotatedFrom}
     )
     RETURNING expires_at
   `;
   await audit(tx, {
-    tenantId: input.tenantId,
     command: input.command ?? (input.rotatedFrom ? "service_token.rotated" : "service_token.issued"),
     tokenId,
     detail: {
@@ -235,9 +231,9 @@ export async function rotateServiceToken(
   const { token, hash } = generateServiceToken();
   return sql.begin(async (tx) => {
     const [old] = await tx<
-      { tenant_id: string; subject_id: string; label: string; scopes: ServiceScope[] }[]
+      { subject_id: string; label: string; scopes: ServiceScope[] }[]
     >`
-      SELECT tenant_id, subject_id, label, scopes FROM core.service_tokens
+      SELECT subject_id, label, scopes FROM core.service_tokens
       WHERE id = ${input.tokenId} AND revoked_at IS NULL AND expires_at > now()
       FOR UPDATE
     `;
@@ -250,7 +246,6 @@ export async function rotateServiceToken(
       RETURNING expires_at
     `;
     const issued = await insertToken(tx, {
-      tenantId: old.tenant_id,
       subjectId: old.subject_id,
       scopes: old.scopes,
       label: old.label,
@@ -287,7 +282,7 @@ export interface EnsuredServiceToken {
  * `generateServiceTokenValue`. Idempotent: run on every deploy, it changes nothing until the
  * stored value changes.
  *
- * The service is identified by tenant, role and label: a `service` subject named `label` holding
+ * The service is identified by role and label: a `service` subject named `label` holding
  * `role`, created on first use. Then, by the token's hash:
  *
  * - already this service's, live, same scopes → `unchanged` (its expiry is not extended: a
@@ -307,7 +302,6 @@ export interface EnsuredServiceToken {
 export async function ensureServiceToken(
   sql: postgres.Sql,
   input: {
-    tenantId: string;
     label: string;
     role: string;
     scopes: readonly string[];
@@ -333,13 +327,12 @@ export async function ensureServiceToken(
 
   await requireDeploymentOwner(sql);
   return sql.begin(async (tx): Promise<EnsuredServiceToken> => {
-    await tx`SELECT set_config('app.current_tenant', ${input.tenantId}, true)`;
     // Two deploys running the step at once would otherwise both see "not registered".
-    await tx`SELECT pg_advisory_xact_lock(hashtext(${`service-token-ensure:${input.tenantId}:${input.label}`}))`;
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${`service-token-ensure:${input.label}`}))`;
 
     const [found] = await tx<{ id: string }[]>`
       SELECT s.id FROM core.subjects s
-      WHERE s.tenant_id = ${input.tenantId} AND s.kind = 'service' AND s.display_name = ${input.label}
+      WHERE s.kind = 'service' AND s.display_name = ${input.label}
         AND EXISTS (
           SELECT 1 FROM core.role_bindings b
           WHERE b.subject_id = s.id AND b.role = ${input.role} AND b.revoked_at IS NULL
@@ -351,7 +344,6 @@ export async function ensureServiceToken(
     const subjectId =
       found?.id ??
       (await insertServiceSubject(tx, {
-        tenantId: input.tenantId,
         displayName: input.label,
         role: input.role,
       })).subjectId;
@@ -359,7 +351,6 @@ export async function ensureServiceToken(
     const [existing] = await tx<
       {
         id: string;
-        tenant_id: string;
         subject_id: string;
         label: string;
         scopes: string[];
@@ -370,7 +361,7 @@ export async function ensureServiceToken(
         superseded: boolean;
       }[]
     >`
-      SELECT t.id, t.tenant_id, t.subject_id, t.label, t.scopes,
+      SELECT t.id, t.subject_id, t.label, t.scopes,
              t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired, t.expires_at,
              t.expires_at <= now() + make_interval(secs => ${ENSURE_RENEWAL_NOTICE_SECONDS}) AS renewal_due,
              EXISTS (
@@ -383,7 +374,6 @@ export async function ensureServiceToken(
     `;
     if (existing) {
       if (
-        existing.tenant_id !== input.tenantId ||
         existing.subject_id !== subjectId ||
         existing.label !== input.label
       ) {
@@ -427,7 +417,6 @@ export async function ensureServiceToken(
       ORDER BY issued_at DESC, id
     `;
     const inserted = await insertToken(tx, {
-      tenantId: input.tenantId,
       subjectId,
       scopes,
       label: input.label,
@@ -465,14 +454,13 @@ export async function ensureServiceToken(
 
 export async function revokeServiceToken(sql: postgres.Sql, tokenId: string): Promise<boolean> {
   return sql.begin(async (tx) => {
-    const [row] = await tx<{ tenant_id: string }[]>`
+    const [row] = await tx<{ id: string }[]>`
       UPDATE core.service_tokens SET revoked_at = now()
       WHERE id = ${tokenId} AND revoked_at IS NULL
-      RETURNING tenant_id
+      RETURNING id
     `;
     if (!row) return false;
     await audit(tx, {
-      tenantId: row.tenant_id,
       command: "service_token.revoked",
       tokenId,
       detail: {},
@@ -496,7 +484,6 @@ export interface ServiceTokenSummary {
 /** Never returns hashes: a listing is for deciding what to rotate, not for authenticating. */
 export async function listServiceTokens(
   sql: postgres.Sql,
-  tenantId: string,
 ): Promise<ServiceTokenSummary[]> {
   const rows = await sql<
     {
@@ -512,7 +499,7 @@ export async function listServiceTokens(
     }[]
   >`
     SELECT id, subject_id, label, scopes, issued_at, expires_at, revoked_at, last_used_at, rotated_from
-    FROM core.service_tokens WHERE tenant_id = ${tenantId}
+    FROM core.service_tokens
     ORDER BY issued_at
   `;
   return rows.map((row) => ({

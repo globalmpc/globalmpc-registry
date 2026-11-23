@@ -41,7 +41,7 @@ import {
  * - Expired credentials are not inserted as `valid`. Doing so would pass the signing-time
  *   check and embed a false status in the attestation.
  *
- * Called with an RLS-bypassing connection (superuser).
+ * Called with an RLS-bypassing connection (superuser or BYPASSRLS).
  */
 
 export class BootstrapRegistryError extends Error {
@@ -54,7 +54,6 @@ export class BootstrapRegistryError extends Error {
 }
 
 interface AuditInput {
-  readonly tenantId: string;
   readonly command: string;
   readonly resourceType: string;
   readonly resourceId: string;
@@ -78,26 +77,14 @@ async function recordBootstrapAudit(
 ): Promise<void> {
   await tx`
     INSERT INTO audit.events (
-      tenant_id, actor_subject_id, actor_wallet, effective_role,
+      actor_subject_id, actor_wallet, effective_role,
       command, resource_type, resource_id, reason, correlation_id, detail
     ) VALUES (
-      ${entry.tenantId}, NULL, NULL, ${ROLE_DEPLOY_BOUND},
+      NULL, NULL, ${ROLE_DEPLOY_BOUND},
       ${entry.command}, ${entry.resourceType}, ${entry.resourceId},
       ${entry.reason}, ${randomUUID()}, ${tx.json(entry.detail as never)}
     )
   `;
-}
-
-async function requireTenant(tx: postgres.TransactionSql, slug: string): Promise<string> {
-  const [tenant] = await tx<{ id: string }[]>`
-    SELECT id FROM core.tenants WHERE slug = ${slug}
-  `;
-  if (!tenant) {
-    throw new BootstrapRegistryError(
-      `Tenant not found — ${slug}. Insert people first (\`pnpm --filter @mpc/api bootstrap\`)`,
-    );
-  }
-  return tenant.id;
 }
 
 // --- credential -------------------------------------------------------------
@@ -108,7 +95,6 @@ async function requireTenant(tx: postgres.TransactionSql, slug: string): Promise
  * address is the usual way.
  */
 export interface CredentialInput extends CredentialFields {
-  readonly tenantSlug: string;
   readonly email?: string | null;
   readonly walletAddress?: string | null;
 }
@@ -138,16 +124,14 @@ export async function bootstrapCredential(
   if (!checked.ok) throw new BootstrapRegistryError(checked.message);
 
   return sql.begin(async (tx) => {
-    const tenantId = await requireTenant(tx, input.tenantSlug);
-
     const [identity] = email !== null
       ? await tx<{ subject_id: string }[]>`
           SELECT id AS subject_id FROM core.subjects
-          WHERE email = ${email} AND tenant_id = ${tenantId} AND kind = 'person'
+          WHERE email = ${email} AND kind = 'person'
         `
       : await tx<{ subject_id: string }[]>`
           SELECT subject_id FROM core.wallet_identities
-          WHERE wallet_address = ${wallet} AND tenant_id = ${tenantId}
+          WHERE wallet_address = ${wallet}
             AND disabled_at IS NULL
           ORDER BY created_at
           LIMIT 1
@@ -168,25 +152,23 @@ export async function bootstrapCredential(
     if (!identity?.subject_id) {
       throw new BootstrapRegistryError(
         email !== null
-          ? "No person with this email address in this tenant. Insert people first"
-          : `Wallet ${wallet} is not in this tenant. Insert people first`,
+          ? "No person with this email address. Insert people first"
+          : `Wallet ${wallet} is bound to no person. Insert people first`,
       );
     }
 
-    const found = await findCredential(tx, tenantId, identity.subject_id, input.issuerReference);
+    const found = await findCredential(tx, identity.subject_id, input.issuerReference);
     if (found) return { id: found.id, created: false, state: found.currentStatus };
 
     const id = randomUUID();
     await materializeCredential(tx, {
       id,
-      tenantId,
       subjectId: identity.subject_id,
-      organizationId: await holderOrganization(tx, tenantId, identity.subject_id),
+      organizationId: await holderOrganization(tx, identity.subject_id),
       credential: checked.value,
     });
 
     await recordBootstrapAudit(tx, {
-      tenantId,
       command: "bootstrap.credential.created",
       resourceType: "credential",
       resourceId: id,
@@ -205,7 +187,6 @@ export async function bootstrapCredential(
 // --- attestation schema -----------------------------------------------------
 
 export interface AttestationSchemaInput {
-  readonly tenantSlug: string;
   readonly schemaKey: string;
   readonly schemaVersion: string;
   readonly attestationType: string;
@@ -234,9 +215,7 @@ export async function bootstrapAttestationSchema(
   const state = input.approvedBy === null ? "draft" : "active";
 
   return sql.begin(async (tx) => {
-    const tenantId = await requireTenant(tx, input.tenantSlug);
-
-    const found = await findAttestationSchema(tx, tenantId, input.schemaKey, input.schemaVersion);
+    const found = await findAttestationSchema(tx, input.schemaKey, input.schemaVersion);
     if (found) {
       // Registration and approval must be splittable into two steps (02 §2.8). Without a path to
       // approve a draft later, the only option is one person doing everything at once.
@@ -245,7 +224,6 @@ export async function bootstrapAttestationSchema(
           UPDATE core.attestation_schemas SET state = 'active' WHERE id = ${found.id}
         `;
         await recordBootstrapAudit(tx, {
-          tenantId,
           command: "bootstrap.attestation_schema.approved",
           resourceType: "attestation_schema",
           resourceId: found.id,
@@ -258,10 +236,9 @@ export async function bootstrapAttestationSchema(
     }
 
     const id = randomUUID();
-    await materializeAttestationSchema(tx, { id, tenantId, schema: checked.value, state });
+    await materializeAttestationSchema(tx, { id, schema: checked.value, state });
 
     await recordBootstrapAudit(tx, {
-      tenantId,
       command: "bootstrap.attestation_schema.created",
       resourceType: "attestation_schema",
       resourceId: id,
@@ -281,7 +258,6 @@ export async function bootstrapAttestationSchema(
 // --- compliance policy set --------------------------------------------------
 
 export interface PolicySetInput {
-  readonly tenantSlug: string;
   /** Rule set from `packages/policy`. Parsed and rejected here. */
   readonly definition: unknown;
   /** Same meaning as for the attestation schema. Absent means `draft`. */
@@ -299,9 +275,7 @@ export async function bootstrapPolicySet(
   const state = input.approvedBy === null ? "draft" : "effective";
 
   return sql.begin(async (tx) => {
-    const tenantId = await requireTenant(tx, input.tenantSlug);
-
-    const found = await findPolicySet(tx, tenantId, ruleSet.ruleSetId, ruleSet.version);
+    const found = await findPolicySet(tx, ruleSet.ruleSetId, ruleSet.version);
     if (found) {
       // Same as schema — inserting and approving must be separable.
       if (found.state === "draft" && input.approvedBy !== null) {
@@ -309,7 +283,6 @@ export async function bootstrapPolicySet(
           UPDATE core.compliance_policy_sets SET state = 'effective' WHERE id = ${found.id}
         `;
         await recordBootstrapAudit(tx, {
-          tenantId,
           command: "bootstrap.policy_set.approved",
           resourceType: "compliance_policy_set",
           resourceId: found.id,
@@ -322,10 +295,9 @@ export async function bootstrapPolicySet(
     }
 
     const id = randomUUID();
-    await materializePolicySet(tx, { id, tenantId, ruleSet, definition: input.definition, state });
+    await materializePolicySet(tx, { id, ruleSet, definition: input.definition, state });
 
     await recordBootstrapAudit(tx, {
-      tenantId,
       command: "bootstrap.policy_set.created",
       resourceType: "compliance_policy_set",
       resourceId: id,

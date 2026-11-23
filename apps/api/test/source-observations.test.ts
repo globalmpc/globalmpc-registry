@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { recordSourceObservation } from "../src/services/source-observations.js";
@@ -37,9 +37,9 @@ describeDb("official source observations", () => {
   async function claim(receiptId: string, projectId = fx.projectA) {
     const id = randomUUID();
     await fx.sql`INSERT INTO core.claims
-      (id,tenant_id,project_id,claim_type,value_text,source_coordinate,evidence_tier,
+      (id,project_id,claim_type,value_text,source_coordinate,evidence_tier,
        verification_state,grade,source_receipt_id)
-      VALUES (${id},${fx.tenantA},${projectId},'mining_right','MN-1','{"page":"1"}',
+      VALUES (${id},${projectId},'mining_right','MN-1','{"page":"1"}',
         'P1','analyst_checked','verified',${receiptId})`;
     return id;
   }
@@ -151,7 +151,7 @@ describeDb("official source observations", () => {
       FROM core.source_receipts r WHERE id=${seed}
       )
       INSERT INTO core.source_receipts (
-        id, tenant_id, project_id, connection_id,
+        id, project_id, connection_id,
         authority_id, collection_method, result, query_basis,
         endpoint_or_document_ref, authentication_method, raw_hash, raw_object_key,
         source_schema_version, adapter_version, normalization_version, terms_license,
@@ -161,7 +161,7 @@ describeDb("official source observations", () => {
         second_confirmed_at, supersedes_receipt_id, processing_state
       )
       SELECT
-        id, tenant_id, project_id, connection_id,
+        id, project_id, connection_id,
         authority_id, collection_method, result, query_basis,
         endpoint_or_document_ref, authentication_method, raw_hash, raw_object_key,
         source_schema_version, adapter_version, normalization_version, terms_license,
@@ -180,31 +180,31 @@ describeDb("official source observations", () => {
     expect(observation?.affected_claim_ids).toEqual([id]);
   });
 
-  it("rejects mutation and hides observations from another tenant", async () => {
+  it("rejects mutation and hides observations from another company", async () => {
     const receipt = await collect({ licenseNumber: randomUUID() });
     await expect(fx.sql`UPDATE core.source_observations SET outcome='changed' WHERE receipt_id=${receipt}`).rejects.toThrow("append-only");
     await expect(fx.sql`DELETE FROM core.source_observations WHERE receipt_id=${receipt}`).rejects.toThrow("append-only");
     await expect(fx.sql`TRUNCATE core.source_observations`).rejects.toThrow("append-only");
     await expect(fx.sql`INSERT INTO core.source_observations
-      (tenant_id,project_id,connection_id,receipt_id,query_basis,observed_at,outcome)
-      SELECT tenant_id,${fx.otherProjectA},connection_id,receipt_id,query_basis,observed_at,'baseline'
+      (project_id,connection_id,receipt_id,query_basis,observed_at,outcome)
+      SELECT ${fx.otherProjectA},connection_id,receipt_id,query_basis,observed_at,'baseline'
       FROM core.source_observations WHERE receipt_id=${receipt}`)
       .rejects.toThrow("Observation must match its server-collected receipt scope");
-    const rows = await withTenant(fx.appSql,{ tenantId: fx.tenantB },tx => tx`SELECT id FROM core.source_observations WHERE receipt_id=${receipt}`);
+    const rows = await withActor(fx.appSql, { subjectId: fx.operatorSubjectB },tx => tx`SELECT id FROM core.source_observations WHERE receipt_id=${receipt}`);
     expect(rows).toHaveLength(0);
   });
 
   it("includes direct observation inserts in the project publication barrier", async () => {
     const receipt = await collect({licenseNumber:randomUUID()});
-    await withTenant(fx.appSql,{tenantId:fx.tenantA},async publication => {
+    await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },async publication => {
       await publication`SELECT core.lock_ledger_publication_inputs(${fx.projectA}::uuid)`;
-      await expect(withTenant(fx.appSql,{tenantId:fx.tenantA},async writer => {
+      await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA },async writer => {
         await writer`SET LOCAL lock_timeout = '100ms'`;
         // The lock must reject this before later duplicate-receipt checks run. Without the
         // DB trigger a direct writer bypasses the barrier and fails with23505 instead.
         await writer`INSERT INTO core.source_observations
-          (tenant_id,project_id,connection_id,receipt_id,query_basis,observed_at,outcome)
-          SELECT tenant_id,project_id,connection_id,receipt_id,query_basis,observed_at,outcome
+          (project_id,connection_id,receipt_id,query_basis,observed_at,outcome)
+          SELECT project_id,connection_id,receipt_id,query_basis,observed_at,outcome
           FROM core.source_observations WHERE receipt_id=${receipt}`;
       })).rejects.toMatchObject({code:"55P03"});
     });
@@ -216,20 +216,20 @@ describeDb("official source observations", () => {
     const second = await collect({ licenseNumber: randomUUID() });
     // Direct service exercise models a response captured before the accepted baseline but
     // committed later. Receipt payload remains immutable; only observation scheduling differs.
-    await withTenant(fx.appSql,{ tenantId:fx.tenantA },async tx => {
+    await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },async tx => {
       const [receipt] = await tx<{ raw_hash:string }[]>`SELECT raw_hash FROM core.source_receipts WHERE id=${second}`;
       // A separate receipt already owns its observation; a new receipt is required.
       const id = randomUUID();
       await tx`INSERT INTO core.source_receipts
-        (id,tenant_id,project_id,connection_id,authority_id,collection_method,result,query_basis,
+        (id,project_id,connection_id,authority_id,collection_method,result,query_basis,
          endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,
          terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,
          correlation_id,channel_evidence)
-        SELECT ${id},tenant_id,project_id,connection_id,authority_id,collection_method,result,${tx.json(scope)},
+        SELECT ${id},project_id,connection_id,authority_id,collection_method,result,${tx.json(scope)},
           endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,
           terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,
           correlation_id,channel_evidence FROM core.source_receipts WHERE id=${second}`;
-      await recordSourceObservation(tx,{tenantId:fx.tenantA,projectId:fx.projectA,
+      await recordSourceObservation(tx,{projectId:fx.projectA,
         connectionId:fx.connectionA,receiptId:id,queryBasis:scope,observedAt:new Date("2020-01-01"),
         result:"confirmed_from_source",rawHash:receipt!.raw_hash});
       const [observation] = await tx`SELECT outcome,previous_receipt_id FROM core.source_observations WHERE receipt_id=${id}`;
@@ -246,14 +246,14 @@ describeDb("official source observations", () => {
     const baseline = await collect(scope);
     const id = await claim(baseline);
     const lateReceipt = randomUUID();
-    await withTenant(fx.appSql,{tenantId:fx.tenantA},async tx => {
+    await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },async tx => {
       await tx`WITH cloned_receipts AS (
       SELECT (jsonb_populate_record(NULL::core.source_receipts,to_jsonb(r) ||
           jsonb_build_object('id',${lateReceipt}::text,'result','source_returned_no_record',
             'raw_hash',NULL))).* FROM core.source_receipts r WHERE id=${baseline}
       )
       INSERT INTO core.source_receipts (
-        id, tenant_id, project_id, connection_id,
+        id, project_id, connection_id,
         authority_id, collection_method, result, query_basis,
         endpoint_or_document_ref, authentication_method, raw_hash, raw_object_key,
         source_schema_version, adapter_version, normalization_version, terms_license,
@@ -263,7 +263,7 @@ describeDb("official source observations", () => {
         second_confirmed_at, supersedes_receipt_id, processing_state
       )
       SELECT
-        id, tenant_id, project_id, connection_id,
+        id, project_id, connection_id,
         authority_id, collection_method, result, query_basis,
         endpoint_or_document_ref, authentication_method, raw_hash, raw_object_key,
         source_schema_version, adapter_version, normalization_version, terms_license,
@@ -272,7 +272,7 @@ describeDb("official source observations", () => {
         created_at, channel_evidence, first_confirmed_by, second_confirmed_by,
         second_confirmed_at, supersedes_receipt_id, processing_state
       FROM cloned_receipts`;
-      await recordSourceObservation(tx,{tenantId:fx.tenantA,projectId:fx.projectA,
+      await recordSourceObservation(tx,{projectId:fx.projectA,
         connectionId:fx.connectionA,receiptId:lateReceipt,queryBasis:scope,
         observedAt:new Date("2020-01-01"),result:"source_returned_no_record",rawHash:null});
     });
@@ -280,7 +280,7 @@ describeDb("official source observations", () => {
     expect(late?.outcome).toBe("out_of_order");
     expect(late?.affected_claim_ids).toEqual([]);
     const [latest] = await fx.sql`SELECT receipt_id FROM core.source_observations
-      WHERE tenant_id=${fx.tenantA} AND project_id=${fx.projectA}
+      WHERE project_id=${fx.projectA}
         AND connection_id=${fx.connectionA} AND query_basis=${fx.sql.json(scope)}::jsonb
         AND outcome <> 'out_of_order' ORDER BY observation_sequence DESC LIMIT 1`;
     expect(latest?.receipt_id).toBe(baseline);

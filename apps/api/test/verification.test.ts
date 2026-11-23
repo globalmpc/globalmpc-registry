@@ -1,6 +1,6 @@
 import { freezeReviewBundle } from "../src/services/review-commitment.js";
 import { hashProjection } from "@mpc/canonical";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
@@ -107,11 +107,11 @@ describeDb("Verification and EIP-712 signature", () => {
     reviewerToken = await signIn(app, { address: reviewerWallet as `0x${string}`, account: reviewerAccount });
     for (const role of ["reviewer", "project_member"]) {
       const subject=randomUUID();
-      await fx.sql`INSERT INTO core.subjects(id,tenant_id,kind,display_name,assurance_level)
-        VALUES(${subject},${fx.tenantA},'person',${`Dispute ${role}`},'high_assurance')`;
-      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
-        VALUES(${randomUUID()},${fx.tenantA},${subject},${role === "reviewer" ? fx.reviewOrgA : fx.orgA},${role})`;
-      const token=await issueTestSession(fx.appSql,fx.tenantA,subject,{firstFactor:"email_code",secondFactor:"passkey"});
+      await fx.sql`INSERT INTO core.subjects(id,kind,display_name,assurance_level)
+        VALUES(${subject},'person',${`Dispute ${role}`},'high_assurance')`;
+      await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,role)
+        VALUES(${randomUUID()},${subject},${role === "reviewer" ? fx.reviewOrgA : fx.orgA},${role})`;
+      const token=await issueTestSession(fx.appSql,subject,{firstFactor:"email_code",secondFactor:"passkey"});
       if(role === "reviewer") {resolverToken=token;resolverSubjectId=subject;} else memberToken=token;
     }
 
@@ -248,7 +248,7 @@ describeDb("Verification and EIP-712 signature", () => {
     expect(found?.claimIds).toEqual([claimId]);
   });
 
-  it("does not list cases of another tenant", async () => {
+  it("does not list cases to another company's administrator", async () => {
     await createCase();
 
     const response = await app.inject({
@@ -257,9 +257,9 @@ describeDb("Verification and EIP-712 signature", () => {
       headers: { authorization: `Bearer ${await signIn(app, fx.operatorB)}` },
     });
 
-    // An empty list, not a permission error. For tenant B, projectA does not exist.
-    expect(response.statusCode).toBe(200);
-    expect(response.json().items).toEqual([]);
+    // Operator B's organization-scoped binding does not reach project A.
+    expect(response.statusCode).toBe(403);
+    expect(response.json().items).toBeUndefined();
   });
 
   it("assignment scope cannot be changed afterwards", async () => {
@@ -371,16 +371,16 @@ describeDb("Verification and EIP-712 signature", () => {
         signatureRequestId: signatureRequest.signatureRequestId,
         signature,
       });
-      const frozen=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>freezeReviewBundle(tx,fx.tenantA,fx.projectA,"verification",draft.id,{}));
+      const frozen=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>freezeReviewBundle(tx,fx.projectA,"verification",draft.id,{}));
       expect(frozen.commitment.reviewCount).toBe("1");
       expect(frozen.commitment.independentlyVerifiableCount).toBe("1");
       expect(frozen.bundle.reviews[0]!.signature).toBe(signature);
       expect(frozen.bundleHash).toBe(hashProjection(frozen.bundle as never));
       expect(frozen.bundle.reviews[0]!.signingEnvelope).toBeTruthy();
       await expect(fx.sql`UPDATE core.verification_attestations SET signing_envelope='{}' WHERE id=${draft.id}`).rejects.toThrow("Signed envelope is immutable");
-      await expect(withTenant(fx.appSql,{tenantId:fx.tenantB},tx=>freezeReviewBundle(tx,fx.tenantB,fx.projectA,"verification",draft.id,{}))).rejects.toMatchObject({code:"REVIEW_SUBJECT_NOT_SIGNED"});
+      await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectB },tx=>freezeReviewBundle(tx,fx.projectA,"verification",draft.id,{}))).rejects.toMatchObject({code:"REVIEW_SUBJECT_NOT_SIGNED"});
       const [claim]=await fx.sql<{claim_type:string}[]>`SELECT claim_type FROM core.claims WHERE id=${evidenceClaimId}`;
-      const excluded=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>freezeReviewBundle(tx,fx.tenantA,fx.projectA,"project",fx.projectA,{evidenceLedger:{items:[{claimType:claim!.claim_type,status:"not_applicable"}]}}));
+      const excluded=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>freezeReviewBundle(tx,fx.projectA,"project",fx.projectA,{evidenceLedger:{items:[{claimType:claim!.claim_type,status:"not_applicable"}]}}));
       expect(excluded.bundle.reviews).toEqual([]);
       return draft.id as string;
     }
@@ -542,8 +542,8 @@ describeDb("Verification and EIP-712 signature", () => {
         if(change === "new schema version" || change === "older activated schema") await fx.sql`INSERT INTO core.attestation_schemas SELECT (jsonb_populate_record(NULL::core.attestation_schemas,
           to_jsonb(s)||jsonb_build_object('id',${randomUUID()}::text,'schema_version','2','created_at',now()-CASE WHEN ${change === "older activated schema"} THEN interval '1 year' ELSE interval '0' END))).* FROM core.attestation_schemas s WHERE id=${schemaId}`;
         if(change === "stale claim") await fx.sql`UPDATE core.claims SET stale_since=now(),stale_reason='Source withdrawn during dispute' WHERE id=${evidenceClaimId}`;
-        if(change === "new policy") await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-          VALUES(${randomUUID()},${fx.tenantA},${`restore-${schemaId}`},'1','registry_publication','MNG',now()-interval '1 minute','{}','effective')`;
+        if(change === "new policy") await fx.sql`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+          VALUES(${randomUUID()},${`restore-${schemaId}`},'1','registry_publication','MNG',now()-interval '1 minute','{}','effective')`;
         const [objection]=await disputeOf(attestationId);
         const response=await resolve(objection!.id,{outcome:"dismissed",resolution:"Date checked; current review basis still needs attention"});
         expect(response.statusCode,response.body).toBe(200);
@@ -561,19 +561,19 @@ describeDb("Verification and EIP-712 signature", () => {
       const [objection]=await disputeOf(attestationId), key=idempotencyKey(), body={outcome:"dismissed",resolution:"Checked"};
       const unknownBinding=randomUUID();
       await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE subject_id=${resolverSubjectId} AND revoked_at IS NULL`;
-      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,role) VALUES(${unknownBinding},${fx.tenantA},${resolverSubjectId},'reviewer')`;
+      await fx.sql`INSERT INTO core.role_bindings(id,subject_id,role) VALUES(${unknownBinding},${resolverSubjectId},'reviewer')`;
       const credential=randomUUID();
       try {
         const unknown=await resolve(objection!.id,body,resolverToken,key);
         expect(unknown.statusCode,unknown.body).toBe(403);expect(unknown.json().code).toBe("DISPUTE_RESOLUTION_NOT_INDEPENDENT");
         expect((await disputeOf(attestationId))[0]!.resolvedAt).toBeNull();
-        await fx.sql`INSERT INTO core.credentials(id,tenant_id,subject_id,organization_id,issuer_reference,credential_type,issued_at)
-          VALUES(${credential},${fx.tenantA},${resolverSubjectId},${fx.reviewOrgA},'Independent organization','competent_person',now()-interval '1 day')`;
+        await fx.sql`INSERT INTO core.credentials(id,subject_id,organization_id,issuer_reference,credential_type,issued_at)
+          VALUES(${credential},${resolverSubjectId},${fx.reviewOrgA},'Independent organization','competent_person',now()-interval '1 day')`;
         const known=await resolve(objection!.id,body,resolverToken,key);
         expect(known.statusCode,known.body).toBe(200);expect(known.json().attestationState).toBe("active");
       } finally {
         await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE id=${unknownBinding}`;
-        await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role) VALUES(${randomUUID()},${fx.tenantA},${resolverSubjectId},${fx.reviewOrgA},'reviewer')`;
+        await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,role) VALUES(${randomUUID()},${resolverSubjectId},${fx.reviewOrgA},'reviewer')`;
       }
     });
 
@@ -600,29 +600,22 @@ describeDb("Verification and EIP-712 signature", () => {
       expect(after).toEqual(before);
     });
 
-    it("keeps activation clocks tenant scoped, read only and frozen after signing", async () => {
+    it("keeps activation clocks visible only to live actors, read only and frozen after signing", async () => {
       const attestationId=await signOne();
-      const foreignSchema=randomUUID();
-      await fx.sql`INSERT INTO core.attestation_schemas SELECT (jsonb_populate_record(NULL::core.attestation_schemas,
-        to_jsonb(s)||jsonb_build_object('id',${foreignSchema}::text,'tenant_id',${fx.tenantB}::text))).* FROM core.attestation_schemas s WHERE id=${fx.schemaA}`;
-      await fx.sql`UPDATE core.attestation_schemas SET state='retired' WHERE id=${foreignSchema}`;
-      await fx.sql`UPDATE core.attestation_schemas SET state='active' WHERE id=${foreignSchema}`;
-      const foreign=await fx.sql`SELECT * FROM core.schema_activation_clocks WHERE tenant_id=${fx.tenantB}`;
-      expect(foreign.length).toBeGreaterThan(0);
-      const own=await withTenant(fx.appSql,{tenantId:fx.tenantA},async tx=>{
+      const own=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },async tx=>{
         const [role]=await tx`SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user`;
         expect(role).toMatchObject({rolsuper:false,rolbypassrls:false});
-        expect(await tx`SELECT * FROM core.schema_activation_clocks WHERE tenant_id=${fx.tenantB}`).toEqual([]);
-        return tx`SELECT * FROM core.schema_activation_clocks WHERE tenant_id=${fx.tenantA}`;
+        return tx`SELECT * FROM core.schema_activation_clocks`;
       });
+      expect(await withActor(fx.appSql, { subjectId: randomUUID() },tx=>tx`SELECT * FROM core.schema_activation_clocks`)).toEqual([]);
       expect(own.length).toBeGreaterThan(0);
       expect(await fx.appSql`SELECT * FROM core.schema_activation_clocks`).toEqual([]);
-      await expect(withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>tx`UPDATE core.schema_activation_clocks SET epoch=epoch+1`)).rejects.toMatchObject({code:"42501"});
-      await expect(withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>tx`INSERT INTO core.schema_activation_clocks(tenant_id,schema_key,epoch) VALUES(${fx.tenantA},'forged',999)`)).rejects.toMatchObject({code:"42501"});
+      await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>tx`UPDATE core.schema_activation_clocks SET epoch=epoch+1`)).rejects.toMatchObject({code:"42501"});
+      await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>tx`INSERT INTO core.schema_activation_clocks(schema_key,epoch) VALUES('forged',999)`)).rejects.toMatchObject({code:"42501"});
       await expect(fx.sql`UPDATE core.verification_attestations SET schema_activation_epoch=schema_activation_epoch+1 WHERE id=${attestationId}`).rejects.toMatchObject({code:"42501"});
       await dispute(attestationId,{reasonCode:"X",detail:"Check source"});
       const [objection]=await disputeOf(attestationId);
-      const restored=await resolve(objection!.id,{outcome:"dismissed",resolution:"Other-tenant schema activation is unrelated"});
+      const restored=await resolve(objection!.id,{outcome:"dismissed",resolution:"Schema activation is unrelated"});
       expect(restored.statusCode,restored.body).toBe(200);expect(restored.json().attestationState).toBe("active");
     });
 
@@ -630,8 +623,8 @@ describeDb("Verification and EIP-712 signature", () => {
       const attestationId=await signOne();
       await dispute(attestationId,{reasonCode:"X",detail:"Check scope"});
       const [objection]=await disputeOf(attestationId), credential=randomUUID();
-      await fx.sql`INSERT INTO core.credentials(id,tenant_id,subject_id,organization_id,issuer_reference,credential_type,issued_at,expires_at)
-        VALUES(${credential},${fx.tenantA},${resolverSubjectId},${fx.orgA},'Operator affiliation','competent_person',now()-interval '1 day',now()+interval '1 day')`;
+      await fx.sql`INSERT INTO core.credentials(id,subject_id,organization_id,issuer_reference,credential_type,issued_at,expires_at)
+        VALUES(${credential},${resolverSubjectId},${fx.orgA},'Operator affiliation','competent_person',now()-interval '1 day',now()+interval '1 day')`;
       const body={outcome:"dismissed",resolution:"Review by an independent person"}, key=idempotencyKey();
       const denied=await resolve(objection!.id,body,resolverToken,key);
       expect(denied.statusCode,denied.body).toBe(403);
@@ -672,7 +665,7 @@ describeDb("Verification and EIP-712 signature", () => {
       const request=(await requestSignature(draft.id)).json(), signingKey=idempotencyKey();
       const signature={signatureRequestId:request.signatureRequestId,signature:await signTypedData(request.typedData)};
       await fx.sql.begin(async hold=>{
-        await hold`SELECT pg_advisory_xact_lock(hashtextextended(${`ledger-project:${fx.tenantA}:${fx.projectA}`},0))`;
+        await hold`SELECT pg_advisory_xact_lock(hashtextextended(${`ledger-project:${fx.projectA}`},0))`;
         const busy=await resolve(raised!.id,body,resolverToken,key);
         expect(busy.statusCode,busy.body).toBe(503);expect(busy.json().code).toBe("DISPUTE_EVIDENCE_BUSY");
         expect((await disputeOf(attestationId))[0]!.resolvedAt).toBeNull();
@@ -731,9 +724,9 @@ describeDb("Verification and EIP-712 signature", () => {
       const signerGrant=randomUUID(),resolverGrant=randomUUID();
       try {
         await fx.sql.begin(async writer=>{
-          await writer`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
-            VALUES(${signerGrant},${fx.tenantA},${fx.reviewerSubjectA},${fx.orgA},'project_member'),
-              (${resolverGrant},${fx.tenantA},${resolverSubjectId},${fx.orgA},'project_member')`;
+          await writer`INSERT INTO core.role_bindings(id,subject_id,organization_id,role)
+            VALUES(${signerGrant},${fx.reviewerSubjectA},${fx.orgA},'project_member'),
+              (${resolverGrant},${resolverSubjectId},${fx.orgA},'project_member')`;
           const signing=await submitSignature(draft.id,signature,reviewerToken,signingKey);
           expect(signing.statusCode,signing.body).toBe(503);expect(signing.json().code).toBe("ATTESTATION_EVIDENCE_BUSY");
           const resolution=await resolve(objection!.id,body,resolverToken,key);
@@ -1066,7 +1059,7 @@ describeDb("Verification and EIP-712 signature", () => {
 
   it("cannot create a draft on someone else's assignment", async () => {
     /**
-     * A role check does not block this path: all reviewers in a tenant share the same role.
+     * A role check does not block this path: all reviewers share the same role.
      * Without matching the assignee, findings are recorded under someone else's name.
      */
     const created = await createCase();
@@ -1092,7 +1085,7 @@ describeDb("Verification and EIP-712 signature", () => {
    * Signature requests carry the same checks as drafting.
    *
    * The response holds the typed data and the human-readable payload of the draft — project key,
-   * type, claim count, limitations, snapshot hash. Without these checks anyone in the tenant
+   * type, claim count, limitations, snapshot hash. Without these checks anyone in the Registry
    * could read another project's draft and create request rows against it.
    */
   describe("signature request authorization", () => {
@@ -1113,27 +1106,27 @@ describeDb("Verification and EIP-712 signature", () => {
       return Number(row!.count);
     }
 
-    /** A reviewer whose only binding is on another project in the same tenant. */
+    /** A reviewer whose only binding is on another project. */
     async function otherProjectReviewerToken(): Promise<string> {
       const account = newAccount();
       const subject = randomUUID();
       await fx.sql`
-        INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-        VALUES (${subject}, ${fx.tenantA}, 'person', 'Other Project Reviewer')
+        INSERT INTO core.subjects (id, kind, display_name)
+        VALUES (${subject}, 'person', 'Other Project Reviewer')
       `;
       await fx.sql`
         INSERT INTO core.wallet_identities (
-          id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+          id, subject_id, wallet_address, chain_id, assurance_level, bound_at
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'high_assurance', now()
+          ${randomUUID()}, ${subject}, ${account.address}, 31337, 'high_assurance', now()
         )
       `;
       await syncSubjectAssurance(fx.sql);
       await fx.sql`
         INSERT INTO core.role_bindings (
-          id, tenant_id, subject_id, organization_id, project_id, role
+          id, subject_id, organization_id, project_id, role
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, ${fx.otherProjectA}, 'reviewer'
+          ${randomUUID()}, ${subject}, ${fx.orgA}, ${fx.otherProjectA}, 'reviewer'
         )
       `;
       return signIn(app, account);
@@ -1145,7 +1138,8 @@ describeDb("Verification and EIP-712 signature", () => {
 
       const response = await requestSignatureAs(await otherProjectReviewerToken(), draft.id);
 
-      expect(response.statusCode).toBe(403);
+      // The draft's project is outside the reviewer's binding: hidden, not found.
+      expect(response.statusCode).toBe(404);
       expect(response.body).not.toContain("typedData");
       expect(await requestRowCount(draft.id)).toBe(0);
     });
@@ -1154,7 +1148,7 @@ describeDb("Verification and EIP-712 signature", () => {
       const created = await createCase();
       const draft = (await draftAttestation(created.id, created.assignmentId)).json();
 
-      // Same tenant, organization-level role — still not the assigned reviewer.
+      // Same organization-level role — still not the assigned reviewer.
       const response = await requestSignatureAs(stewardToken, draft.id);
 
       expect(response.statusCode).toBe(403);
@@ -1175,8 +1169,8 @@ describeDb("Verification and EIP-712 signature", () => {
     });
 
     it("does not hand the stored response to another user replaying the assignee's key", async () => {
-      // An idempotency key is scoped to the tenant and the body here is empty, so a replay
-      // matches. The checks must run before the stored response is returned.
+      // An idempotency key is unique across the Registry and the body here is empty, so a replay
+      // finds the stored key. The checks must run before the stored response is returned.
       const created = await createCase();
       const draft = (await draftAttestation(created.id, created.assignmentId)).json();
       const key = idempotencyKey();
@@ -1263,10 +1257,10 @@ describeDb("Verification and EIP-712 signature", () => {
       return { promise, resolve };
     }
 
-    it("permits an active same-tenant relay and refuses another tenant without consuming its request", async () => {
+    it("permits an active in-reach relay and refuses another company without consuming its request", async () => {
       const prepared = await pending();
-      const otherTenant = await signIn(app, fx.operatorB);
-      const denied = await submitSignature(prepared.attestationId, prepared.body, otherTenant);
+      const otherCompany = await signIn(app, fx.operatorB);
+      const denied = await submitSignature(prepared.attestationId, prepared.body, otherCompany);
       expect(denied.statusCode, denied.body).toBe(409);
       expect(denied.json().code).toBe("SIGNATURE_REQUEST_UNUSABLE");
       await expectPending(prepared.attestationId, prepared.body.signatureRequestId);
@@ -1378,7 +1372,7 @@ describeDb("Verification and EIP-712 signature", () => {
 
       // Passkey: the reviewer holds one (`signIn` sessions prove it), and binding needs the
       // strongest factor held (WP5). `reviewerToken` must survive: a replace keeps sessions.
-      const account = await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, {
+      const account = await issueTestSession(fx.appSql, fx.reviewerSubjectA, {
         firstFactor: "email_code",
         secondFactor: "passkey",
       });
@@ -1468,11 +1462,11 @@ describeDb("Verification and EIP-712 signature", () => {
     });
 
     /**
-     * A Google (or Microsoft) session carries no wallet at all (WP4). Signing must not lean on
+     * A Google session carries no wallet at all (WP4). Signing must not lean on
      * one: the reviewer requests and submits from that session and the recovered key decides.
      */
     it("signs from a Google + passkey session with the reviewer's new wallet", async () => {
-      const google = await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, {
+      const google = await issueTestSession(fx.appSql, fx.reviewerSubjectA, {
         firstFactor: "google",
         secondFactor: "passkey",
       });

@@ -61,7 +61,6 @@ export interface WeightResult {
 export async function resolveVoteWeight(
   tx: postgres.TransactionSql,
   input: {
-    readonly tenantId: string;
     readonly proposalId: string;
     /** The subject's active wallet — its governance wallet (D9). Needed only for a snapshot proposal. */
     readonly walletAddress: string | null;
@@ -121,9 +120,9 @@ export async function resolveVoteWeight(
 
   await tx`
     INSERT INTO core.governance_vote_weights (
-      id, tenant_id, proposal_id, wallet_address, weight, block_number
+      id, proposal_id, wallet_address, weight, block_number
     ) VALUES (
-      ${randomUUID()}, ${input.tenantId}, ${input.proposalId}, ${walletAddress},
+      ${randomUUID()}, ${input.proposalId}, ${walletAddress},
       ${weight.toString()}, ${input.snapshotBlock}
     )
     ON CONFLICT (proposal_id, wallet_address) DO NOTHING

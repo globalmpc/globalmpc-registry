@@ -32,8 +32,15 @@ const SECRET_VARIABLES = [
   "OBJECT_SECRET_ACCESS_KEY",
   "EDGE_PROXY_SECRET",
   "GOOGLE_CLIENT_SECRET",
-  "MICROSOFT_CLIENT_SECRET",
 ] as const;
+/** A setting that no longer exists: unset or empty only. */
+function removedSetting(message: string) {
+  return z
+    .string()
+    .optional()
+    .refine((raw) => raw === undefined || raw === "", { message });
+}
+
 const schema = z.object({
   DEPLOY_ENVIRONMENT: z.string().optional(),
   PORT: z.coerce.number().int().positive().default(3001),
@@ -72,7 +79,7 @@ const schema = z.object({
       message: "wallet sign-in was removed (WP7); unset LEGACY_WALLET_LOGIN",
     }),
   /**
-   * **Test builds only.** Base URL of the E2E relay that stands in for Google and Microsoft: every
+   * **Test builds only.** Base URL of the E2E relay that stands in for Google: every
    * request the OIDC library makes to a provider host goes to `<relay>/<host><path>` instead
    * (`oidc-test-relay.ts`). Refused in production and on mainnet, like the demo keys.
    */
@@ -104,7 +111,7 @@ const schema = z.object({
    */
   EMAIL_TRANSPORT: z.string().optional(),
   /**
-   * Google and Microsoft sign-in (WP4). A provider is on when both its client id and secret are
+   * Google sign-in (WP4). The provider is on when both its client id and secret are
    * set, and off when neither is. In production one without the other is refused at startup —
    * a deployment that meant to turn a provider on must not silently run without it.
    *
@@ -112,13 +119,13 @@ const schema = z.object({
    */
   GOOGLE_CLIENT_ID: z.string().max(256).optional(),
   GOOGLE_CLIENT_SECRET: z.string().max(512).optional(),
-  MICROSOFT_CLIENT_ID: z.string().max(256).optional(),
-  MICROSOFT_CLIENT_SECRET: z.string().max(512).optional(),
   /**
-   * Microsoft directories (`tid`, comma-separated GUIDs) allowed to sign in. Unset: any work or
-   * school directory — an identity still has to be linked or invited before it signs anyone in.
+   * Microsoft sign-in was removed (0171). A deployment that still sets one of these meant to
+   * offer it; refusing to start says so instead of silently running without it.
    */
-  MICROSOFT_ALLOWED_TENANTS: z.string().optional(),
+  MICROSOFT_CLIENT_ID: removedSetting("Microsoft sign-in was removed; unset MICROSOFT_CLIENT_ID"),
+  MICROSOFT_CLIENT_SECRET: removedSetting("Microsoft sign-in was removed; unset MICROSOFT_CLIENT_SECRET"),
+  MICROSOFT_ALLOWED_TENANTS: removedSetting("Microsoft sign-in was removed; unset MICROSOFT_ALLOWED_TENANTS"),
   /**
    * Origin the providers redirect to: `<OIDC_REDIRECT_BASE>/auth/oidc/{provider}/callback`, a web
    * page that posts the result to the API through the same-origin proxy. It must be the web
@@ -254,7 +261,7 @@ const schema = z.object({
    * `none` is rejected in production — originals would stay in plaintext.
    */
   OBJECT_SSE: z.enum(["none", "aes256", "kms"]).default("aes256"),
-  /** KMS key. Required when `OBJECT_SSE=kms`. Per-tenant separation depends on OD-18. */
+  /** KMS key. Required when `OBJECT_SSE=kms`. Per-company separation depends on OD-18. */
   OBJECT_KMS_KEY_ID: z.string().optional(),
   OBJECT_ACCESS_KEY_ID: z.string().optional(),
   OBJECT_SECRET_ACCESS_KEY: z.string().optional(),
@@ -312,7 +319,7 @@ export interface AppConfig {
    */
   readonly oidcTestRelayUrl: string | null;
   /** WebAuthn relying party: the RP ID and the one origin assertions must come from. */
-  /** Google / Microsoft sign-in (WP4). A provider is `null` when it is turned off. */
+  /** Google sign-in (WP4). The provider is `null` when it is turned off. */
   readonly oidc: OidcConfig;
   readonly rateLimitMax: number;
   readonly publicRateLimitMax: number;
@@ -342,8 +349,6 @@ export interface OidcConfig {
   /** The web origin the providers redirect to, without a trailing slash. */
   readonly redirectBase: string;
   readonly google: OidcClientConfig | null;
-  /** `allowedTenants` null: any work or school directory. */
-  readonly microsoft: (OidcClientConfig & { readonly allowedTenants: readonly string[] | null }) | null;
 }
 
 export class ConfigError extends Error {
@@ -489,8 +494,6 @@ function resolveOidcTestRelay(value: z.infer<typeof schema>): string | null {
   return url.href.replace(/\/+$/, "");
 }
 
-const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
 /**
  * The OIDC client settings, validated once (WP4).
  *
@@ -524,21 +527,9 @@ function resolveOidc(value: z.infer<typeof schema>, webOrigin: string): OidcConf
     throw new ConfigError("OIDC_REDIRECT_BASE must use https in production");
   }
 
-  let allowedTenants: string[] | null = null;
-  if (value.MICROSOFT_ALLOWED_TENANTS !== undefined) {
-    allowedTenants = value.MICROSOFT_ALLOWED_TENANTS.split(",")
-      .map((entry) => entry.trim().toLowerCase())
-      .filter((entry) => entry.length > 0);
-    if (allowedTenants.length === 0 || allowedTenants.some((entry) => !GUID.test(entry))) {
-      throw new ConfigError("MICROSOFT_ALLOWED_TENANTS must be a comma-separated list of directory (tenant) GUIDs");
-    }
-  }
-
-  const microsoft = pair("MICROSOFT", value.MICROSOFT_CLIENT_ID, value.MICROSOFT_CLIENT_SECRET);
   return {
     redirectBase: base.origin,
     google: pair("GOOGLE", value.GOOGLE_CLIENT_ID, value.GOOGLE_CLIENT_SECRET),
-    microsoft: microsoft ? { ...microsoft, allowedTenants } : null,
   };
 }
 

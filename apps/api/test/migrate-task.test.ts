@@ -62,7 +62,6 @@ describe("migration task program", () => {
       DB_NAME: "mpc_registry",
       DB_SSLMODE: "require",
       SCAN_SERVICE_TOKEN: TOKEN,
-      SCAN_SERVICE_TENANT_SLUG: "registry",
     };
     for (const [name, value] of Object.entries(extra)) {
       if (value === undefined) delete env[name];
@@ -85,8 +84,6 @@ describe("migration task program", () => {
 
   const bootstrapVars = {
     BOOTSTRAP_EMAIL: EMAIL,
-    BOOTSTRAP_TENANT_SLUG: "registry",
-    BOOTSTRAP_TENANT_NAME: "Registry",
     BOOTSTRAP_ORG_NAME: "Registry Operator",
     BOOTSTRAP_SUBJECT_NAME: "First operator",
   };
@@ -96,7 +93,7 @@ describe("migration task program", () => {
     expect(status).toBe(0);
     expect(steps.map((step) => step.args)).toEqual([
       "--import tsx src/cli.ts",
-      "--import tsx src/service-token-cli.ts ensure registry scan-worker scan_service scan_result",
+      "--import tsx src/service-token-cli.ts ensure scan-worker scan_service scan_result",
     ]);
     expect(steps[0]!.cwd).toBe(join(dir, "repo/packages/db"));
     expect(steps[1]!.cwd).toBe(join(dir, "repo/apps/api"));
@@ -117,12 +114,11 @@ describe("migration task program", () => {
     expect(steps.map((step) => step.args)).toEqual([
       "--import tsx src/cli.ts",
       "--import tsx src/bootstrap-cli.ts",
-      "--import tsx src/service-token-cli.ts ensure registry scan-worker scan_service scan_result",
+      "--import tsx src/service-token-cli.ts ensure scan-worker scan_service scan_result",
     ]);
     const [migrate, bootstrap, ensure] = steps;
     expect(bootstrap!.cwd).toBe(join(dir, "repo/apps/api"));
     expect(bootstrap!.env.get("BOOTSTRAP_EMAIL")).toBe(EMAIL);
-    expect(bootstrap!.env.get("BOOTSTRAP_TENANT_SLUG")).toBe("registry");
     expect(bootstrap!.env.get("DATABASE_URL")).toBe(migrate!.env.get("DATABASE_URL"));
     expect(migrate!.env.has("BOOTSTRAP_EMAIL")).toBe(false);
     expect(ensure!.env.has("BOOTSTRAP_EMAIL")).toBe(false);
@@ -167,7 +163,7 @@ describe("migration task program", () => {
   });
 
   it("names a missing input and runs nothing, without echoing any value", () => {
-    for (const name of ["DB_PASSWORD", "SCAN_SERVICE_TOKEN", "SCAN_SERVICE_TENANT_SLUG"]) {
+    for (const name of ["DB_PASSWORD", "SCAN_SERVICE_TOKEN"]) {
       rmSync(calls, { recursive: true, force: true });
       mkdirSync(calls);
       const { status, output, steps } = run({ ...bootstrapVars, [name]: "" });

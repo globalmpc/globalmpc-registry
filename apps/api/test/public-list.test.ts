@@ -31,7 +31,7 @@ describeDb("public Registry list and search", () => {
   ) {
     const projectId = await insertProject(
       fx.sql,
-      { tenantId: fx.tenantA, organizationId: fx.orgA },
+      { organizationId: fx.orgA },
       publicKey,
       { name: fields.projectName, hostCountryIso3: fields.hostCountry, minerals: fields.mineral },
     );
@@ -95,7 +95,7 @@ describeDb("public Registry list and search", () => {
   });
 
   /**
-   * The core of this file. The list scans many entries across tenants, so one leaking
+   * The core of this file. The list scans many entries across projects, so one leaking
    * row leaks everything.
    */
   it("returns no fields outside the public allowlist", async () => {
@@ -109,10 +109,8 @@ describeDb("public Registry list and search", () => {
     }
   });
 
-  it("does not reveal the tenant", async () => {
+  it("does not reveal internal ownership columns", async () => {
     const { body } = await list("?limit=100");
-
-    expect(JSON.stringify(body)).not.toContain(fx.tenantA);
     for (const item of body.items) {
       expect(Object.keys(item)).not.toContain("tenantId");
     }

@@ -7,9 +7,8 @@
 # 2. Bootstrap the first operator (`bootstrap-cli.ts`) — only when BOOTSTRAP_EMAIL is set. Unset is
 #    the normal state of an environment that already has its operators: the step is skipped with
 #    a log line. Every run with the same inputs is a no-op (docs/operations/deployment.md).
-# 3. Register the scan worker's token (`service-token ensure`) for SCAN_SERVICE_TENANT_SLUG.
-#    Bootstrap runs first, so on a brand-new environment the tenant it creates exists by now and
-#    one deploy is enough.
+# 3. Register the scan worker's token (`service-token ensure`) for the `scan-worker` service
+#    subject, created on first use, so one deploy is enough on a brand-new environment.
 #
 # Secrets: SCAN_SERVICE_TOKEN and BOOTSTRAP_EMAIL (personal data) are moved into unexported shell
 # variables before anything runs, so the migration never sees them; each is handed, in its
@@ -22,7 +21,7 @@ set -eu
 
 root="${MIGRATE_TASK_ROOT:-/repo}"
 
-for v in DB_USER DB_PASSWORD DB_HOST DB_PORT DB_NAME DB_SSLMODE SCAN_SERVICE_TOKEN SCAN_SERVICE_TENANT_SLUG; do
+for v in DB_USER DB_PASSWORD DB_HOST DB_PORT DB_NAME DB_SSLMODE SCAN_SERVICE_TOKEN; do
   eval "test -n \"\${$v:-}\"" || { echo "migrate-task: $v is empty" >&2; exit 1; }
 done
 
@@ -46,4 +45,4 @@ fi
 bootstrap_email=""
 
 SERVICE_TOKEN="$scan_token" exec node --import tsx src/service-token-cli.ts \
-  ensure "$SCAN_SERVICE_TENANT_SLUG" scan-worker scan_service scan_result
+  ensure scan-worker scan_service scan_result

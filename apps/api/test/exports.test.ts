@@ -46,7 +46,7 @@ describeDb("exports and audit coverage", () => {
       { effective_role: string; resource_id: string | null; project_id: string | null; actor_wallet: string | null }[]
     >`
       SELECT effective_role, resource_id, project_id, actor_wallet FROM audit.events
-      WHERE tenant_id = ${fx.tenantA} AND command = ${command}
+      WHERE command = ${command}
         AND actor_subject_id = (
           SELECT subject_id FROM core.wallet_identities WHERE wallet_address = ${wallet} AND chain_id = 31337
         )
@@ -108,7 +108,7 @@ describeDb("exports and audit coverage", () => {
       const response = (await exportAudit(auditorToken, "?limit=5")).json();
       const [row] = await fx.sql<{ detail: { sha256: string; lineCount: number } }[]>`
         SELECT detail FROM audit.events
-        WHERE tenant_id = ${fx.tenantA} AND command = 'audit.exported'
+        WHERE command = 'audit.exported'
         ORDER BY id DESC LIMIT 1
       `;
       expect(row!.detail.sha256).toBe(response.manifest.sha256);
@@ -193,7 +193,7 @@ describeDb("exports and audit coverage", () => {
     it("follows project scope", async () => {
       const scopedToken = await signIn(app, fx.scopedStewardA);
       expect((await requestExport(scopedToken, fx.otherProjectA)).statusCode).toBe(403);
-      // A tenant-wide role passes scope, so a missing project answers as missing.
+      // A Registry-wide role passes scope, so a missing project answers as missing.
       expect((await requestExport(operatorToken, randomUUID())).statusCode).toBe(404);
     });
   });
@@ -250,9 +250,9 @@ describeDb("exports and audit coverage", () => {
       const reason = `audit-${randomUUID().slice(0, 8)}`;
       await fx.sql`
         INSERT INTO core.evidence_stale_signals (
-          id, tenant_id, project_id, target_type, target_id, reason
+          id, project_id, target_type, target_id, reason
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${fx.projectA}, 'registry_entry_version',
+          ${randomUUID()}, ${fx.projectA}, 'registry_entry_version',
           ${randomUUID()}, ${reason}
         )
       `;
@@ -286,10 +286,10 @@ describeDb("exports and audit coverage", () => {
   it("the backlog counts dead-lettered events apart, with the last error", async () => {
     await fx.sql`
       INSERT INTO core.outbox (
-        id, tenant_id, event_type, aggregate_id, aggregate_version, payload, correlation_id,
+        id, event_type, aggregate_id, aggregate_version, payload, correlation_id,
         attempts, last_error, dead_lettered_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, 'test.dead_letter', ${randomUUID()}, 1, '{}'::jsonb,
+        ${randomUUID()}, 'test.dead_letter', ${randomUUID()}, 1, '{}'::jsonb,
         'dead-letter-test', 5, 'project_export: Error: down', now()
       )
     `;

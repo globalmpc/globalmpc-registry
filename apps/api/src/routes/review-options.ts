@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   ACTION_POLICIES,
   ROLE_MINIMUM_ASSURANCE,
@@ -16,11 +16,11 @@ import { requireReadContext } from "./shared.js";
  * Review assignment options.
  *
  * The assignment form used to send one fixed reviewer, credential, and schema (the E2E seed's
- * ids), so on any real tenant every assignment failed. This read returns what an assignment on
+ * ids), so outside the demo every assignment failed. This read returns what an assignment on
  * this project can actually use, and nothing an assignee could never sign with:
  *
  * - a reviewer-role binding that is not revoked and reaches this project (organization-level
- *   reviewer bindings honor their explicit tenant/owning-organization scope; a project-level
+ *   reviewer bindings honor their explicit Registry/owning-organization scope; a project-level
  *   binding reaches only its project);
  * - an active wallet whose assurance meets that role's minimum, or signing is refused later;
  * - credentials that are valid now; schemas that are active.
@@ -87,18 +87,17 @@ function toCredential(row: CredentialRow) {
   };
 }
 
-async function readReviewers(tx: Tx, tenantId: string, projectId: string) {
+async function readReviewers(tx: Tx, projectId: string) {
   const bindings = await tx<BindingRow[]>`
     SELECT rb.subject_id, s.display_name, rb.role
     FROM core.role_bindings rb
-    JOIN core.subjects s ON s.id = rb.subject_id AND s.tenant_id=rb.tenant_id
-    JOIN core.projects p ON p.id=${projectId} AND p.tenant_id=rb.tenant_id
-    WHERE rb.tenant_id = ${tenantId}
-      AND rb.revoked_at IS NULL
+    JOIN core.subjects s ON s.id = rb.subject_id
+    JOIN core.projects p ON p.id=${projectId}
+    WHERE rb.revoked_at IS NULL
       AND rb.role = ANY(${[...REVIEWER_ROLES]})
       AND s.kind='person' AND s.suspended_at IS NULL
       AND (rb.jurisdiction IS NULL OR p.host_country_iso3=ANY(rb.jurisdiction))
-      AND (rb.project_id=p.id OR (rb.project_id IS NULL AND (rb.scope_kind='tenant'
+      AND (rb.project_id=p.id OR (rb.project_id IS NULL AND (rb.scope_kind='registry'
         OR (rb.scope_kind='organization' AND rb.organization_id=p.owner_organization_id))))
     ORDER BY s.display_name, rb.subject_id
   `;
@@ -110,15 +109,15 @@ async function readReviewers(tx: Tx, tenantId: string, projectId: string) {
     -- attestation is signed with one.
     SELECT w.subject_id, s.assurance_level
     FROM core.wallet_identities w
-    JOIN core.subjects s ON s.id = w.subject_id AND s.tenant_id = w.tenant_id
-    WHERE w.tenant_id = ${tenantId} AND w.subject_id = ANY(${subjectIds}::uuid[])
+    JOIN core.subjects s ON s.id = w.subject_id
+    WHERE w.subject_id = ANY(${subjectIds}::uuid[])
       AND w.disabled_at IS NULL
   `;
   const credentials = await tx<CredentialRow[]>`
     SELECT id, subject_id, credential_type, issuer_reference, credential_scope,
            jurisdiction, expires_at
     FROM core.credentials
-    WHERE tenant_id = ${tenantId} AND subject_id = ANY(${subjectIds}::uuid[])
+    WHERE subject_id = ANY(${subjectIds}::uuid[])
       AND current_status = 'valid' AND revoked_at IS NULL
       AND issued_at <= now() AND (expires_at IS NULL OR expires_at > now())
     ORDER BY issued_at DESC, id
@@ -142,12 +141,12 @@ async function readReviewers(tx: Tx, tenantId: string, projectId: string) {
   });
 }
 
-async function readSchemas(tx: Tx, tenantId: string) {
+async function readSchemas(tx: Tx) {
   const rows = await tx<SchemaRow[]>`
     SELECT id, schema_key, schema_version, attestation_type::text AS attestation_type,
            jurisdiction_profile
     FROM core.attestation_schemas
-    WHERE tenant_id = ${tenantId} AND state = 'active'
+    WHERE state = 'active'
     ORDER BY schema_key, schema_version, id
   `;
   return rows.map((row) => ({
@@ -166,28 +165,28 @@ export async function registerReviewOptionRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/review-assignment-options",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { projectId } = request.params;
 
       assertAuthorized(
         session,
         "claim.curate",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       if (!projectIdSchema.safeParse(projectId).success) throw notFound("Project not found");
 
       const { requestId, asOf } = request.context;
-      return withTenant(sql, { tenantId }, async (tx) => {
-        // Another tenant's project is invisible under RLS; it reads as not found.
+      return withActor(sql, actor, async (tx) => {
+        // A project outside the caller's reach is invisible under RLS; it reads as not found.
         const [project] = await tx<{ id: string }[]>`
-          SELECT id FROM core.projects WHERE tenant_id = ${tenantId} AND id = ${projectId}
+          SELECT id FROM core.projects WHERE id = ${projectId}
         `;
         if (!project) throw notFound("Project not found");
 
         return {
-          reviewers: await readReviewers(tx, tenantId, projectId),
-          schemas: await readSchemas(tx, tenantId),
+          reviewers: await readReviewers(tx, projectId),
+          schemas: await readSchemas(tx),
           requestId,
           asOf,
         };

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   createDocumentRequirementRequest,
   documentListQuery,
@@ -105,17 +105,17 @@ export async function registerDocumentStatusRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/document-requirements",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { projectId } = request.params;
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const { requestId, asOf } = request.context;
 
-      const rows = await withTenant(sql, { tenantId }, async (tx) => {
+      const rows = await withActor(sql, actor, async (tx) => {
         await assertProjectExists(tx, projectId);
         return tx<RequirementRow[]>`
           SELECT * FROM core.document_requirements
@@ -131,7 +131,7 @@ export async function registerDocumentStatusRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/document-requirements",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = createDocumentRequirementRequest.safeParse(request.body);
       if (!parsed.success) {
@@ -146,7 +146,7 @@ export async function registerDocumentStatusRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const subjectId = requireSubject(session);
@@ -154,8 +154,8 @@ export async function registerDocumentStatusRoutes(
       const requestHash = hashRequest(request);
       const { documentType, tier, note } = parsed.data;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           await assertProjectExists(tx, projectId);
 
           // Checked before inserting so the answer names the declaration in the way. The unique
@@ -177,9 +177,9 @@ export async function registerDocumentStatusRoutes(
           try {
             [created] = await tx<RequirementRow[]>`
               INSERT INTO core.document_requirements (
-                tenant_id, project_id, document_type, tier, note, created_by
+                project_id, document_type, tier, note, created_by
               ) VALUES (
-                ${tenantId}, ${projectId}, ${documentType}, ${tier}, ${note}, ${subjectId}
+                ${projectId}, ${documentType}, ${tier}, ${note}, ${subjectId}
               )
               RETURNING *
             `;
@@ -195,7 +195,6 @@ export async function registerDocumentStatusRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "document_requirement.declared",
             resourceType: "document_requirement",
@@ -215,7 +214,7 @@ export async function registerDocumentStatusRoutes(
   app.post<{ Params: { requirementId: string } }>(
     "/api/v1/document-requirements/:requirementId/retirement",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = retireDocumentRequirementRequest.safeParse(request.body);
       if (!parsed.success) {
@@ -228,7 +227,7 @@ export async function registerDocumentStatusRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, async (tx) => {
+      return withActor(sql, actor, async (tx) => {
         // Authorized against the requirement's own project, which the path does not carry, and
         // before the idempotency lookup so a replay never answers someone without the permission.
         const [target] = await tx<{ project_id: string }[]>`
@@ -238,11 +237,11 @@ export async function registerDocumentStatusRoutes(
         const effectiveRole = assertAuthorized(
           session,
           "source.upload",
-          projectResource(tenantId, target.project_id),
+          projectResource(target.project_id),
           sessionFacts(session),
         );
 
-        return withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+        return withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [current] = await tx<RequirementRow[]>`
             SELECT * FROM core.document_requirements WHERE id = ${requirementId}
             FOR UPDATE
@@ -266,7 +265,6 @@ export async function registerDocumentStatusRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "document_requirement.retired",
             resourceType: "document_requirement",
@@ -287,17 +285,17 @@ export async function registerDocumentStatusRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/document-status",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { projectId } = request.params;
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const { requestId, asOf } = request.context;
 
-      const summary = await withTenant(sql, { tenantId }, async (tx) => {
+      const summary = await withActor(sql, actor, async (tx) => {
         await planForThisProject(tx);
         await assertProjectExists(tx, projectId);
 
@@ -469,19 +467,19 @@ export async function registerDocumentStatusRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/documents",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { projectId } = request.params;
       const query = parseQuery(documentListQuery, request.query);
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const { requestId, asOf } = request.context;
       const after = query.cursor ? decodeKeysetCursor(query.cursor) : null;
 
-      const rows = await withTenant(sql, { tenantId }, async (tx) => {
+      const rows = await withActor(sql, actor, async (tx) => {
         await planForThisProject(tx);
         await assertProjectExists(tx, projectId);
 

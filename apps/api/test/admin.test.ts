@@ -5,7 +5,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { TestAccount } from "./helpers/db.js";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { bearer, idempotencyKey, issueTestSession, setupFixture, signIn, testEnv, type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
 import { bindWalletByProof } from "./helpers/wallets.js";
 
@@ -35,7 +35,7 @@ describeDb("platform administration", () => {
   let operatorAToken: string;
   let operatorBToken: string;
   let stewardToken: string;
-  /** Subject of operatorBToken — a second admin in tenant A. */
+  /** Subject of operatorBToken — a second Registry-wide admin of company A. */
   let operatorSubjectB: string;
 
   beforeAll(async () => {
@@ -44,28 +44,28 @@ describeDb("platform administration", () => {
     operatorAToken = await signIn(app, fx.operatorA);
     stewardToken = await signIn(app, fx.stewardA);
 
-    // operatorB is in tenant B. A second admin in the same tenant is needed, so
-    // create one more in tenant A — without the operator screens, this setup alone
+    // operatorB is an organization admin of company B. A second Registry-wide admin is needed, so
+    // create one more in company A — without the operator screens, this setup alone
     // was possible only through the CLI.
     const second = newAccount();
     const subjectId = randomUUID();
     operatorSubjectB = subjectId;
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subjectId}, ${fx.tenantA}, 'person', 'Operator Second')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subjectId}, 'person', 'Operator Second')
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${second.address},
+        ${randomUUID()}, ${subjectId}, ${second.address},
         31337, 'high_assurance', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'administrator')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, 'administrator')
     `;
     operatorBToken = await signIn(app, second);
   });
@@ -109,23 +109,22 @@ describeDb("platform administration", () => {
     const withIdentityOnly = randomUUID();
     const withNothing = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, email) VALUES
-        (${withEmail}, ${fx.tenantA}, 'person', 'Methods Email', ${`methods-${withEmail.slice(0, 8)}@example.com`}),
-        (${withIdentityOnly}, ${fx.tenantA}, 'person', 'Methods Identity', NULL),
-        (${withNothing}, ${fx.tenantA}, 'person', 'Methods None', NULL)
+      INSERT INTO core.subjects (id, kind, display_name, email) VALUES
+        (${withEmail}, 'person', 'Methods Email', ${`methods-${withEmail.slice(0, 8)}@example.com`}),
+        (${withIdentityOnly}, 'person', 'Methods Identity', NULL),
+        (${withNothing}, 'person', 'Methods None', NULL)
     `;
-    // A live Google identity, a revoked Microsoft one: only the live one is a way in.
+    // A live Google identity, a revoked one: only the live one is a way in.
     await fx.sql`
       INSERT INTO core.external_identities (
-        id, tenant_id, subject_id, provider, issuer, subject_key, idp_tenant, linked_via, revoked_at, revoked_reason
+        id, subject_id, provider, issuer, subject_key, linked_via, revoked_at, revoked_reason
       ) VALUES
-        (${randomUUID()}, ${fx.tenantA}, ${withEmail}, 'google', 'https://accounts.google.com',
-         ${`g-${withEmail}`}, NULL, 'link', NULL, NULL),
-        (${randomUUID()}, ${fx.tenantA}, ${withIdentityOnly}, 'google', 'https://accounts.google.com',
-         ${`g-${withIdentityOnly}`}, NULL, 'link', NULL, NULL),
-        (${randomUUID()}, ${fx.tenantA}, ${withNothing}, 'microsoft',
-         'https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0',
-         ${randomUUID()}, '11111111-1111-1111-1111-111111111111', 'link', now(), 'unlinked_by_holder')
+        (${randomUUID()}, ${withEmail}, 'google', 'https://accounts.google.com',
+         ${`g-${withEmail}`}, 'link', NULL, NULL),
+        (${randomUUID()}, ${withIdentityOnly}, 'google', 'https://accounts.google.com',
+         ${`g-${withIdentityOnly}`}, 'link', NULL, NULL),
+        (${randomUUID()}, ${withNothing}, 'google', 'https://accounts.google.com',
+         ${randomUUID()}, 'link', now(), 'unlinked_by_holder')
     `;
 
     const response = await get(operatorAToken, "/api/v1/admin/subjects");
@@ -137,24 +136,22 @@ describeDb("platform administration", () => {
     expect(byId(withNothing)).toMatchObject({ signInMethods: [], locked: true });
   });
 
-  it("the sign-in providers function answers nothing outside the caller's tenant", async () => {
+  it("the sign-in providers function answers live actors only", async () => {
     const subject = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name) VALUES
-        (${subject}, ${fx.tenantB}, 'person', 'Methods Tenant B')
+      INSERT INTO core.subjects (id, kind, display_name) VALUES
+        (${subject}, 'person', 'Methods person')
     `;
     await fx.sql`
-      INSERT INTO core.external_identities (id, tenant_id, subject_id, provider, issuer, subject_key, linked_via)
-      VALUES (${randomUUID()}, ${fx.tenantB}, ${subject}, 'google', 'https://accounts.google.com', ${`g-${subject}`}, 'link')
+      INSERT INTO core.external_identities (id, subject_id, provider, issuer, subject_key, linked_via)
+      VALUES (${randomUUID()}, ${subject}, 'google', 'https://accounts.google.com', ${`g-${subject}`}, 'link')
     `;
-    const seenFromA = await withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) =>
+    const seenBy = (subjectId: string) => withActor(fx.appSql, { subjectId }, (tx) =>
       tx<{ provider: string }[]>`SELECT provider FROM core.subject_sign_in_providers(${[subject]}::uuid[])`,
     );
-    expect(seenFromA).toHaveLength(0);
-    const seenFromB = await withTenant(fx.appSql, { tenantId: fx.tenantB }, (tx) =>
-      tx<{ provider: string }[]>`SELECT provider FROM core.subject_sign_in_providers(${[subject]}::uuid[])`,
-    );
-    expect(seenFromB.map((row) => row.provider)).toEqual(["google"]);
+    expect((await seenBy(fx.operatorSubjectA)).map((row) => row.provider)).toEqual(["google"]);
+    expect(await seenBy(randomUUID())).toHaveLength(0);
+    expect(await fx.appSql`SELECT provider FROM core.subject_sign_in_providers(${[subject]}::uuid[])`).toHaveLength(0);
   });
 
   it("rejects without admin permission", async () => {
@@ -205,16 +202,16 @@ describeDb("platform administration", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
-      ) VALUES (${id}, ${fx.tenantA}, ${subjectId}, ${account.address}, 31337, ${level}, now())
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+      ) VALUES (${id}, ${subjectId}, ${account.address}, 31337, ${level}, now())
     `;
     await syncSubjectAssurance(fx.sql);
     if (options.uiBound) {
       await fx.sql`
         INSERT INTO audit.events (
-          tenant_id, actor_subject_id, command, resource_type, resource_id, correlation_id
+          actor_subject_id, command, resource_type, resource_id, correlation_id
         ) VALUES (
-          ${fx.tenantA}, ${fx.operatorSubjectA}, 'admin.wallet.bound', 'wallet_identity', ${id}, 'pre-wp5-bind'
+          ${fx.operatorSubjectA}, 'admin.wallet.bound', 'wallet_identity', ${id}, 'pre-wp5-bind'
         )
       `;
     }
@@ -280,7 +277,7 @@ describeDb("platform administration", () => {
       const subject = (
         await post(operatorAToken, "/api/v1/admin/subjects", { displayName: "bound by own proof" })
       ).json();
-      const own = await issueTestSession(fx.appSql, fx.tenantA, subject.id, {
+      const own = await issueTestSession(fx.appSql, subject.id, {
         firstFactor: "email_code",
         secondFactor: "totp",
       });
@@ -317,14 +314,14 @@ describeDb("platform administration", () => {
         await tx`SELECT id FROM core.subjects WHERE id = ${subject.id} FOR NO KEY UPDATE`;
         await tx`
           INSERT INTO core.wallet_identities (
-            id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
-          ) VALUES (${walletId}, ${fx.tenantA}, ${subject.id}, ${newAccount().address}, 31337, 'high_assurance', now())
+            id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+          ) VALUES (${walletId}, ${subject.id}, ${newAccount().address}, 31337, 'high_assurance', now())
         `;
         await tx`
           INSERT INTO audit.events (
-            tenant_id, actor_subject_id, command, resource_type, resource_id, correlation_id
+            actor_subject_id, command, resource_type, resource_id, correlation_id
           ) VALUES (
-            ${fx.tenantA}, ${fx.operatorSubjectA}, 'admin.wallet.bound', 'wallet_identity', ${walletId}, 'race-test'
+            ${fx.operatorSubjectA}, 'admin.wallet.bound', 'wallet_identity', ${walletId}, 'race-test'
           )
         `;
         const started = post(
@@ -436,19 +433,19 @@ describeDb("platform administration", () => {
      */
     it("the application role can neither insert a wallet nor move one to another subject", async () => {
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
-          INSERT INTO core.wallet_identities (id, tenant_id, subject_id, wallet_address, chain_id, bound_at)
-          VALUES (${randomUUID()}, ${fx.tenantA}, ${operatorSubjectB}, ${newAccount().address}, 31337, now())
+        withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
+          INSERT INTO core.wallet_identities (id, subject_id, wallet_address, chain_id, bound_at)
+          VALUES (${randomUUID()}, ${operatorSubjectB}, ${newAccount().address}, 31337, now())
         `),
       ).rejects.toThrow(/permission denied/);
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
+        withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
           UPDATE core.wallet_identities SET subject_id = ${operatorSubjectB}
           WHERE wallet_address = ${fx.operatorA.address}
         `),
       ).rejects.toThrow(/permission denied/);
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
+        withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
           UPDATE core.wallet_identities SET wallet_address = ${newAccount().address}
           WHERE wallet_address = ${fx.operatorA.address}
         `),
@@ -484,7 +481,7 @@ describeDb("platform administration", () => {
       expect(keyOnly).toMatchObject({ signInMethods: [], locked: true });
 
       // The person signs in to their account (this gives them an address) and holds a session.
-      const account = await issueTestSession(fx.appSql, fx.tenantA, subject.id, {
+      const account = await issueTestSession(fx.appSql, subject.id, {
         firstFactor: "email_code",
         secondFactor: "totp",
       });
@@ -532,7 +529,7 @@ describeDb("platform administration", () => {
 
       // Recovery: the person signs in to their account again and binds a new key themselves.
       // If cutting worked but rebinding did not, it would be account destruction, not recovery.
-      const again = await issueTestSession(fx.appSql, fx.tenantA, subject.id, {
+      const again = await issueTestSession(fx.appSql, subject.id, {
         firstFactor: "email_code",
         secondFactor: "totp",
       });

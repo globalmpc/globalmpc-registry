@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, testEnv, type TestFixture, signIn } from "./helpers/db.js";
@@ -93,8 +94,8 @@ describeDb("project routes", () => {
      */
     it("records the role that allowed the action, not the session's first role", async () => {
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, project_id, role)
-        VALUES (gen_random_uuid(), ${fx.tenantA}, ${fx.operatorSubjectA}, ${fx.orgA}, ${fx.projectA}, 'reviewer')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, project_id, role)
+        VALUES (gen_random_uuid(), ${fx.operatorSubjectA}, ${fx.orgA}, ${fx.projectA}, 'reviewer')
       `;
 
       try {
@@ -146,7 +147,7 @@ describeDb("project routes", () => {
       expect(response.json().code).toBe("UNAUTHENTICATED");
     });
 
-    it("returns 403 and the required roles for a tenant member without a role", async () => {
+    it("returns 403 and the required roles for a person without a role", async () => {
       const response = await create(tokens.readerA, body());
       expect(response.statusCode).toBe(403);
 
@@ -237,21 +238,39 @@ describeDb("project routes", () => {
     });
   });
 
-  describe("tenant isolation", () => {
-    it("another tenant's project is 404 — existence is not revealed", async () => {
-      const created = await create(tokens.operatorB, body({ ownerOrganizationId: fx.orgB }));
+  /**
+   * Company isolation. Operator B administers company B only (organization scope); operator A
+   * administers the Registry. Project reach comes from those role bindings alone.
+   */
+  describe("company isolation", () => {
+    it("another company's project answers an organization-scoped administrator exactly as a missing one — existence is not revealed", async () => {
+      const created = await create(tokens.operatorA, body());
       expect(created.statusCode).toBe(200);
-
-      const response = await app.inject({
+      const answer = async (id: string) => {
+        const response = await app.inject({ method: "GET", url: `/api/v1/projects/${id}`, headers: { authorization: `Bearer ${tokens.operatorB}` } });
+        const { correlationId: _ignored, ...rest } = response.json();
+        // The requested id is echoed back; nothing else may differ.
+        return { status: response.statusCode, body: JSON.parse(JSON.stringify(rest).replaceAll(id, "<id>")) };
+      };
+      const missing = await answer(randomUUID());
+      expect(missing.status).toBeGreaterThanOrEqual(403);
+      expect(missing.status).toBeLessThanOrEqual(404);
+      expect(missing.body).not.toHaveProperty("projectKey");
+      for (const id of [created.json().id as string, fx.projectA]) {
+        expect(await answer(id), id).toEqual(missing);
+      }
+      // The Registry-wide administrator reaches company B's project.
+      const own = await create(tokens.operatorB, body({ ownerOrganizationId: fx.orgB }));
+      expect(own.statusCode).toBe(200);
+      const wide = await app.inject({
         method: "GET",
-        url: `/api/v1/projects/${created.json().id}`,
+        url: `/api/v1/projects/${own.json().id}`,
         headers: { authorization: `Bearer ${tokens.operatorA}` },
       });
-      expect(response.statusCode).toBe(404);
-      expect(response.json().code).toBe("NOT_FOUND");
+      expect(wide.statusCode).toBe(200);
     });
 
-    it("lists only the caller's tenant projects", async () => {
+    it("lists only the projects the caller's bindings reach", async () => {
       const response = await app.inject({
         method: "GET",
         url: "/api/v1/projects",
@@ -262,21 +281,30 @@ describeDb("project routes", () => {
       const items = response.json().items as { id: string }[];
       const ids = items.map((item) => item.id);
 
-      const rows = await withTenant(fx.appSql, { tenantId: fx.tenantB }, (tx) =>
+      const rows = await withActor(fx.appSql, { subjectId: fx.operatorSubjectB }, (tx) =>
         tx<{ id: string }[]>`SELECT id FROM core.projects`,
       );
       expect(new Set(ids)).toEqual(new Set(rows.map((row) => row.id)));
+      expect(ids).not.toContain(fx.projectA);
+      expect(ids).not.toContain(fx.otherProjectA);
     });
 
-    it("rejects creation under another tenant's organization", async () => {
-      const response = await create(tokens.operatorA, body({ ownerOrganizationId: fx.orgB }));
-      // RLS hides the FK target organization, so the insert fails.
-      expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    it("refuses another company's project key without naming its holder", async () => {
+      const [held] = await fx.sql<{ project_key: string }[]>`SELECT project_key FROM core.projects WHERE id = ${fx.projectA}`;
+      const response = await create(tokens.operatorB, body({ projectKey: held!.project_key, ownerOrganizationId: fx.orgB }));
+      expect(response.statusCode).toBe(409);
+      expect(response.body).not.toContain(fx.projectA);
+      expect(response.body).not.toContain(fx.orgA);
+      expect(await fx.sql`SELECT id FROM core.projects WHERE project_key = ${held!.project_key}`).toHaveLength(1);
+    });
 
-      const rows = await fx.sql`
-        SELECT id FROM core.projects
-        WHERE tenant_id = ${fx.tenantA} AND owner_organization_id = ${fx.orgB}
-      `;
+    it("rejects creation under another company's organization, writing nothing", async () => {
+      const payload = body({ ownerOrganizationId: fx.orgA });
+      const response = await create(tokens.operatorB, payload);
+      expect(response.statusCode).toBeGreaterThanOrEqual(400);
+      expect(response.statusCode).toBeLessThan(500);
+
+      const rows = await fx.sql`SELECT id FROM core.projects WHERE project_key = ${payload.projectKey}`;
       expect(rows).toHaveLength(0);
     });
   });

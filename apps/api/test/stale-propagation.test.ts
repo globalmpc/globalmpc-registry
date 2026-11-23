@@ -45,13 +45,13 @@ describeDb("stale propagation", () => {
     const receiptId = randomUUID();
     await fx.sql`
       INSERT INTO core.source_receipts (
-        id, tenant_id, project_id, connection_id, authority_id, collection_method,
+        id, project_id, connection_id, authority_id, collection_method,
         result, query_basis, endpoint_or_document_ref, authentication_method,
         raw_hash, source_schema_version, adapter_version, terms_license,
         commercial_reuse, disclosure_permission, received_at, as_of,
         freshness_status, correlation_id, channel_evidence
       ) VALUES (
-        ${receiptId}, ${fx.tenantA}, ${fx.projectA}, ${fx.connectionA}, ${fx.authorityA},
+        ${receiptId}, ${fx.projectA}, ${fx.connectionA}, ${fx.authorityA},
         'authenticated_api', 'confirmed_from_source', '{}'::jsonb, 'https://x.test/a',
         'none', ${`0x${"11".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
         now(), now(), 'fresh', 'test',
@@ -64,10 +64,10 @@ describeDb("stale propagation", () => {
     const claimId = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
-        id, tenant_id, project_id, claim_type, value_text, source_coordinate,
+        id, project_id, claim_type, value_text, source_coordinate,
         evidence_tier, verification_state, grade, source_receipt_id
       ) VALUES (
-        ${claimId}, ${fx.tenantA}, ${fx.projectA}, 'mining_right', 'MN-1',
+        ${claimId}, ${fx.projectA}, 'mining_right', 'MN-1',
         '{"page":"1"}'::jsonb, 'P1', 'analyst_checked', 'verified', ${receiptId}
       )
     `;
@@ -78,26 +78,26 @@ describeDb("stale propagation", () => {
   async function seedAttestation(claimId: string, state: string): Promise<string> {
     const caseId = randomUUID();
     await fx.sql`
-      INSERT INTO core.verification_cases (id, tenant_id, project_id, schema_id, state)
-      VALUES (${caseId}, ${fx.tenantA}, ${fx.projectA}, ${fx.schemaA}, 'draft')
+      INSERT INTO core.verification_cases (id, project_id, schema_id, state)
+      VALUES (${caseId}, ${fx.projectA}, ${fx.schemaA}, 'draft')
     `;
 
     const assignmentId = randomUUID();
     await fx.sql`
-      INSERT INTO core.assignments (id, tenant_id, case_id, subject_id, credential_id)
-      VALUES (${assignmentId}, ${fx.tenantA}, ${caseId}, ${fx.reviewerSubjectA},
+      INSERT INTO core.assignments (id, case_id, subject_id, credential_id)
+      VALUES (${assignmentId}, ${caseId}, ${fx.reviewerSubjectA},
               ${fx.credentialA})
     `;
 
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.verification_attestations (
-        id, tenant_id, case_id, assignment_id, credential_id, schema_id,
+        id, case_id, assignment_id, credential_id, schema_id,
         attestation_type, claim_scope, evidence_snapshot_hash, findings, limitations,
         credential_status_snapshot, method_version, policy_version,
         payload_hash, signature, signer_wallet_address, signed_at, state
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${caseId}, ${assignmentId}, ${fx.credentialA}, ${fx.schemaA},
+        ${id}, ${caseId}, ${assignmentId}, ${fx.credentialA}, ${fx.schemaA},
         'professional_signoff', ARRAY[${claimId}]::UUID[], ${`0x${"22".repeat(32)}`},
         '{"note":"reviewed"}'::jsonb, 'legal_effect_not_determined', '{}'::jsonb, '1', '1',
         ${`0x${"33".repeat(32)}`}, ${`0x${"44".repeat(65)}`},
@@ -210,10 +210,10 @@ describeDb("stale propagation", () => {
     const other = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
-        id, tenant_id, project_id, claim_type, value_text, source_coordinate,
+        id, project_id, claim_type, value_text, source_coordinate,
         verification_state, grade
       ) VALUES (
-        ${other}, ${fx.tenantA}, ${fx.projectA}, 'other', 'x',
+        ${other}, ${fx.projectA}, 'other', 'x',
         '{}'::jsonb, 'unreviewed', 'unverified'
       )
     `;
@@ -241,10 +241,10 @@ describeDb("stale propagation", () => {
     const orphan = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
-        id, tenant_id, project_id, claim_type, value_text, source_coordinate,
+        id, project_id, claim_type, value_text, source_coordinate,
         evidence_tier, verification_state, grade
       ) VALUES (
-        ${orphan}, ${fx.tenantA}, ${fx.projectA}, 'unbacked', 'x',
+        ${orphan}, ${fx.projectA}, 'unbacked', 'x',
         '{}'::jsonb, 'P1', 'independently_assured', 'verified'
       )
     `;
@@ -257,14 +257,14 @@ describeDb("stale propagation", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("cannot use another tenant's receipt as evidence", async () => {
+  it("cannot use a receipt outside the project's reach as evidence", async () => {
     await expect(
       fx.sql`
         INSERT INTO core.claims (
-          id, tenant_id, project_id, claim_type, value_text, source_coordinate,
+          id, project_id, claim_type, value_text, source_coordinate,
           verification_state, grade, source_receipt_id
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantB}, ${fx.projectA}, 'x', 'x',
+          ${randomUUID()}, ${fx.projectA}, 'x', 'x',
           '{}'::jsonb, 'unreviewed', 'unverified', ${randomUUID()}
         )
       `,
@@ -281,18 +281,18 @@ describeDb("stale propagation", () => {
     async function seedPublishedRegistryEntry(): Promise<string> {
       const entryId = randomUUID();
       await fx.sql`
-        INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
-        VALUES (${entryId}, ${fx.tenantA}, 'project', ${fx.projectA},
+        INSERT INTO core.registry_entries (id, registry_type, subject_id, public_key)
+        VALUES (${entryId}, 'project', ${fx.projectA},
                 ${`PRJ-${entryId.slice(0, 8)}`})
       `;
       const versionId = randomUUID();
       await fx.sql`
         INSERT INTO core.registry_entry_versions (
-          id, tenant_id, entry_id, version, status, public_projection,
+          id, entry_id, version, status, public_projection,
           content_hash, source_snapshot_hash, policy_version, schema_version,
           serialization_version, published_at
         ) VALUES (
-          ${versionId}, ${fx.tenantA}, ${entryId}, 1, 'published', '{}'::jsonb,
+          ${versionId}, ${entryId}, 1, 'published', '{}'::jsonb,
           ${`0x${"55".repeat(32)}`}, ${`0x${"66".repeat(32)}`}, '1', '1', '1', now()
         )
       `;
@@ -324,18 +324,18 @@ describeDb("stale propagation", () => {
       const attestationId = await seedAttestation(claimId, "active");
       const entryId = randomUUID();
       await fx.sql`
-        INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
-        VALUES (${entryId}, ${fx.tenantA}, 'verification', ${attestationId},
+        INSERT INTO core.registry_entries (id, registry_type, subject_id, public_key)
+        VALUES (${entryId}, 'verification', ${attestationId},
                 ${`VER-${entryId.slice(0, 8)}`})
       `;
       const versionId = randomUUID();
       await fx.sql`
         INSERT INTO core.registry_entry_versions (
-          id, tenant_id, entry_id, version, status, public_projection,
+          id, entry_id, version, status, public_projection,
           content_hash, source_snapshot_hash, policy_version, schema_version,
           serialization_version, published_at
         ) VALUES (
-          ${versionId}, ${fx.tenantA}, ${entryId}, 1, 'published', '{}'::jsonb,
+          ${versionId}, ${entryId}, 1, 'published', '{}'::jsonb,
           ${`0x${"55".repeat(32)}`}, ${`0x${"22".repeat(32)}`}, '1', '1', '1', now()
         )
       `;
@@ -442,17 +442,17 @@ describeDb("stale propagation", () => {
     async function openSignal(): Promise<string> {
       const entryId = randomUUID();
       await fx.sql`
-        INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
-        VALUES (${entryId}, ${fx.tenantA}, 'project', ${fx.projectA},
+        INSERT INTO core.registry_entries (id, registry_type, subject_id, public_key)
+        VALUES (${entryId}, 'project', ${fx.projectA},
                 ${`PRJ-${entryId.slice(0, 8)}`})
       `;
       await fx.sql`
         INSERT INTO core.registry_entry_versions (
-          id, tenant_id, entry_id, version, status, public_projection,
+          id, entry_id, version, status, public_projection,
           content_hash, source_snapshot_hash, policy_version, schema_version,
           serialization_version, published_at
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${entryId}, 1, 'published', '{}'::jsonb,
+          ${randomUUID()}, ${entryId}, 1, 'published', '{}'::jsonb,
           ${`0x${"77".repeat(32)}`}, ${`0x${"88".repeat(32)}`}, '1', '1', '1', now()
         )
       `;

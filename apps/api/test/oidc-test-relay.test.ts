@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createOidcTestRelayFetch, OIDC_RELAY_HOSTS, relayUrl } from "../src/services/oidc-test-relay.js";
 
 /**
- * The E2E transport for Google and Microsoft (`OIDC_TEST_RELAY_URL`). The OIDC library keeps the
- * real issuer URLs; only the four provider hosts are sent to the relay, and nothing else leaves.
+ * The E2E transport for Google (`OIDC_TEST_RELAY_URL`). The OIDC library keeps the real issuer
+ * URLs; only the three provider hosts are sent to the relay, and nothing else leaves.
  */
 describe("OIDC test relay", () => {
   const relay = "http://127.0.0.1:4555";
@@ -16,12 +16,11 @@ describe("OIDC test relay", () => {
     expect(relayUrl(relay, "https://www.googleapis.com/oauth2/v3/certs?x=1&y=%2F")).toBe(
       "http://127.0.0.1:4555/www.googleapis.com/oauth2/v3/certs?x=1&y=%2F",
     );
-    expect(
-      relayUrl(`${relay}/`, "https://login.microsoftonline.com/organizations/v2.0/.well-known/openid-configuration"),
-    ).toBe("http://127.0.0.1:4555/login.microsoftonline.com/organizations/v2.0/.well-known/openid-configuration");
+    expect(relayUrl(`${relay}/`, "https://accounts.google.com/o/oauth2/v2/auth")).toBe(
+      "http://127.0.0.1:4555/accounts.google.com/o/oauth2/v2/auth",
+    );
     expect([...OIDC_RELAY_HOSTS].sort()).toEqual([
       "accounts.google.com",
-      "login.microsoftonline.com",
       "oauth2.googleapis.com",
       "www.googleapis.com",
     ]);
@@ -42,6 +41,8 @@ describe("OIDC test relay", () => {
       "https://accounts.google.com:8443/x",
       "https://user:pass@oauth2.googleapis.com/token",
       "https://169.254.169.254/latest/meta-data",
+      // Microsoft sign-in was removed (0171); its host is no longer a provider.
+      "https://login.microsoftonline.com/organizations/v2.0/.well-known/openid-configuration",
       "not a url",
     ]) {
       expect(() => relayUrl(relay, target), target).toThrow(/OIDC test relay/);

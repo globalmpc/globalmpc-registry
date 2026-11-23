@@ -26,7 +26,6 @@ describeDb("credential expiry sweep", () => {
 
   /** A credential that expired yesterday, with one active and one revoked attestation. */
   async function seedExpired(): Promise<{ credential: string; active: string; revoked: string }> {
-    const tenant = randomUUID();
     const org = randomUUID();
     const subject = randomUUID();
     const project = randomUUID();
@@ -34,39 +33,35 @@ describeDb("credential expiry sweep", () => {
     const schema = randomUUID();
 
     await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenant}, ${`t-${tenant.slice(0, 8)}`}, 'Credential tenant')
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${org}, 'Credential org', 'MNG')
     `;
     await sql`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${org}, ${tenant}, 'Credential org', 'MNG')
-    `;
-    await sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subject}, ${tenant}, 'person', 'Reviewer')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subject}, 'person', 'Reviewer')
     `;
     await sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${project}, ${tenant}, ${`CRD-${project.slice(0, 8)}`}, 'Credential project', 'MNG',
+        ${project}, ${`CRD-${project.slice(0, 8)}`}, 'Credential project', 'MNG',
         ARRAY['copper'], ${org}
       )
     `;
     // Inserted already past its date: an INSERT fires no update trigger, as when a date lapses.
     await sql`
       INSERT INTO core.credentials (
-        id, tenant_id, subject_id, organization_id, issuer_reference, credential_type,
+        id, subject_id, organization_id, issuer_reference, credential_type,
         issued_at, expires_at, current_status
       ) VALUES (
-        ${credential}, ${tenant}, ${subject}, ${org}, 'AusIMM', 'competent_person',
+        ${credential}, ${subject}, ${org}, 'AusIMM', 'competent_person',
         now() - interval '2 years', now() - interval '1 day', 'valid'
       )
     `;
     await sql`
       INSERT INTO core.attestation_schemas (
-        id, tenant_id, schema_key, schema_version, attestation_type, jurisdiction_profile, state
-      ) VALUES (${schema}, ${tenant}, 'review', '1', 'professional_signoff', 'MNG', 'active')
+        id, schema_key, schema_version, attestation_type, jurisdiction_profile, state
+      ) VALUES (${schema}, ${`review-${schema.slice(0, 8)}`}, '1', 'professional_signoff', 'MNG', 'active')
     `;
 
     const ids: string[] = [];
@@ -75,21 +70,21 @@ describeDb("credential expiry sweep", () => {
       const assignment = randomUUID();
       const id = randomUUID();
       await sql`
-        INSERT INTO core.verification_cases (id, tenant_id, project_id, schema_id, state)
-        VALUES (${caseId}, ${tenant}, ${project}, ${schema}, 'draft')
+        INSERT INTO core.verification_cases (id, project_id, schema_id, state)
+        VALUES (${caseId}, ${project}, ${schema}, 'draft')
       `;
       await sql`
-        INSERT INTO core.assignments (id, tenant_id, case_id, subject_id, credential_id)
-        VALUES (${assignment}, ${tenant}, ${caseId}, ${subject}, ${credential})
+        INSERT INTO core.assignments (id, case_id, subject_id, credential_id)
+        VALUES (${assignment}, ${caseId}, ${subject}, ${credential})
       `;
       await sql`
         INSERT INTO core.verification_attestations (
-          id, tenant_id, case_id, assignment_id, credential_id, schema_id,
+          id, case_id, assignment_id, credential_id, schema_id,
           attestation_type, claim_scope, evidence_snapshot_hash, limitations,
           credential_status_snapshot, method_version, policy_version,
           payload_hash, signature, signer_wallet_address, signed_at, state
         ) VALUES (
-          ${id}, ${tenant}, ${caseId}, ${assignment}, ${credential}, ${schema},
+          ${id}, ${caseId}, ${assignment}, ${credential}, ${schema},
           'professional_signoff', ARRAY[${randomUUID()}]::UUID[], ${`0x${"22".repeat(32)}`},
           'legal_effect_not_determined', '{"currentStatus":"valid"}'::jsonb, '1', '1',
           ${`0x${"33".repeat(32)}`}, ${`0x${"44".repeat(65)}`},

@@ -69,7 +69,7 @@ export default function ProjectListPage() {
       .catch(error => { if (live) setError(error); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [token, sessionLoading, session?.tenantId, session?.subjectId, filters]);
+  }, [token, sessionLoading, session?.subjectId, filters]);
 
   if (!sessionLoading && !token) {
     return (
@@ -219,7 +219,7 @@ export default function ProjectListPage() {
               <td>
                 <span className="project-mobile-label" aria-hidden="true">Evidence stage</span>
                 {token && can(session, "readiness.read")
-                  ? <WorkspaceProjectProgress key={`${session?.tenantId}:${session?.subjectId}:${project.id}`} token={token} projectId={project.id} savedSummary={project.stageProgress} />
+                  ? <WorkspaceProjectProgress key={`${session?.subjectId}:${project.id}`} token={token} projectId={project.id} savedSummary={project.stageProgress} />
                   : "Assessment access required"}
               </td>
               <td><span className="project-mobile-label" aria-hidden="true">Lifecycle</span><LifecycleBadge state={project.lifecycleState} /></td>
@@ -235,7 +235,7 @@ export default function ProjectListPage() {
                     shown an ErrorNotice above. */}
           {filtered
             ? "No project matches these filters. Other projects may exist; clear the filters to see them."
-            : "No projects are registered in this tenant. There is no data here; this is not a permission problem."}
+            : "No projects are available to your account. There is no data here; this is not a permission problem."}
         </p>
       </div>
     ) : null;
@@ -244,7 +244,7 @@ export default function ProjectListPage() {
   const renderSessionSummary = () => {
     return session?.authenticated ? (
       <p className="meta">
-        Tenant <span className="mono">{session.tenantId?.slice(0, 8)}</span> · roles{" "}
+        Roles{" "}
         <span className="mono">
           {session.roleBindings?.map((binding) => binding.role).join(", ") || "none"}
         </span>
@@ -258,9 +258,7 @@ export default function ProjectListPage() {
         <div>
           <h1>Projects</h1>
           <p className="sub">
-            {/* Tenant isolation is enforced by server RLS, not by the screen. Another tenant's
-                projects appear in neither the list nor the detail view. */}
-            Only projects in the current tenant are listed. Isolation is decided by the server.
+            Projects you can access appear here.
           </p>
         </div>
         {/* Offered only to a session whose roles can create a project; the server decides. */}

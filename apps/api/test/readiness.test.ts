@@ -35,10 +35,10 @@ describeDb("Readiness and Gate Decision", () => {
     policySetId = randomUUID();
     await fx.sql`
       INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id,
+        id, rule_set_id, rule_set_version, gate_id,
         jurisdiction_profile, effective_from, definition, state
       ) VALUES (
-        ${policySetId}, ${fx.tenantA}, 'registry-publication-gate', '1.0.0',
+        ${policySetId}, 'registry-publication-gate', '1.0.0',
         'registry_publication', 'MNG', now(), ${fx.sql.json(rulesFixture as never)}, 'effective'
       )
     `;
@@ -82,10 +82,10 @@ describeDb("Readiness and Gate Decision", () => {
     const overall = statuses.includes("watch") ? "watch" : "ok";
     await fx.sql`
       INSERT INTO core.compliance_assessments (
-        id, tenant_id, project_id, gate_id, policy_set_id, input_snapshot_hash,
+        id, project_id, gate_id, policy_set_id, input_snapshot_hash,
         evaluated_as_of, status, requirement_results, canonical_result_hash, evidence_actor_ids
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${fx.projectA}, 'registry_publication', ${policySetId},
+        ${id}, ${fx.projectA}, 'registry_publication', ${policySetId},
         ${"0x" + "a1".repeat(32)}, now(), ${overall}, ${fx.sql.json(results as never)},
         ${"0x" + "b2".repeat(32)}, ${actors}::uuid[]
       )
@@ -154,10 +154,10 @@ describeDb("Readiness and Gate Decision", () => {
     const draftPolicy = randomUUID();
     await fx.sql`
       INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id,
+        id, rule_set_id, rule_set_version, gate_id,
         jurisdiction_profile, effective_from, definition, state
       ) VALUES (
-        ${draftPolicy}, ${fx.tenantA}, 'draft-rules', '0.1.0', 'registry_publication',
+        ${draftPolicy}, 'draft-rules', '0.1.0', 'registry_publication',
         'MNG', now(), ${fx.sql.json(rulesFixture as never)}, 'draft'
       )
     `;
@@ -407,7 +407,7 @@ describeDb("Readiness and Gate Decision", () => {
 
       // Passkey: the approver holds one (`signIn` sessions prove it), and binding needs the
       // strongest factor held (WP5).
-      const account = await issueTestSession(fx.appSql, fx.tenantA, approver!.subject_id, {
+      const account = await issueTestSession(fx.appSql, approver!.subject_id, {
         firstFactor: "email_code",
         secondFactor: "passkey",
       });
@@ -507,11 +507,11 @@ describeDb("Readiness and Gate Decision", () => {
       await expect(
         fx.sql`
           INSERT INTO core.gate_decisions (
-            id, tenant_id, project_id, gate_id, decision, input_assessment_id,
+            id, project_id, gate_id, decision, input_assessment_id,
             evidence_snapshot_hash, decision_authority, decision_maker_subject_id,
             rationale, signature, signed_at
           ) VALUES (
-            ${randomUUID()}, ${fx.tenantA}, ${fx.projectA}, 'registry_publication', 'hold',
+            ${randomUUID()}, ${fx.projectA}, 'registry_publication', 'hold',
             ${content.inputAssessmentId}, ${"0x" + "cc".repeat(32)}, 'MPC Gate Approver',
             ${subject!.id}, 'unsigned', '', now()
           )

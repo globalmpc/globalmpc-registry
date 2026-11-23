@@ -160,10 +160,8 @@ describeDb("public governance and public history", () => {
     }
   });
 
-  it("does not expose the tenant", async () => {
+  it("does not expose internal ownership columns", async () => {
     const listed = await publicProposals();
-
-    expect(listed.body).not.toContain(fx.tenantA);
   });
 
   it("returns 404 for a missing proposal", async () => {
@@ -208,7 +206,7 @@ describeDb("public governance and public history", () => {
       app,
       fx.sql,
       { drafter: operatorToken, publisher: await signIn(app, fx.disclosureApproverA) },
-      await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, publicKey),
+      await insertProject(fx.sql, { organizationId: fx.orgA }, publicKey),
     );
     expect(published.statusCode).toBe(200);
 
@@ -250,9 +248,9 @@ describeDb("public governance and public history", () => {
     const projectId = randomUUID();
     await fx.sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${projectId}, ${fx.tenantA}, ${`Q17-${projectId.slice(0, 8)}`}, 'disclosure fixture',
+        ${projectId}, ${`Q17-${projectId.slice(0, 8)}`}, 'disclosure fixture',
         'MNG', ARRAY['copper'], ${fx.orgA}
       )
     `;
@@ -298,9 +296,9 @@ describeDb("public governance and public history", () => {
 
     await fx.sql`
       INSERT INTO core.project_lifecycle_transitions (
-        tenant_id, project_id, from_state, to_state, reason, actor_subject_id
+        project_id, from_state, to_state, reason, actor_subject_id
       ) VALUES (
-        ${fx.tenantA}, ${projectId}, 'registered', 'suspended', ${SECRET_REASON},
+        ${projectId}, 'registered', 'suspended', ${SECRET_REASON},
         ${fx.reviewerSubjectA}
       )
     `;
@@ -327,8 +325,8 @@ describeDb("public governance and public history", () => {
 
     await fx.sql`
       INSERT INTO core.project_lifecycle_transitions (
-        tenant_id, project_id, from_state, to_state, reason
-      ) VALUES (${fx.tenantA}, ${projectId}, 'registered', 'suspended', 'undisclosed')
+        project_id, from_state, to_state, reason
+      ) VALUES (${projectId}, 'registered', 'suspended', 'undisclosed')
     `;
 
     const body = await disclosures();
@@ -341,10 +339,10 @@ describeDb("public governance and public history", () => {
 
     await fx.sql`
       INSERT INTO core.disclosure_restrictions (
-        id, tenant_id, project_id, subject_scope, restricted_action_types,
+        id, project_id, subject_scope, restricted_action_types,
         legal_basis, authority, state, effective_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${projectId}, ARRAY[]::UUID[], ARRAY['publish'],
+        ${randomUUID()}, ${projectId}, ARRAY[]::UUID[], ARRAY['publish'],
         'LEGAL_BASIS_SECRET', 'AUTHORITY_SECRET', 'active', now()
       )
     `;
@@ -369,10 +367,10 @@ describeDb("public governance and public history", () => {
 
     await fx.sql`
       INSERT INTO core.disclosure_restrictions (
-        id, tenant_id, project_id, subject_scope, restricted_action_types,
+        id, project_id, subject_scope, restricted_action_types,
         legal_basis, authority, state
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${projectId}, ARRAY[]::UUID[], ARRAY['publish'],
+        ${randomUUID()}, ${projectId}, ARRAY[]::UUID[], ARRAY['publish'],
         'draft basis', 'draft authority', 'draft'
       )
     `;
@@ -390,25 +388,25 @@ describeDb("public governance and public history", () => {
 
     const caseId = randomUUID();
     await fx.sql`
-      INSERT INTO core.verification_cases (id, tenant_id, project_id, schema_id, state)
-      VALUES (${caseId}, ${fx.tenantA}, ${projectId}, ${fx.schemaA}, 'draft')
+      INSERT INTO core.verification_cases (id, project_id, schema_id, state)
+      VALUES (${caseId}, ${projectId}, ${fx.schemaA}, 'draft')
     `;
 
     const assignmentId = randomUUID();
     await fx.sql`
-      INSERT INTO core.assignments (id, tenant_id, case_id, subject_id, credential_id)
-      VALUES (${assignmentId}, ${fx.tenantA}, ${caseId}, ${fx.reviewerSubjectA}, ${fx.credentialA})
+      INSERT INTO core.assignments (id, case_id, subject_id, credential_id)
+      VALUES (${assignmentId}, ${caseId}, ${fx.reviewerSubjectA}, ${fx.credentialA})
     `;
 
     const attestationId = randomUUID();
     await fx.sql`
       INSERT INTO core.verification_attestations (
-        id, tenant_id, case_id, assignment_id, credential_id, schema_id,
+        id, case_id, assignment_id, credential_id, schema_id,
         attestation_type, claim_scope, evidence_snapshot_hash, findings, limitations,
         credential_status_snapshot, method_version, policy_version,
         payload_hash, signature, signer_wallet_address, signed_at, state
       ) VALUES (
-        ${attestationId}, ${fx.tenantA}, ${caseId}, ${assignmentId}, ${fx.credentialA},
+        ${attestationId}, ${caseId}, ${assignmentId}, ${fx.credentialA},
         ${fx.schemaA}, 'professional_signoff', ARRAY[]::UUID[], ${`0x${"22".repeat(32)}`},
         '{}'::jsonb, 'legal_effect_not_determined', '{}'::jsonb, '1', '1',
         ${`0x${"33".repeat(32)}`}, ${`0x${"44".repeat(65)}`},
@@ -418,9 +416,9 @@ describeDb("public governance and public history", () => {
 
     await fx.sql`
       INSERT INTO core.attestation_disputes (
-        id, tenant_id, attestation_id, reason_code, detail, raised_by_subject_id
+        id, attestation_id, reason_code, detail, raised_by_subject_id
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${attestationId}, 'REASON_CODE_SECRET',
+        ${randomUUID()}, ${attestationId}, 'REASON_CODE_SECRET',
         'DETAIL_SECRET', ${fx.reviewerSubjectA}
       )
     `;

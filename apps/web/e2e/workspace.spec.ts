@@ -9,7 +9,7 @@ import { mailedCode } from "./mailbox";
  *
  * Runs through browser → web → API → PostgreSQL. Checking only that screens render
  * would not distinguish this from a mockup, so it checks **whether results decided by
- * the server reach the screen** — tenant isolation, permission-denial reasons, state labels.
+ * the server reach the screen** — company isolation, permission-denial reasons, state labels.
  */
 
 test.describe("account connection", () => {
@@ -31,24 +31,31 @@ test.describe("account connection", () => {
   });
 });
 
-test.describe("tenant isolation", () => {
-  test("Operator A sees only its own tenant's projects", async ({ page }) => {
-    await connectAs(page, "Operator A");
+test.describe("company isolation", () => {
+  test("an organization-scoped administrator sees only its own company's projects", async ({ page }) => {
+    await connectAs(page, "Operator C");
 
     await expect(page).toHaveURL(/\/w\/projects$/);
-    // The project the seed created only in tenant B must not be visible.
-    await expect(page.getByText("TENANT-B-ONLY")).toHaveCount(0);
+    // The project the seed created for company B must not be visible to company C.
+    await expect(page.getByText("COMPANY-B-ONLY")).toHaveCount(0);
   });
 
   test("Operator B sees its own project", async ({ page }) => {
     await connectAs(page, "Operator B");
     await expect(page).toHaveURL(/\/w\/projects$/);
 
-    await expect(page.getByRole("link", { name: "TENANT-B-ONLY" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "COMPANY-B-ONLY" })).toBeVisible();
+  });
+
+  test("the Registry-wide administrator reaches every company's project", async ({ page }) => {
+    await connectAs(page, "Operator A");
+    await expect(page).toHaveURL(/\/w\/projects$/);
+
+    await expect(page.getByRole("link", { name: "COMPANY-B-ONLY" })).toBeVisible();
   });
 
   test("distinguishes an empty list from no permission", async ({ page }) => {
-    // Tenant C has no projects and never will. If data created by other tests could sway
+    // Company C has no projects and never will. If data created by other tests could sway
     // this check, it would no longer verify the "empty state".
     await connectAs(page, "Operator C");
 
@@ -67,7 +74,7 @@ test.describe("project registration", () => {
     await page.getByRole("textbox", { name: "Project key" }).fill(key);
     await page.getByRole("textbox", { name: "Name" }).fill("Created by E2E");
     await page.getByRole("textbox", { name: "Minerals (comma separated)" }).fill("copper, gold");
-    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    // Company A's operator also may register for the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
     await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
@@ -86,7 +93,7 @@ test.describe("project registration", () => {
     const stages=page.getByRole("list",{name:"Project stages"}).getByRole("listitem");
     await expect(stages).toHaveCount(5);
     await expect(stages).toContainText(["Exploration","Resource definition","Feasibility","Permitting","Production"]);
-    // Tenant definitions may already yield an incomplete evidence assessment; that is not a gate decision.
+    // Registry definitions may already yield an incomplete evidence assessment; that is not a gate decision.
     await expect(page.getByTestId("readiness-card")).toContainText("No gate has an assessment on record.");
     await expect(page.getByText(/No assessment has run yet. This is not a pass./)).toBeVisible();
   });
@@ -98,7 +105,7 @@ test.describe("project registration", () => {
     await page.getByRole("button", { name: "New project" }).click();
     await page.getByRole("textbox", { name: "Project key" }).fill(key);
     await page.getByRole("textbox", { name: "Name" }).fill("For the list check");
-    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    // Company A's operator also may register for the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
     await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
@@ -112,20 +119,19 @@ test.describe("project registration", () => {
 
 test.describe("owner organization", () => {
   test("is picked from the organizations this account may register for", async ({ page }) => {
-    // The form used to find the organization in a table of demo tenant ids. It now
-    // reads the organizations the server would accept for this account.
+    // The form reads the organizations the server would accept for this account.
     await connectAs(page, "Operator A");
     await expect(page).toHaveURL(/\/w\/projects$/);
     await page.goto("/w/projects/new");
 
     const picker = page.getByRole("combobox", { name: "Owning organization" });
-    // Tenant A has two organizations — the operator's and the reviewer's firm — so nothing is
-    // preselected: registering under the wrong one makes another company a party.
+    // The Registry-wide operator may register for several organizations — its own, the reviewer's
+    // firm and the other companies' — so nothing is preselected: registering under the wrong one
+    // makes another company a party.
     await expect(picker).toHaveValue("");
-    await expect(picker).toContainText("MPC Operations tenant-a");
+    await expect(picker).toContainText("MPC Operations company-a");
     await expect(picker).toContainText("Independent Review Firm");
-    // Tenant B's organization is never offered.
-    await expect(picker).not.toContainText("tenant-b");
+    await expect(picker).toContainText("MPC Operations company-b");
     await expect(page.getByRole("button", { name: "Register" })).toBeDisabled();
 
     await picker.selectOption("aaaaaaaa-0000-0000-0000-000000000001");
@@ -194,7 +200,7 @@ test.describe("accessibility", () => {
   test("state badges carry a marker other than color", async ({ page }) => {
     await connectAs(page, "Operator B");
     await expect(page).toHaveURL(/\/w\/projects$/);
-    await page.getByRole("link", { name: "TENANT-B-ONLY" }).click();
+    await page.getByRole("link", { name: "COMPANY-B-ONLY" }).click();
 
     await page.getByText("Project details, parties and history", { exact: true }).click();
     // The lifecycle badge has both a glyph and text (§11.8).
@@ -264,7 +270,7 @@ test.describe("language (OD-30) — English only", () => {
   test("state badges use English labels", async ({ page }) => {
     await connectAs(page, "Operator B");
     await expect(page).toHaveURL(/\/w\/projects$/);
-    await page.getByRole("link", { name: "TENANT-B-ONLY" }).click();
+    await page.getByRole("link", { name: "COMPANY-B-ONLY" }).click();
 
     await page.getByText("Project details, parties and history", { exact: true }).click();
     await expect(page.locator(".badge").first()).toContainText(/draft/i);

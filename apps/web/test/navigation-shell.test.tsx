@@ -32,7 +32,7 @@ const s = vi.hoisted(() => ({
   wallets: [] as { id: string; name: string; icon: string | null }[],
   session: {
     authenticated: true,
-    tenantId: "tenant1" as string | null,
+    workspaceAvailable: true,
     assuranceLevel: "high_assurance",
     roleBindings: [] as { role: string }[],
     actions: [] as string[],
@@ -59,7 +59,7 @@ beforeEach(() => {
   s.token = "token";
   s.loading = false;
   s.session.authenticated = true;
-  s.session.tenantId = "tenant1";
+  s.session.workspaceAvailable = true;
   s.session.roleBindings = [];
   s.wallets = [];
   for (const f of [s.signOut, s.push, s.replace, s.refresh])
@@ -72,7 +72,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-it("gates loading, signed-out and tenantless sessions while always allowing access guidance", () => {
+it("gates loading, signed-out and sessions without workspace access while always allowing access guidance", () => {
   s.loading = true;
   const view = render(
     <WorkspaceGate>
@@ -90,13 +90,13 @@ it("gates loading, signed-out and tenantless sessions while always allowing acce
   );
   expect(screen.getByTestId("workspace-signed-out")).toBeTruthy();
   s.session.authenticated = true;
-  s.session.tenantId = null;
+  s.session.workspaceAvailable = false;
   view.rerender(
     <WorkspaceGate>
       <p>Private records</p>
     </WorkspaceGate>,
   );
-  expect(screen.getByTestId("workspace-no-tenant")).toBeTruthy();
+  expect(screen.getByTestId("workspace-unavailable")).toBeTruthy();
   expect(screen.queryByText("Private records")).toBeNull();
   for (const path of [
     "/w/access-requests",
@@ -112,7 +112,7 @@ it("gates loading, signed-out and tenantless sessions while always allowing acce
     expect(screen.getByText("Access guidance")).toBeTruthy();
   }
   s.path = "/w/projects";
-  s.session.tenantId = "tenant1";
+  s.session.workspaceAvailable = true;
   s.session.roleBindings = [{ role: "reviewer" }];
   view.rerender(
     <WorkspaceGate>
@@ -166,7 +166,6 @@ it("offers no wallet sign-in, whatever an older server still reports (WP7)", asy
     "GET /api/v1/auth/methods": {
       emailCode: true,
       google: false,
-      microsoft: false,
       legacyWalletLogin: true,
       emailCodeDigits: 8,
       emailCodeTtlMinutes: 10,

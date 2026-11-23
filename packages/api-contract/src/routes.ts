@@ -310,7 +310,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   ...ACCOUNT_ROUTES,
   // Suspending and reinstating a person (AUTH-06, 0127).
   ...SUSPENSION_ROUTES,
-  // Google / Microsoft sign-in, linking and unlinking (WP4).
+  // Google sign-in, linking and unlinking (WP4).
   ...OIDC_ROUTES,
   // Signing wallets bound by proof of possession (WP5).
   ...WALLET_ROUTES,
@@ -332,7 +332,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/projects",
-    summary: "List projects in the current tenant — filters narrow within the caller's scope",
+    summary: "List projects in the caller's scope — filters narrow within it",
     operationId: "listProjects",
     public: false,
     mutation: false,
@@ -1510,7 +1510,6 @@ export const ROUTES: readonly RouteDefinition[] = [
 
   // --- Platform administration -----------------------------------------
   //
-  // Tenant creation is not here. See the header of `apps/api/src/routes/admin.ts` for why.
   {
     method: "get",
     path: "/api/v1/admin/subjects",

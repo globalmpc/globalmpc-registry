@@ -1,5 +1,9 @@
 # Tenant-scoped scan queue access
 
+> **Historical.** 0169 removed the tenant (`docs/reviews/tenant-removal.md`). The scan worker
+> now leases as its service token's subject under actor-based RLS; `SCAN_SERVICE_TENANT_SLUG`
+> no longer exists. The RLS-enforced regression approach below still applies.
+
 The scan worker serves the tenant configured by `SCAN_SERVICE_TENANT_SLUG`. A connecting
 role without BYPASSRLS currently sees no uploads because queue queries omit the tenant
 session context. Set the existing transaction-local context for every queue operation;

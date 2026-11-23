@@ -5,14 +5,14 @@ import { ACCOUNT_ACTION_POLICIES } from "./accounts.js";
  * Authorization decision — the access decision formula of spec 02 §2.1 in code.
  *
  *   allow = role_action_allowed
- *        AND tenant_scope_matches
  *        AND project_scope_matches
  *        AND sensitivity_clearance_sufficient
  *        AND credential_or_assignment_valid_if_required
  *        AND resource_state_allows_action
  *        AND no_conflict_or_separation_violation
  *
- * Evaluates the seven conditions, plus the `jurisdiction[]` attribute of §2.5, in order and
+ * Evaluates the six conditions (the Registry is one instance, so the spec's instance condition
+ * always holds), plus the `jurisdiction[]` attribute of §2.5, in order and
  * **preserves the first failure reason**. §11.7 requires "Permission: the required role and the access request
  * path", so the denial reason must reach the UI. With a bare boolean, the user
  * would not know what to do next.
@@ -21,7 +21,6 @@ import { ACCOUNT_ACTION_POLICIES } from "./accounts.js";
 export type DenyReason =
   | "ROLE_ACTION_NOT_ALLOWED"
   | "ASSURANCE_LEVEL_INSUFFICIENT"
-  | "TENANT_SCOPE_MISMATCH"
   | "PROJECT_SCOPE_MISMATCH"
   | "JURISDICTION_SCOPE_MISMATCH"
   | "SENSITIVITY_CLEARANCE_INSUFFICIENT"
@@ -32,8 +31,8 @@ export type DenyReason =
 /**
  * Projects this role binding reaches.
  *
- * `"all"` is the whole tenant — only organization-level bindings of
- * `TENANT_WIDE_ROLES` qualify. An array lists the projects reached: a
+ * `"all"` is the whole Registry — only Registry-scoped bindings (by default those of
+ * `REGISTRY_WIDE_ROLES`) qualify. An array lists the projects reached: a
  * project-level binding reaches that project; an organization-level binding of a
  * project-party role reaches **the projects that organization owns**.
  *
@@ -44,15 +43,15 @@ export type DenyReason =
 export type ProjectScope = "all" | readonly string[];
 
 /** Defaults for new grants; explicit stored scopes always take precedence. */
-export const TENANT_WIDE_ROLES: readonly string[] = [
+export const REGISTRY_WIDE_ROLES: readonly string[] = [
   "public_reader", "administrator", "reviewer", "scan_service", "cre_reporter",
 ];
 
-export type BindingScopeKind = "tenant" | "organization" | "none";
+export type BindingScopeKind = "registry" | "organization" | "none";
 /** Existing grants carry an explicit scope; role consolidation must never widen it. */
-export function isTenantWideBinding(binding: { role: string; scopeKind?: BindingScopeKind | undefined }) {
-  return binding.scopeKind === "tenant" ||
-    (binding.scopeKind === undefined && TENANT_WIDE_ROLES.includes(binding.role));
+export function isRegistryWideBinding(binding: { role: string; scopeKind?: BindingScopeKind | undefined }) {
+  return binding.scopeKind === "registry" ||
+    (binding.scopeKind === undefined && REGISTRY_WIDE_ROLES.includes(binding.role));
 }
 
 /**
@@ -77,7 +76,6 @@ export const ACCESS_REQUEST_PATHS = {
 export interface AuthorizationContext {
   readonly role: string;
   readonly assuranceLevel: AssuranceLevel;
-  readonly actorTenantId: string;
   readonly actorProjectIds: ProjectScope;
   readonly sensitivityClearance: readonly string[];
   readonly hasRequiredCredential: boolean;
@@ -93,9 +91,8 @@ export interface AuthorizationContext {
 }
 
 export interface ResourceContext {
-  /** Mixed-project/global operational records require an unrestricted tenant binding. */
-  readonly requiresTenantScope?: boolean;
-  readonly tenantId: string;
+  /** Mixed-project/global operational records require an unrestricted Registry binding. */
+  readonly requiresRegistryScope?: boolean;
   readonly projectId: string | null;
   readonly sensitivity: string;
   readonly state: string;
@@ -108,14 +105,14 @@ export interface ResourceContext {
   /**
    * Host jurisdiction of the project this resource belongs to (ISO 3166-1 alpha-3).
    *
-   * `null` or absent for tenant-level resources, or when it was not looked up. A
+   * `null` or absent for Registry-level resources, or when it was not looked up. A
    * jurisdiction-scoped binding treats both as a mismatch — an unknown location is not a match.
    */
   readonly jurisdiction?: string | null;
   /**
-   * A tenant-level list whose rows the route filters by project scope (`visibleProjectScope`),
+   * A Registry-level list whose rows the route filters by project scope (`visibleProjectScope`),
    * which already narrows jurisdiction-scoped bindings to their jurisdictions. Only such lists
-   * let a scoped binding through at tenant level; every other tenant-level action stays closed.
+   * let a scoped binding through at Registry level; every other Registry-level action stays closed.
    */
   readonly filteredByProjectScope?: boolean;
 }
@@ -123,8 +120,8 @@ export interface ResourceContext {
 export interface ActionPolicy {
   readonly action: string;
   readonly allowedRoles: readonly string[];
-  readonly requiresTenantScope?: boolean;
-  /** Scoped grants require a resolved project; tenant-wide grants may use global records. */
+  readonly requiresRegistryScope?: boolean;
+  /** Scoped grants require a resolved project; Registry-wide grants may use global records. */
   readonly requiresResourceScope?: boolean;
   /**
    * Set when this action is the **second person** of a two-person rule — it decides, publishes
@@ -149,7 +146,7 @@ function jurisdictionMatches(actor: AuthorizationContext, resource: ResourceCont
    * Jurisdiction condition — 02 §2.5.
    *
    * **Fails closed for scoped bindings.** A binding limited to some jurisdictions passes only
-   * when the resource's host jurisdiction is known and listed. A tenant-level resource has no
+   * when the resource's host jurisdiction is known and listed. A Registry-level resource has no
    * host jurisdiction, so a scoped binding cannot act on it: treating "no location" as "any
    * location" would let the narrowest binding reach the widest resources. The one exception is
    * a list the route filters by project scope, where the filter itself applies the limit.
@@ -190,11 +187,7 @@ export function authorize(
     };
   }
 
-  if (actor.actorTenantId !== resource.tenantId) {
-    return { allow: false, reason: "TENANT_SCOPE_MISMATCH" };
-  }
-
-  if (!tenantAuthorityMatches(policy, actor, resource)) {
+  if (!registryAuthorityMatches(policy, actor, resource)) {
     return { allow: false, reason: "PROJECT_SCOPE_MISMATCH", accessRequestPath: ACCESS_REQUEST_PATHS.role };
   }
 
@@ -217,9 +210,9 @@ export function authorize(
   return authorizeResourceConditions(actor, resource);
 }
 
-/** Global work cannot borrow a project grant or a jurisdiction-limited tenant grant. */
-function tenantAuthorityMatches(policy: ActionPolicy, actor: AuthorizationContext, resource: ResourceContext): boolean {
-  if (!policy.requiresTenantScope && !resource.requiresTenantScope && !(policy.requiresResourceScope && resource.projectId === null)) return true;
+/** Global work cannot borrow a project grant or a jurisdiction-limited Registry grant. */
+function registryAuthorityMatches(policy: ActionPolicy, actor: AuthorizationContext, resource: ResourceContext): boolean {
+  if (!policy.requiresRegistryScope && !resource.requiresRegistryScope && !(policy.requiresResourceScope && resource.projectId === null)) return true;
   return actor.actorProjectIds === "all" && actor.jurisdictionScope == null;
 }
 
@@ -254,9 +247,8 @@ function authorizeResourceConditions(
  * Roles that can read workspace data — 02 §2.1·§2.3.
  *
  * **`public_reader` is absent.** Public reads need no standing grant; workspace evidence, review, and
- * readiness are not public. A wallet being bound to a tenant is not a role —
- * treating it as read permission would turn the RLS tenant boundary into the
- * authorization itself.
+ * readiness are not public. A bound wallet is not a role — treating it as read permission would
+ * turn holding an account into the authorization itself.
  */
 const WORKSPACE_READERS = ["administrator", "project_member", "reviewer"] as const;
 
@@ -310,7 +302,7 @@ export const DISCLOSURE_APPROVER_ROLES: readonly string[] = ["reviewer"];
  *
  * Not in 02 §2.2 and not in `ROLE_MINIMUM_ASSURANCE`, so it cannot be proposed as a standing
  * role grant (the grant route refuses unknown roles). It is also absent from
- * `TENANT_WIDE_ROLES`, so it reaches no project: the emergency actions are tenant-level.
+ * `REGISTRY_WIDE_ROLES`, so it reaches no project: the emergency actions are Registry-level.
  */
 export const BREAK_GLASS_ROLE = "break_glass";
 
@@ -339,8 +331,8 @@ const ROLE_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
    * Read actions — 02 §2.1.
    *
    * The decision formula applies to reads too. Checking only writes would let
-   * reads break role and project boundaries inside a tenant. RLS enforces only
-   * the tenant boundary (0002_rls.sql).
+   * reads break role and project boundaries. RLS enforces project reach for the actor (0168,
+   * 0169); role, assurance and state conditions are decided here.
    */
   "project.read": { action: "project.read", allowedRoles: WORKSPACE_READERS },
   "evidence.read": {
@@ -493,11 +485,11 @@ const ROLE_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     allowedRoles: ["reviewer"],
   },
   /**
-   * Tenant-wide document type rules ("documents of type Y rest on documents of type X").
+   * Registry-wide document type rules ("documents of type Y rest on documents of type X").
    *
    * Linking two documents is Data Room work and rides on `source.upload`. A rule is different:
-   * it writes links into every project of the tenant. A role narrowed to one organization's
-   * projects would reach into other organizations' Data Rooms through it, so only a tenant-wide
+   * it writes links into every project of the Registry. A role narrowed to one organization's
+   * projects would reach into other organizations' Data Rooms through it, so only a Registry-wide
    * role holds it.
    */
   "document.rule.manage": {
@@ -628,7 +620,7 @@ const ROLE_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     allowedRoles: ["administrator"],
   },
   /**
-   * Bulk audit export — 12 §12.4. Exporting tenant audit data requires tenant-wide
+   * Bulk audit export — 12 §12.4. Exporting Registry audit data requires Registry-wide
    * administration, just as reading the audit trail does.
    */
   "audit.export": {
@@ -710,7 +702,7 @@ const ROLE_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   /**
    * Notification sink management.
    *
-   * A sink URL belongs to the tenant, not a person, so it is not personal data.
+   * A sink URL belongs to the Registry, not a person, so it is not personal data.
    * It still has its own permission because changing a sink **sends
    * notifications elsewhere.** A silent change leaves the original recipient
    * unaware that notifications stopped.
@@ -827,12 +819,12 @@ const ROLE_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   },
 };
 
-/** A project-only grant cannot administer tenant policy, credentials or security. */
+/** A project-only grant cannot administer Registry policy, credentials or security. */
 export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = Object.fromEntries(
   Object.entries(ROLE_ACTION_POLICIES).map(([action, policy]) => [action, {
     ...policy,
     ...((/^(admin\.|review_registry\.|credential\.status\.|connection\.|break_glass\.)/.test(action) && action !== "break_glass.quarantine") || ["document.rule.manage", "authority.register", "authority.review", "audit.read", "audit.export", "anchor.read", "anchor.submit"].includes(action)
-      ? { requiresTenantScope: true } : {}),
+      ? { requiresRegistryScope: true } : {}),
     ...(["registry.draft", "registry.publish", "registry.revoke", "anchor.batch.create"].includes(action)
       ? { requiresResourceScope: true } : {}),
   }]),

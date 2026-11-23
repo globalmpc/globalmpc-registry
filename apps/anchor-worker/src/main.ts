@@ -32,7 +32,7 @@ import { eoaSubmissionAllowed } from "./anchor-state.js";
  * Advances one transaction at a time. Batching them lets one RPC failure roll back the progress
  * of the rest.
  *
- * This process works **across tenants**, so it connects as the `mpc_worker` role (0012).
+ * This process works **across every project**, so it connects as the `mpc_worker` role (0012).
  * Connecting as superuser grants more privilege than needed.
  */
 

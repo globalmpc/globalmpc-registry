@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { WorkspaceShell } from "../src/components/WorkspaceShell";
 const state = vi.hoisted(() => ({ path: "/w/projects/p1/requirements", actions: ["project.read", "readiness.read", "registry.read"] }));
 vi.mock("next/navigation", () => ({usePathname: () => state.path}));
-vi.mock("../src/lib/session", () => ({useSession: () => ({token:"test",session:{subjectId:"s1",tenantId:"t1",actions:state.actions}})}));
+vi.mock("../src/lib/session", () => ({useSession: () => ({token:"test",session:{subjectId:"s1",actions:state.actions}})}));
 vi.mock("../src/lib/api", () => ({getProject: async () => ({projectKey:"P1",name:"Mine"})}));
 afterEach(cleanup);
 it("has one requirements destination and labels the publication gate accurately", async () => {

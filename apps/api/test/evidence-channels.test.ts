@@ -1,4 +1,4 @@
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { loadEvidenceSubmitters } from "../src/services/attestation-basis.js";
 import { randomUUID } from "node:crypto";
 import { addGovernanceAccount } from "./helpers/governance-accounts.js";
@@ -131,7 +131,7 @@ describeDb("Evidence channel", () => {
       headers:{authorization:`Bearer ${steward}`,"idempotency-key":idempotencyKey()},
       payload:{claimType:"mining_right_registration",valueText:`Source ${uploadId}`,sourceReceiptId:receipt.json().id,sourceCoordinate:{page:"1"}}});
     expect(claim.statusCode,claim.body).toBe(200);
-    const provenance=()=>withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[claim.json().id]));
+    const provenance=()=>withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[claim.json().id]));
     expect(await provenance()).toMatchObject({allKnown:true,submitterIds:expect.arrayContaining([fx.reviewerSubjectA,fx.stewardSubjectA])});
     const assign=()=>app.inject({method:"POST",url:"/api/v1/verification-cases",
       headers:{authorization:`Bearer ${steward}`,"idempotency-key":idempotencyKey()},
@@ -440,10 +440,10 @@ describeDb("Evidence channel", () => {
       expect(response.json().result).toBe("confirmed_from_source");
     });
 
-    it("requires tenant authority to second-review a projectless source receipt", async () => {
+    it("requires Registry-wide authority to second-review a projectless source receipt", async () => {
       const receipt=randomUUID();
-      const insert=(id:string,first:string|null)=>fx.sql`INSERT INTO core.source_receipts(id,tenant_id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id,first_confirmed_by)
-        VALUES(${id},${fx.tenantA},${fx.connectionA},${fx.authorityA},'manual_official_registry_confirmation','manual_review_required','{}','Synthetic tenant record','none',${`0x${"ac".repeat(32)}`},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test',${first})`;
+      const insert=(id:string,first:string|null)=>fx.sql`INSERT INTO core.source_receipts(id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id,first_confirmed_by)
+        VALUES(${id},${fx.connectionA},${fx.authorityA},'manual_official_registry_confirmation','manual_review_required','{}','Synthetic Registry record','none',${`0x${"ac".repeat(32)}`},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test',${first})`;
       await insert(receipt,fx.stewardSubjectA);
       const scoped=await signIn(app,await addGovernanceAccount(fx,"reviewer",{assurance:"high_assurance",scopeKind:"organization"}));
       const review=(token:string)=>app.inject({method:"POST",url:`/api/v1/source-receipts/${receipt}/second-review`,headers:{authorization:`Bearer ${token}`,"idempotency-key":idempotencyKey()},payload:{observation:"Independent review",confirmed:true}});
@@ -543,8 +543,11 @@ describeDb("Evidence channel", () => {
         payload: { observation: "confirmed", confirmed: true },
       });
 
-      expect(response.statusCode).toBe(403);
-      expect(response.json().details.reason).toBe("PROJECT_SCOPE_MISMATCH");
+      // The receipt's project is outside the caller's role bindings, so row-level security hides
+      // the receipt itself: not found, and its existence is not disclosed.
+      expect(response.statusCode).toBe(404);
+      expect(await fx.sql`SELECT second_confirmed_by FROM core.source_receipts WHERE id = ${created.json().id}`)
+        .toEqual([{ second_confirmed_by: null }]);
     });
 
     /**
@@ -565,14 +568,14 @@ describeDb("Evidence channel", () => {
       const { pending } = await fx.sql.begin(async (tx) => {
         await tx`
           INSERT INTO core.source_receipts (
-            id, tenant_id, project_id, connection_id, authority_id, collection_method,
+            id, project_id, connection_id, authority_id, collection_method,
             result, query_basis, endpoint_or_document_ref, authentication_method,
             raw_hash, source_schema_version, adapter_version, terms_license,
             commercial_reuse, disclosure_permission, received_at, as_of,
             freshness_status, correlation_id, first_confirmed_by, second_confirmed_by,
             second_confirmed_at, supersedes_receipt_id
           ) VALUES (
-            gen_random_uuid(), ${fx.tenantA}, ${fx.projectA}, ${fx.connectionA},
+            gen_random_uuid(), ${fx.projectA}, ${fx.connectionA},
             ${fx.authorityA}, 'manual_official_registry_confirmation',
             'conflicting', '{}'::jsonb, 'doc', 'none',
             ${`0x${"ef".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
@@ -623,13 +626,13 @@ describeDb("Evidence channel", () => {
       await expect(
         fx.sql`
           INSERT INTO core.source_receipts (
-            id, tenant_id, project_id, connection_id, authority_id, collection_method,
+            id, project_id, connection_id, authority_id, collection_method,
             result, query_basis, endpoint_or_document_ref, authentication_method,
             raw_hash, source_schema_version, adapter_version, terms_license,
             commercial_reuse, disclosure_permission, received_at, as_of,
             freshness_status, correlation_id, first_confirmed_by, second_confirmed_by
           ) VALUES (
-            gen_random_uuid(), ${fx.tenantA}, ${fx.projectA}, ${fx.connectionA},
+            gen_random_uuid(), ${fx.projectA}, ${fx.connectionA},
             ${fx.authorityA}, 'manual_official_registry_confirmation',
             'confirmed_from_source', '{}'::jsonb, 'doc', 'none',
             ${`0x${"cd".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
@@ -654,13 +657,13 @@ describeDb("Evidence channel", () => {
     ) {
       return fx.sql`
         INSERT INTO core.source_receipts (
-          id, tenant_id, project_id, connection_id, authority_id, collection_method,
+          id, project_id, connection_id, authority_id, collection_method,
           result, query_basis, endpoint_or_document_ref, authentication_method,
           raw_hash, source_schema_version, adapter_version, terms_license,
           commercial_reuse, disclosure_permission, received_at, as_of,
           freshness_status, correlation_id, channel_evidence
         ) VALUES (
-          gen_random_uuid(), ${fx.tenantA}, ${fx.projectA}, ${fx.connectionA},
+          gen_random_uuid(), ${fx.projectA}, ${fx.connectionA},
           ${fx.authorityA}, ${fx.sql.unsafe(`'${method}'`)},
           'confirmed_from_source', '{}'::jsonb, 'doc', 'none',
           ${`0x${"1a".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
@@ -702,13 +705,13 @@ describeDb("Evidence channel", () => {
       await expect(
         fx.sql`
           INSERT INTO core.source_receipts (
-            id, tenant_id, project_id, connection_id, authority_id, collection_method,
+            id, project_id, connection_id, authority_id, collection_method,
             result, query_basis, endpoint_or_document_ref, authentication_method,
             raw_hash, source_schema_version, adapter_version, terms_license,
             commercial_reuse, disclosure_permission, received_at, as_of,
             freshness_status, correlation_id
           ) VALUES (
-            gen_random_uuid(), ${fx.tenantA}, ${fx.projectA}, ${fx.connectionA},
+            gen_random_uuid(), ${fx.projectA}, ${fx.connectionA},
             ${fx.authorityA}, 'manual_official_registry_confirmation',
             'confirmed_from_source', '{}'::jsonb, 'doc', 'none',
             ${`0x${"ef".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',

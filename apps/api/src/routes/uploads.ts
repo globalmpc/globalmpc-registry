@@ -1,8 +1,9 @@
+import type { ActorContext } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { SENSITIVITY_LEVELS, admitToStorage } from "@mpc/domain";
 import { STREAM_UPLOAD_MAX_BYTES, uploadListQuery } from "@mpc/api-contract";
 import { badRequest, conflict, notFound, unprocessable, unsupportedMediaType } from "../errors.js";
@@ -46,7 +47,7 @@ import {
  * - **Storage keys contain no file or project names.** Keys travel through logs, URLs,
  *   and error messages.
  * - **No permanent public URLs.** Downloads use presigned URLs capped at 15 minutes.
- * - **The same content is not stored twice.** The content hash is UNIQUE per tenant and
+ * - **The same content is not stored twice.** The content hash is UNIQUE per
  *   project, so evidence does not fork.
  */
 
@@ -251,10 +252,10 @@ export const toUploadView = toView;
  */
 export async function uploadProjectId(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   uploadId: string,
 ): Promise<string> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, actor, (tx) =>
     tx<{ project_id: string }[]>`
       SELECT project_id FROM core.object_uploads WHERE id = ${uploadId}
     `,
@@ -336,13 +337,13 @@ export async function registerUploadRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/uploads",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { requestId, asOf } = request.context;
 
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
@@ -356,7 +357,7 @@ export async function registerUploadRoutes(
       const after = parsed.data.cursor ? decodeKeysetCursor(parsed.data.cursor) : null;
       const { projectId } = request.params;
 
-      const { rows, total } = await withTenant(sql, { tenantId }, async (tx) => {
+      const { rows, total } = await withActor(sql, actor, async (tx) => {
         /**
          * The first page and the later ones are separate statements on purpose. One statement
          * with `$cursor IS NULL OR (...)` works until the server switches to a generic plan,
@@ -415,7 +416,7 @@ export async function registerUploadRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/uploads",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = createUploadSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -442,7 +443,7 @@ export async function registerUploadRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(tenantId, request.params.projectId, {
+        projectResource(request.params.projectId, {
           sensitivity: parsed.data.sensitivity,
         }),
         sessionFacts(session),
@@ -463,8 +464,8 @@ export async function registerUploadRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           // If the same content exists, return it. Storing it twice forks evidence and
           // leaves it unclear which copy is under review.
           const existing = await uploadWithContent(tx, request.params.projectId, contentHash);
@@ -475,22 +476,22 @@ export async function registerUploadRoutes(
 
           const uploadId = randomUUID();
           // Quarantine path. The evidence path is created on promotion.
-          const key = quarantineKey(tenantId, uploadId);
+          const key = quarantineKey(uploadId);
 
           await store.put(key, bytes, normalizeContentType(parsed.data.contentType));
 
           const [row] = await tx<UploadRow[]>`
             INSERT INTO core.object_uploads (
-              id, tenant_id, project_id, object_key, content_hash, byte_size,
+              id, project_id, object_key, content_hash, byte_size,
               content_type, original_filename, sensitivity, state, uploaded_by
             ) VALUES (
-              ${uploadId}, ${tenantId}, ${request.params.projectId}, ${key},
+              ${uploadId}, ${request.params.projectId}, ${key},
               ${contentHash}, ${bytes.byteLength},
               ${normalizeContentType(parsed.data.contentType)},
               ${parsed.data.originalFilename}, ${parsed.data.sensitivity},
               'quarantined', ${session.subjectId ?? null}
             )
-            ON CONFLICT (tenant_id, project_id, content_hash) DO NOTHING
+            ON CONFLICT (project_id, content_hash) DO NOTHING
             RETURNING *
           `;
           if (!row) {
@@ -503,7 +504,6 @@ export async function registerUploadRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: request.params.projectId,
             session,
             command: "upload.received",
@@ -549,12 +549,12 @@ export async function registerUploadRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/uploads/stream",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
@@ -575,7 +575,7 @@ export async function registerUploadRoutes(
 
       const { requestId, asOf, correlationId } = request.context;
       const uploadId = randomUUID();
-      const key = quarantineKey(tenantId, uploadId);
+      const key = quarantineKey(uploadId);
 
       // Write to storage first. Deduplication needs the content hash, and when streaming
       // the hash exists only after reading everything.
@@ -595,8 +595,8 @@ export async function registerUploadRoutes(
 
       const requestHash = hashRequest(request, { contentHash: stored.contentHash });
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const existing = await uploadWithContent(
             tx,
             request.params.projectId,
@@ -611,15 +611,15 @@ export async function registerUploadRoutes(
 
           const [row] = await tx<UploadRow[]>`
             INSERT INTO core.object_uploads (
-              id, tenant_id, project_id, object_key, content_hash, byte_size,
+              id, project_id, object_key, content_hash, byte_size,
               content_type, original_filename, sensitivity, state, uploaded_by
             ) VALUES (
-              ${uploadId}, ${tenantId}, ${request.params.projectId}, ${key},
+              ${uploadId}, ${request.params.projectId}, ${key},
               ${stored.contentHash}, ${stored.byteSize}, ${stored.contentType},
               ${file.filename ?? null}, ${STREAM_SENSITIVITY}, 'quarantined',
               ${session.subjectId ?? null}
             )
-            ON CONFLICT (tenant_id, project_id, content_hash) DO NOTHING
+            ON CONFLICT (project_id, content_hash) DO NOTHING
             RETURNING *
           `;
           if (!row) {
@@ -635,7 +635,6 @@ export async function registerUploadRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: request.params.projectId,
             session,
             command: "upload.received",
@@ -656,7 +655,7 @@ export async function registerUploadRoutes(
   app.post<{ Params: { uploadId: string } }>(
     "/api/v1/uploads/:uploadId/scan-result",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const parsed = scanResultSchema.safeParse(request.body);
@@ -667,9 +666,7 @@ export async function registerUploadRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "upload.scan_result",
-        projectResource(
-          tenantId,
-          await uploadProjectId(sql, tenantId, request.params.uploadId),
+        projectResource(await uploadProjectId(sql, actor, request.params.uploadId),
         ),
         sessionFacts(session),
       );
@@ -679,8 +676,8 @@ export async function registerUploadRoutes(
       const toState: UploadState =
         parsed.data.result === "clean" ? "scanned_clean" : "scanned_infected";
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [row] = await tx<UploadRow[]>`
             SELECT * FROM core.object_uploads WHERE id = ${request.params.uploadId}
             FOR UPDATE
@@ -706,7 +703,6 @@ export async function registerUploadRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: row.project_id,
             session,
             command: `upload.${toState}`,
@@ -733,15 +729,13 @@ export async function registerUploadRoutes(
   app.post<{ Params: { uploadId: string } }>(
     "/api/v1/uploads/:uploadId/promote",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(
-          tenantId,
-          await uploadProjectId(sql, tenantId, request.params.uploadId),
+        projectResource(await uploadProjectId(sql, actor, request.params.uploadId),
         ),
         sessionFacts(session),
       );
@@ -749,8 +743,8 @@ export async function registerUploadRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [row] = await tx<UploadRow[]>`
             SELECT * FROM core.object_uploads WHERE id = ${request.params.uploadId}
             FOR UPDATE
@@ -768,14 +762,14 @@ export async function registerUploadRoutes(
           }
 
           const artifactId = randomUUID();
-          const target = evidenceKey(tenantId, artifactId);
+          const target = evidenceKey(artifactId);
           await store.copy(row.object_key, target);
 
           await tx`
             INSERT INTO core.artifacts (
-              id, tenant_id, project_id, kind, content_hash, object_key, sensitivity
+              id, project_id, kind, content_hash, object_key, sensitivity
             ) VALUES (
-              ${artifactId}, ${tenantId}, ${row.project_id}, 'raw_source',
+              ${artifactId}, ${row.project_id}, 'raw_source',
               ${row.content_hash}, ${target}, ${row.sensitivity}
             )
           `;
@@ -790,7 +784,6 @@ export async function registerUploadRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: row.project_id,
             session,
             command: "upload.promoted",
@@ -804,7 +797,6 @@ export async function registerUploadRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "evidence.artifact.created",
             aggregateId: artifactId,
             aggregateVersion: 1,
@@ -829,14 +821,12 @@ export async function registerUploadRoutes(
   app.post<{ Params: { uploadId: string } }>(
     "/api/v1/uploads/:uploadId/download-link",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(
-          tenantId,
-          await uploadProjectId(sql, tenantId, request.params.uploadId),
+        projectResource(await uploadProjectId(sql, actor, request.params.uploadId),
         ),
         sessionFacts(session),
       );
@@ -845,8 +835,8 @@ export async function registerUploadRoutes(
       const requestHash = hashRequest(request);
       const ttlSeconds = 300;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [row] = await tx<UploadRow[]>`
             SELECT * FROM core.object_uploads WHERE id = ${request.params.uploadId}
           `;
@@ -876,7 +866,6 @@ export async function registerUploadRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: row.project_id,
             session,
             command: "upload.download_link_issued",

@@ -160,7 +160,7 @@ describeDb("Source Receipt", () => {
     expect(response.json().code).toBe("CONNECTION_AUTHORITY_MISMATCH");
   });
 
-  it("refuses a connection that does not exist in the tenant", async () => {
+  it("refuses a connection that does not exist in the Registry", async () => {
     const response = await create(tokens.stewardA, receiptBody({ connectionId: randomUUID() }));
     expect(response.statusCode).toBe(404);
   });
@@ -189,10 +189,10 @@ describeDb("Source Receipt", () => {
     const contentHash = `0x${randomUUID().replace(/-/g, "").padEnd(64, "7")}`;
     await fx.sql`
       INSERT INTO core.object_uploads (
-        id, tenant_id, project_id, object_key, content_hash, byte_size, content_type,
+        id, project_id, object_key, content_hash, byte_size, content_type,
         sensitivity, state
       ) VALUES (
-        ${uploadId}, ${fx.tenantA}, ${fx.projectA}, ${`objects/${uploadId}`}, ${contentHash},
+        ${uploadId}, ${fx.projectA}, ${`objects/${uploadId}`}, ${contentHash},
         10, 'application/pdf', 'restricted', 'scanned_clean'
       )
     `;
@@ -265,7 +265,7 @@ describeDb("Source Receipt", () => {
     expect(events[0]?.["event_type"]).toBe("source_receipt.received");
   });
 
-  it("lists only within the tenant", async () => {
+  it("lists only to actors whose bindings reach the project", async () => {
     await create(tokens.stewardA, receiptBody());
 
     const own = await app.inject({
@@ -280,7 +280,8 @@ describeDb("Source Receipt", () => {
       url: `/api/v1/projects/${fx.projectA}/source-receipts`,
       headers: { authorization: `Bearer ${tokens.operatorB}` },
     });
-    expect(other.json().items).toEqual([]);
+    expect(other.statusCode).toBe(403);
+    expect(other.json().items).toBeUndefined();
   });
 
   it("does not let an unauthorized account register", async () => {
@@ -505,7 +506,7 @@ describeDb("Claim", () => {
     expect(response.json().valueText).toBe(huge);
   });
 
-  it("lists only within the tenant", async () => {
+  it("lists only to actors whose bindings reach the project", async () => {
     await create(tokens.stewardA, claimBody());
 
     const other = await app.inject({
@@ -513,7 +514,8 @@ describeDb("Claim", () => {
       url: `/api/v1/projects/${fx.projectA}/claims`,
       headers: { authorization: `Bearer ${tokens.operatorB}` },
     });
-    expect(other.json().items).toEqual([]);
+    expect(other.statusCode).toBe(403);
+    expect(other.json().items).toBeUndefined();
   });
 
   it("does not let an unauthorized account register", async () => {

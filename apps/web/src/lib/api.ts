@@ -112,10 +112,10 @@ export type AuthenticationLevel = "aal1" | "aal2" | "aal3";
 
 export interface SessionInfo {
   authenticated: boolean;
-  /** What the session proved first: `email_code`, `google` or `microsoft`. */
+  /** What the session proved first: `email_code` or `google`. */
   googleWorkspaceAccess?: boolean;
   googleRequiresMfa?: boolean;
-  firstFactor?: "email_code" | "google" | "microsoft" | null;
+  firstFactor?: "email_code" | "google" | null;
   secondFactor?: "passkey" | "totp" | "recovery_code" | null;
   /** Derived by the server from what the session proved. `aal1`: first factor only. */
   aal?: AuthenticationLevel;
@@ -125,9 +125,9 @@ export interface SessionInfo {
   /** Roles held but not effective at this session's level, with the level each needs. */
   narrowedRoles?: { role: string; requiredAal: AuthenticationLevel | null }[];
   subjectId?: string | null;
-  tenantId?: string | null;
+  workspaceAvailable?: boolean;
   assuranceLevel?: string;
-  roleBindings?: { role: string; scopeKind?: "tenant" | "organization" | "none"; governanceScope?: "protocol" | "project" | "none"; organizationId: string | null; projectId: string | null }[];
+  roleBindings?: { role: string; scopeKind?: "registry" | "organization" | "none"; governanceScope?: "protocol" | "project" | "none"; organizationId: string | null; projectId: string | null }[];
   projectIds?: string[];
   /** Actions allowed by role. Used only to filter menus — the server makes the decision. */
   actions?: string[];
@@ -136,10 +136,11 @@ export interface SessionInfo {
 
 export async function getSession(token: string | null): Promise<SessionInfo> {
   const response = await apiFetch("/api/v1/auth/session", {
-    headers: authHeader(token),
+    headers: { ...authHeader(token), "x-mpc-session-view": "workspace" },
     cache: "no-store",
   });
-  return parse<SessionInfo>(response);
+  const session = await parse<SessionInfo>(response);
+  return { ...session, workspaceAvailable: session.workspaceAvailable ?? Boolean(session.subjectId) };
 }
 
 export async function listProjects(
@@ -2073,10 +2074,10 @@ export interface AdminSubject {
   wallets: AdminWallet[];
   roles: { id: string; role: string; projectId: string | null; grantedAt: string; revokedAt: string | null }[];
   /**
-   * How the person can sign in: the account address and linked Google / Microsoft identities
+   * How the person can sign in: the account address and linked Google identities
    * (WP6). A wallet is never one (WP7).
    */
-  signInMethods?: ("email" | "google" | "microsoft")[];
+  signInMethods?: ("email" | "google")[];
   /** No way to sign in at all. This is the first state the screen must report. */
   locked: boolean;
   /** When two admins suspended the person (AUTH-06); null or absent while the account is in use. */
@@ -2255,7 +2256,7 @@ export async function listRoleGrants(token: string): Promise<{ items: RoleGrant[
 export async function createRoleGrant(
   token: string,
   key: string,
-  input: { subjectId: string; role: string; organizationId?: string; scopeKind?: "tenant" | "organization" | "none"; reason: string },
+  input: { subjectId: string; role: string; organizationId?: string; scopeKind?: "registry" | "organization" | "none"; reason: string },
 ): Promise<RoleGrant> {
   const response = await apiFetch("/api/v1/admin/role-grants", {
     method: "POST",

@@ -26,7 +26,7 @@ import { moveRefusalText, moveWaitText } from "./move-text";
  */
 export default function AnchorsPage() {
   const context = useSession();
-  return <AnchorsForSession key={JSON.stringify([context.token, context.session?.tenantId, context.session?.subjectId, context.loading])} {...context} />;
+  return <AnchorsForSession key={JSON.stringify([context.token, context.session?.subjectId, context.loading])} {...context} />;
 }
 
 function AnchorsForSession({ token, session, loading: sessionLoading }: ReturnType<typeof useSession>) {

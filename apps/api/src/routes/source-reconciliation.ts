@@ -1,9 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { resolveReconciliationTaskRequest } from "@mpc/api-contract";
 import { badRequest, conflict, notFound } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
@@ -64,11 +64,11 @@ export async function registerSourceReconciliationRoutes(
   app.get<{ Params: { connectionId: string } }>(
     "/api/v1/source-connections/:connectionId/reconciliation-tasks",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
-      assertAuthorized(session, "authority.read", tenantResource(tenantId), sessionFacts(session));
+      const { session, actor } = requireReadContext(request);
+      assertAuthorized(session, "authority.read", registryResource(), sessionFacts(session));
 
       const { requestId, asOf } = request.context;
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
+      const rows = await withActor(sql, actor, (tx) =>
         tx<TaskRow[]>`
           SELECT ${tx.unsafe(TASK_COLUMNS)}
           FROM core.source_reconciliation_tasks
@@ -84,7 +84,7 @@ export async function registerSourceReconciliationRoutes(
   app.post<{ Params: { taskId: string } }>(
     "/api/v1/source-reconciliation-tasks/:taskId/resolve",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
 
       const parsed = resolveReconciliationTaskRequest.safeParse(request.body);
@@ -97,13 +97,13 @@ export async function registerSourceReconciliationRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "connection.configure",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      const result = await withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      const result = await withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [current] = await tx<TaskRow[]>`
             SELECT ${tx.unsafe(TASK_COLUMNS)}
             FROM core.source_reconciliation_tasks
@@ -127,7 +127,6 @@ export async function registerSourceReconciliationRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "source_reconciliation.resolved",
             resourceType: "source_reconciliation_task",
@@ -141,7 +140,6 @@ export async function registerSourceReconciliationRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "evidence_adapter.reconciled",
             aggregateId: current.connection_id,
             aggregateVersion: row!.version,
@@ -167,11 +165,11 @@ export async function registerSourceReconciliationRoutes(
   app.get<{ Params: { connectionId: string } }>(
     "/api/v1/source-connections/:connectionId/transitions",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
-      assertAuthorized(session, "authority.read", tenantResource(tenantId), sessionFacts(session));
+      const { session, actor } = requireReadContext(request);
+      assertAuthorized(session, "authority.read", registryResource(), sessionFacts(session));
 
       const { requestId, asOf } = request.context;
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
+      const rows = await withActor(sql, actor, (tx) =>
         tx<
           {
             from_state: string | null;

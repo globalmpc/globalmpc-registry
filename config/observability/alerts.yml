@@ -39,7 +39,7 @@ groups:
           summary: "5% or more of requests are hitting the rate limit"
 
       # A rising sign-in failure rate may be credential attempts rather than typos. Counted
-      # across first-factor methods (`method`: email_code, invitation, google, microsoft); a typed code
+      # across first-factor methods (`method`: email_code, invitation, google); a typed code
       # fails now and then, a sustained 12 per minute is someone trying codes or signatures.
       # The per-address and per-IP code limits hold either way; this says that someone is trying.
       - alert: MpcSignInFailureRate

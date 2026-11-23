@@ -23,7 +23,7 @@ export class AppError extends Error {
 /** Legacy 422 response for an absent verification subject, distinct from an unsigned one. */
 export class RegistrySubjectNotFoundError extends AppError {
   constructor() {
-    super("REGISTRY_SUBJECT_NOT_SIGNED", "A Verification Registry entry must point to a signed attestation in this tenant", 422, false);
+    super("REGISTRY_SUBJECT_NOT_SIGNED", "A Verification Registry entry must point to a signed attestation in the Registry", 422, false);
   }
 }
 

@@ -14,14 +14,12 @@ import type { BootstrapInput } from "./bootstrap.js";
  * first email, preserving identity and existing authority. It never grants roles or upgrades
  * assurance, and an unchanged subject/email rerun is a no-op. A refusal exits 1, stopping deploy.
  *
- * Connect as the migration table owner, not an application/worker login. Bootstrap establishes
- * the tenant scope before account access and does not require BYPASSRLS.
+ * Connect as the migration table owner, not an application/worker login. The owner must bypass
+ * row-level security, as the definer functions it owns already require (`deploy-authority.ts`).
  */
 
 const REQUIRED = [
   "DATABASE_URL",
-  "BOOTSTRAP_TENANT_SLUG",
-  "BOOTSTRAP_TENANT_NAME",
   "BOOTSTRAP_ORG_NAME",
   "BOOTSTRAP_SUBJECT_NAME",
   "BOOTSTRAP_EMAIL",
@@ -44,8 +42,6 @@ if (missing.length > 0) {
       "",
       "Required:",
       "  DATABASE_URL              same table-owner connection used for migrations",
-      "  BOOTSTRAP_TENANT_SLUG     tenant identifier. Reused if it already exists",
-      "  BOOTSTRAP_TENANT_NAME     tenant display name",
       "  BOOTSTRAP_ORG_NAME        organization legal name",
       "  BOOTSTRAP_SUBJECT_NAME    person display name",
       "  BOOTSTRAP_EMAIL           sign-in email address (emailed codes)",
@@ -73,8 +69,6 @@ const databaseUrl = resolveSecret(
 );
 
 const input: BootstrapInput = {
-  tenantSlug: process.env["BOOTSTRAP_TENANT_SLUG"] as string,
-  tenantName: process.env["BOOTSTRAP_TENANT_NAME"] as string,
   organizationName: process.env["BOOTSTRAP_ORG_NAME"] as string,
   jurisdiction: process.env["BOOTSTRAP_JURISDICTION"] ?? "MNG",
   subjectName: process.env["BOOTSTRAP_SUBJECT_NAME"] as string,
@@ -93,7 +87,6 @@ try {
   process.stdout.write(
     `${JSON.stringify({
       msg: result.created ? "bootstrap.created" : "bootstrap.exists",
-      tenantId: result.tenantId,
       organizationId: result.organizationId,
       subjectId: result.subjectId,
       emailBound: result.emailBound,

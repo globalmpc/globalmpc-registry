@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { bearer, idempotencyKey, issueTestSession, setupFixture, testEnv, type TestFixture } from "./helpers/db.js";
@@ -20,7 +20,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * - an emailed-code session is aal1 and needs MFA for anything restricted, and no path but a
  *   consumed challenge mints one;
  * - an invitation carries no role, works once, expires, can be revoked, cannot name another
- *   tenant's organisation, and refuses an address in use with one generic, audited answer;
+ *   Registry's organisations, and refuses an address in use with one generic, audited answer;
  * - an email change takes two admins other than the person, a code sent to the new address,
  *   and ends every session;
  * - the application role cannot write an address directly, and audit records carry a keyed hash,
@@ -66,28 +66,28 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
     return mail.params.code;
   }
 
-  /** A person in tenant A with an address, created as the migration role would. */
-  async function person(email: string, tenantId = fx.tenantA): Promise<string> {
+  /** A person with an address, created as the migration role would. */
+  async function person(email: string): Promise<string> {
     const id = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, email)
-      VALUES (${id}, ${tenantId}, 'person', 'Email Person', ${email})
+      INSERT INTO core.subjects (id, kind, display_name, email)
+      VALUES (${id}, 'person', 'Email Person', ${email})
     `;
     return id;
   }
 
-  /** An admin (administrator or administrator) session at aal3 in tenant A. */
+  /** An admin (administrator) session at aal3. */
   async function admin(role: "administrator" | "administrator" = "administrator") {
     const subjectId = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-      VALUES (${subjectId}, ${fx.tenantA}, 'person', ${`Admin ${subjectId.slice(0, 4)}`}, 'high_assurance')
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+      VALUES (${subjectId}, 'person', ${`Admin ${subjectId.slice(0, 4)}`}, 'high_assurance')
     `;
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, ${role})
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, ${role})
     `;
-    const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, {
+    const token = await issueTestSession(fx.appSql, subjectId, {
       firstFactor: "google",
       secondFactor: "passkey",
     });
@@ -114,7 +114,6 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       expect(withoutRequestId(response.json())).toEqual({
         emailCode: true,
         google: false,
-        microsoft: false,
         emailCodeDigits: 8,
         emailCodeTtlMinutes: 10,
       });
@@ -138,7 +137,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
           headers: { authorization: "Bearer not-a-session" },
         });
         expect(answer.statusCode).toBe(200);
-        expect(answer.json()).toMatchObject({ google: true, microsoft: false });
+        expect(answer.json()).toEqual(expect.objectContaining({ google: true }));
+        expect(answer.json()).not.toHaveProperty("microsoft");
         expect(answer.json()).not.toHaveProperty("legacyWalletLogin");
       } finally {
         await configured.close();
@@ -221,8 +221,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       const email = freshEmail();
       const subjectId = await person(email);
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'reviewer')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, 'reviewer')
       `;
       await start(email);
       const { sessionToken } = (await verify(email, await mailedCode(email))).json();
@@ -352,7 +352,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
   describe("the session boundary", () => {
     it("create_subject_session cannot mint an email_code session", async () => {
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
+        withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
           SELECT core.create_subject_session(
             ${randomUUID()}, ${`h-${randomUUID()}`}, ${fx.stewardSubjectA}, 'email_code', NULL, 3600
           )
@@ -369,8 +369,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       `;
       // Even the migration role cannot attach an unconsumed challenge.
       await expect(fx.sql`
-        INSERT INTO core.sessions (id, token_hash, tenant_id, subject_id, first_factor, expires_at, email_challenge_id)
-        VALUES (${randomUUID()}, ${`h-${randomUUID()}`}, ${fx.tenantA}, ${subjectId}, 'email_code',
+        INSERT INTO core.sessions (id, token_hash, subject_id, first_factor, expires_at, email_challenge_id)
+        VALUES (${randomUUID()}, ${`h-${randomUUID()}`}, ${subjectId}, 'email_code',
                 now() + interval '1 hour', ${challenge!.id})
       `).rejects.toThrow();
     });
@@ -379,19 +379,19 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       const email = freshEmail();
       const subjectId = await person(email);
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
+        withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
           UPDATE core.subjects SET email = ${freshEmail("takeover")} WHERE id = ${subjectId}
         `),
       ).rejects.toThrow(/permission denied/);
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
-          INSERT INTO core.subjects (id, tenant_id, kind, display_name, email)
-          VALUES (${randomUUID()}, ${fx.tenantA}, 'person', 'x', ${freshEmail("insert")})
+        withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
+          INSERT INTO core.subjects (id, kind, display_name, email)
+          VALUES (${randomUUID()}, 'person', 'x', ${freshEmail("insert")})
         `),
       ).rejects.toThrow(/permission denied/);
       for (const table of ["email_challenges", "email_outbox", "email_test_sink", "auth_rate_events"]) {
         await expect(
-          withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx.unsafe(`SELECT 1 FROM core.${table}`)),
+          withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx.unsafe(`SELECT 1 FROM core.${table}`)),
           table,
         ).rejects.toThrow(/permission denied/);
       }
@@ -436,10 +436,10 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       const session = accepted.json();
       expect(session).toMatchObject({ firstFactor: "email_code", aal: "aal1" });
 
-      const [subject] = await fx.sql<{ email: string; assurance_level: string; organization_id: string; tenant_id: string }[]>`
-        SELECT email, assurance_level, organization_id, tenant_id FROM core.subjects WHERE id = ${session.subjectId}
+      const [subject] = await fx.sql<{ email: string; assurance_level: string; organization_id: string }[]>`
+        SELECT email, assurance_level, organization_id FROM core.subjects WHERE id = ${session.subjectId}
       `;
-      expect(subject).toEqual({ email, assurance_level: "wallet_only", organization_id: fx.orgA, tenant_id: fx.tenantA });
+      expect(subject).toEqual({ email, assurance_level: "wallet_only", organization_id: fx.orgA });
       expect(await fx.sql`SELECT 1 FROM core.role_bindings WHERE subject_id = ${session.subjectId}`).toHaveLength(0);
 
       // Used once.
@@ -450,13 +450,14 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
 
     it("refuses an address already in use with one generic answer, and audits it", async () => {
       const { token: adminToken } = await admin();
-      const inTenant = freshEmail("taken");
-      await person(inTenant);
+      const inRegistry = freshEmail("taken");
+      await person(inRegistry);
+      // A second taken address, held by a person with no relation to the inviter.
       const elsewhere = freshEmail("taken-elsewhere");
-      await person(elsewhere, fx.tenantB);
+      await person(elsewhere);
 
       const answers = [];
-      for (const email of [inTenant, elsewhere]) {
+      for (const email of [inRegistry, elsewhere]) {
         const response = await invite(email, adminToken);
         expect(response.statusCode).toBe(409);
         answers.push({ code: response.json().code, message: response.json().message });
@@ -466,7 +467,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
 
       const refused = await fx.sql<{ detail: Record<string, unknown> }[]>`
         SELECT detail FROM audit.events
-        WHERE tenant_id = ${fx.tenantA} AND command = 'admin.invitation.refused'
+        WHERE command = 'admin.invitation.refused'
       `;
       expect(refused.length).toBeGreaterThanOrEqual(2);
       expect(JSON.stringify(refused)).not.toContain("@");
@@ -477,11 +478,16 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       expect((await invite(pending, adminToken)).json().code).toBe("INVITATION_EMAIL_UNAVAILABLE");
     });
 
-    it("cannot name another tenant's organisation", async () => {
+    it("an organization-scoped administrator cannot name another company's organisation", async () => {
+      const email = freshEmail();
+      const operatorB = await issueTestSession(fx.appSql, fx.operatorSubjectB, { firstFactor: "google", secondFactor: "passkey" });
+      const response = await invite(email, operatorB, fx.orgA);
+      expect(response.statusCode).toBeGreaterThanOrEqual(403);
+      expect(response.statusCode).toBeLessThan(500);
+      expect(await fx.sql`SELECT 1 FROM core.email_outbox WHERE recipient = ${email}`).toHaveLength(0);
+      // A Registry-wide administrator invites into any company's organisation.
       const { token: adminToken } = await admin();
-      const response = await invite(freshEmail(), adminToken, fx.orgB);
-      expect(response.statusCode).toBe(422);
-      expect(response.json().code).toBe("ORGANIZATION_UNKNOWN");
+      expect((await invite(freshEmail(), adminToken, fx.orgB)).statusCode).toBe(200);
     });
 
     it("stops working after 72 hours", async () => {
@@ -532,8 +538,8 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       const email = freshEmail();
       const subjectId = await person(email);
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'administrator')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, 'administrator')
       `;
       await start(email);
       const { sessionToken } = (await verify(email, await mailedCode(email))).json();
@@ -598,7 +604,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       // Each step is audited, with hashes only.
       const commands = await fx.sql<{ command: string; detail: unknown }[]>`
         SELECT command, detail FROM audit.events
-        WHERE tenant_id = ${fx.tenantA} AND (resource_id = ${change.id} OR command = 'auth.email_change.completed')
+        WHERE (resource_id = ${change.id} OR command = 'auth.email_change.completed')
       `;
       const names = commands.map((c) => c.command);
       for (const step of ["admin.email_change.proposed", "admin.email_change.approved", "auth.email_change.completed"]) {
@@ -648,7 +654,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       expect(after!.email).toBe(email);
     });
 
-    it("lists this tenant's invitations and email changes to an admin", async () => {
+    it("lists the Registry's invitations and email changes to an admin", async () => {
       const proposer = await admin("administrator");
       const subjectId = await person(freshEmail());
       const change = (await propose(proposer.token, subjectId, freshEmail("listed"))).json();
@@ -675,7 +681,7 @@ describeDb("email codes, invitations and email change", { timeout: 30_000 }, () 
       const proposer = await admin("administrator");
       const subjectId = await person(freshEmail());
       const taken = freshEmail("taken");
-      await person(taken, fx.tenantB);
+      await person(taken);
       const response = await propose(proposer.token, subjectId, taken);
       expect(response.statusCode).toBe(409);
       expect(response.json().code).toBe("EMAIL_CHANGE_EMAIL_UNAVAILABLE");

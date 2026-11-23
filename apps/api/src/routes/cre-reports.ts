@@ -3,7 +3,7 @@ import type postgres from "postgres";
 import { keccak256, toBytes } from "viem";
 import { inspectCreDelivery } from "../services/cre-delivery.js";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { createCreReportRequest, creReport } from "@mpc/api-contract";
 import type { AppConfig } from "../config.js";
 import { assertAuthorized, projectResource, sessionFacts } from "../plugins/authorize.js";
@@ -17,49 +17,49 @@ import { lockEvidenceLedgerPublicationInputs } from "../services/registry-public
 /** An authenticated observation of approved public content, never an approval command. */
 export async function registerCreReportRoutes(app: FastifyInstance, sql: postgres.Sql, config: AppConfig): Promise<void> {
   app.get<{ Params: { projectId: string } }>("/api/v1/projects/:projectId/cre-reports", async request => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     const { projectId } = parseBody(z.object({ projectId: z.string().guid() }), request.params);
-    assertAuthorized(session, "cre.report", projectResource(tenantId, projectId), sessionFacts(session));
-    return withTenant(sql, { tenantId }, async tx => {
-      const [project] = await tx`SELECT id FROM core.projects WHERE tenant_id=${tenantId} AND id=${projectId}`;
+    assertAuthorized(session, "cre.report", projectResource(projectId), sessionFacts(session));
+    return withActor(sql, actor, async tx => {
+      const [project] = await tx`SELECT id FROM core.projects WHERE id=${projectId}`;
       if (!project) throw notFound("Project not found");
       const [publication] = await tx<{ publicKey: string; version: number; status: string }[]>`
         SELECT e.public_key AS "publicKey", v.version, v.status
-        FROM core.registry_entries e JOIN core.registry_entry_versions v ON v.entry_id=e.id AND v.tenant_id=e.tenant_id
-        WHERE e.tenant_id=${tenantId} AND e.subject_id=${projectId} AND e.registry_type='project'
+        FROM core.registry_entries e JOIN core.registry_entry_versions v ON v.entry_id=e.id
+        WHERE e.subject_id=${projectId} AND e.registry_type='project'
           AND v.published_at IS NOT NULL AND v.status IN ('published','revoked','superseded')
         ORDER BY v.version DESC LIMIT 1`;
       const reports = await tx<{ id: string; report: unknown }[]>`
-        SELECT id, report FROM core.cre_reports WHERE tenant_id=${tenantId} AND project_id=${projectId}
+        SELECT id, report FROM core.cre_reports WHERE project_id=${projectId}
         ORDER BY (report ->> 'sequence')::numeric DESC LIMIT 20`;
       return { chainId: String(config.creChainId), rpcConfigured: config.creChainRpcUrl !== null,
         publication: publication ?? null, reports: reports.map(row => ({ id: row.id, report: creReport.parse(row.report) })) };
     });
   });
   app.get<{ Params: { projectId: string; reportId: string } }>("/api/v1/projects/:projectId/cre-reports/:reportId/delivery", async request => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     const { projectId, reportId } = parseBody(z.object({ projectId: z.string().guid(), reportId: z.string().guid() }), request.params);
-    assertAuthorized(session, "cre.report", projectResource(tenantId, projectId), sessionFacts(session));
-    const report = await withTenant(sql, { tenantId }, async tx => {
-      const [row] = await tx`SELECT report FROM core.cre_reports WHERE tenant_id=${tenantId} AND project_id=${projectId} AND id=${reportId}`;
+    assertAuthorized(session, "cre.report", projectResource(projectId), sessionFacts(session));
+    const report = await withActor(sql, actor, async tx => {
+      const [row] = await tx`SELECT report FROM core.cre_reports WHERE project_id=${projectId} AND id=${reportId}`;
       if (!row) throw notFound("Report not found");
       return creReport.parse(row.report);
     });
     return inspectCreDelivery(config, report);
   });
   app.post<{ Params: { projectId: string } }>("/api/v1/projects/:projectId/cre-reports", async request => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     parseBody(z.object({projectId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)}), request.params);
-    const effectiveRole = assertAuthorized(session, "cre.report", projectResource(tenantId, request.params.projectId), sessionFacts(session));
+    const effectiveRole = assertAuthorized(session, "cre.report", projectResource(request.params.projectId), sessionFacts(session));
     const body = parseBody(createCreReportRequest, request.body);
     if (body.chainId !== String(config.creChainId)) throw badRequest("REQUEST_INVALID", "Report chain must match the configured chain");
-    return withTenant(sql, { tenantId }, async tx => {
+    return withActor(sql, actor, async tx => {
       // DON nodes may issue this exact request concurrently. Serialize reservations before
       // the standard idempotency helper reads/inserts, then take the project barrier.
-      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${'cre-report-key:' + tenantId + ':' + idempotencyKey},0))`;
-      return withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${'cre-report-key:' + idempotencyKey},0))`;
+      return withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
       // The same barrier used by publication prevents reporting a mixed evidence basis.
-      const [project] = await tx`SELECT id FROM core.projects WHERE tenant_id=${tenantId} AND id=${request.params.projectId}`;
+      const [project] = await tx`SELECT id FROM core.projects WHERE id=${request.params.projectId}`;
       if (!project) throw notFound("Published project record not found");
       await lockEvidenceLedgerPublicationInputs(tx, request.params.projectId);
       const [version] = await tx<{
@@ -67,9 +67,9 @@ export async function registerCreReportRoutes(app: FastifyInstance, sql: postgre
         public_projection: Record<string, unknown>; lifecycle_state: string;
       }[]>`
         SELECT v.id,v.version,v.status,v.content_hash,v.public_projection,p.lifecycle_state
-        FROM core.registry_entries e JOIN core.registry_entry_versions v ON v.entry_id=e.id AND v.tenant_id=e.tenant_id
-        JOIN core.projects p ON p.id=e.subject_id AND p.tenant_id=e.tenant_id
-        WHERE e.tenant_id=${tenantId} AND e.subject_id=${request.params.projectId}
+        FROM core.registry_entries e JOIN core.registry_entry_versions v ON v.entry_id=e.id
+        JOIN core.projects p ON p.id=e.subject_id
+        WHERE e.subject_id=${request.params.projectId}
           AND e.registry_type='project' AND e.public_key=${body.publicKey}
           AND v.status IN ('published','revoked','superseded') AND v.published_at IS NOT NULL
         ORDER BY v.version DESC LIMIT 1 FOR SHARE OF v,p
@@ -87,22 +87,22 @@ export async function registerCreReportRoutes(app: FastifyInstance, sql: postgre
           -- version marks the whole on-chain record stale. Item scoping must never weaken the
           -- record-level status reported on chain (fail closed).
           EXISTS (SELECT 1 FROM core.evidence_stale_signals signal
-            WHERE signal.tenant_id=${tenantId} AND signal.project_id=${request.params.projectId}
+            WHERE signal.project_id=${request.params.projectId}
               AND signal.target_type='registry_entry_version' AND signal.target_id=${version.id}
               AND signal.resolution='open') AS stale,
           EXISTS (
             SELECT 1 FROM core.evidence_ledger_snapshots snapshot
             CROSS JOIN LATERAL jsonb_array_elements(snapshot.snapshot->'items') item
             CROSS JOIN LATERAL jsonb_array_elements_text(item->'claimIds') claim_id
-            JOIN core.claims c ON c.id::text=claim_id AND c.tenant_id=snapshot.tenant_id AND c.project_id=snapshot.project_id
-            JOIN core.source_receipts receipt ON receipt.id=c.source_receipt_id AND receipt.tenant_id=c.tenant_id AND receipt.project_id=c.project_id
-            JOIN core.source_connections connection ON connection.id=receipt.connection_id AND connection.tenant_id=receipt.tenant_id
-            WHERE snapshot.tenant_id=${tenantId} AND snapshot.project_id=${request.params.projectId}
+            JOIN core.claims c ON c.id::text=claim_id AND c.project_id=snapshot.project_id
+            JOIN core.source_receipts receipt ON receipt.id=c.source_receipt_id AND receipt.project_id=c.project_id
+            JOIN core.source_connections connection ON connection.id=receipt.connection_id
+            WHERE snapshot.project_id=${request.params.projectId}
               AND snapshot.id::text=${version.public_projection["evidenceLedger"] && typeof version.public_projection["evidenceLedger"] === "object"
                 ? (version.public_projection["evidenceLedger"] as Record<string, unknown>)["snapshotId"] as string : null}
               AND (connection.state <> 'active' OR (
                 SELECT latest.outcome FROM core.source_observations latest
-                WHERE latest.tenant_id=receipt.tenant_id AND latest.project_id=receipt.project_id
+                WHERE latest.project_id=receipt.project_id
                   AND latest.connection_id=receipt.connection_id
                   AND latest.query_scope_hash=receipt.query_scope_hash
                   AND latest.query_basis=receipt.query_basis AND latest.outcome <> 'out_of_order'
@@ -110,7 +110,7 @@ export async function registerCreReportRoutes(app: FastifyInstance, sql: postgre
               ) IN ('unavailable','no_record'))
           ) AS unavailable,
           (SELECT (COALESCE((SELECT (history.report ->> 'sequence')::numeric FROM core.cre_reports history
-            WHERE history.tenant_id=${tenantId} AND history.project_id=${request.params.projectId}
+            WHERE history.project_id=${request.params.projectId}
             ORDER BY ((history.report ->> 'sequence')::numeric) DESC LIMIT 1),0)+1)::text) AS sequence
       `;
       if (!health) throw new Error("Report observation was not produced");
@@ -135,10 +135,10 @@ export async function registerCreReportRoutes(app: FastifyInstance, sql: postgre
         contentHash: version.content_hash, observedAt: evaluation.observed_at,
         validUntil: String(validUntil), sequence: health.sequence, status });
       const [stored] = await tx<{ id: string; report: typeof report }[]>`
-        INSERT INTO core.cre_reports(tenant_id,project_id,registry_version_id,report)
-        VALUES(${tenantId},${request.params.projectId},${version.id},${tx.json(report)}) RETURNING id,report
+        INSERT INTO core.cre_reports(project_id,registry_version_id,report)
+        VALUES(${request.params.projectId},${version.id},${tx.json(report)}) RETURNING id,report
       `;
-      await recordAudit(tx, { effectiveRole, tenantId, projectId: request.params.projectId, session,
+      await recordAudit(tx, { effectiveRole, projectId: request.params.projectId, session,
         command: "cre_report.observed", resourceType: "cre_report", resourceId: stored!.id,
         correlationId: request.context.correlationId, requestIp: request.clientIp,
         detail: { recordId: report.recordId, sequence: report.sequence, status: report.status } });

@@ -19,7 +19,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * The signed-in "me" screen.
  *
  * 1. My activity holds only what this wallet's subject did. Other people's records in the
- *    same tenant do not appear here, whatever the role.
+ *    same Registry do not appear here, whatever the role.
  * 2. The session returns the allowed action list. Menus filter by it.
  */
 describeDb("my activity and session actions", () => {

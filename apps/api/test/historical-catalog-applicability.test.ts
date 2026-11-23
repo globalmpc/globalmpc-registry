@@ -42,32 +42,32 @@ describeDb("historical catalog warnings do not read legacy matrix applicability"
       await tx`ALTER TABLE core.registry_proposals DISABLE TRIGGER catalog_proposal_reserved_key_guard`;
       await tx`ALTER TABLE core.claim_types DISABLE TRIGGER catalog_type_reserved_key_guard`;
       await tx`ALTER TABLE core.claims DISABLE TRIGGER catalog_claim_reserved_key_guard`;
-      await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${proposalId},${fx.tenantA},'claim_type',${claimType},1,${tx.json(payload)},'Historical import',now(),${fx.operatorSubjectA})`;
-      await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-        SELECT ${catalogId},tenant_id,item_key,1,${payload.displayName},payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposalId}`;
+      await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+        VALUES(${proposalId},'claim_type',${claimType},1,${tx.json(payload)},'Historical import',now(),${fx.operatorSubjectA})`;
+      await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+        SELECT ${catalogId},item_key,1,${payload.displayName},payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposalId}`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Historical import',materialized_id=${catalogId},version=2 WHERE id=${proposalId}`;
       if (evidence) {
-        await tx`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity)
-          VALUES(${artifactId},${fx.tenantA},${fx.projectA},'raw_source',${"0x"+"ab".repeat(32)},'restricted')`;
-        await tx`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,promoted_artifact_id)
-          VALUES(${uploadId},${fx.tenantA},${fx.projectA},${uploadId},${"0x"+"ab".repeat(32)},123,'application/pdf','restricted','promoted',${artifactId})`;
+        await tx`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity)
+          VALUES(${artifactId},${fx.projectA},'raw_source',${"0x"+"ab".repeat(32)},'restricted')`;
+        await tx`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,promoted_artifact_id)
+          VALUES(${uploadId},${fx.projectA},${uploadId},${"0x"+"ab".repeat(32)},123,'application/pdf','restricted','promoted',${artifactId})`;
       }
-      await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
-        VALUES(${claimId},${fx.tenantA},${fx.projectA},${claimType},'Historical rights','{}',${initialGrade},${catalogId},1,'{}',${evidence ? [uploadId] : []}::uuid[],${old ? '2000-01-01' : evaluatedAt.slice(0,10)})`;
+      await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
+        VALUES(${claimId},${fx.projectA},${claimType},'Historical rights','{}',${initialGrade},${catalogId},1,'{}',${evidence ? [uploadId] : []}::uuid[],${old ? '2000-01-01' : evaluatedAt.slice(0,10)})`;
       if (reviewed) {
         const caseId = randomUUID(), assignmentId = randomUUID();
-        await tx`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id,state)
-          VALUES(${caseId},${fx.tenantA},${fx.projectA},${fx.schemaA},'signed')`;
-        await tx`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id)
-          VALUES(${assignmentId},${fx.tenantA},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
-        await tx`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
+        await tx`INSERT INTO core.verification_cases(id,project_id,schema_id,state)
+          VALUES(${caseId},${fx.projectA},${fx.schemaA},'signed')`;
+        await tx`INSERT INTO core.assignments(id,case_id,subject_id,credential_id)
+          VALUES(${assignmentId},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
+        await tx`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,
           evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-          VALUES(${attestationId},${fx.tenantA},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${[claimId]}::uuid[],
+          VALUES(${attestationId},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${[claimId]}::uuid[],
           ${"0x"+"ab".repeat(32)},'Historical rights only','{"status":"valid"}','1','1',${"0x"+"ab".repeat(32)},${"0x"+"12".repeat(65)},${fx.reviewerA.address},now(),'signed')`;
       }
-      await tx`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-        VALUES(${policyId},${fx.tenantA},'historical-rights','1.0.0','stage.exploration','MNG',now(),${tx.json(definition)},'effective')`;
+      await tx`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+        VALUES(${policyId},'historical-rights','1.0.0','stage.exploration','MNG',now(),${tx.json(definition)},'effective')`;
       const snapshot = historicalSnapshot();
 
       function historicalSnapshot(): LedgerSnapshot {
@@ -88,17 +88,17 @@ describeDb("historical catalog warnings do not read legacy matrix applicability"
         return snapshot;
       }
 
-      const stored = await persistEvidenceLedger(tx, fx.tenantA, snapshot);
-      if (addedUnreviewed) await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
-        SELECT ${randomUUID()},tenant_id,project_id,claim_type,'Later historical claim',source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of
+      const stored = await persistEvidenceLedger(tx, snapshot);
+      if (addedUnreviewed) await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of)
+        SELECT ${randomUUID()},project_id,claim_type,'Later historical claim',source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids,as_of
         FROM core.claims WHERE id=${claimId}`;
       const projection = await projectProjection(fx.sql, fx.projectA, { evidenceLedger: publicLedgerProjection(stored) });
       const entryId = randomUUID();
       versionId = randomUUID();
-      await tx`INSERT INTO core.registry_entries(id,tenant_id,registry_type,subject_id,public_key)
-        SELECT ${entryId},${fx.tenantA},'project',id,project_key FROM core.projects WHERE id=${fx.projectA}`;
-      await tx`INSERT INTO core.registry_entry_versions(id,tenant_id,entry_id,version,status,public_projection,content_hash,source_snapshot_hash,policy_version,schema_version,published_at)
-        VALUES(${versionId},${fx.tenantA},${entryId},1,'published',${tx.json(projection as never)},${hashProjection(projection as never)},${stored.inputSnapshotHash},'1','1',now())`;
+      await tx`INSERT INTO core.registry_entries(id,registry_type,subject_id,public_key)
+        SELECT ${entryId},'project',id,project_key FROM core.projects WHERE id=${fx.projectA}`;
+      await tx`INSERT INTO core.registry_entry_versions(id,entry_id,version,status,public_projection,content_hash,source_snapshot_hash,policy_version,schema_version,published_at)
+        VALUES(${versionId},${entryId},1,'published',${tx.json(projection as never)},${hashProjection(projection as never)},${stored.inputSnapshotHash},'1','1',now())`;
       await tx`SET CONSTRAINTS ALL IMMEDIATE`;
       await tx`ALTER TABLE core.registry_proposals ENABLE TRIGGER catalog_proposal_reserved_key_guard`;
       await tx`ALTER TABLE core.claim_types ENABLE TRIGGER catalog_type_reserved_key_guard`;
@@ -157,8 +157,8 @@ describeDb("historical catalog warnings do not read legacy matrix applicability"
     await fixture.confirm("pending", 1);
     if (kind === "stale") await fx.sql`UPDATE core.claims SET stale_since=now(),stale_reason='Actual stale evidence' WHERE id=${fixture.claimId}`;
     if (kind === "rejected") await fx.sql`UPDATE core.claims SET grade='rejected' WHERE id=${fixture.claimId}`;
-    if (kind === "conflicting") await fx.sql`INSERT INTO core.claim_conflicts(id,tenant_id,claim_id,conflict_type)
-      VALUES(${randomUUID()},${fx.tenantA},${fixture.claimId},'contradiction')`;
+    if (kind === "conflicting") await fx.sql`INSERT INTO core.claim_conflicts(id,claim_id,conflict_type)
+      VALUES(${randomUUID()},${fixture.claimId},'contradiction')`;
     const current = await fixture.get();
     expect(current.statusCode, current.body).toBe(200);
     expect(current.json().evidenceLedgerCurrent.warnings).toMatchObject([{ claimType,
@@ -177,28 +177,28 @@ describeDb("historical catalog warnings do not read legacy matrix applicability"
         // Model another active evidence item without a post-publication grade UPDATE:
         // provenance propagation must not accidentally mask the priority being tested.
         await tx`ALTER TABLE core.claims DISABLE TRIGGER catalog_claim_reserved_key_guard`;
-        await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,as_of,excluded_by_rule)
-          VALUES(${addedId},${fx.tenantA},${fx.projectA},${catalogKey},'New problematic evidence','{}',
+        await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,as_of,excluded_by_rule)
+          VALUES(${addedId},${fx.projectA},${catalogKey},'New problematic evidence','{}',
             ${combination === "excluded" ? "self_reported" : "rejected"},${fixture.catalogId},1,'{}','2000-01-01',${combination === "excluded"})`;
         await tx`SET CONSTRAINTS ALL IMMEDIATE`;
         await tx`ALTER TABLE core.claims ENABLE TRIGGER catalog_claim_reserved_key_guard`;
         if (combination === "stale" || combination === "conflicting") await tx`UPDATE core.claims SET stale_since=now(),stale_reason='Actual invalidation' WHERE id=${addedId}`;
         if (combination === "invalid_review") await tx`UPDATE core.verification_attestations SET state='revoked' WHERE id=${fixture.attestationId}`;
-        if (combination === "conflicting") await tx`INSERT INTO core.claim_conflicts(id,tenant_id,claim_id,conflict_type)
-          VALUES(${randomUUID()},${fx.tenantA},${addedId},'contradiction')`;
+        if (combination === "conflicting") await tx`INSERT INTO core.claim_conflicts(id,claim_id,conflict_type)
+          VALUES(${randomUUID()},${addedId},'contradiction')`;
         const expectedStatus = combination === "conflicting" ? "conflicting"
           : combination === "stale" || combination === "invalid_review" ? "needs_re_review" : "rejected";
         // Query in the writer transaction so the overlay sees exactly these uncommitted
         // conditions; existing public-API cases above cover the same wrapper and projection.
         const [version] = await tx`SELECT v.id FROM core.registry_entry_versions v
-          JOIN core.registry_entries e ON e.id=v.entry_id AND e.tenant_id=v.tenant_id
-          WHERE e.tenant_id=${fx.tenantA} AND e.subject_id=${fx.projectA}`;
+          JOIN core.registry_entries e ON e.id=v.entry_id
+          WHERE e.subject_id=${fx.projectA}`;
         const [current] = await tx`SELECT core.public_evidence_ledger_current(${version!.id}) AS current`;
         expect(current!.current.warnings).toEqual([{ claimType: catalogKey, catalogVersion: "1", status: expectedStatus,
           reasons: [expectedStatus === "conflicting" ? "UNRESOLVED_CONFLICT"
             : expectedStatus === "rejected" ? "REJECTED_OR_EXCLUDED_EVIDENCE" : "EVIDENCE_OR_REVIEW_NO_LONGER_CURRENT"] }]);
         if (catalogKey !== "rights") {
-          const privateLedger = await computeEvidenceLedger(tx, fx.tenantA, fx.projectA, new Date());
+          const privateLedger = await computeEvidenceLedger(tx, fx.projectA, new Date());
           expect(privateLedger!.items.find(item => item.claimType === catalogKey)!.status).toBe(expectedStatus);
         }
         throw rollback;

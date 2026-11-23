@@ -5,7 +5,7 @@ import { classifyIp } from "./device.js";
 /**
  * Audit record — 02 §2.7.
  *
- * Every mutation records actor, effective role, tenant/project, command,
+ * Every mutation records actor, effective role, project, command,
  * before/after version, reason, correlation ID, and timestamp. This table is
  * append-only; not even the application admin can delete from it (0003_guards.sql).
  */
@@ -39,7 +39,6 @@ export const ROLE_DEPLOY_BOUND = "deploy_bound";
 export const ROLE_SELF_BOUND = "self_bound";
 
 export interface AuditEntry {
-  readonly tenantId: string;
   readonly projectId?: string;
   readonly session: Session;
   /**
@@ -72,11 +71,11 @@ export async function recordAudit(
 ): Promise<void> {
   await tx`
     INSERT INTO audit.events (
-      tenant_id, project_id, actor_subject_id, actor_wallet, effective_role,
+      project_id, actor_subject_id, actor_wallet, effective_role,
       command, resource_type, resource_id, before_version, after_version,
       reason, correlation_id, request_ip, detail, request_ip_class, user_agent_hash
     ) VALUES (
-      ${entry.tenantId},
+      
       ${entry.projectId ?? null},
       ${entry.session.subjectId},
       ${entry.signingWallet ?? null},

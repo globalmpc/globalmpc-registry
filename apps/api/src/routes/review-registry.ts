@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   PROJECT_FACT_KEYS,
   decideRegistryProposalRequest,
@@ -15,7 +15,7 @@ import {
   type REGISTRY_KINDS,
 } from "@mpc/api-contract";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, projectResource, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, projectResource, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
@@ -52,7 +52,7 @@ import {
  * **someone else, holding the designated review role, decides**. Approval writes the registry
  * row through the same function the CLI uses.
  *
- * **Why an HTTP path at all.** Keeping these in the CLI, as tenant creation is,
+ * **Why an HTTP path at all.** Keeping these in the CLI, as the first administrator is,
  * would keep one hijacked operator session away from them — but it would also keep approval a
  * statement nobody verifies, and schemas and policies gain versions for as long as the system
  * runs, so the CLI would be a standing path, not a one-time seed. What limits a hijacked
@@ -136,13 +136,12 @@ interface KindSpec<Body extends { rationale: string }, Stored extends Record<str
   readonly requestSchema: z.ZodType<Body, unknown>;
   /** Shape of `payload` as stored. Re-read at decision time rather than trusted blindly. */
   readonly storedSchema: z.ZodType<Stored, unknown>;
-  prepare(tx: Tx, tenantId: string, body: Body, now: Date): Promise<Validated<Prepared<Stored>>>;
+  prepare(tx: Tx, body: Body, now: Date): Promise<Validated<Prepared<Stored>>>;
   /** The registry row this version would duplicate, if one exists. */
-  findExisting(tx: Tx, tenantId: string, stored: Stored): Promise<string | null>;
+  findExisting(tx: Tx, stored: Stored): Promise<string | null>;
   /** Re-validates (time has passed since the proposal) and writes the registry row. */
   materialize(
     tx: Tx,
-    tenantId: string,
     id: string,
     stored: Stored,
     now: Date,
@@ -169,24 +168,24 @@ const CREDENTIAL: KindSpec<z.infer<typeof proposeCredentialRequest>, StoredCrede
   resourceType: "credential",
   requestSchema: proposeCredentialRequest,
   storedSchema: storedCredential,
-  async prepare(tx, tenantId, body, now) {
+  async prepare(tx, body, now) {
     const checked = validateCredential(body, now);
     if (!checked.ok) return checked;
 
     const [subject] = await tx<{ id: string }[]>`
-      SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${body.subjectId}
+      SELECT id FROM core.subjects WHERE id = ${body.subjectId}
     `;
     if (!subject) throw notFound("Subject not found");
 
-    // The issuer must be a registered authority of this tenant. Its state is judged when the
+    // The issuer must be a registered authority of the Registry. Its state is judged when the
     // credential is used, not here: an authority can be accepted or suspended after this.
     const [issuer] = await tx<{ id: string }[]>`
-      SELECT id FROM core.authorities WHERE tenant_id = ${tenantId} AND id = ${body.issuerAuthorityId}
+      SELECT id FROM core.authorities WHERE id = ${body.issuerAuthorityId}
     `;
     if (!issuer) throw notFound("Issuing authority not found");
 
     // Resolved now and stored, so the approver sees the organization that will be recorded.
-    const organizationId = await holderOrganization(tx, tenantId, body.subjectId);
+    const organizationId = await holderOrganization(tx, body.subjectId);
     const { rationale: _rationale, ...fields } = body;
     return {
       ok: true,
@@ -197,16 +196,15 @@ const CREDENTIAL: KindSpec<z.infer<typeof proposeCredentialRequest>, StoredCrede
       },
     };
   },
-  async findExisting(tx, tenantId, stored) {
-    return (await findCredential(tx, tenantId, stored.subjectId, stored.issuerReference))?.id ?? null;
+  async findExisting(tx, stored) {
+    return (await findCredential(tx, stored.subjectId, stored.issuerReference))?.id ?? null;
   },
-  async materialize(tx, tenantId, id, stored, now) {
+  async materialize(tx, id, stored, now) {
     // It may have expired while waiting for a decision.
     const checked = validateCredential(stored, now);
     if (!checked.ok) return checked;
     await materializeCredential(tx, {
       id,
-      tenantId,
       subjectId: stored.subjectId,
       organizationId: stored.organizationId,
       credential: checked.value,
@@ -227,7 +225,7 @@ const ATTESTATION_SCHEMA: KindSpec<z.infer<typeof proposeAttestationSchemaReques
   resourceType: "attestation_schema",
   requestSchema: proposeAttestationSchemaRequest,
   storedSchema,
-  async prepare(_tx, _tenantId, body) {
+  async prepare(_tx, body) {
     const checked = validateAttestationSchema(body);
     if (!checked.ok) return checked;
     const { rationale: _rationale, effectiveFrom, ...fields } = body;
@@ -236,13 +234,13 @@ const ATTESTATION_SCHEMA: KindSpec<z.infer<typeof proposeAttestationSchemaReques
       value: { itemKey: body.schemaKey, effectiveFrom: new Date(effectiveFrom), payload: fields },
     };
   },
-  async findExisting(tx, tenantId, stored) {
-    return (await findAttestationSchema(tx, tenantId, stored.schemaKey, stored.schemaVersion))?.id ?? null;
+  async findExisting(tx, stored) {
+    return (await findAttestationSchema(tx, stored.schemaKey, stored.schemaVersion))?.id ?? null;
   },
-  async materialize(tx, tenantId, id, stored) {
+  async materialize(tx, id, stored) {
     const checked = validateAttestationSchema(stored);
     if (!checked.ok) return checked;
-    await materializeAttestationSchema(tx, { id, tenantId, schema: checked.value, state: "active" });
+    await materializeAttestationSchema(tx, { id, schema: checked.value, state: "active" });
     return { ok: true, value: true };
   },
 };
@@ -258,7 +256,7 @@ const POLICY_SET: KindSpec<z.infer<typeof proposePolicySetRequest>, StoredPolicy
   resourceType: "compliance_policy_set",
   requestSchema: proposePolicySetRequest,
   storedSchema: storedPolicySet,
-  async prepare(_tx, _tenantId, body) {
+  async prepare(_tx, body) {
     const checked = validatePolicySet(body.definition);
     if (!checked.ok) return checked;
     // Version and effective date live in the rule set itself. A second copy on the proposal
@@ -272,17 +270,16 @@ const POLICY_SET: KindSpec<z.infer<typeof proposePolicySetRequest>, StoredPolicy
       },
     };
   },
-  async findExisting(tx, tenantId, stored) {
+  async findExisting(tx, stored) {
     const checked = validatePolicySet(stored.definition);
     if (!checked.ok) return null;
-    return (await findPolicySet(tx, tenantId, checked.value.ruleSetId, checked.value.version))?.id ?? null;
+    return (await findPolicySet(tx, checked.value.ruleSetId, checked.value.version))?.id ?? null;
   },
-  async materialize(tx, tenantId, id, stored) {
+  async materialize(tx, id, stored) {
     const checked = validatePolicySet(stored.definition);
     if (!checked.ok) return checked;
     await materializePolicySet(tx, {
       id,
-      tenantId,
       ruleSet: checked.value,
       definition: stored.definition,
       state: "effective",
@@ -312,8 +309,8 @@ const JURISDICTION_PROFILE: KindSpec<
   resourceType: "jurisdiction_profile",
   requestSchema: proposeJurisdictionProfileRequest,
   storedSchema: storedJurisdictionProfile,
-  async prepare(tx, tenantId, body) {
-    const current = await findLatestJurisdictionProfile(tx, tenantId, body.jurisdiction);
+  async prepare(tx, body) {
+    const current = await findLatestJurisdictionProfile(tx, body.jurisdiction);
     const checked = validateJurisdictionProfile(body, new Date(body.effectiveFrom), current);
     if (!checked.ok) return checked;
     const { rationale: _rationale, ...fields } = body;
@@ -329,16 +326,15 @@ const JURISDICTION_PROFILE: KindSpec<
   async findExisting() {
     return null;
   },
-  async materialize(tx, tenantId, id, stored, _now, context) {
+  async materialize(tx, id, stored, _now, context) {
     // Another version may have been approved since this was proposed — check against that one.
-    const current = await findLatestJurisdictionProfile(tx, tenantId, stored.jurisdiction);
+    const current = await findLatestJurisdictionProfile(tx, stored.jurisdiction);
     const checked = validateJurisdictionProfile(stored, new Date(stored.effectiveFrom), current);
     if (!checked.ok) return checked;
 
     const profileVersion = (current?.profileVersion ?? 0) + 1;
     await materializeJurisdictionProfile(tx, {
       id,
-      tenantId,
       profileVersion,
       profile: checked.value,
       effectiveFrom: new Date(stored.effectiveFrom),
@@ -347,7 +343,6 @@ const JURISDICTION_PROFILE: KindSpec<
     // 07 §7.12 names state events only. A basis revision keeps the state and emits none.
     if (current?.state !== checked.value.state) {
       await enqueueEvent(tx, {
-        tenantId,
         eventType: `jurisdiction_profile.${checked.value.state}`,
         aggregateId: id,
         aggregateVersion: profileVersion,
@@ -368,12 +363,12 @@ const JURISDICTION_PROFILE: KindSpec<
 // Claim types are definitions only; approval never changes existing claims or assessments.
 const storedClaimType = proposeClaimTypeRequest.omit({ rationale: true, effectiveFrom: true });
 type StoredClaimType = z.infer<typeof storedClaimType>;
-async function validateCatalogKeyAndDate(tx: Tx, tenantId: string, claimType: string, effectiveFrom: Date): Promise<Validated<true>> {
+async function validateCatalogKeyAndDate(tx: Tx, claimType: string, effectiveFrom: Date): Promise<Validated<true>> {
   if ((PROJECT_FACT_KEYS as readonly string[]).includes(claimType)) {
     return { ok: false, code: "CLAIM_TYPE_RESERVED", message: "This key belongs to the legacy project confirmation matrix; choose a distinct catalog key" };
   }
   const [latest] = await tx<{ effective_from: Date }[]>`
-    SELECT effective_from FROM core.claim_types WHERE tenant_id = ${tenantId} AND claim_type = ${claimType}
+    SELECT effective_from FROM core.claim_types WHERE claim_type = ${claimType}
     ORDER BY catalog_version DESC LIMIT 1
   `;
   if (latest && effectiveFrom < latest.effective_from) {
@@ -384,24 +379,24 @@ async function validateCatalogKeyAndDate(tx: Tx, tenantId: string, claimType: st
 const CLAIM_TYPE: KindSpec<z.infer<typeof proposeClaimTypeRequest>, StoredClaimType> = {
   kind: "claim_type", segment: "claim-types", resourceType: "claim_type",
   requestSchema: proposeClaimTypeRequest, storedSchema: storedClaimType,
-  async prepare(tx, tenantId, body) {
-    const checked = await validateCatalogKeyAndDate(tx, tenantId, body.claimType, new Date(body.effectiveFrom));
+  async prepare(tx, body) {
+    const checked = await validateCatalogKeyAndDate(tx, body.claimType, new Date(body.effectiveFrom));
     if (!checked.ok) return checked;
     const { rationale: _rationale, effectiveFrom, ...payload } = body;
     return { ok: true, value: { itemKey: body.claimType, effectiveFrom: new Date(effectiveFrom), payload } };
   },
   async findExisting() { return null; },
-  async materialize(tx, tenantId, id, stored, _now, context) {
-    const checked = await validateCatalogKeyAndDate(tx, tenantId, stored.claimType, context.effectiveFrom);
+  async materialize(tx, id, stored, _now, context) {
+    const checked = await validateCatalogKeyAndDate(tx, stored.claimType, context.effectiveFrom);
     if (!checked.ok) return checked;
     const [latest] = await tx<{ version: number }[]>`
       SELECT COALESCE(max(catalog_version), 0)::integer AS version FROM core.claim_types
-      WHERE tenant_id = ${tenantId} AND claim_type = ${stored.claimType}
+      WHERE claim_type = ${stored.claimType}
     `;
     await tx`
       INSERT INTO core.claim_types
-        (id, tenant_id, claim_type, catalog_version, display_name, description, definition, effective_from)
-      VALUES (${id}, ${tenantId}, ${stored.claimType}, ${latest!.version + 1}, ${stored.displayName},
+        (id, claim_type, catalog_version, display_name, description, definition, effective_from)
+      VALUES (${id}, ${stored.claimType}, ${latest!.version + 1}, ${stored.displayName},
         ${stored.description}, ${tx.json(stored.definition)}, ${context.effectiveFrom})
     `;
     return { ok: true, value: true };
@@ -420,23 +415,23 @@ function toCatalog(row: CatalogRow) {
 function registerCatalogReads(app: FastifyInstance, sql: postgres.Sql): void {
   function context(request: FastifyRequest) {
     const result = requireReadContext(request);
-    assertAuthorized(result.session, "registry.read", tenantResource(result.tenantId), sessionFacts(result.session));
+    assertAuthorized(result.session, "registry.read", registryResource(), sessionFacts(result.session));
     return result;
   }
   app.get("/api/v1/claim-types", async (request) => {
-    const { tenantId, session } = requireReadContext(request);
+    const { actor, session } = requireReadContext(request);
     const { requestId, asOf } = request.context;
     const { limit, cursor, projectId } = parseBody(claimTypeCatalogQuery, request.query);
-    assertAuthorized(session, "registry.read", projectId ? projectResource(tenantId, projectId) : tenantResource(tenantId), sessionFacts(session));
-    if (projectId) assertAuthorized(session, "evidence.read", projectResource(tenantId, projectId), sessionFacts(session));
-    const rows = await withTenant(sql, { tenantId }, async (tx) => {
+    assertAuthorized(session, "registry.read", projectId ? projectResource(projectId) : registryResource(), sessionFacts(session));
+    if (projectId) assertAuthorized(session, "evidence.read", projectResource(projectId), sessionFacts(session));
+    const rows = await withActor(sql, actor, async (tx) => {
       if (projectId) {
-        const [project] = await tx`SELECT id FROM core.projects WHERE tenant_id=${tenantId} AND id=${projectId}`;
+        const [project] = await tx`SELECT id FROM core.projects WHERE id=${projectId}`;
         if (!project) throw notFound("Project not found");
       }
       return tx<CatalogRow[]>`
       SELECT DISTINCT ON (claim_type) * FROM core.claim_types
-      WHERE tenant_id = ${tenantId} AND effective_from <= ${new Date(asOf)}
+      WHERE effective_from <= ${new Date(asOf)}
         AND core.project_definition_applies(project_id,${projectId ?? null})
         AND NOT (claim_type = ANY(${[...PROJECT_FACT_KEYS]}::text[]))
         AND claim_type > ${cursor ?? ""}
@@ -448,14 +443,14 @@ function registerCatalogReads(app: FastifyInstance, sql: postgres.Sql): void {
   });
   app.get<{ Params: { claimType: string; catalogVersion: string } }>(
     "/api/v1/claim-types/:claimType/versions/:catalogVersion", async (request) => {
-      const { tenantId } = context(request);
+      const { actor } = context(request);
       const { requestId, asOf } = request.context;
       const { claimType, catalogVersion } = request.params;
       if (!/^[a-z][a-z0-9_]{0,99}$/.test(claimType) || !/^[1-9][0-9]{0,8}$/.test(catalogVersion)) {
         throw notFound("Claim type version not found");
       }
-      const [row] = await withTenant(sql, { tenantId }, (tx) => tx<CatalogRow[]>`
-        SELECT * FROM core.claim_types WHERE tenant_id = ${tenantId} AND claim_type = ${claimType}
+      const [row] = await withActor(sql, actor, (tx) => tx<CatalogRow[]>`
+        SELECT * FROM core.claim_types WHERE claim_type = ${claimType}
           AND catalog_version = ${Number(catalogVersion)} AND effective_from <= ${new Date(asOf)}
       `);
       if (!row) throw notFound("Claim type version not found");
@@ -490,28 +485,26 @@ function isUniqueViolation(caught: unknown, constraint?: string): boolean {
 
 async function readProposal(
   tx: Tx,
-  tenantId: string,
   kind: RegistryKind,
   id: string,
 ): Promise<ProposalRow | undefined> {
   if (!UUID_PATTERN.test(id)) return undefined;
   const [row] = await tx<ProposalRow[]>`
     SELECT * FROM core.registry_proposals
-    WHERE tenant_id = ${tenantId} AND kind = ${kind}::core.registry_kind AND id = ${id}
+    WHERE kind = ${kind}::core.registry_kind AND id = ${id}
   `;
   return row;
 }
 
 async function lockProposal(
   tx: Tx,
-  tenantId: string,
   kind: RegistryKind,
   id: string,
 ): Promise<ProposalRow | undefined> {
   if (!UUID_PATTERN.test(id)) return undefined;
   const [row] = await tx<ProposalRow[]>`
     SELECT * FROM core.registry_proposals
-    WHERE tenant_id = ${tenantId} AND kind = ${kind}::core.registry_kind AND id = ${id}
+    WHERE kind = ${kind}::core.registry_kind AND id = ${id}
     FOR UPDATE
   `;
   return row;
@@ -519,13 +512,12 @@ async function lockProposal(
 
 async function nextItemVersion(
   tx: Tx,
-  tenantId: string,
   kind: RegistryKind,
   itemKey: string,
 ): Promise<number> {
   const [row] = await tx<{ next: number }[]>`
     SELECT COALESCE(max(item_version), 0) + 1 AS next FROM core.registry_proposals
-    WHERE tenant_id = ${tenantId} AND kind = ${kind}::core.registry_kind AND item_key = ${itemKey}
+    WHERE kind = ${kind}::core.registry_kind AND item_key = ${itemKey}
   `;
   return Number(row!.next);
 }
@@ -542,29 +534,29 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
     assertAuthorized(
       context.session,
       "review_registry.read",
-      tenantResource(context.tenantId),
+      registryResource(),
       sessionFacts(context.session),
     );
     return context;
   }
 
   app.get(base, async (request) => {
-    const { tenantId } = readContext(request);
+    const { actor } = readContext(request);
     const { requestId, asOf } = request.context;
     // Pending first — that is what the reader is here to decide.
-    const rows = await withTenant(sql, { tenantId }, (tx) => tx<ProposalRow[]>`
+    const rows = await withActor(sql, actor, (tx) => tx<ProposalRow[]>`
       SELECT * FROM core.registry_proposals
-      WHERE tenant_id = ${tenantId} AND kind = ${spec.kind}::core.registry_kind
+      WHERE kind = ${spec.kind}::core.registry_kind
       ORDER BY (state = 'pending') DESC, proposed_at DESC
     `);
     return { items: rows.map((row) => toProposal(row, requestId, asOf)), requestId, asOf };
   });
 
   app.get<{ Params: { proposalId: string } }>(`${base}/:proposalId`, async (request, reply) => {
-    const { tenantId } = readContext(request);
+    const { actor } = readContext(request);
     const { requestId, asOf } = request.context;
-    const row = await withTenant(sql, { tenantId }, (tx) =>
-      readProposal(tx, tenantId, spec.kind, request.params.proposalId),
+    const row = await withActor(sql, actor, (tx) =>
+      readProposal(tx, spec.kind, request.params.proposalId),
     );
     if (!row) throw notFound("Proposal not found");
     reply.header("etag", etagOf(row.version));
@@ -572,25 +564,25 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
   });
 
   app.post(base, async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "review_registry.propose",
-      tenantResource(tenantId),
+      registryResource(),
       sessionFacts(session),
     );
     const body = parseBody(spec.requestSchema, request.body);
     const proposer = subjectOf(session);
 
     const { requestId, asOf, correlationId } = request.context;
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-        const prepared = await spec.prepare(tx, tenantId, body, new Date(asOf));
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+        const prepared = await spec.prepare(tx, body, new Date(asOf));
         if (!prepared.ok) throw unprocessable(prepared.code, prepared.message, prepared.details);
         const { itemKey, effectiveFrom, payload } = prepared.value;
 
         // Refused up front: failing at approval would leave the approver unable to act on it.
-        const existing = await spec.findExisting(tx, tenantId, payload);
+        const existing = await spec.findExisting(tx, payload);
         if (existing) {
           throw conflict("REGISTRY_ITEM_EXISTS", "This version is already in the registry", {
             registryId: existing,
@@ -599,7 +591,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
 
         const [pending] = await tx<{ id: string }[]>`
           SELECT id FROM core.registry_proposals
-          WHERE tenant_id = ${tenantId} AND kind = ${spec.kind}::core.registry_kind
+          WHERE kind = ${spec.kind}::core.registry_kind
             AND item_key = ${itemKey} AND state = 'pending'
         `;
         if (pending) {
@@ -609,14 +601,14 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
         }
 
         const id = randomUUID();
-        const itemVersion = await nextItemVersion(tx, tenantId, spec.kind, itemKey);
+        const itemVersion = await nextItemVersion(tx, spec.kind, itemKey);
         try {
           await tx`
             INSERT INTO core.registry_proposals (
-              id, tenant_id, kind, item_key, item_version, payload, rationale,
+              id, kind, item_key, item_version, payload, rationale,
               effective_from, proposed_by_subject_id
             ) VALUES (
-              ${id}, ${tenantId}, ${spec.kind}::core.registry_kind, ${itemKey}, ${itemVersion},
+              ${id}, ${spec.kind}::core.registry_kind, ${itemKey}, ${itemVersion},
               ${tx.json(payload as never)}, ${body.rationale}, ${effectiveFrom}, ${proposer}
             )
           `;
@@ -629,7 +621,6 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
         }
 
         await recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: `review_registry.${spec.kind}.proposed`,
@@ -642,7 +633,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
           detail: { kind: spec.kind, itemKey, itemVersion },
         });
 
-        const row = await readProposal(tx, tenantId, spec.kind, id);
+        const row = await readProposal(tx, spec.kind, id);
         return toProposal(row!, requestId, asOf);
       }),
     );
@@ -651,14 +642,14 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
   app.post<{ Params: { proposalId: string } }>(
     `${base}/:proposalId/decision`,
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       // If-Match before authorization and body: a missing header is answered as missing, not
       // hidden behind a 403 or a body error the client would keep fixing.
       const expected = requireIfMatch(request);
       const effectiveRole = assertAuthorized(
         session,
         "review_registry.approve",
-        tenantResource(tenantId, {
+        registryResource({
           state: "pending",
           statesAllowingAction: ["pending"],
           // Approval requires independence, as authority review does.
@@ -670,9 +661,9 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
       const decider = subjectOf(session);
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          const proposal = await lockProposal(tx, tenantId, spec.kind, request.params.proposalId);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          const proposal = await lockProposal(tx, spec.kind, request.params.proposalId);
           if (!proposal) throw notFound("Proposal not found");
           assertVersionMatches(expected, proposal.version, "registry_proposal");
 
@@ -699,7 +690,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
           const stored = spec.storedSchema.parse(proposal.payload);
           const approved = body.decision === "approve";
           const materializedId = approved
-            ? await materializeApproved(tx, tenantId, spec, stored, decider, new Date(asOf), {
+            ? await materializeApproved(tx, spec, stored, decider, new Date(asOf), {
                 correlationId,
                 effectiveFrom: proposal.effective_from,
               })
@@ -713,7 +704,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
                 decision_reason = ${body.reason},
                 materialized_id = ${materializedId},
                 version = version + 1
-            WHERE tenant_id = ${tenantId} AND id = ${proposal.id}
+            WHERE id = ${proposal.id}
           `;
 
           const detail = {
@@ -723,7 +714,6 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
             materializedId,
           };
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: `review_registry.${spec.kind}.${approved ? "approved" : "rejected"}`,
@@ -740,7 +730,6 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
           // The registry row's own record points back to the proposal that justified it.
           if (materializedId) {
             await recordAudit(tx, {
-              tenantId,
               session,
               effectiveRole,
               command: `review_registry.${spec.kind}.materialized`,
@@ -759,7 +748,7 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
           }
 
           reply.header("etag", etagOf(proposal.version + 1));
-          const row = await readProposal(tx, tenantId, spec.kind, proposal.id);
+          const row = await readProposal(tx, spec.kind, proposal.id);
           return toProposal(row!, requestId, asOf);
         }),
       );
@@ -770,7 +759,6 @@ function registerKind<Body extends { rationale: string }, Stored extends Record<
 /** Writes the registry row for an approved proposal and returns its id. */
 async function materializeApproved<Body extends { rationale: string }, Stored extends Record<string, unknown>>(
   tx: Tx,
-  tenantId: string,
   spec: KindSpec<Body, Stored>,
   stored: Stored,
   decider: string,
@@ -786,7 +774,7 @@ async function materializeApproved<Body extends { rationale: string }, Stored ex
     );
   }
 
-  const existing = await spec.findExisting(tx, tenantId, stored);
+  const existing = await spec.findExisting(tx, stored);
   if (existing) {
     throw conflict("REGISTRY_ITEM_EXISTS", "This version is already in the registry", {
       registryId: existing,
@@ -796,7 +784,7 @@ async function materializeApproved<Body extends { rationale: string }, Stored ex
   const id = randomUUID();
   let result: Validated<true>;
   try {
-    result = await spec.materialize(tx, tenantId, id, stored, now, context);
+    result = await spec.materialize(tx, id, stored, now, context);
   } catch (caught) {
     // The CLI inserted the same version between the check and the insert.
     if (isUniqueViolation(caught)) {

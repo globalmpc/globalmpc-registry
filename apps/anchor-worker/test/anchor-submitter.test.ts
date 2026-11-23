@@ -254,7 +254,6 @@ describeDb("anchor submission and finality", () => {
   let databaseUrl: string;
   const databaseName = `anchor_submitter_${randomUUID().replaceAll("-", "")}`;
   let databaseCreated = false;
-  let tenantId: string;
   let batchRowId: string;
   let transactionId: string;
   /** batch_id is globally UNIQUE. Create a new one per case. */
@@ -266,7 +265,7 @@ describeDb("anchor submission and finality", () => {
   };
 
   beforeAll(async () => {
-    // Drain reports and chain moves intentionally range over every tenant/chain. Other API
+    // Drain reports and chain moves intentionally range over every project/chain. Other API
     // suites retain 5611 fixtures, so this suite owns a database rather than relying on order
     // or deleting another suite's transactions. The configured CI PostgreSQL owner has CREATEDB.
     administrator = postgres(process.env["DATABASE_URL"]!, { onnotice: () => {}, prepare: false });
@@ -292,9 +291,8 @@ describeDb("anchor submission and finality", () => {
     chain = new FakeChain();
     logs.length = 0;
 
-    // Create a new tenant every time. If the worker picks up an earlier case's transaction, there is
+    // Create new fixtures every time. If the worker picks up an earlier case's transaction, there is
     // no telling which case changed what.
-    tenantId = randomUUID();
     // reorg_events references transactions. The application has no delete path (append-only);
     // only tests clean up, as superuser.
     await sql`DELETE FROM chain.reorg_events`;
@@ -308,29 +306,25 @@ describeDb("anchor submission and finality", () => {
     });
     await sql`DELETE FROM chain.anchor_proposals`;
     await sql`DELETE FROM chain.transactions WHERE chain_id = ${CHAIN_ID}`;
-    await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenantId}, ${`anchor-${tenantId.slice(0, 8)}`}, 'anchor test')
-    `;
 
     batchRowId = randomUUID();
     batchExternalId = `0x${batchRowId.replace(/-/g, "").repeat(2)}`;
     caseBatchId = batchExternalId;
     await sql`
       INSERT INTO chain.anchor_batches (
-        id, tenant_id, batch_id, merkle_root, manifest_hash,
+        id, batch_id, merkle_root, manifest_hash,
         manifest_object_key, schema_version, record_count
       ) VALUES (
-        ${batchRowId}, ${tenantId}, ${batchExternalId}, ${ROOT}, ${MANIFEST},
+        ${batchRowId}, ${batchExternalId}, ${ROOT}, ${MANIFEST},
         'manifests/test.json', '1', 2
       )
     `;
 
     transactionId = randomUUID();
     await sql`
-      INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state)
+      INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state)
       VALUES (
-        ${transactionId}, ${tenantId}, ${batchRowId},
+        ${transactionId}, ${batchRowId},
         ${`anchor:${batchExternalId}`}, ${CHAIN_ID}, 'created'
       )
     `;
@@ -986,15 +980,15 @@ describeDb("anchor submission and finality", () => {
     const id = randomUUID();
     await sql`
       INSERT INTO chain.anchor_batches (
-        id, tenant_id, batch_id, merkle_root, manifest_hash,
+        id, batch_id, merkle_root, manifest_hash,
         manifest_object_key, schema_version, record_count
       ) VALUES (
-        ${rowId}, ${tenantId}, ${externalId}, ${ROOT}, ${MANIFEST}, 'manifests/more.json', '1', 1
+        ${rowId}, ${externalId}, ${ROOT}, ${MANIFEST}, 'manifests/more.json', '1', 1
       )
     `;
     await sql`
-      INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state)
-      VALUES (${id}, ${tenantId}, ${rowId}, ${`anchor:${externalId}`}, ${CHAIN_ID}, 'created')
+      INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state)
+      VALUES (${id}, ${rowId}, ${`anchor:${externalId}`}, ${CHAIN_ID}, 'created')
     `;
     return id;
   }
@@ -1126,17 +1120,17 @@ describeDb("anchor submission and finality", () => {
     const laterTransactionId = randomUUID();
     await sql`
       INSERT INTO chain.anchor_batches (
-        id, tenant_id, batch_id, merkle_root, manifest_hash,
+        id, batch_id, merkle_root, manifest_hash,
         manifest_object_key, schema_version, record_count
       ) VALUES (
-        ${laterBatchRowId}, ${tenantId}, ${laterBatchExternalId}, ${ROOT}, ${MANIFEST},
+        ${laterBatchRowId}, ${laterBatchExternalId}, ${ROOT}, ${MANIFEST},
         'manifests/later.json', '1', 1
       )
     `;
     await sql`
-      INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state)
+      INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state)
       VALUES (
-        ${laterTransactionId}, ${tenantId}, ${laterBatchRowId},
+        ${laterTransactionId}, ${laterBatchRowId},
         ${`anchor:${laterBatchExternalId}`}, ${CHAIN_ID}, 'created'
       )
     `;
@@ -1314,10 +1308,10 @@ describeDb("anchor submission and finality", () => {
       const id = randomUUID();
       await sql`
         INSERT INTO chain.transactions (
-          id, tenant_id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
+          id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
           confirmations, confirmed_at, reorg_watch_until
         ) VALUES (
-          ${id}, ${tenantId}, ${`watch:${id}`}, ${chainId}, 'confirmed', ${TX_HASH}, 100, ${BLOCK_A}, 3,
+          ${id}, ${`watch:${id}`}, ${chainId}, 'confirmed', ${TX_HASH}, 100, ${BLOCK_A}, 3,
           now() - ${confirmedAgo}::interval, now() + ${deadline}::interval
         )
       `;
@@ -1449,10 +1443,10 @@ describeDb("anchor submission and finality", () => {
     const HISTORY_CHAIN = 424242;
     await sql`
       INSERT INTO chain.transactions (
-        id, tenant_id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
+        id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
         confirmations, confirmed_at, reorg_watch_until, created_at, updated_at
       )
-      SELECT gen_random_uuid(), ${tenantId}, 'history:' || g, ${HISTORY_CHAIN}, 'confirmed',
+      SELECT gen_random_uuid(), 'history:' || g, ${HISTORY_CHAIN}, 'confirmed',
              '0x' || lpad(to_hex(g), 64, '0'), g, ${BLOCK_A}, 3,
              now() - g * interval '1 minute', now() - g * interval '1 minute' + interval '30 minutes',
              now() - g * interval '1 minute', now() - g * interval '1 minute'
@@ -1494,8 +1488,8 @@ describeDb("anchor submission and finality", () => {
     } finally {
       await traced.end();
       // Nothing references these rows. Without skipping the foreign-key triggers, each delete
-      // scans this tenant's rows for one naming it as its replacement: no index leads with
-      // `replaced_by_id`, and all 60,000 share the tenant.
+      // scans these rows for one naming it as its replacement: no index leads with
+      // `replaced_by_id`, and all 60,000 share the Registry.
       await sql.begin(async (tx) => {
         await tx`SET LOCAL session_replication_role = replica`;
         await tx`DELETE FROM chain.transactions WHERE chain_id = ${HISTORY_CHAIN}`;
@@ -1627,15 +1621,15 @@ describeDb("anchor submission and finality", () => {
       await requested("failed");
       if (reason === "open_send") {
         await sql`
-          INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id, tenant_id)
-          VALUES (${CHAIN_ID}, ${TX_HASH}, ${transactionId}, ${tenantId})
+          INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id)
+          VALUES (${CHAIN_ID}, ${TX_HASH}, ${transactionId})
         `;
       } else if (reason === "open_proposal") {
         await sql`
           INSERT INTO chain.anchor_proposals (
-            id, tenant_id, transaction_id, chain_id, safe_address, contract_address, calldata, calldata_hash
+            id, transaction_id, chain_id, safe_address, contract_address, calldata, calldata_hash
           ) VALUES (
-            ${randomUUID()}, ${tenantId}, ${transactionId}, ${CHAIN_ID}, ${`0x${"5a".repeat(20)}`},
+            ${randomUUID()}, ${transactionId}, ${CHAIN_ID}, ${`0x${"5a".repeat(20)}`},
             ${OLD_CONTRACT}, '0x00', ${`0x${"ab".repeat(32)}`}
           )
         `;
@@ -1660,8 +1654,8 @@ describeDb("anchor submission and finality", () => {
 
     /** A send of this row on this chain, settled as `reason`. */
     const settledSend = (hash: string, reason: "receipt" | "operator") => sql`
-      INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id, tenant_id, settled_at, settled_reason)
-      VALUES (${CHAIN_ID}, ${hash}, ${transactionId}, ${tenantId}, now(), ${reason})
+      INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id, settled_at, settled_reason)
+      VALUES (${CHAIN_ID}, ${hash}, ${transactionId}, now(), ${reason})
     `;
     const CONTRACT_A = `0x${"0a".repeat(20)}`;
 
@@ -1688,8 +1682,8 @@ describeDb("anchor submission and finality", () => {
       await requested("failed", null);
       const other = randomUUID();
       await sql`
-        INSERT INTO chain.transactions (id, tenant_id, intent_key, chain_id, state, tx_hash, contract_address)
-        VALUES (${other}, ${tenantId}, ${`other:${randomUUID()}`}, ${CHAIN_ID}, 'failed', ${TX_HASH_2}, ${CONTRACT_A})
+        INSERT INTO chain.transactions (id, intent_key, chain_id, state, tx_hash, contract_address)
+        VALUES (${other}, ${`other:${randomUUID()}`}, ${CHAIN_ID}, 'failed', ${TX_HASH_2}, ${CONTRACT_A})
       `;
       await sql`
         UPDATE chain.transactions
@@ -1786,8 +1780,8 @@ describeDb("anchor submission and finality", () => {
     it("asks every contract a row on this chain recorded", async () => {
       await requested("failed", null);
       await sql`
-        INSERT INTO chain.transactions (id, tenant_id, intent_key, chain_id, state, tx_hash, contract_address)
-        VALUES (${randomUUID()}, ${tenantId}, ${`other:${randomUUID()}`}, ${CHAIN_ID}, 'failed', ${TX_HASH_2}, ${CONTRACT_A})
+        INSERT INTO chain.transactions (id, intent_key, chain_id, state, tx_hash, contract_address)
+        VALUES (${randomUUID()}, ${`other:${randomUUID()}`}, ${CHAIN_ID}, 'failed', ${TX_HASH_2}, ${CONTRACT_A})
       `;
       chain.anchored = { root: ROOT, txHash: TX_HASH_2 };
       chain.anchoredOn = CONTRACT_A;
@@ -1882,8 +1876,8 @@ describeDb("anchor submission and finality", () => {
       });
       it("refuses a legacy executed proposal without a verified execution mapping", async () => {
         await requested("failed", null);
-        await sql`INSERT INTO chain.anchor_proposals (id, tenant_id, transaction_id, chain_id, safe_address, contract_address, calldata, calldata_hash, safe_tx_hash, state)
-          VALUES (${randomUUID()}, ${tenantId}, ${transactionId}, ${CHAIN_ID}, ${safeConfig().safeAddress!}, ${config.contractAddress}, '0xdeadbeef', ${ROOT}, ${MANIFEST}, 'executed')`;
+        await sql`INSERT INTO chain.anchor_proposals (id, transaction_id, chain_id, safe_address, contract_address, calldata, calldata_hash, safe_tx_hash, state)
+          VALUES (${randomUUID()}, ${transactionId}, ${CHAIN_ID}, ${safeConfig().safeAddress!}, ${config.contractAddress}, '0xdeadbeef', ${ROOT}, ${MANIFEST}, 'executed')`;
         expect(await safeMoves()).toEqual([{ kind: "refused", transactionId, reason: "send_outcome_unknown" }]);
       });
       it("does not confuse a final Safe revert with logical nonce consumption after the current hash is cleared", async () => {
@@ -1902,8 +1896,8 @@ describeDb("anchor submission and finality", () => {
         chain.anchoredBatch = async (batch, contract) => {
           if (!inserted) {
             inserted = true;
-            await sql`INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, tenant_id, chain_id, execution_tx_hash)
-              VALUES (${proposalId}, ${transactionId}, ${tenantId}, ${CHAIN_ID}, ${TX_HASH_2})`;
+            await sql`INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, chain_id, execution_tx_hash)
+              VALUES (${proposalId}, ${transactionId}, ${CHAIN_ID}, ${TX_HASH_2})`;
           }
           return original(batch, contract);
         };
@@ -2077,12 +2071,12 @@ describeDb("anchor submission and finality", () => {
       const laterBatch = randomUUID();
       const laterTransaction = randomUUID();
       await sql`
-        INSERT INTO chain.anchor_batches (id, tenant_id, batch_id, merkle_root, manifest_hash, manifest_object_key, schema_version, record_count)
-        VALUES (${laterBatch}, ${tenantId}, ${`0x${laterBatch.replace(/-/g, "").repeat(2)}`}, ${ROOT}, ${MANIFEST}, 'manifests/later.json', '1', 1)
+        INSERT INTO chain.anchor_batches (id, batch_id, merkle_root, manifest_hash, manifest_object_key, schema_version, record_count)
+        VALUES (${laterBatch}, ${`0x${laterBatch.replace(/-/g, "").repeat(2)}`}, ${ROOT}, ${MANIFEST}, 'manifests/later.json', '1', 1)
       `;
       await sql`
-        INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state, move_to_chain_id, move_requested_at)
-        VALUES (${laterTransaction}, ${tenantId}, ${laterBatch}, ${`anchor:later:${laterBatch}`}, ${CHAIN_ID}, 'failed', ${NEW_CHAIN}, now())
+        INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state, move_to_chain_id, move_requested_at)
+        VALUES (${laterTransaction}, ${laterBatch}, ${`anchor:later:${laterBatch}`}, ${CHAIN_ID}, 'failed', ${NEW_CHAIN}, now())
       `;
       expect((await moves()).map((o) => o.transactionId)).toEqual([laterTransaction, transactionId]);
     });
@@ -2095,12 +2089,12 @@ describeDb("anchor submission and finality", () => {
       const otherBatch = randomUUID();
       const otherTransaction = randomUUID();
       await sql`
-        INSERT INTO chain.anchor_batches (id, tenant_id, batch_id, merkle_root, manifest_hash, manifest_object_key, schema_version, record_count)
-        VALUES (${otherBatch}, ${tenantId}, ${`0x${otherBatch.replace(/-/g, "").repeat(2)}`}, ${ROOT}, ${MANIFEST}, 'manifests/other.json', '1', 1)
+        INSERT INTO chain.anchor_batches (id, batch_id, merkle_root, manifest_hash, manifest_object_key, schema_version, record_count)
+        VALUES (${otherBatch}, ${`0x${otherBatch.replace(/-/g, "").repeat(2)}`}, ${ROOT}, ${MANIFEST}, 'manifests/other.json', '1', 1)
       `;
       await sql`
-        INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state, move_to_chain_id, move_requested_at)
-        VALUES (${otherTransaction}, ${tenantId}, ${otherBatch}, ${`anchor:other:${otherBatch}`}, ${CHAIN_ID}, 'failed', ${NEW_CHAIN}, now())
+        INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state, move_to_chain_id, move_requested_at)
+        VALUES (${otherTransaction}, ${otherBatch}, ${`anchor:other:${otherBatch}`}, ${CHAIN_ID}, 'failed', ${NEW_CHAIN}, now())
       `;
       expect(await moves()).toEqual([
         { kind: "waiting", transactionId, reason: "check_failed" },
@@ -2132,8 +2126,8 @@ describeDb("anchor submission and finality", () => {
     it("refuses, leaving the row for a person, when the intent is already on the requested chain", async () => {
       await requested("failed");
       await sql`
-        INSERT INTO chain.transactions (id, tenant_id, intent_key, chain_id, state)
-        VALUES (${randomUUID()}, ${tenantId}, ${`anchor:${batchExternalId}`}, ${NEW_CHAIN}, 'created')
+        INSERT INTO chain.transactions (id, intent_key, chain_id, state)
+        VALUES (${randomUUID()}, ${`anchor:${batchExternalId}`}, ${NEW_CHAIN}, 'created')
       `;
       // The row's own failure and retry schedule, which the refusal must not overwrite.
       await sql`
@@ -2215,12 +2209,12 @@ describeDb("anchor submission and finality", () => {
       const otherBatch = randomUUID();
       const otherTransaction = randomUUID();
       await sql`
-        INSERT INTO chain.anchor_batches (id, tenant_id, batch_id, merkle_root, manifest_hash, manifest_object_key, schema_version, record_count)
-        VALUES (${otherBatch}, ${tenantId}, ${`0x${otherBatch.replace(/-/g, "").repeat(2)}`}, ${ROOT}, ${MANIFEST}, 'manifests/other.json', '1', 1)
+        INSERT INTO chain.anchor_batches (id, batch_id, merkle_root, manifest_hash, manifest_object_key, schema_version, record_count)
+        VALUES (${otherBatch}, ${`0x${otherBatch.replace(/-/g, "").repeat(2)}`}, ${ROOT}, ${MANIFEST}, 'manifests/other.json', '1', 1)
       `;
       await sql`
-        INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state, move_to_chain_id, move_requested_at)
-        VALUES (${otherTransaction}, ${tenantId}, ${otherBatch}, ${`anchor:other:${otherBatch}`}, ${CHAIN_ID}, 'failed', ${toChainId}, now() + interval '1 second')
+        INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state, move_to_chain_id, move_requested_at)
+        VALUES (${otherTransaction}, ${otherBatch}, ${`anchor:other:${otherBatch}`}, ${CHAIN_ID}, 'failed', ${toChainId}, now() + interval '1 second')
       `;
       return otherTransaction;
     }
@@ -2345,8 +2339,8 @@ describeDb("anchor submission and finality", () => {
     // that chain settles the send and records the gas.
     await sql`UPDATE chain.transactions SET chain_id = 5611, contract_address = NULL, state = 'failed' WHERE id = ${transactionId}`;
     await sql`
-      INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id, tenant_id)
-      VALUES (5611, ${TX_HASH}, ${transactionId}, ${tenantId})
+      INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id)
+      VALUES (5611, ${TX_HASH}, ${transactionId})
     `;
     try {
       expect(await otherChainsInFlight(sql, CHAIN_ID, 60_000)).toContainEqual({
@@ -2407,19 +2401,19 @@ describeDb("anchor submission and finality", () => {
       const txHash = `0x${id.replace(/-/g, "").repeat(2)}`;
       await sql`
         INSERT INTO chain.transactions (
-          id, tenant_id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
+          id, intent_key, chain_id, state, tx_hash, block_number, block_hash,
           submitted_at, gas_used, effective_gas_price
         ) VALUES (
-          ${id}, ${tenantId}, ${`spent:${id}`}, ${chainId}, 'confirmed',
+          ${id}, ${`spent:${id}`}, ${chainId}, 'confirmed',
           ${txHash}, 90, ${BLOCK_A},
           ${sql.unsafe(observedAt)}, ${gasUsed.toString()}, ${price.toString()}
         )
       `;
       await sql`
         INSERT INTO chain.gas_spend (
-          chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price, observed_at
+          chain_id, tx_hash, transaction_id, gas_used, effective_gas_price, observed_at
         ) VALUES (
-          ${chainId}, ${txHash}, ${id}, ${tenantId}, ${gasUsed.toString()}, ${price.toString()},
+          ${chainId}, ${txHash}, ${id}, ${gasUsed.toString()}, ${price.toString()},
           ${sql.unsafe(observedAt)}
         )
       `;
@@ -2509,16 +2503,16 @@ describeDb("anchor submission and finality", () => {
         const external = `0x${batch.replace(/-/g, "").repeat(2)}`;
         await sql`
           INSERT INTO chain.anchor_batches (
-            id, tenant_id, batch_id, merkle_root, manifest_hash,
+            id, batch_id, merkle_root, manifest_hash,
             manifest_object_key, schema_version, record_count
           ) VALUES (
-            ${batch}, ${tenantId}, ${external}, ${ROOT}, ${MANIFEST}, 'manifests/second.json', '1', 2
+            ${batch}, ${external}, ${ROOT}, ${MANIFEST}, 'manifests/second.json', '1', 2
           )
         `;
         const id = randomUUID();
         await sql`
-          INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state)
-          VALUES (${id}, ${tenantId}, ${batch}, ${`anchor:${external}`}, ${CHAIN_ID}, 'created')
+          INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state)
+          VALUES (${id}, ${batch}, ${`anchor:${external}`}, ${CHAIN_ID}, 'created')
         `;
         return id;
       }
@@ -2528,17 +2522,17 @@ describeDb("anchor submission and finality", () => {
         const txHash = `0x${id.replace(/-/g, "").repeat(2)}`;
         await sql`
           INSERT INTO chain.transactions (
-            id, tenant_id, intent_key, chain_id, state, tx_hash, submitted_at
+            id, intent_key, chain_id, state, tx_hash, submitted_at
           ) VALUES (
-            ${id}, ${tenantId}, ${`inflight:${id}`}, ${CHAIN_ID}, 'submitted', ${txHash}, now()
+            ${id}, ${`inflight:${id}`}, ${CHAIN_ID}, 'submitted', ${txHash}, now()
           )
         `;
         // Sent at the fee cap, so its most is gas limit × fee cap.
         await sql`
           INSERT INTO chain.anchor_sends (
-            chain_id, tx_hash, transaction_id, tenant_id, signer, nonce, gas_limit, max_fee_per_gas
+            chain_id, tx_hash, transaction_id, signer, nonce, gas_limit, max_fee_per_gas
           ) VALUES (
-            ${CHAIN_ID}, ${txHash}, ${id}, ${tenantId}, ${SIGNER}, 99,
+            ${CHAIN_ID}, ${txHash}, ${id}, ${SIGNER}, 99,
             ${config.gasLimit.toString()}, ${config.feeCapWei.toString()}
           )
         `;
@@ -2581,9 +2575,9 @@ describeDb("anchor submission and finality", () => {
         const inFlight = await insertInFlight();
         await sql`
           INSERT INTO chain.gas_spend (
-            chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price
+            chain_id, tx_hash, transaction_id, gas_used, effective_gas_price
           ) VALUES (
-            ${CHAIN_ID}, ${inFlight.txHash}, ${inFlight.id}, ${tenantId},
+            ${CHAIN_ID}, ${inFlight.txHash}, ${inFlight.id}, 
             ${GAS_USED.toString()}, ${GAS_PRICE.toString()}
           )
         `;
@@ -2827,8 +2821,8 @@ describeDb("anchor submission and finality", () => {
 
       it("waits when the block gas limit for an unbounded send cannot be read", async () => {
         await sql`
-          INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id, tenant_id)
-          VALUES (${CHAIN_ID}, ${TX_HASH_2}, ${transactionId}, ${tenantId})
+          INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id)
+          VALUES (${CHAIN_ID}, ${TX_HASH_2}, ${transactionId})
         `;
         chain.observation = { kind: "unknown" };
         chain.blockGasLimitError = new Error("rpc unavailable");
@@ -2842,8 +2836,8 @@ describeDb("anchor submission and finality", () => {
       it("counts a send recorded without a gas limit at the block gas limit", async () => {
         // Sent before every send carried a fixed gas limit: its most is bounded only by the block.
         await sql`
-          INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id, tenant_id)
-          VALUES (${CHAIN_ID}, ${TX_HASH_2}, ${transactionId}, ${tenantId})
+          INSERT INTO chain.anchor_sends (chain_id, tx_hash, transaction_id)
+          VALUES (${CHAIN_ID}, ${TX_HASH_2}, ${transactionId})
         `;
         chain.observation = { kind: "unknown" };
         const legacyMax = chain.blockGasLimitValue * config.feeCapWei;
@@ -2930,17 +2924,17 @@ describeDb("anchor submission and finality", () => {
         const otherExternal = `0x${otherBatch.replace(/-/g, "").repeat(2)}`;
         await sql`
           INSERT INTO chain.anchor_batches (
-            id, tenant_id, batch_id, merkle_root, manifest_hash,
+            id, batch_id, merkle_root, manifest_hash,
             manifest_object_key, schema_version, record_count
           ) VALUES (
-            ${otherBatch}, ${tenantId}, ${otherExternal}, ${ROOT}, ${MANIFEST},
+            ${otherBatch}, ${otherExternal}, ${ROOT}, ${MANIFEST},
             'manifests/other.json', '1', 2
           )
         `;
         const otherTx = randomUUID();
         await sql`
-          INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state)
-          VALUES (${otherTx}, ${tenantId}, ${otherBatch}, ${`anchor:${otherExternal}`}, ${CHAIN_ID}, 'created')
+          INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state)
+          VALUES (${otherTx}, ${otherBatch}, ${`anchor:${otherExternal}`}, ${CHAIN_ID}, 'created')
         `;
 
         const result = await step();
@@ -3011,8 +3005,8 @@ describeDb("anchor submission and finality", () => {
       chain.l1Fee = L1_FEE;
       chain.fee = config.feeCapWei;
       await sql`
-        INSERT INTO chain.gas_spend (chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price)
-        VALUES (${CHAIN_ID}, ${`0x${"77".repeat(32)}`}, ${transactionId}, ${tenantId}, 1, 1)
+        INSERT INTO chain.gas_spend (chain_id, tx_hash, transaction_id, gas_used, effective_gas_price)
+        VALUES (${CHAIN_ID}, ${`0x${"77".repeat(32)}`}, ${transactionId}, 1, 1)
       `;
       const capped = { ...config, dailySpendCapWei: 2n * (config.gasLimit * config.feeCapWei + L1_FEE) };
       const blocked = await stepOnce(sql, chain, capped, log);
@@ -3031,16 +3025,16 @@ describeDb("anchor submission and finality", () => {
         if (identity === "another transaction") {
           owner = randomUUID();
           await sql`
-            INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state)
-            VALUES (${owner}, ${tenantId}, ${batchRowId}, ${`other:${owner}`}, ${CHAIN_ID}, 'failed')
+            INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state)
+            VALUES (${owner}, ${batchRowId}, ${`other:${owner}`}, ${CHAIN_ID}, 'failed')
           `;
         }
         await sql`
           INSERT INTO chain.anchor_sends (
-            chain_id, tx_hash, transaction_id, tenant_id, signer, nonce,
+            chain_id, tx_hash, transaction_id, signer, nonce,
             gas_limit, max_fee_per_gas, l1_fee_bound
           ) VALUES (
-            ${CHAIN_ID}, ${TX_HASH_2}, ${owner}, ${tenantId},
+            ${CHAIN_ID}, ${TX_HASH_2}, ${owner}, 
             ${identity === "another signer" ? `0x${"6b".repeat(20)}` : SIGNER},
             ${identity === "another nonce" ? 1 : 0},
             ${config.gasLimit.toString()}, ${config.feeCapWei.toString()}, ${L1_FEE.toString()}
@@ -3067,10 +3061,10 @@ describeDb("anchor submission and finality", () => {
       for (const [hash, signer] of [[TX_HASH_2, SIGNER], [`0x${"77".repeat(32)}`, `0x${"6b".repeat(20)}`]]) {
         await sql`
           INSERT INTO chain.anchor_sends (
-            chain_id, tx_hash, transaction_id, tenant_id, signer, nonce,
+            chain_id, tx_hash, transaction_id, signer, nonce,
             gas_limit, max_fee_per_gas, l1_fee_bound
           ) VALUES (
-            ${CHAIN_ID}, ${hash!}, ${transactionId}, ${tenantId}, ${signer!}, 0,
+            ${CHAIN_ID}, ${hash!}, ${transactionId}, ${signer!}, 0,
             ${config.gasLimit.toString()}, ${config.feeCapWei.toString()}, ${L1_FEE.toString()}
           )
         `;
@@ -3079,8 +3073,8 @@ describeDb("anchor submission and finality", () => {
         await sql`UPDATE chain.anchor_sends SET settled_at = now(), settled_reason = 'operator' WHERE tx_hash = ${TX_HASH_2}`;
       } else {
         await sql`
-          INSERT INTO chain.gas_spend (chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price)
-          VALUES (${CHAIN_ID}, ${TX_HASH_2}, ${transactionId}, ${tenantId}, 1, 1)
+          INSERT INTO chain.gas_spend (chain_id, tx_hash, transaction_id, gas_used, effective_gas_price)
+          VALUES (${CHAIN_ID}, ${TX_HASH_2}, ${transactionId}, 1, 1)
         `;
       }
       const cap = 2n * reserve + (status === "receipted" ? 1n : 0n);
@@ -3534,17 +3528,17 @@ describeDb("anchor submission and finality", () => {
       const laterTransaction = randomUUID();
       await sql`
         INSERT INTO chain.anchor_batches (
-          id, tenant_id, batch_id, merkle_root, manifest_hash,
+          id, batch_id, merkle_root, manifest_hash,
           manifest_object_key, schema_version, record_count
         ) VALUES (
-          ${laterBatchRow}, ${tenantId}, ${laterBatchId}, ${ROOT}, ${MANIFEST},
+          ${laterBatchRow}, ${laterBatchId}, ${ROOT}, ${MANIFEST},
           'manifests/later.json', '1', 2
         )
       `;
       await sql`
-        INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state, created_at)
+        INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state, created_at)
         VALUES (
-          ${laterTransaction}, ${tenantId}, ${laterBatchRow},
+          ${laterTransaction}, ${laterBatchRow},
           ${`anchor:${laterBatchId}`}, ${CHAIN_ID}, 'created', now() + interval '1 second'
         )
       `;

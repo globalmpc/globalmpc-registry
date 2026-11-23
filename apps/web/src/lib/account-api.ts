@@ -2,7 +2,7 @@ import { ApiError, apiFetch, type ApiErrorEnvelope, type AuthenticationLevel } f
 
 /**
  * Account API client — WP2 (email codes, invitations, email change), WP3 (second factors),
- * WP4 (Google / Microsoft) and WP5 (wallets as signing keys).
+ * WP4 (Google) and WP5 (wallets as signing keys).
  *
  * Every call is same-origin and carries no credential of its own: the web server attaches the
  * session from its HttpOnly cookie (`proxy.ts`). The answers that issue a session or start a
@@ -34,7 +34,6 @@ function get(path: string): Promise<Response> {
 export interface AuthMethods {
   emailCode: true;
   google: boolean;
-  microsoft: boolean;
   emailCodeDigits: number;
   emailCodeTtlMinutes: number;
 }
@@ -96,9 +95,9 @@ export async function verifyEmailChange(
   );
 }
 
-// --- Google / Microsoft ---------------------------------------------------------------------
+// --- Google ---------------------------------------------------------------------------------
 
-export type OidcProvider = "google" | "microsoft";
+export type OidcProvider = "google";
 
 export type OidcStart =
   | { purpose: "sign_in" }
@@ -146,7 +145,6 @@ export interface ExternalIdentity {
   id: string;
   provider: OidcProvider;
   issuer: string;
-  idpTenant: string | null;
   linkedVia: "link" | "invitation";
   createdAt: string;
   lastUsedAt: string | null;

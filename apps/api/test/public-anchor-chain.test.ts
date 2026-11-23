@@ -39,7 +39,7 @@ describeDb("public anchor chain", () => {
 
     const operator = await signIn(local, fx.operatorA);
     const approver = await signIn(local, fx.disclosureApproverA);
-    const projectId = await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, `CHAIN-${randomUUID().slice(0, 8)}`);
+    const projectId = await insertProject(fx.sql, { organizationId: fx.orgA }, `CHAIN-${randomUUID().slice(0, 8)}`);
     const published = await publishProject(
       local,
       fx.sql,
@@ -137,8 +137,8 @@ describeDb("public anchor chain", () => {
     // A replacement sent later on another chain is what the proof now references.
     const replacement = `0x${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
     await fx.sql`
-      INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, tx_hash, created_at)
-      SELECT ${randomUUID()}, b.tenant_id, b.id, ${`replace-${randomUUID()}`}, 5611, ${replacement}, now() + interval '1 second'
+      INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, tx_hash, created_at)
+      SELECT ${randomUUID()}, b.id, ${`replace-${randomUUID()}`}, 5611, ${replacement}, now() + interval '1 second'
       FROM chain.anchor_batches b WHERE b.id = ${batchRowId}
     `;
     const proof = await proofOf(testnet);

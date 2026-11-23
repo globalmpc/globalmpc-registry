@@ -1616,7 +1616,7 @@ export const myActivity = z.object({
  * An organization the caller may name as a project's owner.
  *
  * Only what the registration form shows. The list follows the owner rule of `project.create`,
- * so it is a list of choices, not a tenant directory.
+ * so it is a list of choices, not a Registry directory.
  */
 export const organizationSummary = z.object({
   id: z.string(),
@@ -1704,10 +1704,10 @@ export const adminSubject = z.object({
     }),
   ),
   /**
-   * How the person can sign in (WP6): their account address and each live Google / Microsoft
+   * How the person can sign in (WP6): their account address and each live Google
    * identity. A wallet is a signing key, never a way in (D3, WP7).
    */
-  signInMethods: z.array(z.enum(["email", "google", "microsoft"])),
+  signInMethods: z.array(z.enum(["email", "google"])),
   /** No way to sign in at all (`signInMethods` is empty). The UI must say so first. */
   locked: z.boolean(),
   /** When two admins suspended the person (0127); null while the account is in use. */
@@ -1739,7 +1739,7 @@ export const roleGrantRequest = z.object({
   role: z.string(),
   organizationId: z.string().nullable().optional(),
   governanceScope: z.enum(["protocol", "project", "none"]).nullable().optional(),
-  scopeKind: z.enum(["tenant", "organization", "none"]).nullable().optional(),
+  scopeKind: z.enum(["registry", "organization", "none"]).nullable().optional(),
   projectId: z.string().nullable(),
   /** Jurisdictions the granted binding is limited to (02 §2.5). Null: not scoped. */
   jurisdiction: z.array(z.string()).nullable(),
@@ -1759,7 +1759,7 @@ export const createRoleGrantRequest = z.object({
   subjectId: z.string().guid(),
   role: z.string().min(1),
   governanceScope: z.enum(["protocol", "project", "none"]).optional(),
-  scopeKind: z.enum(["tenant", "organization", "none"]).optional(),
+  scopeKind: z.enum(["registry", "organization", "none"]).optional(),
   projectId: z.string().guid().optional(),
   organizationId: z.string().guid().optional(),
   /**
@@ -2085,7 +2085,7 @@ export const registryPublicationDraft = z.object({
  * One registry publication status row.
  *
  * Previously, publication status was visible only by opening a project.
- * Answering "what has this tenant published" then meant opening projects one by
+ * Answering "what has the Registry published" then meant opening projects one by
  * one, which is not an answer.
  */
 export const registryEntrySummary = z.object({
@@ -2465,7 +2465,7 @@ export const documentLinkRule = z.object({
   retirementNote: z.string().nullable(),
 });
 
-/** "Documents of `downstreamType` rest on documents of `upstreamType`" across the tenant. */
+/** "Documents of `downstreamType` rest on documents of `upstreamType`" across the Registry. */
 export const createDocumentLinkRuleRequest = z
   .object({
     upstreamType: documentTypeText,

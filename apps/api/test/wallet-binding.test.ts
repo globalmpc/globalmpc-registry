@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import {
@@ -14,6 +14,7 @@ import {
   testEnv,
   type TestAccount,
   type TestFixture,
+  setupBareRegistry,
 } from "./helpers/db.js";
 import {
   bindWalletByProof,
@@ -33,7 +34,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * account, a proof-bound key never signs anyone in, and a bound key is the person's to cut.
  *
  * Every case uses real keys: the property under test is that the signature covers exactly this
- * subject, tenant, address, chain and nonce, and nothing else passes.
+ * subject, address, chain and nonce, and nothing else passes.
  */
 describeDb("wallet binding by proof of possession", () => {
   let fx: TestFixture;
@@ -49,22 +50,22 @@ describeDb("wallet binding by proof of possession", () => {
     await fx.close();
   });
 
-  /** A fresh person in `tenantId` with no wallet and no role. */
-  async function person(tenantId = fx.tenantA): Promise<string> {
+  /** A fresh person with no wallet and no role. */
+  async function person(): Promise<string> {
     const id = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${id}, ${tenantId}, 'person', ${`wallet person ${id.slice(0, 8)}`})
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${id}, 'person', ${`wallet person ${id.slice(0, 8)}`})
     `;
     return id;
   }
 
-  function totpSession(subjectId: string, tenantId = fx.tenantA): Promise<string> {
-    return issueTestSession(fx.appSql, tenantId, subjectId, { firstFactor: "email_code", secondFactor: "totp" });
+  function totpSession(subjectId: string): Promise<string> {
+    return issueTestSession(fx.appSql, subjectId, { firstFactor: "email_code", secondFactor: "totp" });
   }
 
-  function passkeySession(subjectId: string, tenantId = fx.tenantA): Promise<string> {
-    return issueTestSession(fx.appSql, tenantId, subjectId, { firstFactor: "email_code", secondFactor: "passkey" });
+  function passkeySession(subjectId: string): Promise<string> {
+    return issueTestSession(fx.appSql, subjectId, { firstFactor: "email_code", secondFactor: "passkey" });
   }
 
   async function challengeFor(token: string, signer: TestAccount): Promise<BindingChallenge> {
@@ -129,7 +130,6 @@ describeDb("wallet binding by proof of possession", () => {
     it.each([
       ["another chain", { domain: { chainId: 1 } }],
       ["another subject", { message: { subjectId: `0x${"11".repeat(32)}` } }],
-      ["another tenant", { message: { tenantId: `0x${"22".repeat(32)}` } }],
       ["another nonce", { message: { nonce: `0x${"33".repeat(32)}` } }],
       ["another purpose", { message: { purpose: "sign-in" } }],
     ])("refuses a signature that covered %s", async (_label, overrides) => {
@@ -219,10 +219,8 @@ describeDb("wallet binding by proof of possession", () => {
       expect(own.statusCode).toBe(409);
       expect(own.json().code).toBe("WALLET_ALREADY_ACTIVE");
 
-      const tenantBPerson = await person(fx.tenantB);
       const cases: [string, string, TestAccount][] = [
         ["another subject", await totpSession(await person()), taken],
-        ["another tenant", await totpSession(tenantBPerson, fx.tenantB), taken],
         ["an operator-bound key", await totpSession(await person()), fx.operatorA],
       ];
       for (const [label, token, key] of cases) {
@@ -240,14 +238,14 @@ describeDb("wallet binding by proof of possession", () => {
   describe("session strength", () => {
     it("allows initial binding with verified email sign-in and a wallet signature", async () => {
       const subjectId = await person();
-      const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, { firstFactor: "email_code" });
+      const token = await issueTestSession(fx.appSql, subjectId, { firstFactor: "email_code" });
       const response = await bindWalletByProof(app, token, newAccount().account);
       expect(response.statusCode, response.body).toBe(200);
     });
 
     it("refuses a session restored by a recovery code", async () => {
       const subjectId = await person();
-      const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, {
+      const token = await issueTestSession(fx.appSql, subjectId, {
         firstFactor: "email_code",
         secondFactor: "recovery_code",
       });
@@ -256,7 +254,7 @@ describeDb("wallet binding by proof of possession", () => {
       expect(response.json().code).toBe("UNAUTHENTICATED");
 
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, async (tx) => tx`
+        withActor(fx.appSql, { subjectId }, async (tx) => tx`
           SELECT * FROM core.create_wallet_binding_challenge(
             ${await sessionOf(subjectId)}, ${randomUUID()}, ${newAccount().address}, 31337,
             ${`0x${randomBytes(32).toString("hex")}`}
@@ -275,8 +273,8 @@ describeDb("wallet binding by proof of possession", () => {
     it("opens no session with it: there is no wallet sign-in left to try", async () => {
       const subjectId = await person();
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'reviewer')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, 'reviewer')
       `;
       const key = newAccount();
       expect((await bindWalletByProof(app, await totpSession(subjectId), key.account)).statusCode).toBe(200);
@@ -358,7 +356,7 @@ describeDb("wallet binding by proof of possession", () => {
       const system = await disable(token, bound.id, "replaced");
       expect(system.statusCode).toBe(400);
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, async (tx) => tx`
+        withActor(fx.appSql, { subjectId }, async (tx) => tx`
           SELECT * FROM core.disable_own_wallet(${await sessionOf(subjectId)}, ${bound.id}, 'replaced', 'x')
         `),
       ).rejects.toThrow(/WALLET_REASON_INVALID/);
@@ -538,85 +536,90 @@ describeDb("wallet binding by proof of possession", () => {
       const subjectId = await person();
       expect((await bindWalletByProof(app, await totpSession(subjectId), newAccount().account)).statusCode).toBe(200);
       await expect(fx.sql`
-        INSERT INTO core.wallet_identities (id, tenant_id, subject_id, wallet_address, chain_id, bound_at)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${newAccount().address}, 31337, now())
+        INSERT INTO core.wallet_identities (id, subject_id, wallet_address, chain_id, bound_at)
+        VALUES (${randomUUID()}, ${subjectId}, ${newAccount().address}, 31337, now())
       `).rejects.toThrow(/wallet_identities_one_active_per_subject/);
 
       const taken = (await activeWallets(subjectId))[0]!;
       const other = await person();
       await expect(fx.sql`
-        INSERT INTO core.wallet_identities (id, tenant_id, subject_id, wallet_address, chain_id, bound_at)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${other}, ${taken}, 31337, now())
+        INSERT INTO core.wallet_identities (id, subject_id, wallet_address, chain_id, bound_at)
+        VALUES (${randomUUID()}, ${other}, ${taken}, 31337, now())
       `).rejects.toThrow(/wallet_identities_active_address_key/);
     });
   });
 
   it.each([false, true])("rechecks sole-admin recovery and preserves administrator access (another admin returns: %s)", async anotherReturns => {
-    const tenant = randomUUID();
+    // A Registry whose only administrators are these two, so "sole admin" means them.
+    const registry = await setupBareRegistry();
+    const local = await buildServer(loadConfig(testEnv()), registry.appSql);
+    try {
     const org = randomUUID();
-    await fx.sql`INSERT INTO core.tenants(id,slug,display_name) VALUES (${tenant},${tenant},'Wallet recovery')`;
-    await fx.sql`INSERT INTO core.organizations(id,tenant_id,legal_name,jurisdiction) VALUES (${org},${tenant},'Recovery org','MNG')`;
-    const holder = await person(tenant);
-    const other = await person(tenant);
-    const token = await issueTestSession(fx.appSql, tenant, holder, { firstFactor: "email_code" });
-    const next = newAccount();
-    await fx.sql`INSERT INTO core.wallet_identities(id,tenant_id,subject_id,wallet_address,chain_id,assurance_level,bound_at,bound_via)
-      VALUES (${randomUUID()},${tenant},${holder},${newAccount().address},31337,'high_assurance',now(),'operator')`;
+    await registry.sql`INSERT INTO core.organizations(id,legal_name,jurisdiction) VALUES (${org},'Recovery org','MNG')`;
+    const holder = randomUUID(), other = randomUUID();
     for (const subject of [holder, other]) {
-      await fx.sql`UPDATE core.subjects SET assurance_level='high_assurance', email=coalesce(email,${subject+'@example.test'}) WHERE id=${subject}`;
-      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
-        VALUES (${randomUUID()},${tenant},${subject},${org},'administrator')`;
+      await registry.sql`INSERT INTO core.subjects (id, kind, display_name) VALUES (${subject}, 'person', 'Recovery admin')`;
+    }
+    const token = await issueTestSession(registry.appSql, holder, { firstFactor: "email_code" });
+    const next = newAccount();
+    await registry.sql`INSERT INTO core.wallet_identities(id,subject_id,wallet_address,chain_id,assurance_level,bound_at,bound_via)
+      VALUES (${randomUUID()},${holder},${newAccount().address},31337,'high_assurance',now(),'operator')`;
+    for (const subject of [holder, other]) {
+      await registry.sql`UPDATE core.subjects SET assurance_level='high_assurance', email=coalesce(email,${subject+'@example.test'}) WHERE id=${subject}`;
+      await registry.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,role)
+        VALUES (${randomUUID()},${subject},${org},'administrator')`;
     }
     const post = (path: string, payload: Record<string,string>) =>
-      app.inject({method:"POST",url:"/api/v1/"+path,headers:bearer(token),payload});
+      local.inject({method:"POST",url:"/api/v1/"+path,headers:bearer(token),payload});
     const requested = await post("auth/wallet-recoveries", {walletAddress:next.address});
     expect(requested.statusCode, requested.body).toBe(200);
     const {id} = requested.json();
     const approve = () => post("admin/wallet-recoveries/approve", {id});
     const queue = async () => {
-      const response = await app.inject({url:"/api/v1/admin/wallet-recoveries",headers:bearer(token)});
+      const response = await local.inject({url:"/api/v1/admin/wallet-recoveries",headers:bearer(token)});
       expect(response.statusCode).toBe(200);
       return response.json().items.map((item:{id:string}) => item.id);
     };
-    const [mail] = await fx.sql`SELECT params FROM core.email_outbox WHERE template='wallet_recovery' AND params->>'address'=${next.address}`;
+    const [mail] = await registry.sql`SELECT params FROM core.email_outbox WHERE template='wallet_recovery' AND params->>'address'=${next.address}`;
     expect((await post("auth/wallet-recoveries/confirm",{id,proof:mail!.params.code})).statusCode).toBe(200);
     expect(await queue()).not.toContain(id);
     expect((await approve()).statusCode).toBe(409);
-    await fx.sql`UPDATE core.subjects SET suspended_at=now() WHERE id=${other}`;
+    await registry.sql`UPDATE core.subjects SET suspended_at=now() WHERE id=${other}`;
     expect(await queue()).toContain(id);
     expect((await approve()).statusCode).toBe(200);
     if (anotherReturns) {
-      await fx.sql`UPDATE core.subjects SET suspended_at=NULL WHERE id=${other}`;
-      expect((await bindWalletByProof(app, token, next.account)).statusCode).toBe(403);
-      const otherToken = await issueTestSession(fx.appSql, tenant, other, { firstFactor: "email_code" });
-      const review = await app.inject({url:"/api/v1/admin/wallet-recoveries",headers:bearer(otherToken)});
+      await registry.sql`UPDATE core.subjects SET suspended_at=NULL WHERE id=${other}`;
+      expect((await bindWalletByProof(local, token, next.account)).statusCode).toBe(403);
+      const otherToken = await issueTestSession(registry.appSql, other, { firstFactor: "email_code" });
+      const review = await local.inject({url:"/api/v1/admin/wallet-recoveries",headers:bearer(otherToken)});
       expect(review.json().items).toContainEqual(expect.objectContaining({id, approved:false}));
-      const approval = await app.inject({method:"POST",url:"/api/v1/admin/wallet-recoveries/approve",
+      const approval = await local.inject({method:"POST",url:"/api/v1/admin/wallet-recoveries/approve",
         headers:bearer(otherToken),payload:{id}});
       expect(approval.statusCode, approval.body).toBe(200);
     }
-    const bound = await bindWalletByProof(app, token, next.account);
+    const bound = await bindWalletByProof(local, token, next.account);
     expect(bound.statusCode, bound.body).toBe(200);
-    const [record] = await fx.sql`SELECT w.assurance_level AS wallet,w.bound_via,s.assurance_level AS person
+    const [record] = await registry.sql`SELECT w.assurance_level AS wallet,w.bound_via,s.assurance_level AS person
       FROM core.wallet_identities w JOIN core.subjects s ON s.id=w.subject_id WHERE w.id=${bound.json().id}`;
     expect(record).toEqual({wallet:"wallet_only",bound_via:"proof",person:anotherReturns ? "wallet_only" : "high_assurance"});
-    const invitation = await app.inject({method:"POST",url:"/api/v1/admin/invitations",
+    const invitation = await local.inject({method:"POST",url:"/api/v1/admin/invitations",
       headers:{...bearer(token),"idempotency-key":idempotencyKey()},payload:{email:`invite-${randomUUID()}@example.test`,organizationId:org}});
     expect(invitation.statusCode, invitation.body).toBe(anotherReturns ? 403 : 200);
+      } finally { await local.close(); await registry.close(); }
   });
 
-  it.each(["lost", "admin-disabled", "approver-suspended", "logout", "expired", "idle"])("recovers a %s signing key only after mailbox proof, tenant approval and a fresh signature", async mode => {
+  it.each(["lost", "admin-disabled", "approver-suspended", "logout", "expired", "idle"])("recovers a %s signing key only after mailbox proof, administrator approval and a fresh signature", async mode => {
     const subject = await person();
-    const owner = () => issueTestSession(fx.appSql, fx.tenantA, subject, { firstFactor: "email_code" });
+    const owner = () => issueTestSession(fx.appSql, subject, { firstFactor: "email_code" });
     const old = newAccount();
     const next = newAccount();
     const bound = await bindWalletByProof(app, await owner(), old.account);
     expect(bound.statusCode, bound.body).toBe(200);
     const approver = await person();
     await fx.sql`UPDATE core.subjects SET assurance_level='high_assurance' WHERE id=${approver}`;
-    await fx.sql`INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${approver}, ${fx.orgA}, 'administrator')`;
-    const administrator = await issueTestSession(fx.appSql, fx.tenantA, approver, { firstFactor: "email_code" });
+    await fx.sql`INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${approver}, ${fx.orgA}, 'administrator')`;
+    const administrator = await issueTestSession(fx.appSql, approver, { firstFactor: "email_code" });
     if (mode === "admin-disabled") {
       const disabled = await app.inject({ method: "POST", url: `/api/v1/admin/wallets/${bound.json().id}/disable`,
         headers: { ...bearer(administrator), "idempotency-key": idempotencyKey(), "if-match": '"1"' },
@@ -638,7 +641,8 @@ describeDb("wallet binding by proof of possession", () => {
     expect(mail!.params.address).toBe(next.address);
     expect((await post("auth/wallet-recoveries/confirm", token, { id, proof: mail!.params.code })).statusCode).toBe(200);
     expect((await approve(token)).statusCode).toBe(403);
-    expect((await approve(await signIn(app, fx.operatorB))).statusCode).toBe(409);
+    // Another company's organization-scoped administrator holds no Registry-wide authority to approve.
+    expect((await approve(await signIn(app, fx.operatorB))).statusCode).toBe(403);
     if (["logout", "expired", "idle"].includes(mode)) {
       const queued = async () => {
         const response = await app.inject({ method: "GET", url: "/api/v1/admin/wallet-recoveries", headers: bearer(administrator) });
@@ -781,9 +785,9 @@ describeDb("wallet binding by proof of possession", () => {
       // Bound before WP5 by an operator, who verified the person with it.
       await fx.sql`
         INSERT INTO core.wallet_identities (
-          id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at, bound_via
+          id, subject_id, wallet_address, chain_id, assurance_level, bound_at, bound_via
         ) VALUES (
-          ${operatorWalletId}, ${fx.tenantA}, ${subjectId}, ${operatorKey.address}, 31337, 'high_assurance', now(), 'operator'
+          ${operatorWalletId}, ${subjectId}, ${operatorKey.address}, 31337, 'high_assurance', now(), 'operator'
         )
       `;
       const token = await totpSession(subjectId);
@@ -824,7 +828,7 @@ describeDb("wallet binding by proof of possession", () => {
 
   /**
    * A key that someone else may hold is never bound again (0130): one disabled as compromised —
-   * directly or as the reason for a replace — or by an admin. The history is read in every tenant,
+   * directly or as the reason for a replace — or by an admin. The history is read across the Registry,
    * and the refusal is the one code an address active elsewhere gets.
    */
   describe("a compromised or admin-disabled key is never bound again", () => {
@@ -834,7 +838,7 @@ describeDb("wallet binding by proof of possession", () => {
       expect(refused.json().code).toBe("WALLET_UNAVAILABLE");
     }
 
-    it("disabled as compromised: refused to the same person, a new holder, and another tenant", async () => {
+    it("disabled as compromised: refused to the same person, and any new holder", async () => {
       const subjectId = await person();
       const key = newAccount();
       const old = (await bindWalletByProof(app, await totpSession(subjectId), key.account)).json();
@@ -842,7 +846,7 @@ describeDb("wallet binding by proof of possession", () => {
 
       await expectUnavailable(await totpSession(subjectId), key);
       await expectUnavailable(await totpSession(await person()), key);
-      await expectUnavailable(await totpSession(await person(fx.tenantB), fx.tenantB), key);
+      await expectUnavailable(await totpSession(await person()), key);
       const rows = await fx.sql`SELECT 1 FROM core.wallet_identities WHERE wallet_address = ${key.address}`;
       expect(rows).toHaveLength(1);
     });
@@ -860,7 +864,7 @@ describeDb("wallet binding by proof of possession", () => {
       // Back to the old key, after disabling the new one: still refused.
       expect((await disable(token, next.json().id, "rotation")).statusCode).toBe(200);
       await expectUnavailable(await totpSession(subjectId), key);
-      await expectUnavailable(await totpSession(await person(fx.tenantB), fx.tenantB), key);
+      await expectUnavailable(await totpSession(await person()), key);
     });
 
     it("disabled by an admin: refused even to the same person; a key the holder retired comes back", async () => {
@@ -883,21 +887,21 @@ describeDb("wallet binding by proof of possession", () => {
       expect(admin.statusCode, admin.body).toBe(200);
       await expectUnavailable(await totpSession(subjectId), key);
 
-      // Retired by its holder for rotation, a key may come back — in another tenant too.
+      // Retired by its holder for rotation, a key may come back — to another person too.
       const retired = newAccount();
       const retiringSubject = await person();
       const mine = (await bindWalletByProof(app, await totpSession(retiringSubject), retired.account)).json();
       expect((await disable(await totpSession(retiringSubject), mine.id, "rotation")).statusCode).toBe(200);
       const elsewhere = await bindWalletByProof(
         app,
-        await totpSession(await person(fx.tenantB), fx.tenantB),
+        await totpSession(await person()),
         retired.account,
       );
       expect(elsewhere.statusCode, elsewhere.body).toBe(200);
       const [event] = await fx.sql<{ detail: Record<string, unknown> }[]>`
         SELECT detail FROM audit.events WHERE command = 'account.wallet.bound' AND resource_id = ${elsewhere.json().id}
       `;
-      // The earlier row is found across tenants.
+      // The earlier row is found across subjects.
       expect(event!.detail).toMatchObject({ rebindOf: mine.id, rebindSameSubject: false });
     });
 
@@ -905,10 +909,10 @@ describeDb("wallet binding by proof of possession", () => {
       const subjectId = await person();
       const bound = (await bindWalletByProof(app, await totpSession(subjectId), newAccount().account)).json();
       const forge = (reason: string, cause: string | null, decider: string | null) =>
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
+        withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
           INSERT INTO core.wallet_disable_events (
-            id, tenant_id, wallet_identity_id, reason_code, replace_cause, detail, disabled_by_subject_id
-          ) VALUES (${randomUUID()}, ${fx.tenantA}, ${bound.id}, ${reason}, ${cause}, 'forged', ${decider})
+            id, wallet_identity_id, reason_code, replace_cause, detail, disabled_by_subject_id
+          ) VALUES (${randomUUID()}, ${bound.id}, ${reason}, ${cause}, 'forged', ${decider})
         `);
       await expect(forge("replaced", "rotation", subjectId)).rejects.toThrow(/WALLET_REASON_INVALID/);
       await expect(forge("consolidated_single_wallet", null, null)).rejects.toThrow(/WALLET_REASON_INVALID/);
@@ -917,13 +921,13 @@ describeDb("wallet binding by proof of possession", () => {
     });
 
     it("a lost key comes back only to its own subject; a retired one to anyone", async () => {
-      // Disabled as lost: the same person binds it again, nobody else does — in any tenant.
+      // Disabled as lost: the same person binds it again, nobody else does.
       const loser = await person();
       const lost = newAccount();
       const lostRow = (await bindWalletByProof(app, await totpSession(loser), lost.account)).json();
       expect((await disable(await totpSession(loser), lostRow.id, "key_lost")).statusCode).toBe(200);
       await expectUnavailable(await totpSession(await person()), lost);
-      await expectUnavailable(await totpSession(await person(fx.tenantB), fx.tenantB), lost);
+      await expectUnavailable(await totpSession(await person()), lost);
       expect((await bindWalletByProof(app, await totpSession(loser), lost.account)).statusCode).toBe(200);
 
       // Replaced because it was lost: the same rule.
@@ -941,7 +945,7 @@ describeDb("wallet binding by proof of possession", () => {
       const handed = newAccount();
       const handedRow = (await bindWalletByProof(app, await totpSession(leaver), handed.account)).json();
       expect((await disable(await totpSession(leaver), handedRow.id, "offboarding")).statusCode).toBe(200);
-      const taker = await bindWalletByProof(app, await totpSession(await person(fx.tenantB), fx.tenantB), handed.account);
+      const taker = await bindWalletByProof(app, await totpSession(await person()), handed.account);
       expect(taker.statusCode, taker.body).toBe(200);
     });
 
@@ -950,17 +954,17 @@ describeDb("wallet binding by proof of possession", () => {
       const id = randomUUID();
       await fx.sql`
         INSERT INTO core.wallet_identities (
-          id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at, bound_via, disabled_at
+          id, subject_id, wallet_address, chain_id, assurance_level, bound_at, bound_via, disabled_at
         ) VALUES (
-          ${id}, ${fx.tenantA}, ${subjectId}, ${key.address}, 31337, 'wallet_only', now() - interval '2 days',
+          ${id}, ${subjectId}, ${key.address}, 31337, 'wallet_only', now() - interval '2 days',
           'operator', now() - interval '1 day'
         )
       `;
       if (event) {
         await fx.sql`
           INSERT INTO core.wallet_disable_events (
-            id, tenant_id, wallet_identity_id, reason_code, detail, disabled_by_subject_id
-          ) VALUES (${randomUUID()}, ${fx.tenantA}, ${id}, ${event.reason}, 'history', ${event.decider})
+            id, wallet_identity_id, reason_code, detail, disabled_by_subject_id
+          ) VALUES (${randomUUID()}, ${id}, ${event.reason}, 'history', ${event.decider})
         `;
       }
     }
@@ -989,7 +993,7 @@ describeDb("wallet binding by proof of possession", () => {
       await expectUnavailable(await totpSession(await person()), orphanSilent);
     });
 
-    it("fails loudly, never narrowed to one tenant, when the function's owner does not bypass RLS", async () => {
+    it("fails loudly, never narrowed by row security, when the function's owner does not bypass RLS", async () => {
       const subjectId = await person();
       const token = await totpSession(subjectId);
       const key = newAccount();
@@ -1007,7 +1011,7 @@ describeDb("wallet binding by proof of possession", () => {
         const role = `wallet_owner_nobypass_${randomUUID().slice(0, 8)}`;
         await tx`CREATE ROLE ${tx(role)} NOLOGIN NOSUPERUSER NOBYPASSRLS IN ROLE ${tx(owner)}`;
         await tx`ALTER FUNCTION core.bind_wallet_by_proof(uuid, uuid, text, uuid, text, text) OWNER TO ${tx(role)}`;
-        await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+        await tx`SELECT set_config('app.actor_subject_id', ${fx.operatorSubjectA}, true)`;
         await tx`
           SELECT * FROM core.bind_wallet_by_proof(${sessionId}, ${challenge.challengeId}, ${key.address}, ${randomUUID()}, 'rotation', NULL)
         `;
@@ -1038,7 +1042,7 @@ describeDb("wallet binding by proof of possession", () => {
       // The application role keeps `UPDATE (disabled_at, version)` for the admin disable; it
       // cannot use it to bring a wallet back.
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
+        withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
           UPDATE core.wallet_identities SET disabled_at = NULL, version = version + 1 WHERE id = ${old.id}
         `),
       ).rejects.toThrow(/WALLET_HISTORY_FROZEN/);
@@ -1048,18 +1052,18 @@ describeDb("wallet binding by proof of possession", () => {
       const subjectId = await person();
       const bound = (await bindWalletByProof(app, await totpSession(subjectId), newAccount().account)).json();
       for (const statement of [
-        (tx: Parameters<Parameters<typeof withTenant>[2]>[0]) => tx`
-          INSERT INTO core.wallet_identities (id, tenant_id, subject_id, wallet_address, chain_id, bound_at)
-          VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${newAccount().address}, 31337, now())
+        (tx: Parameters<Parameters<typeof withActor>[2]>[0]) => tx`
+          INSERT INTO core.wallet_identities (id, subject_id, wallet_address, chain_id, bound_at)
+          VALUES (${randomUUID()}, ${subjectId}, ${newAccount().address}, 31337, now())
         `,
-        (tx: Parameters<Parameters<typeof withTenant>[2]>[0]) => tx`
+        (tx: Parameters<Parameters<typeof withActor>[2]>[0]) => tx`
           UPDATE core.wallet_identities SET subject_id = ${subjectId} WHERE id = ${bound.id}
         `,
-        (tx: Parameters<Parameters<typeof withTenant>[2]>[0]) => tx`
+        (tx: Parameters<Parameters<typeof withActor>[2]>[0]) => tx`
           UPDATE core.wallet_identities SET wallet_address = ${newAccount().address} WHERE id = ${bound.id}
         `,
       ]) {
-        await expect(withTenant(fx.appSql, { tenantId: fx.tenantA }, statement)).rejects.toThrow(/permission denied/);
+        await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, statement)).rejects.toThrow(/permission denied/);
       }
       expect(await activeWallets(subjectId)).toEqual([bound.walletAddress]);
     });

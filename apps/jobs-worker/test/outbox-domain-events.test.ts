@@ -16,21 +16,18 @@ const hex32 = () => `0x${randomBytes(32).toString("hex")}`;
  */
 describeDb("domain events from state changes", () => {
   let sql: postgres.Sql;
-  const tenant = randomUUID();
   const subject = randomUUID();
   const project = randomUUID();
 
   beforeAll(async () => {
     sql = await connectIsolated("domain_events");
     const org = randomUUID();
-    await sql`INSERT INTO core.tenants (id, slug, display_name)
-              VALUES (${tenant}, ${`de-${tenant.slice(0, 8)}`}, 'domain events')`;
-    await sql`INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-              VALUES (${org}, ${tenant}, 'Org', 'MNG')`;
-    await sql`INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-              VALUES (${subject}, ${tenant}, 'person', 'Holder')`;
-    await sql`INSERT INTO core.projects (id, tenant_id, project_key, name, host_country_iso3, owner_organization_id)
-              VALUES (${project}, ${tenant}, ${`DE-${project.slice(0, 6)}`}, 'Events', 'MNG', ${org})`;
+    await sql`INSERT INTO core.organizations (id, legal_name, jurisdiction)
+              VALUES (${org}, 'Org', 'MNG')`;
+    await sql`INSERT INTO core.subjects (id, kind, display_name)
+              VALUES (${subject}, 'person', 'Holder')`;
+    await sql`INSERT INTO core.projects (id, project_key, name, host_country_iso3, owner_organization_id)
+              VALUES (${project}, ${`DE-${project.slice(0, 6)}`}, 'Events', 'MNG', ${org})`;
   });
 
   beforeEach(async () => {
@@ -60,13 +57,13 @@ describeDb("domain events from state changes", () => {
       const id = randomUUID();
       await sql`
         INSERT INTO chain.anchor_batches (
-          id, tenant_id, batch_id, merkle_root, manifest_hash, manifest_object_key,
+          id, batch_id, merkle_root, manifest_hash, manifest_object_key,
           schema_version, record_count
-        ) VALUES (${batch}, ${tenant}, ${hex32()}, ${hex32()}, ${hex32()}, 'm.json', '1', 1)
+        ) VALUES (${batch}, ${hex32()}, ${hex32()}, ${hex32()}, 'm.json', '1', 1)
       `;
       await sql`
-        INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state, tx_hash)
-        VALUES (${id}, ${tenant}, ${batch}, ${`anchor:${batch}`}, 31337, 'submitted', ${hex32()})
+        INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state, tx_hash)
+        VALUES (${id}, ${batch}, ${`anchor:${batch}`}, 31337, 'submitted', ${hex32()})
       `;
       await sql`TRUNCATE core.outbox`;
       return { id, batch };
@@ -115,8 +112,8 @@ describeDb("domain events from state changes", () => {
       await asWorker(async (tx) => {
         await tx`
           INSERT INTO chain.reorg_events (
-            id, tenant_id, transaction_id, previous_block_number, previous_block_hash, detected_state
-          ) VALUES (${randomUUID()}, ${tenant}, ${id}, 10, ${hex32()}, 'submitted')
+            id, transaction_id, previous_block_number, previous_block_hash, detected_state
+          ) VALUES (${randomUUID()}, ${id}, 10, ${hex32()}, 'submitted')
         `;
       });
       expect(await events()).toMatchObject([
@@ -134,8 +131,8 @@ describeDb("domain events from state changes", () => {
       const id = randomUUID();
       await sql`
         INSERT INTO core.credentials (
-          id, tenant_id, subject_id, issuer_reference, credential_type, issued_at
-        ) VALUES (${id}, ${tenant}, ${subject}, 'ref-1', 'competent_person', now())
+          id, subject_id, issuer_reference, credential_type, issued_at
+        ) VALUES (${id}, ${subject}, 'ref-1', 'competent_person', now())
       `;
       await sql`UPDATE core.credentials SET current_status = 'suspended' WHERE id = ${id}`;
       await sql`UPDATE core.credentials SET current_status = 'expired' WHERE id = ${id}`;
@@ -161,8 +158,8 @@ describeDb("domain events from state changes", () => {
     async function artifact(): Promise<string> {
       const id = randomUUID();
       await sql`
-        INSERT INTO core.artifacts (id, tenant_id, project_id, kind, content_hash, sensitivity)
-        VALUES (${id}, ${tenant}, ${project}, 'raw_source', ${hex32()}, 'restricted')
+        INSERT INTO core.artifacts (id, project_id, kind, content_hash, sensitivity)
+        VALUES (${id}, ${project}, 'raw_source', ${hex32()}, 'restricted')
       `;
       return id;
     }
@@ -196,11 +193,11 @@ describeDb("domain events from state changes", () => {
       const id = randomUUID();
       await sql`
         INSERT INTO core.governance_proposals (
-          id, tenant_id, space, project_id, proposal_type, title, rationale, proposer_subject_id,
+          id, space, project_id, proposal_type, title, rationale, proposer_subject_id,
           quorum_numerator, quorum_denominator, threshold_numerator, threshold_denominator,
           conflict_disclosure, execution_mode
         ) VALUES (
-          ${id}, ${tenant}, 'project', ${project}, 'operating_change', 'Title', 'Why',
+          ${id}, 'project', ${project}, 'operating_change', 'Title', 'Why',
           ${subject}, 1, 10, 1, 2, 'No conflict of interest', 'offchain_required'
         )
       `;
@@ -209,8 +206,8 @@ describeDb("domain events from state changes", () => {
 
     async function transition(id: string, from: string, to: string) {
       await sql`
-        INSERT INTO core.governance_transitions (id, tenant_id, proposal_id, from_state, to_state, reason)
-        VALUES (${randomUUID()}, ${tenant}, ${id}, ${from}::core.proposal_state, ${to}::core.proposal_state, 'r')
+        INSERT INTO core.governance_transitions (id, proposal_id, from_state, to_state, reason)
+        VALUES (${randomUUID()}, ${id}, ${from}::core.proposal_state, ${to}::core.proposal_state, 'r')
       `;
     }
 

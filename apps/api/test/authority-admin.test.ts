@@ -38,20 +38,20 @@ describeDb("Authority Registry writes", () => {
     const account = newAccount();
     const subject = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subject}, ${fx.tenantA}, 'person', 'Security A')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subject}, 'person', 'Security A')
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'high_assurance', now()
+        ${randomUUID()}, ${subject}, ${account.address}, 31337, 'high_assurance', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'administrator')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subject}, ${fx.orgA}, 'administrator')
     `;
     security = await signIn(app, account);
   });
@@ -124,8 +124,8 @@ describeDb("Authority Registry writes", () => {
 
     // Add the reviewer role to operatorA so that permissions alone would pass.
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (gen_random_uuid(), ${fx.tenantA}, ${fx.operatorSubjectA}, ${fx.orgA}, 'reviewer')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (gen_random_uuid(), ${fx.operatorSubjectA}, ${fx.orgA}, 'reviewer')
     `;
     const bothRoles = await signIn(app, fx.operatorA);
 
@@ -420,7 +420,7 @@ describeDb("Authority Registry writes", () => {
       // The application role, as the API uses it — a route that forgot the check.
       await expect(
         fx.appSql.begin(async (tx) => {
-          await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+          await tx`SELECT set_config('app.actor_subject_id', ${fx.operatorSubjectA}, true)`;
           await tx`UPDATE core.source_connections SET state = 'active' WHERE id = ${created.id}`;
         }),
       ).rejects.toThrow(/no approved security review/);

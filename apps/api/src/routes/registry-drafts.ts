@@ -1,9 +1,10 @@
+import type { ActorContext } from "@mpc/db";
 import { authorizedProjectLookup } from "../services/authorized-project-lookup.js";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import type { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { checkPublishable } from "@mpc/domain";
 import {
   createRegistryDraftRequest,
@@ -12,7 +13,7 @@ import {
   rejectRegistryDraftRequest,
 } from "@mpc/api-contract";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource, projectResource, visibleProjectScope } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, registryResource, projectResource, visibleProjectScope } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import {
@@ -41,8 +42,8 @@ import {
  */
 
 /** Immutable draft subject resolves scope before an idempotency response can be replayed. */
-export async function draftProjectId(sql: postgres.Sql, tenantId: string, draftId: string): Promise<string> {
-  const [row] = await withTenant(sql, { tenantId }, tx => tx<{project_id: string | null}[]>`
+export async function draftProjectId(sql: postgres.Sql, actor: ActorContext, draftId: string): Promise<string> {
+  const [row] = await withActor(sql, actor, tx => tx<{project_id: string | null}[]>`
     SELECT CASE WHEN d.registry_type='project' THEN d.subject_id ELSE vc.project_id END AS project_id
     FROM core.registry_publication_drafts d
     LEFT JOIN core.verification_attestations a ON d.registry_type='verification' AND a.id=d.subject_id
@@ -98,12 +99,11 @@ export function subjectOf(session: EnrolledSession): string {
 
 export async function lockDraft(
   tx: postgres.TransactionSql,
-  tenantId: string,
   draftId: string,
 ): Promise<DraftRow | undefined> {
   const [row] = await tx<DraftRow[]>`
     SELECT * FROM core.registry_publication_drafts
-    WHERE tenant_id = ${tenantId} AND id = ${draftId}
+    WHERE id = ${draftId}
     FOR UPDATE
   `;
   return row;
@@ -180,7 +180,7 @@ export async function registerRegistryDraftRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   app.post("/api/v1/registry-entries", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const data = parseBody(createRegistryDraftRequest, request.body);
 
     /**
@@ -199,12 +199,12 @@ export async function registerRegistryDraftRoutes(
     }
     const registryType = data.registryType;
     const projectId = await authorizedProjectLookup(session, "registry.draft",
-      () => withTenant(sql, { tenantId }, tx => registrySubjectProjectId(tx, tenantId, registryType, data.subjectId)), id => id);
+      () => withActor(sql, actor, tx => registrySubjectProjectId(tx, registryType, data.subjectId)), id => id);
 
     const effectiveRole = assertAuthorized(
       session,
       "registry.draft",
-      projectResource(tenantId, projectId, { sensitivity: "public" }),
+      projectResource(projectId, { sensitivity: "public" }),
       sessionFacts(session),
     );
     const proposer = subjectOf(session);
@@ -221,11 +221,10 @@ export async function registerRegistryDraftRoutes(
     const { requestId, asOf, correlationId } = request.context;
     const requestHash = hashRequest(request);
 
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, requestHash, async () => {
         const subject = await resolvePublicationSubject(
           tx,
-          tenantId,
           registryType,
           data.subjectId,
         );
@@ -250,7 +249,7 @@ export async function registerRegistryDraftRoutes(
         }
 
         await assertEvidenceLedgerProjection(
-          tx, tenantId, registryType, subject.projectId, data.projection, new Date(asOf),
+          tx, registryType, subject.projectId, data.projection, new Date(asOf),
         );
 
         if (subject.publicKey !== null && data.publicKey !== subject.publicKey) {
@@ -295,13 +294,13 @@ export async function registerRegistryDraftRoutes(
         try {
           await tx`
             INSERT INTO core.registry_publication_drafts (
-              id, tenant_id, registry_type, subject_id, public_key, projection,
+              id, registry_type, subject_id, public_key, projection,
               source_snapshot_hash, commercial_reuse, published_as_commercial_basis,
               policy_version, schema_version, contains_person_level_identifier,
               lawful_basis, purpose, retention, irreversibility_acknowledged_at,
               proposed_by_subject_id
             ) VALUES (
-              ${id}, ${tenantId}, ${registryType}, ${data.subjectId}, ${data.publicKey},
+              ${id}, ${registryType}, ${data.subjectId}, ${data.publicKey},
               ${tx.json(data.projection as never)}, ${subject.sourceSnapshotHash},
               ${subject.commercialReuse}, ${data.publishedAsCommercialBasis},
               ${data.policyVersion}, ${data.schemaVersion}, ${data.containsPersonLevelIdentifier},
@@ -322,7 +321,6 @@ export async function registerRegistryDraftRoutes(
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           session,
           command: "registry.version.drafted",
           resourceType: "registry_publication_draft",
@@ -340,7 +338,7 @@ export async function registerRegistryDraftRoutes(
         });
 
         const [row] = await tx<DraftRow[]>`
-          SELECT * FROM core.registry_publication_drafts WHERE tenant_id = ${tenantId} AND id = ${id}
+          SELECT * FROM core.registry_publication_drafts WHERE id = ${id}
         `;
         return { ...toDraft(row!), requestId, asOf };
       }),
@@ -348,11 +346,11 @@ export async function registerRegistryDraftRoutes(
   });
 
   app.get("/api/v1/registry-entries/drafts", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "registry.read",
-      tenantResource(tenantId, { sensitivity: "public" }),
+      registryResource({ sensitivity: "public" }),
       sessionFacts(session),
     );
     const query = registryDraftListQuery.safeParse(request.query);
@@ -363,13 +361,12 @@ export async function registerRegistryDraftRoutes(
     const scope = visibleProjectScope(session, "registry.read");
     const { requestId, asOf } = request.context;
 
-    const rows = await withTenant(sql, { tenantId }, (tx) =>
+    const rows = await withActor(sql, actor, (tx) =>
       tx<DraftRow[]>`
         SELECT d.* FROM core.registry_publication_drafts d
         LEFT JOIN core.verification_attestations a ON d.registry_type='verification' AND a.id=d.subject_id
         LEFT JOIN core.verification_cases vc ON vc.id=a.case_id
-        WHERE d.tenant_id = ${tenantId}
-          AND ${scope === "all" ? tx`TRUE` : tx`(CASE WHEN d.registry_type='project' THEN d.subject_id ELSE vc.project_id END) = ANY(${scope as string[]}::uuid[])`}
+        WHERE ${scope === "all" ? tx`TRUE` : tx`(CASE WHEN d.registry_type='project' THEN d.subject_id ELSE vc.project_id END) = ANY(${scope as string[]}::uuid[])`}
           ${subjectId ? tx`AND d.subject_id = ${subjectId}` : tx``}
           ${state ? tx`AND d.state = ${state}::core.registry_draft_state` : tx``}
         ORDER BY d.proposed_at DESC
@@ -382,14 +379,14 @@ export async function registerRegistryDraftRoutes(
   app.post<{ Params: { draftId: string } }>(
     "/api/v1/registry-entries/drafts/:draftId/reject",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
       const projectId = await authorizedProjectLookup(session, "registry.publish",
-        () => draftProjectId(sql, tenantId, request.params.draftId), id => id);
+        () => draftProjectId(sql, actor, request.params.draftId), id => id);
       const effectiveRole = assertAuthorized(
         session,
         "registry.publish",
-        projectResource(tenantId, projectId, {
+        projectResource(projectId, {
           sensitivity: "public",
           state: "pending",
           statesAllowingAction: ["pending"],
@@ -400,9 +397,9 @@ export async function registerRegistryDraftRoutes(
       const decider = subjectOf(session);
       const { requestId, asOf, correlationId } = request.context;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          const draft = await lockDraft(tx, tenantId, request.params.draftId);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          const draft = await lockDraft(tx, request.params.draftId);
           if (!draft) throw notFound("Draft not found");
           assertVersionMatches(expected, draft.version, "registry_publication_draft");
           if (draft.state !== "pending") {
@@ -416,12 +413,11 @@ export async function registerRegistryDraftRoutes(
             UPDATE core.registry_publication_drafts
             SET state = 'rejected', decided_by_subject_id = ${decider}, decided_at = now(),
                 decision_reason = ${body.reason}, version = version + 1
-            WHERE tenant_id = ${tenantId} AND id = ${draft.id}
+            WHERE id = ${draft.id}
           `;
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "registry.version.draft_rejected",
             resourceType: "registry_publication_draft",
@@ -434,7 +430,7 @@ export async function registerRegistryDraftRoutes(
           });
 
           reply.header("etag", etagOf(draft.version + 1));
-          const row = await lockDraft(tx, tenantId, draft.id);
+          const row = await lockDraft(tx, draft.id);
           return { ...toDraft(row!), requestId, asOf };
         }),
       );

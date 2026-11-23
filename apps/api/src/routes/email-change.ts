@@ -10,12 +10,12 @@ import {
   emailChangeVerifyRequest,
   normalizeEmail,
 } from "@mpc/api-contract";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { createAccountCrypto, generateEmailCode } from "../account-crypto.js";
 import { recordAudit } from "../audit.js";
 import type { AppConfig } from "../config.js";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import {
   CODE_ROUTE_MIN_DURATION_MS,
@@ -114,17 +114,16 @@ export async function registerEmailChangeRoutes(
   // --- Admin --------------------------------------------------------------
 
   app.get("/api/v1/admin/email-changes", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "admin.read",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
     const { requestId, asOf } = request.context;
-    const rows = await withTenant(sql, { tenantId }, (tx) => tx<ChangeRow[]>`
+    const rows = await withActor(sql, actor, (tx) => tx<ChangeRow[]>`
       SELECT ${tx.unsafe(CHANGE_COLUMNS)} FROM core.email_change_requests
-      WHERE tenant_id = ${tenantId}
       ORDER BY requested_at DESC
       LIMIT 500
     `);
@@ -132,11 +131,11 @@ export async function registerEmailChangeRoutes(
   });
 
   app.post("/api/v1/admin/email-changes", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "admin.email_change.propose",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
     const parsed = createEmailChangeRequest.safeParse(request.body);
@@ -149,8 +148,8 @@ export async function registerEmailChangeRoutes(
     const id = randomUUID();
 
     try {
-      return await withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return await withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [created] = await tx<{ status: string }[]>`
             SELECT status FROM core.request_email_change(
               ${id}, ${parsed.data.subjectId}, ${email}, ${parsed.data.reason}, ${session.subjectId}
@@ -175,7 +174,6 @@ export async function registerEmailChangeRoutes(
           }
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: "admin.email_change.proposed",
@@ -191,9 +189,8 @@ export async function registerEmailChangeRoutes(
       );
     } catch (caught) {
       if (!(caught instanceof EmailUnavailable)) throw caught;
-      await withTenant(sql, { tenantId }, (tx) =>
+      await withActor(sql, actor, (tx) =>
         recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: "admin.email_change.refused",
@@ -210,11 +207,11 @@ export async function registerEmailChangeRoutes(
   app.post<{ Params: { changeId: string } }>(
     "/api/v1/admin/email-changes/:changeId/decision",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
         "admin.email_change.approve",
-        tenantResource(tenantId, { state: "pending", statesAllowingAction: ["pending"] }),
+        registryResource({ state: "pending", statesAllowingAction: ["pending"] }),
         sessionFacts(session),
       );
       const expected = requireIfMatch(request);
@@ -225,8 +222,8 @@ export async function registerEmailChangeRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const approve = parsed.data.decision === "approve";
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const current = await readChange(tx, request.params.changeId);
           if (!current) throw notFound("Email change request not found");
 
@@ -253,7 +250,6 @@ export async function registerEmailChangeRoutes(
           }
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: approve ? "admin.email_change.approved" : "admin.email_change.rejected",
@@ -267,7 +263,6 @@ export async function registerEmailChangeRoutes(
           });
           if (approve) {
             await recordAccountAudit(tx, request, {
-              tenantId,
               subjectId: current.subject_id,
               command: "auth.email_code.issued",
               resourceType: "email_challenge",
@@ -315,7 +310,6 @@ export async function registerEmailChangeRoutes(
           {
             status: string;
             retry_after_seconds: number;
-            tenant_id: string | null;
             subject_id: string | null;
             email_change_id: string | null;
             previous_email: string | null;
@@ -328,11 +322,10 @@ export async function registerEmailChangeRoutes(
           )
         `;
         const result = completed!;
-        if (result.tenant_id === null || result.subject_id === null) return result;
+        if (result.subject_id === null) return result;
 
         if (result.status !== "completed") {
           await recordAccountAudit(tx, request, {
-            tenantId: result.tenant_id,
             subjectId: result.subject_id,
             command: "auth.email_code.failed",
             resourceType: "email_challenge",
@@ -342,7 +335,6 @@ export async function registerEmailChangeRoutes(
           return result;
         }
         await recordAccountAudit(tx, request, {
-          tenantId: result.tenant_id,
           subjectId: result.subject_id,
           command: "auth.email_change.completed",
           resourceType: "email_change_request",

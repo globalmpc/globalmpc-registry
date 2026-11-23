@@ -66,21 +66,21 @@ describeDb("second-jurisdiction portability (AC-25)", () => {
     // not Core changes.
     await fx.sql`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove,
+        id, name, jurisdiction, proves, does_not_prove,
         recognized_scope, verification_method, public_disclosure_level, valid_from, state
       ) VALUES (
-        ${authorityId}, ${fx.tenantA}, 'Synthetic Cadastre', ${JURISDICTION},
+        ${authorityId}, 'Synthetic Cadastre', ${JURISDICTION},
         ARRAY['Existence of a registered mining right'], ARRAY['Ore body grade', 'Legal validity of issuance'],
         ARRAY['mining_right'], 'authenticated_api', 'public', '2020-01-01', 'accepted'
       )
     `;
     await fx.sql`
       INSERT INTO core.source_connections (
-        id, tenant_id, authority_id, connection_key, collection_method,
+        id, authority_id, connection_key, collection_method,
         access_basis, state, endpoint, authentication_method,
         adapter_version, source_schema_version
       ) VALUES (
-        ${connectionId}, ${fx.tenantA}, ${authorityId}, ${`synthetic-${randomUUID().slice(0, 8)}`},
+        ${connectionId}, ${authorityId}, ${`synthetic-${randomUUID().slice(0, 8)}`},
         'authenticated_api', 'For synthetic-jurisdiction tests', 'active',
         -- .test is a reserved TLD and never resolves. Keeps the synthetic address from
         -- being mistaken for a real authority's address.
@@ -89,10 +89,10 @@ describeDb("second-jurisdiction portability (AC-25)", () => {
     `;
     await fx.sql`
       INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id,
+        id, rule_set_id, rule_set_version, gate_id,
         jurisdiction_profile, effective_from, definition, state
       ) VALUES (
-        ${policySetId}, ${fx.tenantA}, 'registry-publication-gate', '1.0.0',
+        ${policySetId}, 'registry-publication-gate', '1.0.0',
         'registry_publication', ${JURISDICTION}, now(),
         ${fx.sql.json(rulesFixture as never)}, 'effective'
       )
@@ -101,10 +101,10 @@ describeDb("second-jurisdiction portability (AC-25)", () => {
     // environmental requirement has no basis and readiness is not_evaluable.
     await fx.sql`
       INSERT INTO core.jurisdiction_profiles (
-        id, tenant_id, jurisdiction, profile_version, state,
+        id, jurisdiction, profile_version, state,
         environmental_requirement_basis, effective_from
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${JURISDICTION}, 1, 'approved',
+        ${randomUUID()}, ${JURISDICTION}, 1, 'approved',
         'Synthetic Environmental Code', '2026-01-01T00:00:00Z'
       )
     `;

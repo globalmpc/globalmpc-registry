@@ -24,30 +24,25 @@ describeDb("document expiry sweep", () => {
     await sql.end();
   });
 
-  /** An expired permit and a plan that rests on it, in a tenant of their own. */
+  /** An expired permit and a plan that rests on it, in a project of their own. */
   async function seedExpiredPair(): Promise<{ permit: string; plan: string }> {
-    const tenant = randomUUID();
     const org = randomUUID();
     const subject = randomUUID();
     const project = randomUUID();
 
     await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenant}, ${`t-${tenant.slice(0, 8)}`}, 'Expiry tenant')
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${org}, 'Expiry org', 'MNG')
     `;
     await sql`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${org}, ${tenant}, 'Expiry org', 'MNG')
-    `;
-    await sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subject}, ${tenant}, 'person', 'Steward')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subject}, 'person', 'Steward')
     `;
     await sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${project}, ${tenant}, ${`EXP-${project.slice(0, 8)}`}, 'Expiry project', 'MNG',
+        ${project}, ${`EXP-${project.slice(0, 8)}`}, 'Expiry project', 'MNG',
         ARRAY['copper'], ${org}
       )
     `;
@@ -60,10 +55,10 @@ describeDb("document expiry sweep", () => {
     ] as const) {
       await sql`
         INSERT INTO core.object_uploads (
-          id, tenant_id, project_id, object_key, content_hash, byte_size, content_type,
+          id, project_id, object_key, content_hash, byte_size, content_type,
           sensitivity, state, valid_until
         ) VALUES (
-          ${id}, ${tenant}, ${project}, ${`quarantine/${id}`},
+          ${id}, ${project}, ${`quarantine/${id}`},
           ${`0x${id.replace(/-/g, "").padEnd(64, "0")}`}, 10, 'application/pdf',
           'restricted', 'quarantined', ${validUntil}::date
         )
@@ -72,8 +67,8 @@ describeDb("document expiry sweep", () => {
 
     await sql`
       INSERT INTO core.document_links (
-        tenant_id, project_id, upstream_upload_id, downstream_upload_id, kind, origin, created_by
-      ) VALUES (${tenant}, ${project}, ${permit}, ${plan}, 'depends_on', 'user', ${subject})
+        project_id, upstream_upload_id, downstream_upload_id, kind, origin, created_by
+      ) VALUES (${project}, ${permit}, ${plan}, 'depends_on', 'user', ${subject})
     `;
 
     return { permit, plan };

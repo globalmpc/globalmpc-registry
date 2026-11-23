@@ -57,11 +57,10 @@ const aal1 = {
   aal: "aal1",
   mfaSatisfied: false,
 } as SessionInfo;
-const aal2 = { ...aal1, aal: "aal2", secondFactor: "totp", mfaSatisfied: true, tenantId: "t" } as SessionInfo;
+const aal2 = { ...aal1, aal: "aal2", secondFactor: "totp", mfaSatisfied: true, workspaceAvailable: true } as SessionInfo;
 const methods = (overrides: Record<string, unknown> = {}) => ({
   emailCode: true,
   google: false,
-  microsoft: false,
   emailCodeDigits: 8,
   emailCodeTtlMinutes: 10,
   requestId: "r",
@@ -243,18 +242,20 @@ describe("sign-in screen", () => {
     expect(screen.getByLabelText("Email address")).toBeTruthy();
   });
 
-  it("starts Google or Microsoft only where configured and leaves for the provider's URL", async () => {
+  it("starts Google only where configured and leaves for the provider's URL", async () => {
     const assign = vi.spyOn(navigation, "assign").mockImplementation(() => undefined);
     const calls = mockHttp({
-      // A server from before WP7 may still send the wallet sign-in switch; nothing is drawn for it.
-      "GET /api/v1/auth/methods": methods({ microsoft: true, legacyWalletLogin: true }),
-      "POST /api/v1/auth/oidc/microsoft/start": { authorizationUrl: "https://login.microsoftonline.com/authorize?x", expiresAt: "z" },
+      // A server from before WP7 may still send the wallet sign-in switch, and one from before
+      // 0171 the Microsoft one; nothing is drawn for either.
+      "GET /api/v1/auth/methods": methods({ google: true, microsoft: true, legacyWalletLogin: true }),
+      "POST /api/v1/auth/oidc/google/start": { authorizationUrl: "https://accounts.google.com/authorize?x", expiresAt: "z" },
     });
     render(<Connect />);
-    fireEvent.click(await screen.findByRole("button", { name: "Continue with Microsoft" }));
-    expect(screen.queryByRole("button", { name: "Sign in with Google" })).toBeNull();
-    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://login.microsoftonline.com/authorize?x"));
-    expect(posted(calls, "/oidc/microsoft/start")?.body).toEqual({ purpose: "sign_in" });
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in with Google" }));
+    expect(screen.queryByRole("button", { name: "Continue with Microsoft" })).toBeNull();
+    expect(screen.queryByTestId("oidc-microsoft")).toBeNull();
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://accounts.google.com/authorize?x"));
+    expect(posted(calls, "/oidc/google/start")?.body).toEqual({ purpose: "sign_in" });
     expect(screen.queryByTestId("legacy-wallet-sign-in")).toBeNull();
   });
 
@@ -295,14 +296,13 @@ describe("provider callback", () => {
   });
 
   it("reports a link and stays on this session", async () => {
-    s.params = { provider: "microsoft" };
-    window.history.replaceState(null, "", "/auth/oidc/microsoft/callback?state=st&code=cd");
+    window.history.replaceState(null, "", "/auth/oidc/google/callback?state=st&code=cd");
     mockHttp({
-      "POST /api/v1/auth/oidc/microsoft/callback": () =>
+      "POST /api/v1/auth/oidc/google/callback": () =>
         Response.json({ linked: true }, { headers: { "x-mpc-oidc-purpose": "link" } }),
     });
     render(<OidcCallbackPage />);
-    expect((await screen.findByTestId("oidc-linked")).textContent).toContain("Microsoft is now linked");
+    expect((await screen.findByTestId("oidc-linked")).textContent).toContain("Google is now linked");
     expect(s.replace).not.toHaveBeenCalled();
   });
 
@@ -335,10 +335,14 @@ describe("provider callback", () => {
     await screen.findByTestId("oidc-error");
     expect(screen.getByRole("link", { name: "Back to sign-in" })).toBeTruthy();
     cleanup();
-    s.params = { provider: "github" };
-    window.history.replaceState(null, "", "/auth/oidc/github/callback?state=s&code=c");
-    render(<OidcCallbackPage />);
-    await screen.findByTestId("oidc-error");
+    // Not a provider — nor Microsoft, removed in 0171: nothing is posted for either.
+    for (const provider of ["github", "microsoft"]) {
+      cleanup();
+      s.params = { provider };
+      window.history.replaceState(null, "", `/auth/oidc/${provider}/callback?state=s&code=c`);
+      render(<OidcCallbackPage />);
+      await screen.findByTestId("oidc-error");
+    }
     expect(calls).toHaveLength(0);
   });
 });

@@ -8,7 +8,7 @@ import type { MetricsRegistry } from "../metrics.js";
  * `/health/*` and `/metrics` are not part of the API contract (`ROUTES`). Orchestrators and
  * collectors call them; they are not a versioned public API.
  *
- * **Metrics are not authenticated.** Instead they carry no identifying data such as tenant or
+ * **Metrics are not authenticated.** Instead they carry no identifying data such as organization or
  * path parameters — leaving it out is more reliable than gating it. Restricting exposure to the
  * internal network is the deployment's job.
  */

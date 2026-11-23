@@ -84,7 +84,7 @@ export function edgeRequestHeaders(request: NextRequest, secret: string | undefi
  * **The session (`lib/bff.ts`).** A request without its own `Authorization` header is sent with
  * the session cookie's token as the bearer; one with its own header (a service token, a test
  * client) is forwarded as sent and the cookie is not used. The few routes that issue or end a
- * session, or start and finish a Google / Microsoft flow, are answered here so the token and the
+ * session, or start and finish a Google flow, are answered here so the token and the
  * browser binding become cookies and never appear in a response body.
  *
  * The defaults are for local development. Deployments must set them.

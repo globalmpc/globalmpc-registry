@@ -12,7 +12,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * Workspace aggregation.
  *
  * The two screens were missing not for lack of data but because data showed only after
- * opening a single project. This checks **that aggregation respects tenant boundaries** and
+ * opening a single project. This checks **that aggregation respects actor reach** and
  * **that "my to-dos" and "what I am waiting on" do not mix**.
  */
 describeDb("workspace aggregation", () => {
@@ -43,7 +43,7 @@ describeDb("workspace aggregation", () => {
       app,
       fx.sql,
       { drafter: operatorAToken, publisher: await signIn(app, fx.disclosureApproverA) },
-      await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, publicKey),
+      await insertProject(fx.sql, { organizationId: fx.orgA }, publicKey),
     );
     expect(published.statusCode).toBe(200);
 
@@ -60,7 +60,7 @@ describeDb("workspace aggregation", () => {
     expect(mine.anchored).toBe(false);
   });
 
-  it("does not return another tenant's records", async () => {
+  it("does not return another company's records", async () => {
     const a = await get(operatorAToken, "/api/v1/registry-entries");
     const b = await get(operatorBToken, "/api/v1/registry-entries");
 

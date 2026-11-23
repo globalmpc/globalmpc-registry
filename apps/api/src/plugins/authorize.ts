@@ -3,7 +3,7 @@ import {
   ROLE_MINIMUM_ASSURANCE,
   satisfiesAssurance,
   authorize,
-  isTenantWideBinding,
+  isRegistryWideBinding,
   type AuthorizationContext,
   type ProjectScope,
   type ResourceContext,
@@ -61,8 +61,8 @@ type Binding = Session["roleBindings"][number];
  * Projects a binding reaches.
  *
  * Previously every organization-level binding became `"all"`. The comment said "all of that
- * organization's projects", but nothing compared organizations, so a company B steward in the
- * same tenant could upload to company A's project.
+ * organization's projects", but nothing compared organizations, so a company B steward could
+ * upload to company A's project.
  */
 function scopeOf(session: Session, binding: Binding): ProjectScope {
   return withinJurisdiction(session, binding, baseScopeOf(session, binding));
@@ -70,7 +70,7 @@ function scopeOf(session: Session, binding: Binding): ProjectScope {
 
 function baseScopeOf(session: Session, binding: Binding): ProjectScope {
   if (binding.projectId !== null) return [binding.projectId];
-  if (isTenantWideBinding(binding)) return "all";
+  if (isRegistryWideBinding(binding)) return "all";
   if (binding.scopeKind === "none") return [];
   if (binding.organizationId === null) return [];
   return session.organizationProjectIds?.[binding.organizationId] ?? [];
@@ -108,7 +108,7 @@ function usableBindings(session: Session, action: string): readonly Binding[] {
   return session.roleBindings.filter(
     (binding) =>
       policy.allowedRoles.includes(binding.role) &&
-      (!policy.requiresTenantScope || (binding.projectId === null && isTenantWideBinding(binding) && binding.jurisdiction == null)) &&
+      (!policy.requiresRegistryScope || (binding.projectId === null && isRegistryWideBinding(binding) && binding.jurisdiction == null)) &&
       satisfiesAssurance(
         session.assuranceLevel,
         ROLE_MINIMUM_ASSURANCE[binding.role] ?? "high_assurance",
@@ -125,7 +125,7 @@ export function holdsActionRole(session: Session, action: string): boolean {
  * Whether the session may act in this organization's name — the owning-organization check on
  * project creation.
  *
- * Tenant operations roles can register projects owned by other organizations via onboarding.
+ * Registry operations roles can register projects owned by other organizations via onboarding.
  * Party roles create only their own organization's. Otherwise company B could create a project
  * under company A's name and appear as that project's party.
  */
@@ -145,12 +145,12 @@ export function canActForOrganization(
  * uses and the check on project creation cannot diverge — a listed organization the server then
  * refuses is a dead end on screen.
  *
- * `"all"`: a tenant operations role holds the action. Otherwise the organizations named by the
+ * `"all"`: a Registry operations role holds the action. Otherwise the organizations named by the
  * party bindings that hold it.
  */
 export function actableOrganizations(session: Session, action: string): "all" | readonly string[] {
   const bindings = usableBindings(session, action).filter(binding => binding.projectId === null);
-  if (bindings.some(isTenantWideBinding)) return "all";
+  if (bindings.some(isRegistryWideBinding)) return "all";
   return [
     ...new Set(
       bindings.flatMap((binding) => (binding.scopeKind === "none" || binding.organizationId === null ? [] : [binding.organizationId])),
@@ -166,7 +166,6 @@ export function bindingToAuthorizationContext(
   return {
     role: binding.role,
     assuranceLevel: session.assuranceLevel,
-    actorTenantId: session.tenantId ?? "",
     // The jurisdiction limit is judged by the decision itself, so a single-resource denial says
     // JURISDICTION_SCOPE_MISMATCH rather than a project-scope reason.
     actorProjectIds: baseScopeOf(session, binding),
@@ -185,7 +184,7 @@ export function bindingToAuthorizationContext(
  * names and IDs of out-of-scope projects go out in the list. Not receiving a 403 does not make
  * it any less of a leak.
  *
- * `"all"` means there is at least one organization-level binding of a tenant operations role.
+ * `"all"` means there is at least one Registry-wide binding of an operations role.
  */
 export function visibleProjectScope(session: Session, action: string): ProjectScope {
   const scopes = usableBindings(session, action).map((binding) => scopeOf(session, binding));
@@ -210,27 +209,25 @@ const RESOURCE_DEFAULTS = {
   separationSensitive: false,
 } as const;
 
-/** Tenant-wide resource. Only for operations actions with no project boundary. */
-export function tenantResource(
-  tenantId: string,
-  overrides: Partial<Omit<ResourceContext, "tenantId" | "projectId">> = {},
+/** Registry-wide resource. Only for operations actions with no project boundary. */
+export function registryResource(
+  overrides: Partial<Omit<ResourceContext, "projectId">> = {},
 ): ResourceContext {
-  return { ...RESOURCE_DEFAULTS, ...overrides, tenantId, projectId: null };
+  return { ...RESOURCE_DEFAULTS, ...overrides, projectId: null };
 }
 
 /** Project-bound resource. `projectId` must be passed for project scope to be evaluated. */
 export function projectResource(
-  tenantId: string,
   projectId: string,
-  overrides: Partial<Omit<ResourceContext, "tenantId" | "projectId">> = {},
+  overrides: Partial<Omit<ResourceContext, "projectId">> = {},
 ): ResourceContext {
-  return { ...RESOURCE_DEFAULTS, ...overrides, tenantId, projectId };
+  return { ...RESOURCE_DEFAULTS, ...overrides, projectId };
 }
 
 /**
  * Fills a project resource's host jurisdiction from the session when the route did not.
  *
- * Routes build resources with `projectResource(tenantId, projectId)` and do not look up the
+ * Routes build resources with `projectResource(projectId)` and do not look up the
  * project's host country. Only jurisdiction-scoped sessions carry the lookup; for them an unknown
  * project stays `null`, which the decision treats as a mismatch.
  */

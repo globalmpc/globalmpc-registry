@@ -3,7 +3,7 @@ const s = vi.hoisted(() => ({
   sql: { end: vi.fn() },
   once: vi.fn(),
   backlog: vi.fn(),
-  tenant: vi.fn(),
+  subject: vi.fn(),
   heartbeat: vi.fn(),
   scan: vi.fn(),
   available: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock("../src/scanner.js", () => ({
 vi.mock("../src/scan-worker.js", () => ({
   scanOnce: s.once,
   scanBacklog: s.backlog,
-  resolveScanTenant: s.tenant,
+  resolveScanSubject: s.subject,
 }));
 vi.mock("../src/api-client.js", () => ({
   createApiClient: s.client,
@@ -41,7 +41,7 @@ beforeEach(() => {
     s.sql.end,
     s.once,
     s.backlog,
-    s.tenant,
+    s.subject,
     s.heartbeat,
     s.scan,
     s.available,
@@ -56,7 +56,6 @@ beforeEach(() => {
     DATABASE_URL: "postgres://local/test",
     API_BASE_URL: "http://api.test",
     SCAN_SERVICE_TOKEN: "mpcsvc_secret",
-    SCAN_SERVICE_TENANT_SLUG: "acme",
   }))
     vi.stubEnv(k, v);
   vi.stubEnv("OBJECT_STORE", "memory");
@@ -65,7 +64,7 @@ beforeEach(() => {
   s.available.mockResolvedValue(true);
   s.memory.mockReturnValue("memory-store");
   s.backlog.mockResolvedValue({ stuck: 2 });
-  s.tenant.mockResolvedValue("tenant-acme");
+  s.subject.mockResolvedValue("subject-scan");
   s.once.mockImplementation(async () => {
     s.signals.get("SIGTERM")!();
     return { handled: false };
@@ -328,36 +327,27 @@ it("never sleeps longer than five minutes between leases on a token that stays r
   expect(windows.at(-1)).toBeLessThan(300000);
 });
 
-it("scans for the one tenant its token was registered for", async () => {
+it("acts as the service subject of its own token", async () => {
   await import("../src/main.js");
-  expect(s.tenant).toHaveBeenCalledWith(s.sql, "acme");
+  expect(s.subject).toHaveBeenCalledWith(s.sql, "mpcsvc_secret");
   expect(s.once).toHaveBeenCalledWith(
     s.sql, "memory-store", expect.any(Function), expect.any(Function),
-    expect.objectContaining({ tenantId: "tenant-acme" }), expect.any(Function),
+    expect.objectContaining({ subjectId: "subject-scan" }), expect.any(Function),
   );
-  expect(s.backlog).toHaveBeenCalledWith(s.sql, 3, "tenant-acme");
-  expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"tenant":"acme"'));
+  expect(s.backlog).toHaveBeenCalledWith(s.sql, 3, "subject-scan");
 });
 
-it("refuses to start without a tenant slug", async () => {
-  vi.stubEnv("SCAN_SERVICE_TENANT_SLUG", "");
-  vi.spyOn(process, "exit").mockImplementation(() => {
-    throw new Error("exit");
-  });
-  await expect(import("../src/main.js")).rejects.toThrow("exit");
-  expect(process.stderr.write).toHaveBeenCalledWith("SCAN_SERVICE_TENANT_SLUG is required\n");
-  expect(s.once).not.toHaveBeenCalled();
-});
-
-it("refuses to start for a tenant that does not exist, rather than scanning nothing quietly", async () => {
-  s.tenant.mockResolvedValue(undefined);
+it("refuses to start when its token resolves to no live scan subject, rather than scanning nothing quietly", async () => {
+  s.subject.mockResolvedValue(undefined);
   vi.spyOn(process, "exit").mockImplementation(() => {
     throw new Error("exit");
   });
   await expect(import("../src/main.js")).rejects.toThrow("exit");
   expect(process.stderr.write).toHaveBeenCalledWith(
-    "SCAN_SERVICE_TENANT_SLUG names no tenant (acme); bootstrap it first\n",
+    "SCAN_SERVICE_TOKEN is not a live scan_result service token; register it (`service-token ensure`) first\n",
   );
+  // The token is never echoed.
+  expect(JSON.stringify(vi.mocked(process.stderr.write).mock.calls)).not.toContain("mpcsvc_secret");
   expect(s.sql.end).toHaveBeenCalledOnce();
   expect(s.once).not.toHaveBeenCalled();
 });

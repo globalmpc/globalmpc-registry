@@ -28,7 +28,7 @@ interface Options {
  * Review assignment options.
  *
  * The assignment form used to send one fixed reviewer, credential, and schema — the E2E seed's
- * ids — so on any real tenant every assignment failed. The options must be the ones an
+ * ids — so on any real Registry every assignment failed. The options must be the ones an
  * assignment can actually use:
  *
  * - reviewers whose reviewer-role binding reaches this project and whose active wallet meets
@@ -48,42 +48,40 @@ describeDb("review assignment options", () => {
     expiredCredential: randomUUID(),
     suspendedCredential: randomUUID(),
     draftSchema: randomUUID(),
-    tenantBReviewer: randomUUID(),
-    tenantBCredential: randomUUID(),
-    tenantBSchema: randomUUID(),
-    tenantBProject: randomUUID(),
+    companyBReviewer: randomUUID(),
+    companyBCredential: randomUUID(),
+    companyBProject: randomUUID(),
   };
 
   /** A reviewer subject with one wallet and one role binding. */
   async function seedReviewer(input: {
     readonly subjectId: string;
-    readonly tenantId: string;
     readonly organizationId: string;
     readonly label: string;
     readonly assurance: string;
     readonly projectId?: string;
-    readonly scopeKind?: "tenant" | "organization" | "none";
+    readonly scopeKind?: "registry" | "organization" | "none";
     readonly revoked?: boolean;
     readonly walletDisabled?: boolean;
   }): Promise<void> {
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${input.subjectId}, ${input.tenantId}, 'person', ${input.label})
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${input.subjectId}, 'person', ${input.label})
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at, disabled_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at, disabled_at
       ) VALUES (
-        ${randomUUID()}, ${input.tenantId}, ${input.subjectId}, ${newAccount().address}, 31337,
+        ${randomUUID()}, ${input.subjectId}, ${newAccount().address}, 31337,
         ${input.assurance}, now(), ${input.walletDisabled ? new Date() : null}
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
       INSERT INTO core.role_bindings (
-        id, tenant_id, subject_id, organization_id, project_id, role, revoked_at, scope_kind
+        id, subject_id, organization_id, project_id, role, revoked_at, scope_kind
       ) VALUES (
-        ${randomUUID()}, ${input.tenantId}, ${input.subjectId}, ${input.organizationId},
+        ${randomUUID()}, ${input.subjectId}, ${input.organizationId},
         ${input.projectId ?? null}, 'reviewer', ${input.revoked ? new Date() : null}, ${input.scopeKind ?? null}
       )
     `;
@@ -91,17 +89,16 @@ describeDb("review assignment options", () => {
 
   async function seedCredential(input: {
     readonly id: string;
-    readonly tenantId: string;
     readonly subjectId: string;
     readonly status: string;
     readonly expired?: boolean;
   }): Promise<void> {
     await fx.sql`
       INSERT INTO core.credentials (
-        id, tenant_id, subject_id, issuer_reference, credential_type, credential_scope,
+        id, subject_id, issuer_reference, credential_type, credential_scope,
         jurisdiction, issued_at, expires_at, current_status
       ) VALUES (
-        ${input.id}, ${input.tenantId}, ${input.subjectId}, 'Test issuer', 'lab_accreditation',
+        ${input.id}, ${input.subjectId}, 'Test issuer', 'lab_accreditation',
         ARRAY['resource_estimate'], ARRAY['MNG'], now() - interval '2 years',
         ${input.expired ? fx.sql`now() - interval '1 day'` : fx.sql`now() + interval '1 year'`},
         ${input.status}
@@ -109,13 +106,13 @@ describeDb("review assignment options", () => {
     `;
   }
 
-  async function seedSchema(id: string, tenantId: string, state: string): Promise<void> {
+  async function seedSchema(id: string, state: string): Promise<void> {
     await fx.sql`
       INSERT INTO core.attestation_schemas (
-        id, tenant_id, schema_key, schema_version, attestation_type, required_evidence,
+        id, schema_key, schema_version, attestation_type, required_evidence,
         accepted_authority_types, mandatory_limitations, jurisdiction_profile, state
       ) VALUES (
-        ${id}, ${tenantId}, ${`schema-${id.slice(0, 8)}`}, '1', 'professional_signoff',
+        ${id}, ${`schema-${id.slice(0, 8)}`}, '1', 'professional_signoff',
         ARRAY['mining_right_registration'], ARRAY['government_registry'],
         ARRAY['legal_effect_not_determined'], 'MNG', ${state}
       )
@@ -126,29 +123,29 @@ describeDb("review assignment options", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
-    const tenantA = { tenantId: fx.tenantA, organizationId: fx.orgA };
+    const companyA = { organizationId: fx.orgA };
     // Reviewer roles need high_assurance — this one can never sign.
-    await seedReviewer({ ...tenantA, subjectId: seeded.lowAssurance, label: "Low Assurance Reviewer", assurance: "identity_bound" });
-    await seedReviewer({ ...tenantA, subjectId: seeded.revoked, label: "Revoked Reviewer", assurance: "high_assurance", revoked: true });
-    await seedReviewer({ ...tenantA, subjectId: seeded.disabledWallet, label: "Locked Reviewer", assurance: "high_assurance", walletDisabled: true });
+    await seedReviewer({ ...companyA, subjectId: seeded.lowAssurance, label: "Low Assurance Reviewer", assurance: "identity_bound" });
+    await seedReviewer({ ...companyA, subjectId: seeded.revoked, label: "Revoked Reviewer", assurance: "high_assurance", revoked: true });
+    await seedReviewer({ ...companyA, subjectId: seeded.disabledWallet, label: "Locked Reviewer", assurance: "high_assurance", walletDisabled: true });
     // A project-level binding reaches only that project.
-    await seedReviewer({ ...tenantA, subjectId: seeded.otherProjectOnly, label: "Other Project Reviewer", assurance: "high_assurance", projectId: fx.otherProjectA });
+    await seedReviewer({ ...companyA, subjectId: seeded.otherProjectOnly, label: "Other Project Reviewer", assurance: "high_assurance", projectId: fx.otherProjectA });
 
     // reviewerA already holds `credentialA` (valid). An expired and a suspended one sit beside it.
-    await seedCredential({ id: seeded.expiredCredential, tenantId: fx.tenantA, subjectId: fx.reviewerSubjectA, status: "valid", expired: true });
-    await seedCredential({ id: seeded.suspendedCredential, tenantId: fx.tenantA, subjectId: fx.reviewerSubjectA, status: "suspended" });
-    await seedSchema(seeded.draftSchema, fx.tenantA, "draft");
+    await seedCredential({ id: seeded.expiredCredential, subjectId: fx.reviewerSubjectA, status: "valid", expired: true });
+    await seedCredential({ id: seeded.suspendedCredential, subjectId: fx.reviewerSubjectA, status: "suspended" });
+    await seedSchema(seeded.draftSchema, "draft");
 
-    // Tenant B has its own reviewer, credential, schema and project. None of it may leak.
-    await seedReviewer({ tenantId: fx.tenantB, organizationId: fx.orgB, subjectId: seeded.tenantBReviewer, label: "Tenant B Reviewer", assurance: "high_assurance" });
-    await seedCredential({ id: seeded.tenantBCredential, tenantId: fx.tenantB, subjectId: seeded.tenantBReviewer, status: "valid" });
-    await seedSchema(seeded.tenantBSchema, fx.tenantB, "active");
+    // Company B has its own organization-scoped reviewer, credential and project. None of it
+    // may leak into company A's options.
+    await seedReviewer({ organizationId: fx.orgB, subjectId: seeded.companyBReviewer, label: "Company B Reviewer", assurance: "high_assurance", scopeKind: "organization" });
+    await seedCredential({ id: seeded.companyBCredential, subjectId: seeded.companyBReviewer, status: "valid" });
     await fx.sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${seeded.tenantBProject}, ${fx.tenantB}, ${`B-${seeded.tenantBProject.slice(0, 8)}`},
-        'Tenant B project', 'MNG', ARRAY['gold'], ${fx.orgB}
+        ${seeded.companyBProject}, ${`B-${seeded.companyBProject.slice(0, 8)}`},
+        'Company B project', 'MNG', ARRAY['gold'], ${fx.orgB}
       )
     `;
 
@@ -184,11 +181,11 @@ describeDb("review assignment options", () => {
 
   it("limits organization-only reviewers to projects owned by that organization", async () => {
     const subject=randomUUID();
-    await seedReviewer({tenantId:fx.tenantA,organizationId:fx.orgA,subjectId:subject,label:"Organization reviewer",assurance:"high_assurance",scopeKind:"organization"});
-    await seedCredential({id:randomUUID(),tenantId:fx.tenantA,subjectId:subject,status:"valid"});
+    await seedReviewer({organizationId:fx.orgA,subjectId:subject,label:"Organization reviewer",assurance:"high_assurance",scopeKind:"organization"});
+    await seedCredential({id:randomUUID(),subjectId:subject,status:"valid"});
     const project=randomUUID();
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-      VALUES(${project},${fx.tenantA},${`outside-${project}`},'Other organization','MNG',ARRAY['copper'],${fx.reviewOrgA})`;
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+      VALUES(${project},${`outside-${project}`},'Other organization','MNG',ARRAY['copper'],${fx.reviewOrgA})`;
     expect(reviewerIds(await options(fx.projectA))).toContain(subject);
     const outside=await read(tokens.reviewer,project);
     expect(outside.statusCode).toBe(200);
@@ -224,18 +221,17 @@ describeDb("review assignment options", () => {
     expect(schemaIds).not.toContain(seeded.draftSchema);
   });
 
-  it("never returns another tenant's reviewers, credentials, or schemas", async () => {
+  it("never returns another company's organization-scoped reviewers or their credentials", async () => {
     const value = await options(fx.projectA);
     const credentialIds = value.reviewers.flatMap((reviewer) =>
       reviewer.credentials.map((credential) => credential.id),
     );
 
-    expect(reviewerIds(value)).not.toContain(seeded.tenantBReviewer);
-    expect(credentialIds).not.toContain(seeded.tenantBCredential);
-    expect(value.schemas.map((schema) => schema.id)).not.toContain(seeded.tenantBSchema);
+    expect(reviewerIds(value)).not.toContain(seeded.companyBReviewer);
+    expect(credentialIds).not.toContain(seeded.companyBCredential);
 
-    // Naming another tenant's project does not open its options either.
-    const foreign = await read(tokens.steward, seeded.tenantBProject);
+    // Naming another company's project does not open its options to company A's member either.
+    const foreign = await read(tokens.steward, seeded.companyBProject);
     expect([403, 404]).toContain(foreign.statusCode);
   });
 

@@ -1,6 +1,7 @@
+import type { ActorContext } from "@mpc/db";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   createDocumentLinkRequest,
   createDocumentLinkRuleRequest,
@@ -16,7 +17,7 @@ import {
   assertAuthorized,
   projectResource,
   sessionFacts,
-  tenantResource,
+  registryResource,
 } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
@@ -263,10 +264,10 @@ function translateProfileError(error: unknown): unknown {
 
 async function linkProjectId(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   linkId: string,
 ): Promise<string> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, actor, (tx) =>
     tx<{ project_id: string }[]>`
       SELECT project_id FROM core.document_links WHERE id = ${linkId}
     `,
@@ -382,7 +383,7 @@ export async function registerDocumentRoutes(
   app.patch<{ Params: { uploadId: string } }>(
     "/api/v1/uploads/:uploadId/document-profile",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const parsed = updateDocumentProfileRequest.safeParse(request.body);
@@ -404,19 +405,19 @@ export async function registerDocumentRoutes(
         });
       }
 
-      const projectId = await uploadProjectId(sql, tenantId, request.params.uploadId);
+      const projectId = await uploadProjectId(sql, actor, request.params.uploadId);
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const subjectId = requireSubject(session);
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [row] = await tx<UploadRow[]>`
             SELECT * FROM core.object_uploads WHERE id = ${request.params.uploadId}
             FOR UPDATE
@@ -490,7 +491,6 @@ export async function registerDocumentRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: row.project_id,
             session,
             command: "upload.document_profile_updated",
@@ -518,13 +518,13 @@ export async function registerDocumentRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/document-graph",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { projectId } = request.params;
 
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const { requestId, asOf } = request.context;
@@ -537,7 +537,7 @@ export async function registerDocumentRoutes(
       }
       const focus = parsed.data.focus ?? null;
 
-      const { nodes, links, totalNodes } = await withTenant(sql, { tenantId }, async (tx) => {
+      const { nodes, links, totalNodes } = await withActor(sql, actor, async (tx) => {
         /**
          * Newest documents up to the cap, plus the focused one and its direct neighbours.
          *
@@ -607,7 +607,7 @@ export async function registerDocumentRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/document-links",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = createDocumentLinkRequest.safeParse(request.body);
       if (!parsed.success) {
@@ -621,7 +621,7 @@ export async function registerDocumentRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const subjectId = requireSubject(session);
@@ -633,8 +633,8 @@ export async function registerDocumentRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const ends = await tx<
             {
               id: string;
@@ -715,10 +715,10 @@ export async function registerDocumentRoutes(
           try {
             [created] = await tx<LinkRow[]>`
               INSERT INTO core.document_links (
-                tenant_id, project_id, upstream_upload_id, downstream_upload_id, kind, origin,
+                project_id, upstream_upload_id, downstream_upload_id, kind, origin,
                 note, created_by
               ) VALUES (
-                ${tenantId}, ${projectId}, ${upstreamUploadId}, ${downstreamUploadId}, ${kind},
+                ${projectId}, ${upstreamUploadId}, ${downstreamUploadId}, ${kind},
                 'user', ${note}, ${subjectId}
               )
               RETURNING *
@@ -731,7 +731,6 @@ export async function registerDocumentRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId,
             session,
             command: "document_link.created",
@@ -751,7 +750,7 @@ export async function registerDocumentRoutes(
   app.post<{ Params: { linkId: string } }>(
     "/api/v1/document-links/:linkId/removal",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = removeDocumentLinkRequest.safeParse(request.body);
       if (!parsed.success) {
@@ -760,19 +759,19 @@ export async function registerDocumentRoutes(
         });
       }
 
-      const projectId = await linkProjectId(sql, tenantId, request.params.linkId);
+      const projectId = await linkProjectId(sql, actor, request.params.linkId);
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const subjectId = requireSubject(session);
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [current] = await tx<LinkRow[]>`
             SELECT * FROM core.document_links WHERE id = ${request.params.linkId}
             FOR UPDATE
@@ -799,7 +798,6 @@ export async function registerDocumentRoutes(
            */
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId,
             session,
             command: "document_link.removed",
@@ -824,18 +822,18 @@ export async function registerDocumentRoutes(
   app.get<{ Params: { uploadId: string } }>(
     "/api/v1/uploads/:uploadId/impact-preview",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
-      const projectId = await uploadProjectId(sql, tenantId, request.params.uploadId);
+      const { session, actor } = requireReadContext(request);
+      const projectId = await uploadProjectId(sql, actor, request.params.uploadId);
 
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const { requestId, asOf } = request.context;
 
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
+      const rows = await withActor(sql, actor, (tx) =>
         tx<{ upload_id: string; depth: number; via_upload_id: string; via_kind: string }[]>`
           SELECT t.upload_id, t.depth, t.via_upload_id, t.via_kind::text AS via_kind
           FROM core.document_impact_targets(${request.params.uploadId}) t
@@ -862,18 +860,18 @@ export async function registerDocumentRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/document-impacts",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { projectId } = request.params;
 
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const { requestId, asOf } = request.context;
 
-      const { rows, openCount, total } = await withTenant(sql, { tenantId }, async (tx) => {
+      const { rows, openCount, total } = await withActor(sql, actor, async (tx) => {
         const impactRows = await tx<ImpactRow[]>`
           SELECT * FROM core.document_impacts
           WHERE project_id = ${projectId}
@@ -906,7 +904,7 @@ export async function registerDocumentRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/document-impacts/resolutions",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = resolveDocumentImpactsRequest.safeParse(request.body);
       if (!parsed.success) {
@@ -919,7 +917,7 @@ export async function registerDocumentRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
       const subjectId = requireSubject(session);
@@ -927,8 +925,8 @@ export async function registerDocumentRoutes(
       const requestHash = hashRequest(request);
       const ids = [...new Set(parsed.data.impactIds)];
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const rows = await tx<ImpactRow[]>`
             SELECT * FROM core.document_impacts
             WHERE id = ANY(${ids}::uuid[]) AND project_id = ${projectId}
@@ -979,7 +977,6 @@ export async function registerDocumentRoutes(
           for (const row of updated) {
             await recordAudit(tx, {
               effectiveRole,
-              tenantId,
               projectId,
               session,
               command: "document_impact.resolved",
@@ -1003,19 +1000,19 @@ export async function registerDocumentRoutes(
   );
 
   app.get("/api/v1/document-link-rules", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
 
     // Rules are configuration, not evidence; anyone who works in the Data Room may see which
     // links arrive on their own.
     assertAuthorized(
       session,
       "evidence.read",
-      tenantResource(tenantId, { sensitivity: "public" }),
+      registryResource({ sensitivity: "public" }),
       sessionFacts(session),
     );
     const { requestId, asOf } = request.context;
 
-    const rows = await withTenant(sql, { tenantId }, (tx) =>
+    const rows = await withActor(sql, actor, (tx) =>
       tx<RuleRow[]>`
         SELECT * FROM core.document_link_rules
         ORDER BY (retired_at IS NULL) DESC, created_at DESC
@@ -1026,7 +1023,7 @@ export async function registerDocumentRoutes(
   });
 
   app.post("/api/v1/document-link-rules", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
 
     const parsed = createDocumentLinkRuleRequest.safeParse(request.body);
     if (!parsed.success) {
@@ -1038,7 +1035,7 @@ export async function registerDocumentRoutes(
     const effectiveRole = assertAuthorized(
       session,
       "document.rule.manage",
-      tenantResource(tenantId, { sensitivity: "public" }),
+      registryResource({ sensitivity: "public" }),
       sessionFacts(session),
     );
     const subjectId = requireSubject(session);
@@ -1053,15 +1050,15 @@ export async function registerDocumentRoutes(
       );
     }
 
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, requestHash, async () => {
         let rule: RuleRow | undefined;
         try {
           [rule] = await tx<RuleRow[]>`
             INSERT INTO core.document_link_rules (
-              tenant_id, upstream_type, downstream_type, kind, note, created_by
+              upstream_type, downstream_type, kind, note, created_by
             ) VALUES (
-              ${tenantId}, ${upstreamType}, ${downstreamType}, ${kind}, ${note}, ${subjectId}
+              ${upstreamType}, ${downstreamType}, ${kind}, ${note}, ${subjectId}
             )
             RETURNING *
           `;
@@ -1100,7 +1097,6 @@ export async function registerDocumentRoutes(
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           session,
           command: "document_link_rule.created",
           resourceType: "document_link_rule",
@@ -1118,7 +1114,7 @@ export async function registerDocumentRoutes(
   app.post<{ Params: { ruleId: string } }>(
     "/api/v1/document-link-rules/:ruleId/retirement",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = retireDocumentLinkRuleRequest.safeParse(request.body);
       if (!parsed.success) {
@@ -1130,15 +1126,15 @@ export async function registerDocumentRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "document.rule.manage",
-        tenantResource(tenantId, { sensitivity: "public" }),
+        registryResource({ sensitivity: "public" }),
         sessionFacts(session),
       );
       const subjectId = requireSubject(session);
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [current] = await tx<RuleRow[]>`
             SELECT * FROM core.document_link_rules WHERE id = ${request.params.ruleId}
             FOR UPDATE
@@ -1158,7 +1154,6 @@ export async function registerDocumentRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "document_link_rule.retired",
             resourceType: "document_link_rule",

@@ -1,8 +1,8 @@
 import type postgres from "postgres";
 import { projectStageProgress, type ProjectStageProgress } from "@mpc/api-contract";
 
-/** Caller supplies only authorized, capped project IDs within the active tenant transaction. */
-export async function savedProjectProgress(tx: postgres.TransactionSql, tenantId: string, projectIds: string[]) {
+/** Caller supplies only authorized, capped project IDs within the active actor transaction. */
+export async function savedProjectProgress(tx: postgres.TransactionSql, projectIds: string[]) {
   const result = new Map<string, ProjectStageProgress>();
   if (!projectIds.length) return result;
   // Indexed lookup per capped ID, in one round trip. Do not scan every historical snapshot
@@ -16,7 +16,7 @@ export async function savedProjectProgress(tx: postgres.TransactionSql, tenantId
     FROM unnest(${projectIds}::uuid[]) AS p(id)
     CROSS JOIN LATERAL (
       SELECT snapshot FROM core.evidence_ledger_snapshots
-      WHERE tenant_id = ${tenantId} AND project_id = p.id
+      WHERE project_id = p.id
       ORDER BY created_at DESC, id DESC LIMIT 1
     ) s
   `;

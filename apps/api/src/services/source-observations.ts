@@ -1,7 +1,6 @@
 import type postgres from "postgres";
 
 interface ObservationInput {
-  readonly tenantId: string;
   readonly projectId: string;
   readonly connectionId: string;
   readonly receiptId: string;
@@ -20,14 +19,14 @@ export async function recordSourceObservation(
   // Receipt inserts already acquire this project's publication barrier. Preserve that order
   // before serializing a query scope, including callers that use this service directly.
   await tx`SELECT pg_advisory_xact_lock(hashtextextended(
-    'ledger-project:' || ${input.tenantId}::text || ':' || ${input.projectId}::text, 0))`;
+    'ledger-project:' || ${input.projectId}::text, 0))`;
   await tx`SELECT pg_advisory_xact_lock(hashtextextended(
-    'source-observation:' || ${input.tenantId}::text || ':' || ${input.projectId}::text
+    'source-observation:' || ${input.projectId}::text
       || ':' || ${input.connectionId}::text || ':' || (${scope}::jsonb)::text, 0))`;
   let [previous] = await tx<{ receipt_id: string; raw_hash: string; observed_at: Date }[]>`
     SELECT o.receipt_id, r.raw_hash, o.observed_at
     FROM core.source_observations o JOIN core.source_receipts r ON r.id = o.receipt_id
-    WHERE o.tenant_id = ${input.tenantId} AND o.project_id = ${input.projectId}
+    WHERE o.project_id = ${input.projectId}
       AND o.connection_id = ${input.connectionId}
       AND o.query_scope_hash = md5((${scope}::jsonb)::text) AND o.query_basis = ${scope}::jsonb
       AND o.outcome IN ('baseline','unchanged','changed')
@@ -39,7 +38,7 @@ export async function recordSourceObservation(
     [previous] = await tx<{ receipt_id: string; raw_hash: string; observed_at: Date }[]>`
       SELECT r.id AS receipt_id, r.raw_hash, r.received_at AS observed_at
       FROM core.source_receipts r
-      WHERE r.tenant_id=${input.tenantId} AND r.project_id=${input.projectId}
+      WHERE r.project_id=${input.projectId}
         AND r.connection_id=${input.connectionId}
         AND r.query_scope_hash=md5((${scope}::jsonb)::text) AND r.query_basis=${scope}::jsonb
         AND r.id<>${input.receiptId} AND r.result='confirmed_from_source'
@@ -51,7 +50,7 @@ export async function recordSourceObservation(
   }
   const [latest] = await tx<{ observed_at: Date }[]>`
     SELECT observed_at FROM core.source_observations
-    WHERE tenant_id=${input.tenantId} AND project_id=${input.projectId}
+    WHERE project_id=${input.projectId}
       AND connection_id=${input.connectionId}
       AND query_scope_hash=md5((${scope}::jsonb)::text) AND query_basis=${scope}::jsonb
       AND outcome <> 'out_of_order'
@@ -82,8 +81,8 @@ export async function recordSourceObservation(
     const rows = await tx<{ id: string }[]>`
       UPDATE core.claims c SET stale_since = now(), stale_reason = ${reason}
       FROM core.source_receipts r
-      WHERE c.tenant_id = ${input.tenantId} AND c.project_id = ${input.projectId}
-        AND c.source_receipt_id = r.id AND r.tenant_id = ${input.tenantId}
+      WHERE c.project_id = ${input.projectId}
+        AND c.source_receipt_id = r.id
         AND r.project_id = ${input.projectId} AND r.connection_id = ${input.connectionId}
         AND r.query_basis = ${scope}::jsonb AND r.id <> ${input.receiptId}
         AND (${outcome === "no_record"} OR r.raw_hash IS DISTINCT FROM ${input.rawHash})
@@ -95,9 +94,9 @@ export async function recordSourceObservation(
   }
   await tx`
     INSERT INTO core.source_observations
-      (tenant_id,project_id,connection_id,receipt_id,previous_receipt_id,query_basis,
+      (project_id,connection_id,receipt_id,previous_receipt_id,query_basis,
        observed_at,outcome,affected_claim_ids)
-    VALUES (${input.tenantId},${input.projectId},${input.connectionId},${input.receiptId},
+    VALUES (${input.projectId},${input.connectionId},${input.receiptId},
       ${previous?.receipt_id ?? null},${scope}::jsonb,${input.observedAt},${outcome},${affected})
   `;
 }
