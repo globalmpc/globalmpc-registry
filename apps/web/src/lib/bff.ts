@@ -80,7 +80,12 @@ export const OIDC_MAX_AGE = OIDC_COOKIE_MAX_AGE_SECONDS;
 const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** The origin this web app is served from. `WEB_ORIGIN` when set (behind a proxy, set it). */
-export function expectedOrigin(request: NextRequest, webOrigin = process.env.WEB_ORIGIN): string {
+export function expectedOrigin(request: NextRequest, webOrigin = process.env.WEB_ORIGIN): string | null {
+  const host = request.headers.get("host") ?? request.nextUrl.host;
+  const origins = process.env.WEB_ORIGINS;
+  if (origins) {
+    return origins.split(",").find((origin) => origin === `https://${host.toLowerCase()}`) ?? null;
+  }
   if (webOrigin) {
     try {
       return new URL(webOrigin).origin;
@@ -88,7 +93,6 @@ export function expectedOrigin(request: NextRequest, webOrigin = process.env.WEB
       // A malformed value must not open the check; fall through to the request's own origin.
     }
   }
-  const host = request.headers.get("host") ?? request.nextUrl.host;
   return `${request.nextUrl.protocol}//${host}`;
 }
 
@@ -106,15 +110,16 @@ export function crossSiteRefusal(
 ): string | null {
   if (SAFE_METHODS.has(request.method.toUpperCase())) return null;
 
+  const expected = expectedOrigin(request, webOrigin);
+  if (expected === null) return "host";
   const fetchSite = request.headers.get("sec-fetch-site");
-  if (fetchSite !== null) {
-    return fetchSite === "same-origin" ? null : `sec-fetch-site:${fetchSite}`;
-  }
+  if (fetchSite !== null && fetchSite !== "same-origin") return `sec-fetch-site:${fetchSite}`;
+  if (fetchSite === "same-origin" && !process.env.WEB_ORIGINS) return null;
   const origin = request.headers.get("origin");
   if (origin !== null) {
-    return origin === expectedOrigin(request, webOrigin) ? null : "origin";
+    return origin === expected ? null : "origin";
   }
-  return ridesOnCookie ? "no-origin" : null;
+  return fetchSite === null && ridesOnCookie ? "no-origin" : null;
 }
 
 /** `/api/v1/auth` and everything under it, compared after decoding and without regard to case. */

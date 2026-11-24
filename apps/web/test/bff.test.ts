@@ -129,6 +129,30 @@ describe("cross-site refusal (CSRF)", () => {
     expect(crossSiteRefusal(req("/api/v1/x", { headers: { origin: WEB } }), true, "https://registry.example")).toBe("origin");
   });
 
+  it("binds an allowlisted alias to its own origin and forwards it to Google sign-in", async () => {
+    const canonical = "https://registry.example.test";
+    const alias = "https://demo.example.test";
+    vi.stubEnv("WEB_ORIGINS", `${canonical},${alias}`);
+    const sent = stubApi(() => Response.json({ browserBinding: BINDING }));
+    const path = "/api/v1/auth/oidc/google/start";
+
+    expect((await proxy(req(path, {
+      origin: alias,
+      headers: { origin: alias },
+      body: { purpose: "sign_in" },
+    }))).status).toBe(200);
+    expect(sent[0]?.headers.get("origin")).toBe(alias);
+
+    for (const [host, origin] of [[alias, canonical], ["https://unknown.example.test", alias]]) {
+      expect((await proxy(req(path, {
+        origin: host,
+        headers: { origin },
+        body: { purpose: "sign_in" },
+      }))).status).toBe(403);
+    }
+    expect(sent).toHaveLength(1);
+  });
+
   it("does not let a malformed WEB_ORIGIN open the check", () => {
     expect(expectedOrigin(req("/x"), "not a url")).toBe(WEB);
     expect(crossSiteRefusal(req("/api/v1/x", { headers: { origin: "https://evil.example" } }), true, "::")).toBe("origin");

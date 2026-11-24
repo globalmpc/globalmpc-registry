@@ -36,17 +36,47 @@ export async function readConnectingRole(
 }
 
 /**
- * Why the role cannot work across every project, or null if it can.
+ * Why row-level security still applies to the connecting role, or null if it does not.
  *
- * Every Registry table forces row-level security, owner included. A role that cannot bypass it
- * fails on the first insert, or worse, passes a Registry-wide uniqueness check by seeing nothing.
+ * Every Registry table forces row-level security, owner included. A role it applies to fails on
+ * the first insert, or worse, passes a Registry-wide uniqueness check by seeing nothing.
+ *
+ * Checked by behaviour, as migration 0169 does, not by role attribute: superuser and BYPASSRLS are
+ * the documented ways, but a managed master role (the develop Aurora `postgres`) can be exempt
+ * without either. Every RLS table in core/chain/audit is read with `row_security = off`, which
+ * PostgreSQL refuses (42501) on a table whose policies would apply to the role. The exemption is
+ * per table (FORCE is set per table), so every table is probed, not a chosen few.
  */
-export function rlsBypassProblem(
-  role: Pick<ConnectingRole, "rolsuper" | "rolbypassrls"> | undefined,
-): string | null {
-  if (role?.rolsuper || role?.rolbypassrls) return null;
-  return (
-    "The connecting role can neither bypass row-level security nor is it a superuser. " +
-    "Connect with a role that has BYPASSRLS."
-  );
+export async function rlsExemptionProblem(sql: postgres.Sql): Promise<string | null> {
+  try {
+    await sql.begin((tx) => tx.unsafe(PROBE_EVERY_RLS_TABLE));
+    return null;
+  } catch (error) {
+    if ((error as { code?: string }).code !== "42501") throw error;
+    return `Row-level security still applies to the connecting role (it is neither exempt nor superuser or BYPASSRLS); ${(error as Error).message}`;
+  }
 }
+
+const PROBE_EVERY_RLS_TABLE = `DO $$
+DECLARE
+  t RECORD;
+  refused TEXT[] := '{}';
+BEGIN
+  PERFORM set_config('row_security', 'off', true);
+  FOR t IN
+    SELECT c.oid::regclass AS rel FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname IN ('core', 'chain', 'audit') AND c.relkind IN ('r', 'p') AND c.relrowsecurity
+    ORDER BY 1
+  LOOP
+    BEGIN
+      EXECUTE format('SELECT 1 FROM %s LIMIT 1', t.rel);
+    EXCEPTION WHEN insufficient_privilege THEN
+      refused := refused || t.rel::text;
+    END;
+  END LOOP;
+  IF cardinality(refused) > 0 THEN
+    RAISE EXCEPTION USING ERRCODE = 'insufficient_privilege',
+      MESSAGE = format('row-level security applies on %s table(s): %s', cardinality(refused), array_to_string(refused[1:10], ', '));
+  END IF;
+END
+$$`;

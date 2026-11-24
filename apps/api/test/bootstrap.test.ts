@@ -88,7 +88,7 @@ describeDb("production bootstrap", () => {
       await isolated.end();
       await fx.sql.unsafe(`DROP DATABASE ${database} WITH (FORCE)`);
     }
-  });
+  }, 120_000);
 
   async function signInByEmail(email: string): Promise<string> {
     const remoteAddress = `100.${64 + Math.floor(Math.random() * 64)}.${Math.floor(Math.random() * 256)}.${1 + Math.floor(Math.random() * 254)}`;

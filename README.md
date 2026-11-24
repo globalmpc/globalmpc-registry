@@ -126,7 +126,7 @@ verify the underlying mining asset or confer ownership or regulatory approval.
 
 ## Run Locally
 
-Requires a patched Node.js release: 22.23.4+, 24.22.1+, or 26.12.1+ within the supported release lines; pnpm 10.33.0, Foundry 1.8.5 and Docker Compose. Docker images (Alpine) and CI use Node.js 24.22.1, which includes the October 2026 eMudhra CA security fix.
+Requires Node.js 26.12.1+ (the 26 line the images and CI run); pnpm 10.33.0, Foundry 1.8.5 and Docker Compose. Docker images (Alpine) and CI use Node.js 26.13.1, which includes the October 2026 eMudhra CA security fix (26.12.1).
 
 ```bash
 pnpm install --frozen-lockfile

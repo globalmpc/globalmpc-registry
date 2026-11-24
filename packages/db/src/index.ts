@@ -2,7 +2,7 @@ export { runMigrations, listMigrations, MIGRATIONS_DIR } from "./migrate.js";
 export { SESSION_CONNECTION, withActor, type ActorContext } from "./session.js";
 export {
   readConnectingRole,
-  rlsBypassProblem,
+  rlsExemptionProblem,
   type ConnectingRole,
 } from "./connecting-role.js";
 export { createHeartbeat, recordHeartbeat, type WorkerKind } from "./worker-heartbeat.js";

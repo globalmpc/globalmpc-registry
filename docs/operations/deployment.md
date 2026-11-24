@@ -85,8 +85,12 @@ is missing:
   under an owner that does not bypass RLS they fail with "query would be affected by row-level
   security policy" instead of seeing zero rows and answering "nothing there". Every authenticated
   request, sign-in, invitations, email changes, OIDC and wallet binding would all fail at the first
-  use. Migration 0169 itself refuses an owner that bypasses neither
-  (`TENANT_REMOVAL_REQUIRES_BYPASSRLS`) before changing anything. A successful bootstrap does not
+  use. Migration 0169 itself refuses, before changing anything, an owner that RLS still applies to
+  (`TENANT_REMOVAL_REQUIRES_BYPASSRLS`, naming the tables and the role's attributes). The check, like
+  the deployment CLIs' (`requireDeploymentOwner`), is by behaviour: each RLS table is read with
+  `row_security = off`, which PostgreSQL refuses when RLS would apply. The develop Aurora master
+  `postgres` has neither superuser nor `BYPASSRLS` yet passes it — its definers have resolved
+  sessions since 0131 — so attribute-only checks refused a deployment that works. A successful bootstrap does not
   establish that an Aurora deployment can sign in. Verify the effective function owners and
   actual sign-in/session resolution before release; Aurora's `rds_superuser` is not PostgreSQL
   superuser. This change does not grant any role BYPASSRLS or relax these fail-closed functions.
@@ -298,6 +302,7 @@ it into the API's bearer (`apps/web/src/proxy.ts`); the API is unchanged and rea
 | Setting | Where | Notes |
 | --- | --- | --- |
 | `WEB_ORIGIN` | web (run time) | The public origin of the web app, e.g. `https://<WEB_SERVER>`. The proxy compares a mutation's `Origin` with it (the cross-site check); behind a load balancer the request's own `Host` is the internal one, so **set it on every deployment**. Unset, the request's protocol and `Host` are used. Same value as the API's `WEB_ORIGIN`. |
+| `WEB_ORIGINS` | web (run time) | Optional comma-separated HTTPS origins with no paths or trailing slashes. The first entry equals `WEB_ORIGIN`. The proxy matches the request host to one entry. Set the same list on the API and web service. CDK derives both from `WEB_SERVERS`. |
 | `NODE_ENV=production` | web | Makes the cookie `__Host-mpc_session`, `Secure`, even when TLS ends at the load balancer. Outside production over plain http the cookie is `mpc_session` without `Secure` (local development only). |
 | `API_ORIGIN` | web (run time) | Unchanged: where `/api/*` is proxied. |
 
@@ -338,6 +343,7 @@ issued the code, and the jobs worker sends it.
 | `RESEND_API_KEY` | jobs worker only (secret) | Required with `resend`. `file:`/`env:` references work. |
 | `EMAIL_FROM` | jobs worker only | `MPC Registry <no-reply@…>` on the domain verified in Resend. Required with `resend`. |
 | `WEB_ORIGIN` | API | Required. Origin invitation links open (`<origin>/invitations/accept#token=…`), the passkey origin and the OIDC redirect base. CDK sets `https://$WEB_SERVER`. |
+| `WEB_ORIGINS` | API | Optional comma-separated HTTPS origins with no paths or trailing slashes. The first entry equals `WEB_ORIGIN`. Google sign-in returns to the allowlisted host where it began. Set the same list on the web service and register each Google callback URI. CDK derives both lists from `WEB_SERVERS`. |
 | `EMAIL_SEND_TIMEOUT_MS`, `EMAIL_MAX_ATTEMPTS`, `EMAIL_BACKOFF_MS` | jobs worker | 10 s, 5, 5 s (doubling). A temporary failure is retried up to the cap; anything else fails at once. |
 
 The deployed key and sender live in `globalmpc-github-manager` (`secrets.<env>.RESEND_API_KEY`,

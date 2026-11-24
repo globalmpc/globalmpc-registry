@@ -156,8 +156,8 @@ export class OidcProviders {
     return this.config[provider] !== null;
   }
 
-  redirectUri(provider: OidcProvider): string {
-    return `${this.config.redirectBase}/auth/oidc/${provider}/callback`;
+  redirectUri(provider: OidcProvider, origin = this.config.redirectBase): string {
+    return `${origin}/auth/oidc/${provider}/callback`;
   }
 
   private settings(provider: OidcProvider) {
@@ -199,7 +199,7 @@ export class OidcProviders {
   /** The URL to send the browser to: code flow, PKCE S256, `state` and `nonce`. */
   async authorizationUrl(
     provider: OidcProvider,
-    flow: { readonly state: string; readonly nonce: string; readonly codeVerifier: string },
+    flow: { readonly state: string; readonly nonce: string; readonly codeVerifier: string; readonly redirectUri: string },
   ): Promise<string> {
     let configuration: client.Configuration;
     try {
@@ -208,7 +208,7 @@ export class OidcProviders {
       throw new OidcError("provider_unavailable", errorCode(caught));
     }
     const url = client.buildAuthorizationUrl(configuration, {
-      redirect_uri: this.redirectUri(provider),
+      redirect_uri: flow.redirectUri,
       response_type: "code",
       scope: SCOPE,
       state: flow.state,

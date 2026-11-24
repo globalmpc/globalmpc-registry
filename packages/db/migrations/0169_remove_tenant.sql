@@ -33,15 +33,49 @@ BEGIN
 END
 $$;
 
--- The migration owner must bypass row-level security, as the definer functions it owns already
--- require (0131; docs/operations/deployment.md): the actor helpers below read role bindings and
--- subjects with row_security off, and this migration rewrites rows of forced-RLS tables. An owner
--- that cannot bypass would fail part-way or, worse, rewrite only the rows it sees. Refuse first.
+-- The migration owner must not be subject to row-level security, as the definer functions it
+-- owns already require (0131; docs/operations/deployment.md): the actor helpers below read role
+-- bindings and subjects with row_security off, and this migration rewrites rows of forced-RLS
+-- tables. An owner that RLS still filters would fail part-way or, worse, rewrite only the rows it
+-- sees. Refuse first.
+--
+-- Checked by behaviour, not by role attribute. Superuser and BYPASSRLS are the documented ways,
+-- but a managed database can exempt its master role otherwise: the Aurora develop deployment's
+-- `postgres` has neither attribute, yet its definers (sign-in, session resolution) have worked
+-- since 0131 under `row_security = off`, which PostgreSQL refuses for any query RLS would affect.
+-- So each RLS table is read here with `row_security = off`: that read succeeds only when RLS does
+-- not apply to this role on that table, which is the condition the definers and the rewrites
+-- below need. Any failure lists the tables and the role's attributes, so the refusal can be
+-- diagnosed from the migration log alone.
 DO $$
+DECLARE
+  previous TEXT := current_setting('row_security');
+  t RECORD;
+  refused TEXT[] := '{}';
+  attrs TEXT;
 BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = current_user AND (rolsuper OR rolbypassrls)) THEN
-    RAISE EXCEPTION 'TENANT_REMOVAL_REQUIRES_BYPASSRLS: % is neither superuser nor BYPASSRLS', current_user
-      USING HINT = 'Run migrations as the owner that owns the SECURITY DEFINER functions and bypasses RLS';
+  PERFORM set_config('row_security', 'off', true);
+  FOR t IN
+    SELECT c.oid::regclass AS rel, c.relforcerowsecurity AS forced, pg_get_userbyid(c.relowner) AS owner
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname IN ('core', 'chain', 'audit') AND c.relkind IN ('r', 'p') AND c.relrowsecurity
+    ORDER BY 1
+  LOOP
+    BEGIN
+      EXECUTE format('SELECT 1 FROM %s LIMIT 1', t.rel);
+    EXCEPTION WHEN insufficient_privilege THEN
+      refused := refused || format('%s (owner %s, force %s)', t.rel, t.owner, t.forced);
+    END;
+  END LOOP;
+  PERFORM set_config('row_security', previous, true);
+  IF cardinality(refused) > 0 THEN
+    SELECT format('superuser %s, bypassrls %s, member of %s', r.rolsuper, r.rolbypassrls,
+        COALESCE((SELECT string_agg(b.rolname, ', ' ORDER BY b.rolname) FROM pg_auth_members m
+          JOIN pg_roles b ON b.oid = m.roleid WHERE m.member = r.oid), 'nothing'))
+      INTO attrs FROM pg_roles r WHERE r.rolname = current_user;
+    RAISE EXCEPTION 'TENANT_REMOVAL_REQUIRES_BYPASSRLS: row-level security still applies to % (%) on % table(s): %',
+        current_user, attrs, cardinality(refused), array_to_string(refused[1:10], '; ')
+      USING HINT = 'Run migrations as the owner that owns the SECURITY DEFINER functions and is not subject to RLS (superuser or BYPASSRLS)';
   END IF;
 END
 $$;

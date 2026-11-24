@@ -17,6 +17,6 @@
     "@mpc/domain": "workspace:*",
     "postgres": "^4.1.1",
     "tsx": "4.23.15",
-    "viem": "2.57.19"
+    "viem": "2.58.4"
   }
 }

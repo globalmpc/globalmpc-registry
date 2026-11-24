@@ -27,6 +27,27 @@ describe("loadConfig", () => {
     expect(config.webOrigin).toBe("http://localhost:3000");
   });
 
+  describe("configured web origins", () => {
+    const canonical = "https://registry.example.test";
+    const alias = "https://demo.example.test";
+    const env = { ...VALID, WEB_ORIGIN: canonical };
+
+    it("preserves the canonical origin followed by its HTTPS aliases", () => {
+      expect(loadConfig({ ...env, WEB_ORIGINS: `${canonical},${alias}` }).oidc.redirectOrigins)
+        .toEqual([canonical, alias]);
+    });
+
+    it.each([
+      alias + "," + canonical,
+      canonical + ",http://demo.example.test",
+      canonical + "," + alias + "/",
+      canonical + "," + alias + "/callback",
+      canonical + ",not a URL",
+    ])("rejects an invalid origin list (%s)", (WEB_ORIGINS) => {
+      expect(() => loadConfig({ ...env, WEB_ORIGINS })).toThrow(/WEB_ORIGINS/);
+    });
+  });
+
   it("the public route cap defaults to the authenticated cap and can be set apart", () => {
     // Splitting the pools must not by itself change the numbers a deployment runs with.
     expect(loadConfig({ ...VALID, RATE_LIMIT_MAX: "120" }).publicRateLimitMax).toBe(120);

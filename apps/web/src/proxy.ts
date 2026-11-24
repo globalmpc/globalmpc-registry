@@ -4,6 +4,7 @@ import {
   cookieMode,
   cookieOptions,
   crossSiteRefusal,
+  expectedOrigin,
   pathRefusal,
   decodeOidcBinding,
   encodeOidcBinding,
@@ -119,6 +120,10 @@ export async function proxy(request: NextRequest): Promise<Response> {
   const headers = edgeRequestHeaders(request, process.env.EDGE_PROXY_SECRET);
   // The API reads no cookie. Forwarding them would only copy the session token into its logs.
   headers.delete("cookie");
+  if (oidc && process.env.WEB_ORIGINS) {
+    const origin = expectedOrigin(request);
+    if (origin) headers.set("origin", origin);
+  }
   if (ridesOnCookie) headers.set("authorization", `Bearer ${cookieToken}`);
 
   if (request.method.toUpperCase() === "POST") {

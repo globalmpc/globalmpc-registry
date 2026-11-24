@@ -1031,7 +1031,7 @@ describeDb("attestation integrity", () => {
       await runtime?.end();await legacy.end();
       await fx.sql.unsafe(`DROP DATABASE ${database} WITH (FORCE)`);
     }
-  });
+  }, 120_000);
 
   it.each([true,false])("preserves legacy snapshot time and standing provenance (known uploader=%s)", async (known) => {
     const projectId=randomUUID(), artifact=randomUUID(), upload=randomUUID(), caseId=randomUUID(), assignmentId=randomUUID();
