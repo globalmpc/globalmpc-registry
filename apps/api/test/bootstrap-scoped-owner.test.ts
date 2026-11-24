@@ -51,8 +51,8 @@ describeDb("deployment management needs an owner that bypasses FORCE RLS", () =>
     const [role] = await sql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = ${restricted}`;
     expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
     await as(restricted, async () => {
-      await expect(bootstrapOperator(sql, input())).rejects.toThrow(/bypasses row-level security/);
-      await expect(ensureServiceToken(sql, token())).rejects.toThrow(/bypasses row-level security/);
+      await expect(bootstrapOperator(sql, input())).rejects.toThrow(/row-level security does not apply to/);
+      await expect(ensureServiceToken(sql, token())).rejects.toThrow(/row-level security does not apply to/);
     });
     expect(await sql`SELECT 1 FROM core.subjects`).toHaveLength(0);
     expect(await sql`SELECT 1 FROM core.organizations`).toHaveLength(0);
@@ -83,5 +83,31 @@ describeDb("deployment management needs an owner that bypasses FORCE RLS", () =>
       await expect(bootstrapOperator(sql, input())).rejects.toThrow(/migration table owner/);
       await expect(sql`SELECT * FROM core.open_bootstrap_enrolment_window(${randomUUID()})`).rejects.toMatchObject({ code: "42501" });
     });
+  });
+
+  it("refuses an owner exempt on some tables but not on every one bootstrap reads", async () => {
+    // Exempt (no FORCE) everywhere except the email-change history bootstrap's first-holder check
+    // reads: the three ownership tables alone would pass.
+    const forced = await sql<{ name: string }[]>`
+      SELECT c.oid::regclass::text AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname IN ('core', 'chain', 'audit') AND c.relkind IN ('r', 'p') AND c.relforcerowsecurity`;
+    expect(forced.map((t) => t.name)).toContain("core.email_change_requests");
+    for (const t of forced) await sql.unsafe(`ALTER TABLE ${t.name} NO FORCE ROW LEVEL SECURITY`);
+    await sql.unsafe(`ALTER TABLE core.email_change_requests FORCE ROW LEVEL SECURITY`);
+    const tokensBefore = (await sql`SELECT 1 FROM core.service_tokens WHERE revoked_at IS NULL`).length;
+    try {
+      await as(restricted, async () => {
+        await expect(bootstrapOperator(sql, input())).rejects.toThrow(/row-level security applies on 1 table\(s\): core\.email_change_requests/);
+        await expect(ensureServiceToken(sql, token())).rejects.toThrow(/core\.email_change_requests/);
+      });
+      expect(await sql`SELECT 1 FROM core.service_tokens WHERE revoked_at IS NULL`).toHaveLength(tokensBefore);
+      // Exempt on every table, the same owner without either attribute may proceed past the check.
+      await sql.unsafe(`ALTER TABLE core.email_change_requests NO FORCE ROW LEVEL SECURITY`);
+      await as(restricted, async () => {
+        await expect(ensureServiceToken(sql, token())).resolves.toMatchObject({ outcome: "rotated" });
+      });
+    } finally {
+      for (const t of forced) await sql.unsafe(`ALTER TABLE ${t.name} FORCE ROW LEVEL SECURITY`);
+    }
   });
 });

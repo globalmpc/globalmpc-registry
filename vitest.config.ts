@@ -40,6 +40,10 @@ export default defineConfig(({ mode }) => {
           test: {
             root,
             name: JSON.parse(readFileSync(`${root}/package.json`, "utf8")).name as string,
+            // DB-backed projects run the migration chain in hooks, which under coverage (265 files,
+            // v8) outlasts vitest's 10 s default. Tests keep a tighter bound so a real hang still
+            // fails as a test; the few that run the whole chain inside the test body set 120 s each.
+            ...(integrationRoot(root) ? { testTimeout: 30_000, hookTimeout: 60_000 } : {}),
             // The API's fixtures clone one migrated template database, prepared once.
             ...(root === "apps/api" ? { globalSetup: ["test/helpers/template-setup.ts"] } : {}),
             ...(root === "packages/db" && mode === "unit"

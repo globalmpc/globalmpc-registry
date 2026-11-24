@@ -129,6 +129,52 @@ describe("cross-site refusal (CSRF)", () => {
     expect(crossSiteRefusal(req("/api/v1/x", { headers: { origin: WEB } }), true, "https://registry.example")).toBe("origin");
   });
 
+  it("binds an allowlisted alias to its own origin and forwards it to Google sign-in", async () => {
+    const canonical = "https://registry.example.test";
+    const alias = "https://demo.example.test";
+    vi.stubEnv("WEB_ORIGINS", `${canonical},${alias}`);
+    const sent = stubApi(() => Response.json({ browserBinding: BINDING }));
+    const path = "/api/v1/auth/oidc/google/start";
+
+    expect((await proxy(req(path, {
+      origin: alias,
+      headers: { origin: alias },
+      body: { purpose: "sign_in" },
+    }))).status).toBe(200);
+    expect(sent[0]?.headers.get("origin")).toBe(alias);
+
+    for (const [host, origin] of [[alias, canonical], ["https://unknown.example.test", alias]]) {
+      expect((await proxy(req(path, {
+        origin: host,
+        headers: { origin },
+        body: { purpose: "sign_in" },
+      }))).status).toBe(403);
+    }
+    expect(sent).toHaveLength(1);
+  });
+
+  it("forwards a bearer-only write from an internal host with WEB_ORIGINS set", async () => {
+    vi.stubEnv("WEB_ORIGINS", "https://registry.example.test,https://demo.example.test");
+    const path = "/api/v1/uploads/test-upload/scan-result";
+    const response = await proxy(req(path, {
+      headers: { authorization: "Bearer service" },
+      body: {},
+    }));
+    expect(response.headers.get("x-middleware-rewrite")).toBe(`http://api.internal:3001${path}`);
+    expect(response.headers.get("x-middleware-request-authorization")).toBe("Bearer service");
+  });
+
+  it.each([
+    { cookie: `mpc_session=${TOKEN}` },
+    { origin: WEB },
+    { "sec-fetch-site": "same-origin" },
+  ] as Record<string, string>[])("refuses unlisted hosts for browser writes (%j)", (headers) => {
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("WEB_ORIGINS", "https://registry.example.test");
+    const request = req("/api/v1/projects", { headers });
+    expect(crossSiteRefusal(request, request.cookies.has(cookieMode(request).session))).toBe("host");
+  });
+
   it("does not let a malformed WEB_ORIGIN open the check", () => {
     expect(expectedOrigin(req("/x"), "not a url")).toBe(WEB);
     expect(crossSiteRefusal(req("/api/v1/x", { headers: { origin: "https://evil.example" } }), true, "::")).toBe("origin");

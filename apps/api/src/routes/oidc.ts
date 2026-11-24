@@ -188,6 +188,15 @@ export async function registerOidcRoutes(
     return parsed.data;
   }
 
+  function redirectUri(request: FastifyRequest, provider: OidcProvider): string {
+    const origin = request.headers.origin;
+    if (config.oidc.redirectOrigins && origin !== undefined) {
+      if (!config.oidc.redirectOrigins.includes(origin)) throw stateInvalid();
+      return providers.redirectUri(provider, origin);
+    }
+    return providers.redirectUri(provider);
+  }
+
   /** Generates the flow's secrets and the provider URL, and records the transaction. */
   async function startFlow(
     request: FastifyRequest,
@@ -201,6 +210,7 @@ export async function registerOidcRoutes(
       redirectUri: string;
     }) => Promise<StartRow>,
   ) {
+    const callbackUri = redirectUri(request, provider);
     const state = randomFlowToken();
     const binding = randomFlowToken();
     const secrets: FlowSecrets = { codeVerifier: randomFlowToken(), nonce: randomFlowToken() };
@@ -208,7 +218,7 @@ export async function registerOidcRoutes(
 
     let authorizationUrl: string;
     try {
-      authorizationUrl = await providers.authorizationUrl(provider, { state, ...secrets });
+      authorizationUrl = await providers.authorizationUrl(provider, { state, ...secrets, redirectUri: callbackUri });
     } catch (caught) {
       if (caught instanceof OidcError) {
         request.log.warn({ provider, reason: caught.reason }, "oidc discovery failed");
@@ -223,7 +233,7 @@ export async function registerOidcRoutes(
       bindingHash: sha256Hex(binding),
       nonceHash: sha256Hex(secrets.nonce),
       sealed: sealFlowSecrets(txKey, id, secrets),
-      redirectUri: providers.redirectUri(provider),
+      redirectUri: callbackUri,
     });
     switch (row.status) {
       case "started":
@@ -287,6 +297,10 @@ export async function registerOidcRoutes(
       }
       throw refusal;
     };
+
+    if (config.oidc.redirectOrigins && redirectUri(request, provider) !== claimed.redirect_uri) {
+      return fail("callback_origin_mismatch", stateInvalid());
+    }
 
     if (body.error !== undefined) {
       return fail(body.error === "access_denied" ? "idp_access_denied" : "idp_error", providerRefusal(body.error));

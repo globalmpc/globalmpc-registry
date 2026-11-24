@@ -84,7 +84,7 @@ describeDb("0171: Microsoft sign-in removal on a populated database", () => {
     expect(await sql`SELECT name FROM core.schema_migrations WHERE name >= '0171'`).toHaveLength(0);
     expect(await sql`SELECT id FROM core.sessions WHERE id = ${msSession}`).toHaveLength(1);
     await sql`DELETE FROM core.wallet_recoveries WHERE id = ${recovery}`;
-  });
+  }, 120_000);
 
   it("deletes every Microsoft row, keeps Google's, and leaves no Microsoft in the schema", async () => {
     await runMigrations(sql, listMigrations());
@@ -108,7 +108,7 @@ describeDb("0171: Microsoft sign-in removal on a populated database", () => {
       SELECT p.oid::regprocedure AS f FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname IN ('core', 'chain', 'audit') AND p.prokind = 'f' AND pg_get_functiondef(p.oid) ~* 'microsoft|idp_tenant'`).toHaveLength(0);
     expect(await sql`SELECT conname FROM pg_constraint WHERE pg_get_constraintdef(oid) ~* 'microsoft|idp_tenant'`).toHaveLength(0);
-  });
+  }, 120_000);
 
   it("refuses a Microsoft identity or session from now on, even from the owner", async () => {
     await expect(sql`INSERT INTO core.external_identities (id, subject_id, provider, issuer, subject_key, linked_via)

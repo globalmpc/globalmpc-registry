@@ -16,6 +16,14 @@ export interface LegacyChecksum {
 }
 
 export const LEGACY_CHECKSUMS: Readonly<Record<string, LegacyChecksum>> = {
+  // The first 0169 refused a develop Aurora master that RLS does not apply to by role attribute and
+  // applied nowhere it was deployed; a database that applied it (as superuser or BYPASSRLS) holds
+  // the same schema, since only the owner check changed.
+  "0169_remove_tenant.sql": {
+    full: [],
+    earlier: ["e91129ee42110c8c00a031bb961713c4b68149cf531ed01216cc4972a987862d"],
+    normalized: "7910c72772d5cbdf641fcdc9c8f7cd35015521dcfce24d0dadbbb19b2401394f",
+  },
   // Preserve the historical development checksum for rollback to the image that applied it.
   // 0156 and 0166 reconcile the OIDC settings and the legacy factor grants.
   "0155_account_sign_in_without_second_factors.sql": {

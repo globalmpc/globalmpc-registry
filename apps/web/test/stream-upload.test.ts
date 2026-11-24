@@ -114,6 +114,22 @@ describe("streaming upload pass-through", () => {
     expect(headers.get("cookie")).toBeNull();
   });
 
+  it("streams a signed-in alias request through the same-origin web route", async () => {
+    const alias = "https://demo.example.test";
+    vi.stubEnv("WEB_ORIGINS", `https://registry.example.test,${alias}`);
+    const sent = mockApi(() => Response.json({ id: "u-demo" }));
+    const response = await forwardStreamUpload(new NextRequest(`${alias}${STREAM}`, {
+      method: "POST",
+      headers: { origin: alias, cookie: "__Host-mpc_session=alias-session" },
+      body: new Uint8Array(16),
+    }), API);
+
+    expect(response.status).toBe(200);
+    expect(sent[0]?.url).toBe(`${API}${STREAM}`);
+    expect(sent[0]?.bytes).toBe(16);
+    expect(new Headers(sent[0]?.init.headers).get("authorization")).toBe("Bearer alias-session");
+  });
+
   it("is what the route serves", async () => {
     const sent = mockApi(() => Response.json({ id: "u-2" }));
     vi.stubEnv("API_ORIGIN", API);

@@ -1,6 +1,6 @@
 import postgres from "postgres";
 import { resolveSecret } from "@mpc/config";
-import { readConnectingRole, rlsBypassProblem } from "@mpc/db";
+import { rlsExemptionProblem } from "@mpc/db";
 import {
   ServiceTokenError,
   createServiceSubject,
@@ -88,9 +88,9 @@ const sql = postgres(
 const print = (record: object) => process.stdout.write(`${JSON.stringify(record)}\n`);
 
 try {
-  // Every command reads and writes the whole Registry's tokens: the connection must bypass RLS.
-  // `ensure` also verifies table ownership itself (`requireDeploymentOwner`).
-  const problem = rlsBypassProblem(await readConnectingRole(sql));
+  // Every command reads and writes the whole Registry's tokens: RLS must not apply to the
+  // connection. `ensure` also verifies table ownership itself (`requireDeploymentOwner`).
+  const problem = await rlsExemptionProblem(sql);
   if (problem) throw new ServiceTokenError(problem);
 
   switch (command) {

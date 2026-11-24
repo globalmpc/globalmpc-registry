@@ -51,6 +51,7 @@ const schema = z.object({
    * equal it). Required: it used to fall back to the SIWE URI, which is gone with wallet sign-in.
    */
   WEB_ORIGIN: z.string().url(),
+  WEB_ORIGINS: z.string().optional(),
   // Only BSC mainnet 56, the opBNB testnet 5611 for the dev deployment, and the local chain 31337
   // are allowed (`@mpc/domain` chains). Anchoring on another chain splits the Explorer's
   // verification path. Plain digits only, as in the anchor worker: coercion would also read
@@ -348,6 +349,7 @@ export interface OidcClientConfig {
 export interface OidcConfig {
   /** The web origin the providers redirect to, without a trailing slash. */
   readonly redirectBase: string;
+  readonly redirectOrigins?: readonly string[];
   readonly google: OidcClientConfig | null;
 }
 
@@ -527,8 +529,20 @@ function resolveOidc(value: z.infer<typeof schema>, webOrigin: string): OidcConf
     throw new ConfigError("OIDC_REDIRECT_BASE must use https in production");
   }
 
+  const redirectOrigins = value.WEB_ORIGINS?.split(",");
+  if (redirectOrigins && (
+    redirectOrigins[0] !== base.origin ||
+    redirectOrigins.some((origin) => {
+      const url = URL.canParse(origin) ? new URL(origin) : null;
+      return !url || url.protocol !== "https:" || url.origin !== origin;
+    })
+  )) {
+    throw new ConfigError("WEB_ORIGINS must list HTTPS origins, beginning with WEB_ORIGIN");
+  }
+
   return {
     redirectBase: base.origin,
+    ...(redirectOrigins ? { redirectOrigins } : {}),
     google: pair("GOOGLE", value.GOOGLE_CLIENT_ID, value.GOOGLE_CLIENT_SECRET),
   };
 }
