@@ -39,10 +39,10 @@ describeDb("readiness inputs come from project data", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id,
+        id, rule_set_id, rule_set_version, gate_id,
         jurisdiction_profile, effective_from, definition, state
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${`rules-${id.slice(0, 8)}`}, '1.0.0', 'registry_publication',
+        ${id}, ${`rules-${id.slice(0, 8)}`}, '1.0.0', 'registry_publication',
         'MNG', now(), ${fx.sql.json(definition as never)}, 'effective'
       )
     `;
@@ -75,9 +75,9 @@ describeDb("readiness inputs come from project data", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${`DER-${id.slice(0, 8)}`}, 'Derived inputs', 'MNG',
+        ${id}, ${`DER-${id.slice(0, 8)}`}, 'Derived inputs', 'MNG',
         ARRAY['copper'], ${fx.orgA}
       )
     `;
@@ -92,10 +92,10 @@ describeDb("readiness inputs come from project data", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
-        id, tenant_id, project_id, claim_type, value_text, as_of, source_coordinate, grade,
+        id, project_id, claim_type, value_text, as_of, source_coordinate, grade,
         stale_since, stale_reason
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${projectId}, ${claimType}, ${options.value ?? "recorded"},
+        ${id}, ${projectId}, ${claimType}, ${options.value ?? "recorded"},
         ${options.asOf === undefined ? "2026-09-01" : options.asOf},
         ${fx.sql.json({ document: "extract" })}, ${options.grade ?? "verified"},
         ${options.staleSince ?? null},
@@ -270,8 +270,8 @@ describeDb("readiness inputs come from project data", () => {
       await claim(projectId, "mining_right_registration");
       const other = await claim(projectId, "project_identity");
       await fx.sql`
-        INSERT INTO core.claim_conflicts (id, tenant_id, claim_id, conflict_type)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${other}, 'rights_conflict')
+        INSERT INTO core.claim_conflicts (id, claim_id, conflict_type)
+        VALUES (${randomUUID()}, ${other}, 'rights_conflict')
       `;
       expect((await assess(projectId, policySetId)).result("only").status).toBe("ok");
     });
@@ -329,21 +329,21 @@ describeDb("readiness inputs come from project data", () => {
     const caseId = randomUUID();
     const assignmentId = randomUUID();
     await fx.sql`
-      INSERT INTO core.verification_cases (id, tenant_id, project_id, schema_id, state)
-      VALUES (${caseId}, ${fx.tenantA}, ${projectId}, ${fx.schemaA}, 'signed')
+      INSERT INTO core.verification_cases (id, project_id, schema_id, state)
+      VALUES (${caseId}, ${projectId}, ${fx.schemaA}, 'signed')
     `;
     await fx.sql`
-      INSERT INTO core.assignments (id, tenant_id, case_id, subject_id, credential_id)
-      VALUES (${assignmentId}, ${fx.tenantA}, ${caseId}, ${fx.reviewerSubjectA}, ${fx.credentialA})
+      INSERT INTO core.assignments (id, case_id, subject_id, credential_id)
+      VALUES (${assignmentId}, ${caseId}, ${fx.reviewerSubjectA}, ${fx.credentialA})
     `;
     await fx.sql`
       INSERT INTO core.verification_attestations (
-        id, tenant_id, case_id, assignment_id, credential_id, schema_id, attestation_type,
+        id, case_id, assignment_id, credential_id, schema_id, attestation_type,
         claim_scope, evidence_snapshot_hash, limitations, credential_status_snapshot,
         method_version, policy_version, payload_hash, signature, signer_wallet_address,
         signed_at, valid_until, state
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${caseId}, ${assignmentId}, ${fx.credentialA}, ${fx.schemaA},
+        ${randomUUID()}, ${caseId}, ${assignmentId}, ${fx.credentialA}, ${fx.schemaA},
         'professional_signoff', ${[claimId]}, ${"0x" + "d4".repeat(32)},
         'Scope limited to registration status', ${fx.sql.json({ status: "valid" })},
         '1', '1', ${"0x" + "e5".repeat(32)}, ${"0x" + "f6".repeat(65)},

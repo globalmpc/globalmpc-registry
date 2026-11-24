@@ -1,4 +1,4 @@
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { addGovernanceAccount } from "./helpers/governance-accounts.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -59,9 +59,9 @@ describeDb("Registry publication and public lookup", () => {
     const projectId = randomUUID();
     await fx.sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${projectId}, ${fx.tenantA}, ${projectKey}, 'Registry fixture', 'MNG',
+        ${projectId}, ${projectKey}, 'Registry fixture', 'MNG',
         ARRAY['copper'], ${fx.orgA}
       )
     `;
@@ -313,13 +313,13 @@ describeDb("Registry publication and public lookup", () => {
     async function receiptFor(projectId: string, commercialReuse: string): Promise<void> {
       await fx.sql`
         INSERT INTO core.source_receipts (
-          id, tenant_id, project_id, connection_id, authority_id, collection_method,
+          id, project_id, connection_id, authority_id, collection_method,
           result, query_basis, endpoint_or_document_ref, authentication_method,
           raw_hash, source_schema_version, adapter_version, terms_license,
           commercial_reuse, disclosure_permission, received_at, as_of,
           freshness_status, correlation_id
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${projectId}, ${fx.connectionA}, ${fx.authorityA},
+          ${randomUUID()}, ${projectId}, ${fx.connectionA}, ${fx.authorityA},
           'manual_official_registry_confirmation', 'source_returned_no_record', '{}'::jsonb,
           'https://x.test/a', 'none', ${`0x${"11".repeat(32)}`}, '1', '1', 'CC-BY-4.0',
           ${commercialReuse}, 'public', now(), now(), 'fresh', 'test'
@@ -377,32 +377,32 @@ describeDb("Registry publication and public lookup", () => {
   async function seedAttestation(projectId: string, state: string): Promise<string> {
     const caseId = randomUUID();
     await fx.sql`
-      INSERT INTO core.verification_cases (id, tenant_id, project_id, schema_id, state)
-      VALUES (${caseId}, ${fx.tenantA}, ${projectId}, ${fx.schemaA}, 'draft')
+      INSERT INTO core.verification_cases (id, project_id, schema_id, state)
+      VALUES (${caseId}, ${projectId}, ${fx.schemaA}, 'draft')
     `;
     const assignmentId = randomUUID();
     await fx.sql`
-      INSERT INTO core.assignments (id, tenant_id, case_id, subject_id, credential_id)
-      VALUES (${assignmentId}, ${fx.tenantA}, ${caseId}, ${fx.reviewerSubjectA}, ${fx.credentialA})
+      INSERT INTO core.assignments (id, case_id, subject_id, credential_id)
+      VALUES (${assignmentId}, ${caseId}, ${fx.reviewerSubjectA}, ${fx.credentialA})
     `;
     const claimId = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
-        id, tenant_id, project_id, claim_type, value_text, source_coordinate, grade
+        id, project_id, claim_type, value_text, source_coordinate, grade
       ) VALUES (
-        ${claimId}, ${fx.tenantA}, ${projectId}, 'mining_right', 'MN-1', '{"page":"1"}'::jsonb,
+        ${claimId}, ${projectId}, 'mining_right', 'MN-1', '{"page":"1"}'::jsonb,
         'verified'
       )
     `;
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.verification_attestations (
-        id, tenant_id, case_id, assignment_id, credential_id, schema_id,
+        id, case_id, assignment_id, credential_id, schema_id,
         attestation_type, claim_scope, evidence_snapshot_hash, findings, limitations,
         credential_status_snapshot, method_version, policy_version,
         payload_hash, signature, signer_wallet_address, signed_at, state
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${caseId}, ${assignmentId}, ${fx.credentialA}, ${fx.schemaA},
+        ${id}, ${caseId}, ${assignmentId}, ${fx.credentialA}, ${fx.schemaA},
         'professional_signoff', ARRAY[${claimId}]::UUID[], ${`0x${"22".repeat(32)}`},
         '{"note":"reviewed"}'::jsonb, 'legal_effect_not_determined', '{}'::jsonb, '1', '1',
         ${`0x${"33".repeat(32)}`}, ${`0x${"44".repeat(65)}`},
@@ -449,8 +449,8 @@ describeDb("Registry publication and public lookup", () => {
       const scoped = await signIn(app, await addGovernanceAccount(fx, "reviewer", { assurance: "high_assurance", scopeKind: "organization" }));
       for (const action of ["publish", "reject"] as const) {
         const projectId=randomUUID(), publicKey=`SCOPE-${projectId}`;
-        await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-          VALUES(${projectId},${fx.tenantA},${publicKey},'Other organization','MNG',ARRAY['copper'],${fx.reviewOrgA})`;
+        await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+          VALUES(${projectId},${publicKey},'Other organization','MNG',ARRAY['copper'],${fx.reviewOrgA})`;
         const drafted=await draft(tokens.operatorA,{subjectId:projectId,publicKey});
         expect(drafted.statusCode,drafted.body).toBe(200);
         const hidden=await app.inject({method:"GET",url:`/api/v1/registry-entries/drafts?subjectId=${projectId}`,headers:{authorization:`Bearer ${scoped}`}});
@@ -471,11 +471,11 @@ describeDb("Registry publication and public lookup", () => {
       expect(allowed.statusCode,allowed.body).toBe(200);
     });
 
-    it("keeps scoped administrators inside their projects and out of tenant anchor operations", async () => {
+    it("keeps scoped administrators inside their projects and out of Registry anchor operations", async () => {
       const scoped=await signIn(app,await addGovernanceAccount(fx,"administrator",{assurance:"high_assurance",scopeKind:"organization"}));
       const foreign=randomUUID(), publicKey=`ADMIN-SCOPE-${foreign}`;
-      await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-        VALUES(${foreign},${fx.tenantA},${publicKey},'Other organization','MNG',ARRAY['copper'],${fx.reviewOrgA})`;
+      await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+        VALUES(${foreign},${publicKey},'Other organization','MNG',ARRAY['copper'],${fx.reviewOrgA})`;
       const payload={registryType:"project",subjectId:foreign,publicKey,projection:await projectProjection(fx.sql,foreign),policyVersion:"mn-core-1.0.0",schemaVersion:"project-registry-1"};
       const draftKey=idempotencyKey();
       const create=(token:string)=>app.inject({method:"POST",url:"/api/v1/registry-entries",headers:{authorization:`Bearer ${token}`,"idempotency-key":draftKey},payload});
@@ -499,8 +499,8 @@ describeDb("Registry publication and public lookup", () => {
       expect(ownRevoke.statusCode,ownRevoke.body).toBe(200);
       for(const [project,target,expected] of [[foreign,published.id,403],[ownDraft.json().subjectId,ownPublished.json().id,200]] as const){
         const signal=randomUUID();
-        await fx.sql`INSERT INTO core.evidence_stale_signals(id,tenant_id,project_id,target_type,target_id,reason)
-          VALUES(${signal},${fx.tenantA},${project},'registry_entry_version',${target},'Synthetic scope regression')`;
+        await fx.sql`INSERT INTO core.evidence_stale_signals(id,project_id,target_type,target_id,reason)
+          VALUES(${signal},${project},'registry_entry_version',${target},'Synthetic scope regression')`;
         const result=await app.inject({method:"POST",url:`/api/v1/stale-signals/${signal}/resolve`,headers:{authorization:`Bearer ${scoped}`,"idempotency-key":idempotencyKey()},payload:{resolution:"dismissed",note:"Scope checked"}});
         expect(result.statusCode,result.body).toBe(expected);
       }
@@ -523,8 +523,8 @@ describeDb("Registry publication and public lookup", () => {
         WHERE wallet_address = ${fx.disclosureApproverA.address}
       `;
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${approver!.subject_id}, ${fx.orgA}, 'administrator')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${approver!.subject_id}, ${fx.orgA}, 'administrator')
       `;
       try {
         const both = await signIn(app, fx.disclosureApproverA);
@@ -568,63 +568,9 @@ describeDb("Registry publication and public lookup", () => {
       ).rejects.toThrow(/cannot be modified after it is created/);
     });
 
-    it("another tenant's pending draft for the same key does not block this tenant's draft", async () => {
-      const publicKey = `XT-${randomUUID().slice(0, 8)}`;
-      const otherProject = randomUUID();
-      await fx.sql`
-        INSERT INTO core.projects (
-          id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
-        ) VALUES (
-          ${otherProject}, ${fx.tenantB}, ${publicKey}, 'Other tenant', 'MNG', ARRAY['copper'],
-          ${fx.orgB}
-        )
-      `;
-      const otherDraft = await draft(await signIn(app, fx.operatorB), {
-        publicKey,
-        subjectId: otherProject,
-      });
-      expect(otherDraft.statusCode).toBe(200);
-
-      // Tenant A cannot see B's draft, so a refusal pointing at it could not be acted on.
-      const ours = await draft(tokens.operatorA, { publicKey });
-      expect(ours.statusCode).toBe(200);
-    });
-
-    /**
-     * The public URL is `/registries/{type}/{publicKey}` with no tenant in it, so a key is unique
-     * across tenants. Another tenant's entry is invisible under RLS, so the publish route's own
-     * lookup misses it and the INSERT hits the unique constraint. That is the same conflict as a
-     * key held by another subject in this tenant, and it must read the same — the answer may not
-     * reveal that another tenant holds the key.
-     */
-    it("a key another tenant already published is refused with the same 409 as in-tenant", async () => {
-      const publicKey = `XTP-${randomUUID().slice(0, 8)}`;
-      const otherProject = randomUUID();
-      await fx.sql`
-        INSERT INTO core.projects (
-          id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
-        ) VALUES (
-          ${otherProject}, ${fx.tenantB}, ${publicKey}, 'Other tenant', 'MNG', ARRAY['copper'],
-          ${fx.orgB}
-        )
-      `;
-      await fx.sql`
-        INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
-        VALUES (${randomUUID()}, ${fx.tenantB}, 'project', ${otherProject}, ${publicKey})
-      `;
-
-      const drafted = await draft(tokens.operatorA, { publicKey });
-      expect(drafted.statusCode).toBe(200);
-      const response = await publishDraft(app, tokens.disclosureApproverA, drafted.json());
-
-      expect(response.statusCode).toBe(409);
-      expect(response.json()).toMatchObject({
-        code: "REGISTRY_KEY_TAKEN",
-        message: "This public key belongs to another subject",
-        retryable: false,
-      });
-      expect(response.json().details).toBeUndefined();
-    });
+    // A Project Registry entry is published under its project's key, and project keys are unique
+    // across the Registry, so two companies cannot draft or hold the same project key; the
+    // project-creation conflict is covered in projects.test.ts.
 
     it("a rejected draft publishes nothing and frees the key for a new draft", async () => {
       const publicKey = `REJ-${randomUUID().slice(0, 8)}`;
@@ -650,9 +596,9 @@ describeDb("Registry publication and public lookup", () => {
 
       await fx.sql`
         INSERT INTO core.claims (
-          id, tenant_id, project_id, claim_type, value_text, source_coordinate
+          id, project_id, claim_type, value_text, source_coordinate
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${projectsByKey.get(publicKey)!}, 'mining_right',
+          ${randomUUID()}, ${projectsByKey.get(publicKey)!}, 'mining_right',
           'MN-2', '{"page":"2"}'::jsonb
         )
       `;
@@ -924,7 +870,7 @@ describeDb("Registry publication and public lookup", () => {
       expect(row!.retry_after).toBeNull();
     });
 
-    it("another tenant cannot reset a stuck batch or its retry schedule", async () => {
+    it("another company's organization-scoped administrator cannot reset a stuck batch or its retry schedule", async () => {
       const batchId = await makeBatch();
       await fx.sql`UPDATE chain.transactions SET state = 'reconciliation_required',
         chain_search_failed_since = now() - interval '2 hours', retry_after = now() + interval '1 hour'
@@ -935,7 +881,7 @@ describeDb("Registry publication and public lookup", () => {
         headers: { authorization: `Bearer ${await signIn(app, fx.operatorB)}`, "idempotency-key": idempotencyKey() },
         payload: {},
       });
-      expect(response.statusCode).toBe(404);
+      expect(response.statusCode).toBe(403);
       const [after] = await fx.sql`SELECT state, chain_search_failed_since, retry_after FROM chain.transactions WHERE batch_id = ${batchId}`;
       expect(after).toEqual(before);
     });
@@ -1104,9 +1050,9 @@ describeDb("Registry publication and public lookup", () => {
       // with it, and that transaction may anchor the root on its own.
       await fx.sql`
         INSERT INTO chain.transactions (
-          id, tenant_id, batch_id, intent_key, chain_id, state, created_at
+          id, batch_id, intent_key, chain_id, state, created_at
         )
-        SELECT ${randomUUID()}, tenant_id, batch_id, intent_key, 31337, 'failed',
+        SELECT ${randomUUID()}, batch_id, intent_key, 31337, 'failed',
                created_at - interval '1 day'
         FROM chain.transactions WHERE id = ${transactionId}
       `;
@@ -1156,8 +1102,8 @@ describeDb("Registry publication and public lookup", () => {
         WHERE id = ${transactionId}
       `;
       await fx.sql`
-        INSERT INTO audit.events (tenant_id, command, resource_type, resource_id, reason, correlation_id, detail)
-        VALUES (${fx.tenantA}, 'anchor.batch.chain_move_refused', 'anchor_batch', ${batchId}, 'batch_on_chain',
+        INSERT INTO audit.events (command, resource_type, resource_id, reason, correlation_id, detail)
+        VALUES ('anchor.batch.chain_move_refused', 'anchor_batch', ${batchId}, 'batch_on_chain',
                 ${`anchor-worker:${transactionId}`},
                 ${fx.sql.json({ fromChainId: 5611, toChainId: 31337, result: "batch_on_chain_transaction_unknown" })})
       `;
@@ -1186,7 +1132,7 @@ describeDb("Registry publication and public lookup", () => {
       expect(await listItem()).toMatchObject({ moveRefusal: null, moveRequest: { toChainId: 31337 } });
     });
 
-    it("another tenant cannot request a move", async () => {
+    it("another company's organization-scoped administrator cannot request a move", async () => {
       const { batchId, transactionId } = await stuckOnOldChain();
       const before = await transactionRow(transactionId);
       const response = await app.inject({
@@ -1194,7 +1140,7 @@ describeDb("Registry publication and public lookup", () => {
         headers: { authorization: `Bearer ${await signIn(app, fx.operatorB)}`, "idempotency-key": idempotencyKey() },
         payload: {},
       });
-      expect(response.statusCode).toBe(404);
+      expect(response.statusCode).toBe(403);
       expect(await transactionRow(transactionId)).toEqual(before);
     });
 
@@ -1367,7 +1313,7 @@ describeDb("Registry publication and public lookup", () => {
       expect(body.history[0].status).toBe("superseded");
     });
 
-    it("response has no information that identifies the tenant", async () => {
+    it("response has no internal ownership information", async () => {
       const publicKey = `PUB-${randomUUID().slice(0, 8)}`;
       await publish(tokens.operatorA, { publicKey });
 
@@ -1377,8 +1323,6 @@ describeDb("Registry publication and public lookup", () => {
           url: `/api/v1/public/registries/project/${publicKey}`,
         })
       ).json();
-
-      expect(JSON.stringify(body)).not.toContain(fx.tenantA);
       expect(JSON.stringify(body)).not.toContain(fx.orgA);
     });
   });
@@ -1421,7 +1365,7 @@ describeDb("Registry publication and public lookup", () => {
       const batch = response.json();
       expect(batch).toMatchObject({ recordCount: 2, confirmationState: "created" });
       const [audit] = await fx.sql`SELECT project_id FROM audit.events
-        WHERE tenant_id = ${fx.tenantA} AND resource_id = ${batch.id} AND command = 'anchor.batch.created'`;
+        WHERE resource_id = ${batch.id} AND command = 'anchor.batch.created'`;
       expect(audit?.project_id).toBe(projectA);
       const leaves = await fx.sql<{ entry_version_id: string }[]>`
         SELECT entry_version_id FROM chain.anchor_batch_leaves WHERE batch_id = ${batch.id}
@@ -1431,9 +1375,9 @@ describeDb("Registry publication and public lookup", () => {
         INSERT INTO chain.anchor_batch_leaves (batch_id, leaf_hash, entry_version_id, leaf_index)
         VALUES (${batch.id}, ${"0x" + "99".repeat(32)}, ${versionB.id}, 2)
       `).rejects.toMatchObject({ code: "23514" });
-      const otherTenant = await signIn(app, fx.operatorB);
-      expect((await create(otherTenant, { projectId: projectA })).statusCode).toBe(404);
-      await expect(withTenant(fx.appSql, { tenantId: fx.tenantB }, tx => tx`
+      const otherCompany = await signIn(app, fx.operatorB);
+      expect((await create(otherCompany, { projectId: projectA })).statusCode).toBe(403);
+      await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectB }, tx => tx`
         INSERT INTO chain.anchor_batch_leaves (batch_id, leaf_hash, entry_version_id, leaf_index)
         VALUES (${batch.id}, ${"0x" + "99".repeat(32)}, ${versionB.id}, 2)
       `)).rejects.toMatchObject({ code: "23514" });
@@ -1488,10 +1432,10 @@ describeDb("Registry publication and public lookup", () => {
       const otherBatch = randomUUID();
       await fx.sql`
         INSERT INTO chain.anchor_batches (
-          id, tenant_id, batch_id, merkle_root, manifest_hash,
+          id, batch_id, merkle_root, manifest_hash,
           manifest_object_key, schema_version, record_count
         ) VALUES (
-          ${otherBatch}, ${fx.tenantA}, ${`0x${otherBatch.replace(/-/g, "").repeat(2)}`},
+          ${otherBatch}, ${`0x${otherBatch.replace(/-/g, "").repeat(2)}`},
           ${`0x${"11".repeat(32)}`}, ${`0x${"22".repeat(32)}`}, 'manifests/dup.json', '1', 1
         )
       `;
@@ -1562,7 +1506,7 @@ describeDb("Registry publication and public lookup", () => {
       expect(exported.json().projection.reviewCommitment.reviewCount).toBe("0");
       expect(hashLeaf(exported.json().leaf)).toBe(proof.leafHash);
       const otherToken=await signIn(app,fx.operatorB);
-      expect((await app.inject({method:"GET",url:`/api/v1/registry-entries/versions/${published.id}/review-bundle`,headers:{authorization:`Bearer ${otherToken}`}})).statusCode).toBe(404);
+      expect((await app.inject({method:"GET",url:`/api/v1/registry-entries/versions/${published.id}/review-bundle`,headers:{authorization:`Bearer ${otherToken}`}})).statusCode).toBe(403);
       await expect(fx.sql`UPDATE core.registry_review_bundles SET bundle='{}' WHERE entry_version_id=${published.id}`).rejects.toThrow();
 
       expect((await app.inject({method:"GET",url:`/api/v1/registry-entries/versions/${published.id}/review-bundle`})).statusCode).toBe(401);

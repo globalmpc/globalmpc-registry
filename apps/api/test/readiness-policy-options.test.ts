@@ -17,7 +17,6 @@ describeDb("readiness policy options", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let token: string;
-  const otherProject = randomUUID();
   const active = randomUUID();
   const stage = randomUUID();
   beforeAll(async () => {
@@ -28,47 +27,33 @@ describeDb("readiness policy options", () => {
     >`SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user`;
     expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
     token = await signIn(app, fx.operatorA);
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-      VALUES (${otherProject},${fx.tenantB},${otherProject},'Other tenant','MNG',ARRAY['copper'],${fx.orgB})`;
     for (const row of [
       {
         id: active,
-        tenant: "A",
         state: "effective",
         when: "2000-01-01",
         gate: "registry_publication",
       },
       {
         id: stage,
-        tenant: "A",
         state: "effective",
         when: "2000-01-01",
         gate: "stage.exploration",
       },
       {
         id: randomUUID(),
-        tenant: "A",
         state: "draft",
         when: "2000-01-01",
         gate: "registry_publication",
       },
       {
         id: randomUUID(),
-        tenant: "A",
         state: "effective",
         when: "2999-01-01",
         gate: "registry_publication",
       },
       {
         id: randomUUID(),
-        tenant: "B",
-        state: "effective",
-        when: "2000-01-01",
-        gate: "registry_publication",
-      },
-      {
-        id: randomUUID(),
-        tenant: "A",
         state: "effective",
         when: "2000-01-01",
         gate: "registry_publication",
@@ -76,8 +61,8 @@ describeDb("readiness policy options", () => {
       },
     ]) {
       await fx.sql`INSERT INTO core.compliance_policy_sets
-        (id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-        VALUES (${row.id},${row.tenant === "A" ? fx.tenantA : fx.tenantB},${row.id},'1.0.0',${row.gate},${"jurisdiction" in row ? row.jurisdiction : "MNG"},${row.when}::timestamptz,${fx.sql.json(rules as never)},${row.state})`;
+        (id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+        VALUES (${row.id},${row.id},'1.0.0',${row.gate},${"jurisdiction" in row ? row.jurisdiction : "MNG"},${row.when}::timestamptz,${fx.sql.json(rules as never)},${row.state})`;
     }
   });
   afterAll(async () => {
@@ -94,7 +79,7 @@ describeDb("readiness policy options", () => {
       url: `/api/v1/projects/${project}/readiness-policy-options${query}`,
       headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
     });
-  it("lists actual effective tenant policy IDs and uses the returned ID to recompute", async () => {
+  it("lists actual effective Registry policy IDs and uses the returned ID to recompute", async () => {
     const result = await options(fx.projectA);
     expect(result.statusCode, result.body).toBe(200);
     expect(
@@ -142,13 +127,17 @@ describeDb("readiness policy options", () => {
     const reviewer = await signIn(app, fx.readerA);
     expect((await options(fx.projectA, "", reviewer)).statusCode).toBe(403);
   });
-  it("does not reveal policies for a missing, malformed or other-tenant project", async () => {
-    for (const project of [randomUUID(), "not-an-id", otherProject]) {
+  it("does not reveal policies for a missing, malformed or out-of-reach project", async () => {
+    for (const project of [randomUUID(), "not-an-id"]) {
       const result = await options(project);
       expect(result.statusCode, result.body).toBe(
         project === "not-an-id" ? 400 : 404,
       );
       expect(result.json().items).toBeUndefined();
     }
+    // Another company's organization-scoped administrator does not reach project A.
+    const foreign = await options(fx.projectA, "", await signIn(app, fx.operatorB));
+    expect(foreign.statusCode).toBe(403);
+    expect(foreign.json().items).toBeUndefined();
   });
 });

@@ -25,7 +25,7 @@ interface MockProvider {
 const MOCK_MODULE = "../../api/test/helpers/mock-oidc.ts";
 
 /**
- * The E2E stand-in for Google and Microsoft (WP7) — a test process, started by
+ * The E2E stand-in for Google (WP7) — a test process, started by
  * `playwright.config.ts` beside the API and the web; never part of a build.
  *
  * It serves the same in-process provider the API tests use (`apps/api/test/helpers/mock-oidc.ts`)

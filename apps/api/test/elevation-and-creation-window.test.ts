@@ -40,14 +40,14 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
   async function subject(options: { email?: string; role?: string; ageHours?: number } = {}): Promise<string> {
     const id = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level, email, created_at)
-      VALUES (${id}, ${fx.tenantA}, 'person', ${`Person ${id.slice(0, 6)}`}, 'high_assurance',
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level, email, created_at)
+      VALUES (${id}, 'person', ${`Person ${id.slice(0, 6)}`}, 'high_assurance',
               ${options.email ?? freshEmail()}, now() - make_interval(hours => ${options.ageHours ?? 72}))
     `;
     if (options.role) {
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${id}, ${fx.orgA}, ${options.role})
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${id}, ${fx.orgA}, ${options.role})
       `;
     }
     return id;
@@ -55,7 +55,7 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
 
   async function admin(role: "administrator" = "administrator") {
     const subjectId = await subject({ email: freshEmail("admin"), role });
-    const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, { firstFactor: "email_code" });
+    const token = await issueTestSession(fx.appSql, subjectId, { firstFactor: "email_code" });
     return { subjectId, token };
   }
 
@@ -78,7 +78,7 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
   async function elevated() {
     const email = freshEmail("responder");
     const responderId = await subject({ email, role: "administrator" });
-    const token = await issueTestSession(fx.appSql, fx.tenantA, responderId, { firstFactor: "email_code" });
+    const token = await issueTestSession(fx.appSql, responderId, { firstFactor: "email_code" });
     const asked = await app.inject({
       method: "POST",
       url: "/api/v1/admin/break-glass",
@@ -164,10 +164,10 @@ describeDb("elevations and the creation window (0129)", { timeout: 30_000 }, () 
       const approver = await admin("administrator");
       await fx.sql`
         INSERT INTO core.break_glass_elevations (
-          id, tenant_id, subject_id, purpose, target, requested_at, expires_at, state,
+          id, subject_id, purpose, target, requested_at, expires_at, state,
           decided_by_subject_id, decided_at, decision_reason
         ) VALUES (
-          ${lapsedId}, ${fx.tenantA}, ${lapsedOwner}, 'incident', 'subject', now() - interval '3 hours',
+          ${lapsedId}, ${lapsedOwner}, 'incident', 'subject', now() - interval '3 hours',
           now() - interval '1 hour', 'active', ${approver.subjectId}, now() - interval '3 hours', 'ok'
         )
       `;

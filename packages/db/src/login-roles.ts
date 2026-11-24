@@ -23,7 +23,7 @@ export type { ConnectingRole } from "./connecting-role.js";
  * here is sent, which the server stores as is. Sending the password itself — even as a bound
  * parameter — puts it in the DB log as `DETAIL: parameters: $2 = '…'` whenever statement or
  * duration logging is on, and Aurora exports that log to CloudWatch. The worker login bypasses
- * RLS, so that would be a cross-tenant credential in a widely read place.
+ * RLS, so that would be an every-project credential in a widely read place.
  *
  * Called over the migration connection: a superuser, or an admin holding what
  * `connectingRoleProblem` lists.
@@ -493,7 +493,7 @@ export async function ensureLoginRoles(
       `GRANT USAGE ON SCHEMA ${GRANTED_SCHEMAS.join(", ")} TO ${APP_LOGIN}, ${WORKER_LOGIN}`,
     );
 
-    // The worker is a system process that spans tenants (0012). It bypasses RLS, but the bypass
+    // The worker is a system process that spans every project (0012). It bypasses RLS, but the bypass
     // is limited to the privileges granted to mpc_worker.
     await tx.unsafe(`ALTER ROLE ${WORKER_LOGIN} BYPASSRLS`);
 

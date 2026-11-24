@@ -49,7 +49,6 @@ describeDb("service token ensure", () => {
 
   const ensure = (token: string, overrides: Partial<Parameters<typeof ensureServiceToken>[1]> = {}) =>
     ensureServiceToken(fx.sql, {
-      tenantId: fx.tenantA,
       label: "scan-worker",
       role: "scan_service",
       scopes: ["scan_result"],
@@ -140,7 +139,7 @@ describeDb("service token ensure", () => {
     }
     expect(await tokensOf(first.subjectId, label)).toHaveLength(1);
     const subjects = await fx.sql`
-      SELECT 1 FROM core.subjects WHERE tenant_id = ${fx.tenantA} AND display_name = ${label}
+      SELECT 1 FROM core.subjects WHERE display_name = ${label}
     `;
     expect(subjects).toHaveLength(1);
   });
@@ -239,7 +238,7 @@ describeDb("service token ensure", () => {
       });
     }
     const subjects = await fx.sql`
-      SELECT 1 FROM core.subjects WHERE tenant_id = ${fx.tenantA} AND display_name = ${label}
+      SELECT 1 FROM core.subjects WHERE display_name = ${label}
     `;
     expect(subjects).toHaveLength(0);
   });
@@ -265,9 +264,8 @@ describeDb("service token ensure", () => {
     await expect(
       ensure(token, { label: "owner-scan", scopes: ["scan_result", "cre_report"] }),
     ).rejects.toThrow(/scopes/);
-    await expect(ensure(token, { label: "owner-scan", tenantId: fx.tenantB })).rejects.toThrow(
-      /another service/,
-    );
+    // The owner's own label and scopes still match.
+    expect((await ensure(token, { label: "owner-scan" })).outcome).toBe("unchanged");
   });
 
   it("refuses a person role, and says when the value is due for renewal", async () => {

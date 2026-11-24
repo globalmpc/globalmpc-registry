@@ -21,7 +21,6 @@ const WALLET_ONLY: Session = {
   aal: "aal3",
   narrowedRoles: [],
   subjectId: "subject-reader",
-  tenantId: "tenant-a",
   assuranceLevel: "wallet_only",
   roleBindings: [],
   projectIds: [],
@@ -36,7 +35,6 @@ const GATE_APPROVER: Session = {
 };
 
 const RESOURCE: ResourceContext = {
-  tenantId: "tenant-a",
   projectId: "project-1",
   sensitivity: "restricted",
   state: "assessed",
@@ -72,28 +70,28 @@ describe("assertAuthorized", () => {
     expect(allowed(null)).toBe(true);
   });
 
-  it("does not turn project-scoped administration or review into tenant authority", () => {
-    const tenantResource = { ...RESOURCE, projectId: null };
+  it("does not turn project-scoped administration or review into Registry-wide authority", () => {
+    const registryResource = { ...RESOURCE, projectId: null };
     for (const [role, action] of [["administrator", "admin.role.approve"], ["administrator", "audit.export"], ["reviewer", "review_registry.approve"], ["reviewer", "authority.review"], ["administrator", "registry.draft"], ["administrator", "registry.revoke"], ["reviewer", "registry.publish"], ["administrator", "anchor.submit"], ["reviewer", "anchor.read"]] as const) {
       const scoped: Session = { ...GATE_APPROVER, roleBindings: [{ role, scopeKind: "organization", organizationId: "org-1", projectId: "project-1" }] };
-      expect(denialOf(() => assertAuthorized(scoped, action, tenantResource, FACTS)).statusCode).toBe(403);
-      const tenantWide: Session = { ...scoped, roleBindings: [{ role, scopeKind: "tenant", organizationId: "org-1", projectId: null }] };
-      expect(() => assertAuthorized(tenantWide, action, tenantResource, FACTS)).not.toThrow();
+      expect(denialOf(() => assertAuthorized(scoped, action, registryResource, FACTS)).statusCode).toBe(403);
+      const registryWide: Session = { ...scoped, roleBindings: [{ role, scopeKind: "registry", organizationId: "org-1", projectId: null }] };
+      expect(() => assertAuthorized(registryWide, action, registryResource, FACTS)).not.toThrow();
     }
   });
 
-  it("requires one unrestricted tenant binding for mixed-project operations and their UI action", () => {
+  it("requires one unrestricted Registry-wide binding for mixed-project operations and their UI action", () => {
     const scoped:Session={...GATE_APPROVER,roleBindings:[{role:"administrator",scopeKind:"organization",organizationId:"org-1",projectId:"project-1"}]};
     expect(holdsActionRole(scoped,"anchor.submit")).toBe(false);
     expect(holdsActionRole(scoped,"anchor.read")).toBe(false);
     expect(denialOf(()=>assertAuthorized(scoped,"anchor.submit",RESOURCE,FACTS)).statusCode).toBe(403);
-    const regional:Session={...scoped,roleBindings:[{role:"administrator",scopeKind:"tenant",organizationId:"org-1",projectId:null,jurisdiction:["MNG"]}],projectJurisdictions:{"project-1":"MNG"}};
+    const regional:Session={...scoped,roleBindings:[{role:"administrator",scopeKind:"registry",organizationId:"org-1",projectId:null,jurisdiction:["MNG"]}],projectJurisdictions:{"project-1":"MNG"}};
     expect(holdsActionRole(regional,"anchor.submit")).toBe(false);
     const mixed:Session={...regional,roleBindings:[...regional.roleBindings,...scoped.roleBindings]};
     expect(holdsActionRole(mixed,"anchor.submit")).toBe(false);
     expect(denialOf(()=>assertAuthorized(mixed,"anchor.submit",RESOURCE,FACTS)).statusCode).toBe(403);
     expect(denialOf(()=>assertAuthorized(regional,"anchor.submit",RESOURCE,FACTS)).statusCode).toBe(403);
-    expect(denialOf(()=>assertAuthorized(scoped,"registry.read",{...RESOURCE,projectId:null,requiresTenantScope:true},FACTS)).statusCode).toBe(403);
+    expect(denialOf(()=>assertAuthorized(scoped,"registry.read",{...RESOURCE,projectId:null,requiresRegistryScope:true},FACTS)).statusCode).toBe(403);
     expect(()=>assertAuthorized(scoped,"registry.draft",RESOURCE,FACTS)).not.toThrow();
   });
 
@@ -119,13 +117,6 @@ describe("assertAuthorized", () => {
     );
     expect(error.details?.["reason"]).toBe("ASSURANCE_LEVEL_INSUFFICIENT");
     expect(error.details?.["requiredAssurance"]).toBe("high_assurance");
-  });
-
-  it("rejects cross-tenant access", () => {
-    const error = denialOf(() =>
-      assertAuthorized(GATE_APPROVER, "gate.decide", { ...RESOURCE, tenantId: "tenant-b" }, FACTS),
-    );
-    expect(error.details?.["reason"]).toBe("TENANT_SCOPE_MISMATCH");
   });
 
   it("rejects an out-of-scope project and returns the access request path", () => {
@@ -193,25 +184,15 @@ describe("bindingToAuthorizationContext", () => {
     );
     expect(context.role).toBe("reviewer");
     expect(context.actorProjectIds).toEqual(["project-1"]);
-    expect(context.actorTenantId).toBe("tenant-a");
   });
 
   it("gives an organization binding no project restriction", () => {
     const context = bindingToAuthorizationContext(
       GATE_APPROVER,
-      { role: "reviewer", scopeKind: "tenant", organizationId: "org-1", projectId: null },
+      { role: "reviewer", scopeKind: "registry", organizationId: "org-1", projectId: null },
       FACTS,
     );
     expect(context.actorProjectIds).toBe("all");
-  });
-
-  it("uses an empty string when there is no tenant — matches no resource", () => {
-    const context = bindingToAuthorizationContext(
-      { ...WALLET_ONLY, tenantId: null },
-      { role: "public_reader", organizationId: null, projectId: null },
-      FACTS,
-    );
-    expect(context.actorTenantId).toBe("");
   });
 });
 
@@ -288,7 +269,7 @@ describe("scope of organization-level bindings", () => {
     expect(visibleProjectScope(session, "project.read")).toEqual([]);
   });
 
-  it("gives tenant operator roles the whole tenant regardless of organization", () => {
+  it("gives Registry-wide operator roles every project regardless of organization", () => {
     const session: Session = {
       ...STEWARD_ORG,
       assuranceLevel: "high_assurance",

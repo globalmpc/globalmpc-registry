@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   canTransition,
   disclosureRestrictionMachine,
@@ -123,7 +123,6 @@ async function readEvents(
 
 async function recordEvent(
   tx: postgres.TransactionSql,
-  tenantId: string,
   row: RestrictionRow,
   kind: EventRow["event_kind"],
   session: EnrolledSession,
@@ -132,9 +131,9 @@ async function recordEvent(
 ): Promise<void> {
   await tx`
     INSERT INTO core.disclosure_restriction_events (
-      tenant_id, restriction_id, project_id, event_kind, actor_subject_id, reason, correlation_id
+      restriction_id, project_id, event_kind, actor_subject_id, reason, correlation_id
     ) VALUES (
-      ${tenantId}, ${row.id}, ${row.project_id}, ${kind}, ${session.subjectId}, ${reason},
+      ${row.id}, ${row.project_id}, ${kind}, ${session.subjectId}, ${reason},
       ${correlationId}
     )
   `;
@@ -156,7 +155,7 @@ export async function registerDisclosureRestrictionRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/disclosure-restrictions",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = disclosureRestrictionCreateRequest.safeParse(request.body);
       if (!parsed.success) {
@@ -169,28 +168,28 @@ export async function registerDisclosureRestrictionRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "disclosure.restrict",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const data = parsed.data;
 
-      const result = await withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      const result = await withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [project] = await tx<{ id: string }[]>`
-            SELECT id FROM core.projects WHERE tenant_id = ${tenantId} AND id = ${projectId}
+            SELECT id FROM core.projects WHERE id = ${projectId}
           `;
           if (!project) throw notFound("Project not found");
 
           const id = randomUUID();
           const [row] = await tx<RestrictionRow[]>`
             INSERT INTO core.disclosure_restrictions (
-              id, tenant_id, project_id, subject_scope, restricted_action_types,
+              id, project_id, subject_scope, restricted_action_types,
               material_info_ref, reason, legal_basis, authority,
               expected_next_update_at, expected_release_at, created_by
             ) VALUES (
-              ${id}, ${tenantId}, ${projectId}, ${data.subjectScope}::uuid[],
+              ${id}, ${projectId}, ${data.subjectScope}::uuid[],
               ${[...new Set(data.restrictedActionTypes)]}, ${data.materialInfoRef},
               ${data.reason}, ${data.legalBasis}, ${data.authority},
               ${data.expectedNextUpdateAt ?? null}, ${data.expectedReleaseAt ?? null},
@@ -199,11 +198,10 @@ export async function registerDisclosureRestrictionRoutes(
             RETURNING ${tx.unsafe(SELECT_COLUMNS)}
           `;
 
-          await recordEvent(tx, tenantId, row!, "created", session, data.reason, correlationId);
+          await recordEvent(tx, row!, "created", session, data.reason, correlationId);
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId,
             session,
             command: "disclosure_restriction.created",
@@ -230,17 +228,17 @@ export async function registerDisclosureRestrictionRoutes(
   // --- Read -------------------------------------------------------------------
 
   async function list(request: Parameters<typeof requireReadContext>[0], onlyActive: boolean) {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     const projectId = (request.params as { projectId: string }).projectId;
 
-    assertAuthorized(session, "project.read", projectResource(tenantId, projectId), sessionFacts(session));
+    assertAuthorized(session, "project.read", projectResource(projectId), sessionFacts(session));
 
     const { requestId, asOf } = request.context;
-    const items = await withTenant(sql, { tenantId }, async (tx) => {
+    const items = await withActor(sql, actor, async (tx) => {
       const rows = await tx<RestrictionRow[]>`
         SELECT ${tx.unsafe(SELECT_COLUMNS)}
         FROM core.disclosure_restrictions
-        WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+        WHERE project_id = ${projectId}
           AND (${!onlyActive} OR state = 'active')
         ORDER BY created_at DESC, id
       `;
@@ -279,7 +277,7 @@ export async function registerDisclosureRestrictionRoutes(
     app.post<{ Params: { restrictionId: string } }>(
       `/api/v1/disclosure-restrictions/:restrictionId/${kind}`,
       async (request, reply) => {
-        const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+        const { session, actor, idempotencyKey } = requireMutationContext(request);
         const expected = requireIfMatch(request);
 
         const parsed = SCHEMA[kind].safeParse(request.body);
@@ -298,27 +296,27 @@ export async function registerDisclosureRestrictionRoutes(
         const { requestId, asOf, correlationId } = request.context;
         const to = TARGET[kind];
 
-        const result = await withTenant(sql, { tenantId }, async (tx) => {
+        const result = await withActor(sql, actor, async (tx) => {
           // Authorized before the idempotency lookup: a replayed key must not hand a stored
           // response to someone who could not have made the request.
           const [target] = await tx<{ project_id: string }[]>`
             SELECT project_id FROM core.disclosure_restrictions
-            WHERE tenant_id = ${tenantId} AND id = ${request.params.restrictionId}
+            WHERE id = ${request.params.restrictionId}
           `;
           if (!target) throw notFound("Disclosure restriction not found");
           const effectiveRole = assertAuthorized(
             session,
             "disclosure.restrict",
-            projectResource(tenantId, target.project_id),
+            projectResource(target.project_id),
             sessionFacts(session),
           );
 
-          return withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-            await lockProjectRestrictions(tx, tenantId, target.project_id);
+          return withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+            await lockProjectRestrictions(tx, target.project_id);
             const [current] = await tx<RestrictionRow[]>`
               SELECT ${tx.unsafe(SELECT_COLUMNS)}
               FROM core.disclosure_restrictions
-              WHERE tenant_id = ${tenantId} AND id = ${request.params.restrictionId}
+              WHERE id = ${request.params.restrictionId}
               FOR UPDATE
             `;
             if (!current) throw notFound("Disclosure restriction not found");
@@ -337,7 +335,7 @@ export async function registerDisclosureRestrictionRoutes(
               );
             }
 
-            const supersededById = await resolveReplacement(tx, tenantId, current, kind, body.supersededById);
+            const supersededById = await resolveReplacement(tx, current, kind, body.supersededById);
 
             const releaseRecord =
               kind === "release"
@@ -366,11 +364,10 @@ export async function registerDisclosureRestrictionRoutes(
 
             const eventKind =
               kind === "activate" ? "activated" : kind === "release" ? "released" : "superseded";
-            await recordEvent(tx, tenantId, row!, eventKind, session, body.reason, correlationId);
+            await recordEvent(tx, row!, eventKind, session, body.reason, correlationId);
 
             await recordAudit(tx, {
               effectiveRole,
-              tenantId,
               projectId: current.project_id,
               session,
               command: `disclosure_restriction.${eventKind}`,
@@ -387,7 +384,6 @@ export async function registerDisclosureRestrictionRoutes(
             const outboxEvent = OUTBOX_EVENT[eventKind];
             if (outboxEvent) {
               await enqueueEvent(tx, {
-                tenantId,
                 eventType: outboxEvent,
                 aggregateId: current.id,
                 aggregateVersion: row!.version,
@@ -416,7 +412,6 @@ export async function registerDisclosureRestrictionRoutes(
 
 async function resolveReplacement(
   tx: postgres.TransactionSql,
-  tenantId: string,
   current: RestrictionRow,
   kind: TransitionKind,
   supersededBy: string | null | undefined,
@@ -425,7 +420,7 @@ async function resolveReplacement(
   if (supersededById) {
     const [replacement] = await tx<{ project_id: string }[]>`
       SELECT project_id FROM core.disclosure_restrictions
-      WHERE tenant_id = ${tenantId} AND id = ${supersededById}
+      WHERE id = ${supersededById}
     `;
     // A replacement on another project would leave this project's scope unrestricted
     // while the history says it moved.

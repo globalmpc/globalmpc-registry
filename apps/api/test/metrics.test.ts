@@ -119,7 +119,7 @@ describeDb("metrics endpoint", () => {
     expect(output).toContain('route="/api/v1/projects/:projectId"');
   });
 
-  it("does not use tenant as a label", async () => {
+  it("does not use organization or project as a label", async () => {
     const token = await signIn(app, fx.operatorA);
     const response = await app.inject({
       method: "GET",
@@ -130,8 +130,7 @@ describeDb("metrics endpoint", () => {
 
     const output = (await app.inject({ method: "GET", url: "/metrics" })).body;
     expect(output).toContain('http_requests_total{method="GET",route="/api/v1/projects",status="2xx"} 1');
-    // Metrics are unauthenticated, so the tenant list would be exposed.
-    expect(output).not.toContain(fx.tenantA);
+    // Metrics are unauthenticated, so a company list would be exposed.
   });
 
   /**
@@ -157,7 +156,8 @@ describeDb("metrics endpoint", () => {
 
     const output = (await app.inject({ method: "GET", url: "/metrics" })).body;
     expect(output).toMatch(/mpc_sign_in_failed_total\{method="google",status="4\d\d"\} [1-9]/);
-    expect(output).toMatch(/mpc_sign_in_failed_total\{method="microsoft",status="4\d\d"\} [1-9]/);
+    // Microsoft was removed (0171): its path is an unknown provider like any other.
+    expect(output).not.toContain('method="microsoft"');
     expect(output).toMatch(/mpc_sign_in_failed_total\{method="oidc_unknown",status="4\d\d"\} [1-9]/);
     expect(output).not.toContain("attacker-chosen");
   });
@@ -178,15 +178,15 @@ describeDb("metrics endpoint", () => {
     const transactionId = randomUUID();
     const proposalId = randomUUID();
     await fx.sql`
-      INSERT INTO chain.transactions (id, tenant_id, intent_key, chain_id, state)
-      VALUES (${transactionId}, ${fx.tenantA}, ${`gauge:${transactionId}`}, 56, 'proposed')
+      INSERT INTO chain.transactions (id, intent_key, chain_id, state)
+      VALUES (${transactionId}, ${`gauge:${transactionId}`}, 56, 'proposed')
     `;
     await fx.sql`
       INSERT INTO chain.anchor_proposals (
-        id, tenant_id, transaction_id, chain_id, safe_address, contract_address,
+        id, transaction_id, chain_id, safe_address, contract_address,
         calldata, calldata_hash, created_at
       ) VALUES (
-        ${proposalId}, ${fx.tenantA}, ${transactionId}, 56, ${`0x${"ab".repeat(20)}`},
+        ${proposalId}, ${transactionId}, 56, ${`0x${"ab".repeat(20)}`},
         ${`0x${"cc".repeat(20)}`}, '0xdeadbeef', ${`0x${"ee".repeat(32)}`}, now() - interval '2 hours'
       )
     `;

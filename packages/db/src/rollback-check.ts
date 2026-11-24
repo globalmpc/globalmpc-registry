@@ -38,42 +38,39 @@ function withDatabase(adminUrl: string, database: string): string {
   return url.toString();
 }
 
-/** Rows every release since 0001 can hold. The upgrade must carry them across unchanged. */
+/**
+ * Rows every release since 0001 can hold. The upgrade must carry them across unchanged.
+ *
+ * Releases before 0169 file every row under a tenant; later ones have no tenant. The seed writes
+ * the shape the previous release has, so the upgrade exercises its real conversion.
+ */
 async function seed(sql: postgres.Sql): Promise<void> {
-  const tenant = randomUUID();
   const org = randomUUID();
   const subject = randomUUID();
-  await sql`
-    INSERT INTO core.tenants (id, slug, display_name) VALUES (${tenant}, 'rollback-check', 'Rollback check')
-  `;
-  await sql`
-    INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-    VALUES (${org}, ${tenant}, 'Rollback check org', 'MNG')
-  `;
-  await sql`
-    INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-    VALUES (${subject}, ${tenant}, 'person', 'Rollback check person')
-  `;
-  const [schema] = await sql<{ unified: boolean }[]>`
+  const [schema] = await sql<{ unified: boolean; tenanted: boolean }[]>`
     SELECT EXISTS(SELECT 1 FROM information_schema.columns
-      WHERE table_schema='core' AND table_name='role_bindings' AND column_name='scope_kind') AS unified
+             WHERE table_schema='core' AND table_name='role_bindings' AND column_name='scope_kind') AS unified,
+           to_regclass('core.tenants') IS NOT NULL AS tenanted
   `;
+  const tenant = schema!.tenanted ? randomUUID() : null;
+  if (tenant !== null) {
+    await sql`INSERT INTO core.tenants (id, slug, display_name) VALUES (${tenant}, 'rollback-check', 'Rollback check')`;
+  }
+  const withTenant = (row: Record<string, unknown>) => (tenant === null ? row : { tenant_id: tenant, ...row });
+  await sql`INSERT INTO core.organizations ${sql(withTenant({ id: org, legal_name: "Rollback check org", jurisdiction: "MNG" }))}`;
+  await sql`INSERT INTO core.subjects ${sql(withTenant({ id: subject, kind: "person", display_name: "Rollback check person" }))}`;
   // Seed the role understood by the previous release; upgrading must exercise its real conversion.
   const role = schema!.unified ? "administrator" : "mpc_operator";
-  await sql`
-    INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-    VALUES (${randomUUID()}, ${tenant}, ${subject}, ${org}, ${role})
-  `;
-  await sql`
-    INSERT INTO core.projects (
-      id, tenant_id, project_key, name, host_country_iso3, owner_organization_id
-    ) VALUES (${randomUUID()}, ${tenant}, 'RB-1', 'Rollback check project', 'MNG', ${org})
-  `;
+  await sql`INSERT INTO core.role_bindings ${sql(withTenant({ id: randomUUID(), subject_id: subject, organization_id: org, role }))}`;
+  await sql`INSERT INTO core.projects ${sql(withTenant({
+    id: randomUUID(), project_key: "RB-1", name: "Rollback check project", host_country_iso3: "MNG", owner_organization_id: org,
+  }))}`;
 }
 
+/** Rows that exist in every release; the tenant table does not survive 0169. */
 async function counts(sql: postgres.Sql): Promise<string> {
-  const [row] = await sql<{ tenants: number; bindings: number; projects: number }[]>`
-    SELECT (SELECT count(*) FROM core.tenants)::int AS tenants,
+  const [row] = await sql<{ organizations: number; bindings: number; projects: number }[]>`
+    SELECT (SELECT count(*) FROM core.organizations)::int AS organizations,
            (SELECT count(*) FROM core.role_bindings)::int AS bindings,
            (SELECT count(*) FROM core.projects)::int AS projects
   `;

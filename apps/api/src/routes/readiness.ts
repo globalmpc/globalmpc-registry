@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { canonicalBytes, keccak256 } from "@mpc/canonical";
 import { checkGateDecision, type ReadinessStatus } from "@mpc/domain";
 import {
@@ -91,8 +91,8 @@ const createDecisionSchema = decisionContentSchema.extend({
 /** How long a gate decision signature request stays usable. Same as attestation requests. */
 const SIGNATURE_REQUEST_TTL_MS = 10 * 60 * 1000;
 
-const GATE_RESOURCE = (tenantId: string, projectId: string) =>
-  projectResource(tenantId, projectId, {
+const GATE_RESOURCE = ( projectId: string) =>
+  projectResource(projectId, {
     state: "assessed",
     statesAllowingAction: ["assessed"],
     // Gate decisions require independence (02 §2.4).
@@ -230,7 +230,7 @@ export async function collectRequirementFacts(
     SELECT a.attestation_type, a.claim_scope, asn.subject_id AS reviewer_subject_id, a.case_id
     FROM core.verification_attestations a
     JOIN core.verification_cases vc ON vc.id = a.case_id
-    JOIN core.assignments asn ON asn.id=a.assignment_id AND asn.tenant_id=a.tenant_id
+    JOIN core.assignments asn ON asn.id=a.assignment_id
     WHERE vc.project_id = ${projectId}
       AND a.state IN ('signed', 'active')
       AND (a.valid_until IS NULL OR a.valid_until > ${evaluatedAsOf})
@@ -365,7 +365,7 @@ export async function registerReadinessRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/readiness-assessments",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = z
         .object({ policySetId: z.string().guid() })
@@ -377,15 +377,15 @@ export async function registerReadinessRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "readiness.recompute",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [policy] = await tx<
             {
               id: string;
@@ -465,11 +465,11 @@ export async function registerReadinessRoutes(
 
           await tx`
             INSERT INTO core.compliance_assessments (
-              id, tenant_id, project_id, gate_id, policy_set_id,
+              id, project_id, gate_id, policy_set_id,
               input_snapshot_hash, evaluated_as_of, status, requirement_results,
               canonical_result_hash, evidence_actor_ids
             ) VALUES (
-              ${id}, ${tenantId}, ${request.params.projectId}, ${policy.gate_id},
+              ${id}, ${request.params.projectId}, ${policy.gate_id},
               ${policy.id}, ${inputSnapshotHash}, ${evaluatedAsOf.toISOString()},
               ${assessment.status}, ${tx.json(assessment.requirementResults as never)},
               ${canonicalResultHash}, ${evidenceProvenance.complete ? [...evidenceProvenance.actors].sort() : null}::uuid[]
@@ -478,7 +478,6 @@ export async function registerReadinessRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: request.params.projectId,
             session,
             command: "readiness.assessed",
@@ -490,7 +489,6 @@ export async function registerReadinessRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "readiness.assessed",
             aggregateId: id,
             aggregateVersion: 1,
@@ -530,9 +528,9 @@ export async function registerReadinessRoutes(
     "/api/v1/readiness-assessments/:assessmentId",
     async (request) => {
       const session = request.session;
-      if (!session?.tenantId) throw notFound("Assessment not found");
+      if (!session?.subjectId) throw notFound("Assessment not found");
 
-      const [row] = await withTenant(sql, { tenantId: session.tenantId }, (tx) =>
+      const [row] = await withActor(sql, { subjectId: session.subjectId }, (tx) =>
         tx<
           {
             id: string;
@@ -557,7 +555,7 @@ export async function registerReadinessRoutes(
       assertAuthorized(
         session,
         "readiness.read",
-        projectResource(session.tenantId, row.project_id),
+        projectResource(row.project_id),
         sessionFacts(session),
       );
 
@@ -591,7 +589,7 @@ export async function registerReadinessRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/gate-decisions/signature-requests",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = decisionContentSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -603,7 +601,7 @@ export async function registerReadinessRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "gate.decide",
-        GATE_RESOURCE(tenantId, request.params.projectId),
+        GATE_RESOURCE( request.params.projectId),
         sessionFacts(session),
       );
 
@@ -612,8 +610,8 @@ export async function registerReadinessRoutes(
       const content = parsed.data;
       const projectId = request.params.projectId;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const basis = await loadDecisionBasis(tx, projectId, content, session.subjectId);
 
           const [project] = await tx<{ project_key: string }[]>`
@@ -631,17 +629,16 @@ export async function registerReadinessRoutes(
 
           await tx`
             INSERT INTO core.gate_decision_signature_requests (
-              id, tenant_id, project_id, subject_id, input_assessment_id, gate_id,
+              id, project_id, subject_id, input_assessment_id, gate_id,
               nonce, payload_hash, issued_at, expires_at
             ) VALUES (
-              ${id}, ${tenantId}, ${projectId}, ${session.subjectId!}, ${basis.id},
+              ${id}, ${projectId}, ${session.subjectId!}, ${basis.id},
               ${content.gateId}, ${nonce}, ${payloadHash}, ${issuedAt}, ${expiresAt}
             )
           `;
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId,
             session,
             command: "gate.decision.signature_request.created",
@@ -698,7 +695,7 @@ export async function registerReadinessRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/gate-decisions",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = createDecisionSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -710,7 +707,7 @@ export async function registerReadinessRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "gate.decide",
-        GATE_RESOURCE(tenantId, request.params.projectId),
+        GATE_RESOURCE( request.params.projectId),
         sessionFacts(session),
       );
 
@@ -719,8 +716,8 @@ export async function registerReadinessRoutes(
       const data = parsed.data;
       const projectId = request.params.projectId;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const basis = await loadDecisionBasis(tx, projectId, data, session.subjectId);
 
           // Consumes the request atomically. A second submission finds no row; a request issued
@@ -802,12 +799,12 @@ export async function registerReadinessRoutes(
           const id = randomUUID();
           const [recorded] = await tx<{ signed_at: Date }[]>`
             INSERT INTO core.gate_decisions (
-              id, tenant_id, project_id, gate_id, decision, input_assessment_id,
+              id, project_id, gate_id, decision, input_assessment_id,
               evidence_snapshot_hash, decision_authority, decision_maker_subject_id,
               rationale, assumptions, conditions, signature, signer_wallet_address,
               signature_request_id, signed_at
             ) VALUES (
-              ${id}, ${tenantId}, ${projectId}, ${data.gateId},
+              ${id}, ${projectId}, ${data.gateId},
               ${data.decision}, ${basis.id}, ${basis.inputSnapshotHash},
               'MPC Gate Approver', ${session.subjectId!}, ${data.rationale},
               ${data.assumptions}, ${data.conditions}, ${data.signature.toLowerCase()},
@@ -818,7 +815,6 @@ export async function registerReadinessRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId,
             session,
             command: "gate.decision.recorded",
@@ -832,7 +828,6 @@ export async function registerReadinessRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "gate.decision.recorded",
             aggregateId: id,
             aggregateVersion: 1,

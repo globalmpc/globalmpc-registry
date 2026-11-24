@@ -10,9 +10,9 @@ assessment. A later deploy also resumes an unfinished seed; new demo versions us
 | Case | Authority / time | Input scope | Outcome / priority |
 | --- | --- | --- | --- |
 | Environment | Deployment configuration and chain ID | `develop`, opBNB testnet 5611 only | Refuse other environments before connecting to storage or DB |
-| Tenant / owner | Existing tenant and configured owning organization | Existing workspace; no tenant or real account is created or changed | Ambiguous or missing owner fails closed |
+| Owner | Configured owning organization in the Registry | Existing Registry; no real account is created or changed | Ambiguous or missing owner fails closed |
 | Scenario identity | Stable v1 project key and seed audit markers | Seed-owned project only | Preserve user edits and revocations. Only untouched legacy fixture identities qualify for a profile correction. |
-| Partial run | Per-tenant advisory lock, committed start marker | Generated quarantined document | Resume after actual scan worker success; infection or timeout fails the seed task |
+| Partial run | Registry-wide advisory lock, committed start marker | Generated quarantined document | Resume after actual scan worker success; infection or timeout fails the seed task |
 | Incomplete scenario edited by a user | Locked project and restriction scope | Project metadata, claims, documents, facts and restrictions | Stop without adding reviews or publication; only untouched partial fixtures resume |
 | Review | Explicit synthetic fixture with a fresh, discarded signing key | Demo claim only; separate fixture identities, no login methods or role grants | Store a cryptographically signed simulation, never an official-source confirmation or human approval |
 | Publication | Canonical hashing and current project identity | Public synthetic projection and mandatory limitations | Keep published payloads, assessment dates, hashes and anchor proofs immutable. Link metadata corrections as successor versions. |
@@ -22,14 +22,15 @@ The migration owner creates labelled **fixture records**, not real professional 
 The fixture people have no email, passkey, session or roles. No authentication bypass or test
 support function is installed. No existing mining policy, claim catalog version or authority is changed. New catalog versions
 and the synthetic stage policies are bound to the exact seed-owned demo project. They
-cannot apply to another demo, a normal project or another tenant.
+cannot apply to another demo or a normal project.
 The generated document is plain text and still goes through the deployed scan worker.
 
-`DEMO-V1-INPUT-<tenant UUID>`, `DEMO-V1-REVIEW-<tenant UUID>`, and `DEMO-V1-PUBLIC-<tenant UUID>`
-and `DEMO-V1-STAGE-1-<tenant UUID>` through `DEMO-V1-STAGE-5-<tenant UUID>`
-are reserved for this seed. The tenant suffix keeps public keys unique across workspaces. A collision
-with an existing non-seed project is an error. The owner must already exist in the scan worker's
-tenant. Set `DEMO_OWNER_ORGANIZATION_NAME` when there is more than one operator organization.
+`DEMO-V1-INPUT-<ns>`, `DEMO-V1-REVIEW-<ns>`, and `DEMO-V1-PUBLIC-<ns>`
+and `DEMO-V1-STAGE-1-<ns>` through `DEMO-V1-STAGE-5-<ns>`
+are reserved for this seed. `<ns>` is the suffix of an existing seeded `DEMO-V1-INPUT-` project —
+seeds before 0169 used the deployment's then-only tenant UUID, so a rerun recognises them — or
+`registry` on a Registry seeded afresh. A collision with an existing non-seed project is an error.
+The owner organization must already exist. Set `DEMO_OWNER_ORGANIZATION_NAME` when there is more than one operator organization.
 
 The CI task must stop on task launch failures, missing exit codes, scan failures and timeouts.
 A seed failure fails its CI step; it does not roll back services that were already deployed.

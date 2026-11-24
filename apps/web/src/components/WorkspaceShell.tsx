@@ -12,7 +12,7 @@ function useProjectContext(pathname: string) {
   const { token, session } = useSession();
   const projectId = /^\/w\/projects\/([^/]+)(?:\/|$)/.exec(pathname)?.[1];
   const selectedId = projectId && projectId !== "new" ? projectId : null;
-  const identity = `${session?.tenantId ?? ""}:${session?.subjectId ?? ""}`;
+  const identity = `${session?.subjectId ?? ""}`;
   const actions = session?.actions ?? [];
   const context = useProjectLookup(token, selectedId, identity, session?.actions);
   const project =

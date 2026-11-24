@@ -16,7 +16,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 /**
  * What an idempotency key covers — 07 §7.1.
  *
- * Keys are stored per tenant and the request hash used to cover the body only. The same key
+ * Keys were stored per tenant and the request hash used to cover the body only. The same key
  * and body sent to another resource, or by another person in the same tenant, matched the
  * stored hash and **replayed someone else's response** instead of being refused.
  */
@@ -24,7 +24,7 @@ describeDb("idempotency key scope", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
   let operatorAToken: string;
-  /** A second operator in tenant A — same tenant, different person. */
+  /** A second operator of company A — same scope, different person. */
   let operatorSecondToken: string;
 
   beforeAll(async () => {
@@ -35,21 +35,21 @@ describeDb("idempotency key scope", () => {
     const second = newAccount();
     const subjectId = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subjectId}, ${fx.tenantA}, 'person', 'Operator Idempotency')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subjectId}, 'person', 'Operator Idempotency')
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${second.address},
+        ${randomUUID()}, ${subjectId}, ${second.address},
         31337, 'high_assurance', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'administrator')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, 'administrator')
     `;
     operatorSecondToken = await signIn(app, second);
   });
@@ -104,7 +104,7 @@ describeDb("idempotency key scope", () => {
     expect(other.json().code).toBe("IDEMPOTENCY_KEY_REUSE");
   });
 
-  it("does not replay another person's response in the same tenant", async () => {
+  it("does not replay another person's response", async () => {
     const key = idempotencyKey();
     const body = { displayName: `shared key ${randomUUID().slice(0, 6)}` };
 

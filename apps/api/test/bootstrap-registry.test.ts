@@ -7,7 +7,7 @@ import {
   bootstrapPolicySet,
   BootstrapRegistryError,
 } from "../src/bootstrap-registry.js";
-import { setupFixture, type TestFixture } from "./helpers/db.js";
+import { newAccount, setupBareRegistry, type BareRegistry } from "./helpers/db.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -23,12 +23,11 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * later check pass.
  */
 describeDb("review registry bootstrap", () => {
-  let fx: TestFixture;
-  let tenantSlug: string;
+  // Bootstrap seeds a Registry before anyone uses it: a Registry of this suite's own.
+  let fx: BareRegistry;
 
   beforeAll(async () => {
-    fx = await setupFixture();
-    tenantSlug = `br-${randomUUID().slice(0, 8)}`;
+    fx = await setupBareRegistry();
   });
 
   afterAll(async () => {
@@ -38,7 +37,7 @@ describeDb("review registry bootstrap", () => {
   const newEmail = () => `reviewer-${randomUUID().slice(0, 8)}@example.test`;
 
   /**
-   * The tenant's reviewer, the way an operator brings in the first one: bootstrap, by email (no
+   * The Registry's reviewer, the way an operator brings in the first one: bootstrap, by email (no
    * wallet, WP7). Bootstrap creates only the first holder of a role, so every case shares it.
    */
   let seeded: string | null = null;
@@ -46,8 +45,6 @@ describeDb("review registry bootstrap", () => {
     if (seeded !== null) return seeded;
     const email = newEmail();
     await bootstrapOperator(fx.sql, {
-      tenantSlug,
-      tenantName: "Bootstrap registry tenant",
       organizationName: "Bootstrap registry org",
       jurisdiction: "MNG",
       subjectName: "Reviewer",
@@ -61,7 +58,6 @@ describeDb("review registry bootstrap", () => {
 
   function credential(overrides: Record<string, unknown> = {}) {
     return {
-      tenantSlug,
       issuerReference: `CP #${randomUUID().slice(0, 8)}`,
       credentialType: "competent_person",
       credentialScope: ["mining_right_registration"],
@@ -129,7 +125,7 @@ describeDb("review registry bootstrap", () => {
     );
     await expect(
       bootstrapCredential(fx.sql, credential({ walletAddress: `0x${"9".repeat(40)}` })),
-    ).rejects.toThrow(/is not in this tenant/);
+    ).rejects.toThrow(/is bound to no person/);
   });
 
   it("names the holder by exactly one of email or a wallet they hold, and never echoes the address", async () => {
@@ -142,36 +138,35 @@ describeDb("review registry bootstrap", () => {
     await expect(malformed).rejects.toThrow(/not one email address/);
     await expect(malformed).rejects.not.toThrow(/secret-person/);
 
-    // A wallet the holder bound still names them (fixture tenant A's reviewer).
-    const created = await bootstrapCredential(fx.sql, {
-      ...credential({ walletAddress: fx.reviewerA.address.toUpperCase().replace("0X", "0x") }),
-      tenantSlug: `t-${fx.tenantA.slice(0, 8)}`,
-    });
+    // A wallet the holder bound still names them.
+    const holder = randomUUID(), key = newAccount();
+    await fx.sql`INSERT INTO core.subjects (id, kind, display_name, assurance_level) VALUES (${holder}, 'person', 'Wallet holder', 'high_assurance')`;
+    await fx.sql`INSERT INTO core.wallet_identities (id, subject_id, wallet_address, chain_id, assurance_level, bound_at)
+      VALUES (${randomUUID()}, ${holder}, ${key.address}, 31337, 'high_assurance', now())`;
+    const created = await bootstrapCredential(fx.sql,
+      credential({ walletAddress: key.address.toUpperCase().replace("0X", "0x") }));
     expect(created).toMatchObject({ created: true, state: "valid" });
     const [row] = await fx.sql<{ subject_id: string }[]>`SELECT subject_id FROM core.credentials WHERE id = ${created.id}`;
-    expect(row!.subject_id).toBe(fx.reviewerSubjectA);
+    expect(row!.subject_id).toBe(holder);
   });
 
   it("refuses a wallet address that changed hands rather than guess which holder is meant", async () => {
     const address = `0x${randomUUID().replaceAll("-", "").slice(0, 32)}${"a".repeat(8)}`;
     const [earlier, current] = [randomUUID(), randomUUID()];
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-      VALUES (${earlier}, ${fx.tenantA}, 'person', 'Earlier holder', 'wallet_only'),
-             (${current}, ${fx.tenantA}, 'person', 'Current holder', 'wallet_only')
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+      VALUES (${earlier}, 'person', 'Earlier holder', 'wallet_only'),
+             (${current}, 'person', 'Current holder', 'wallet_only')
     `;
     // The earlier holder retired the key; someone else proved it and holds it now.
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at, bound_via, disabled_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at, bound_via, disabled_at
       ) VALUES
-        (${randomUUID()}, ${fx.tenantA}, ${earlier}, ${address}, 31337, 'wallet_only', now() - interval '2 days', 'proof', now() - interval '1 day'),
-        (${randomUUID()}, ${fx.tenantA}, ${current}, ${address}, 31337, 'wallet_only', now(), 'proof', NULL)
+        (${randomUUID()}, ${earlier}, ${address}, 31337, 'wallet_only', now() - interval '2 days', 'proof', now() - interval '1 day'),
+        (${randomUUID()}, ${current}, ${address}, 31337, 'wallet_only', now(), 'proof', NULL)
     `;
-    const refused = bootstrapCredential(fx.sql, {
-      ...credential({ walletAddress: address }),
-      tenantSlug: `t-${fx.tenantA.slice(0, 8)}`,
-    });
+    const refused = bootstrapCredential(fx.sql, credential({ walletAddress: address }));
     await expect(refused).rejects.toThrow(/may have changed hands\. Name the holder by email/);
     expect(await fx.sql`SELECT 1 FROM core.credentials WHERE subject_id IN (${earlier}, ${current})`).toHaveLength(0);
   });
@@ -179,7 +174,6 @@ describeDb("review registry bootstrap", () => {
   it("a review spec without an approver is draft", async () => {
     await seedPerson();
     const result = await bootstrapAttestationSchema(fx.sql, {
-      tenantSlug,
       schemaKey: `signoff-${randomUUID().slice(0, 8)}`,
       schemaVersion: "1",
       attestationType: "professional_signoff",
@@ -196,8 +190,7 @@ describeDb("review registry bootstrap", () => {
     await seedPerson();
     await expect(
       bootstrapAttestationSchema(fx.sql, {
-        tenantSlug,
-        schemaKey: `nolimit-${randomUUID().slice(0, 8)}`,
+          schemaKey: `nolimit-${randomUUID().slice(0, 8)}`,
         schemaVersion: "1",
         attestationType: "professional_signoff",
         requiredEvidence: [],
@@ -213,7 +206,6 @@ describeDb("review registry bootstrap", () => {
     await seedPerson();
     const schemaKey = `approved-${randomUUID().slice(0, 8)}`;
     const result = await bootstrapAttestationSchema(fx.sql, {
-      tenantSlug,
       schemaKey,
       schemaVersion: "1",
       attestationType: "professional_signoff",
@@ -239,7 +231,6 @@ describeDb("review registry bootstrap", () => {
     await seedPerson();
     const schemaKey = `two-step-${randomUUID().slice(0, 8)}`;
     const args = {
-      tenantSlug,
       schemaKey,
       schemaVersion: "1",
       attestationType: "professional_signoff",
@@ -272,11 +263,10 @@ describeDb("review registry bootstrap", () => {
     await seedPerson();
     const definition = { ...RULE_SET, ruleSetId: `two-step-${randomUUID().slice(0, 8)}` };
 
-    const drafted = await bootstrapPolicySet(fx.sql, { tenantSlug, definition, approvedBy: null });
+    const drafted = await bootstrapPolicySet(fx.sql, { definition, approvedBy: null });
     expect(drafted.state).toBe("draft");
 
     const approved = await bootstrapPolicySet(fx.sql, {
-      tenantSlug,
       definition,
       approvedBy: "Verification lead",
     });
@@ -288,8 +278,7 @@ describeDb("review registry bootstrap", () => {
     await seedPerson();
     await expect(
       bootstrapPolicySet(fx.sql, {
-        tenantSlug,
-        definition: { ...RULE_SET, version: "1" },
+          definition: { ...RULE_SET, version: "1" },
         approvedBy: null,
       }),
     ).rejects.toThrow(BootstrapRegistryError);
@@ -298,7 +287,6 @@ describeDb("review registry bootstrap", () => {
   it("takes row columns from the rule set values", async () => {
     await seedPerson();
     const result = await bootstrapPolicySet(fx.sql, {
-      tenantSlug,
       definition: RULE_SET,
       approvedBy: "Verification lead",
     });

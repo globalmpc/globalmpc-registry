@@ -24,6 +24,6 @@ $$;
 
 GRANT USAGE ON SCHEMA core, chain, audit TO mpc_app_login, mpc_worker_login;
 
--- The worker is a system process that spans multiple tenants (0012). It bypasses RLS, but
+-- The worker is a system process that reads across projects (0012). It bypasses RLS, but
 -- the bypass is limited to the privileges granted to mpc_worker.
 ALTER ROLE mpc_worker_login BYPASSRLS;

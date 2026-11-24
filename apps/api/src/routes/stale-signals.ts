@@ -2,13 +2,13 @@ import { authorizedProjectLookup } from "../services/authorized-project-lookup.j
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import {
   assertAuthorized,
   projectResource,
   sessionFacts,
-  tenantResource,
+  registryResource,
 } from "../plugins/authorize.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
@@ -101,19 +101,19 @@ export async function registerStaleSignalRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/stale-signals",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
 
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
       const { requestId, asOf } = request.context;
 
-      const rows = await withTenant(
+      const rows = await withActor(
         sql,
-        { tenantId },
+        actor,
         (tx) =>
           tx<SignalRow[]>`
           SELECT id, project_id, target_type::text AS target_type, target_id,
@@ -139,7 +139,7 @@ export async function registerStaleSignalRoutes(
   app.post<{ Params: { signalId: string } }>(
     "/api/v1/stale-signals/:signalId/resolve",
     async (request) => {
-      const { session, tenantId } = requireMutationContext(request);
+      const { session, actor } = requireMutationContext(request);
 
       const parsed = resolveSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -157,16 +157,16 @@ export async function registerStaleSignalRoutes(
        */
       const { requestId, asOf, correlationId } = request.context;
 
-      const target = await authorizedProjectLookup(session, "registry.revoke", () => withTenant(sql, { tenantId }, async tx => {
+      const target = await authorizedProjectLookup(session, "registry.revoke", () => withActor(sql, actor, async tx => {
         const [signal] = await tx<{project_id: string | null}[]>`SELECT project_id FROM core.evidence_stale_signals WHERE id=${request.params.signalId}`;
         if (!signal) throw notFound("Signal not found");
         return signal;
       }), signal => signal.project_id);
       assertAuthorized(session, "registry.revoke",
-        target.project_id ? projectResource(tenantId, target.project_id, {sensitivity:"public"})
-          : tenantResource(tenantId, {sensitivity:"public",requiresTenantScope:true}), sessionFacts(session));
+        target.project_id ? projectResource(target.project_id, {sensitivity:"public"})
+          : registryResource({sensitivity:"public",requiresRegistryScope:true}), sessionFacts(session));
 
-      return withTenant(sql, { tenantId }, async (tx) => {
+      return withActor(sql, actor, async (tx) => {
         const [current] = await tx<SignalRow[]>`
           SELECT id, project_id, target_type::text AS target_type, target_id,
                  origin_attestation_id, reason, detected_at,
@@ -177,8 +177,8 @@ export async function registerStaleSignalRoutes(
         `;
         if (!current) throw notFound("Signal not found");
         const effectiveRole = assertAuthorized(session, "registry.revoke",
-          current.project_id ? projectResource(tenantId, current.project_id, {sensitivity:"public"})
-            : tenantResource(tenantId, {sensitivity:"public",requiresTenantScope:true}), sessionFacts(session));
+          current.project_id ? projectResource(current.project_id, {sensitivity:"public"})
+            : registryResource({sensitivity:"public",requiresRegistryScope:true}), sessionFacts(session));
 
         if (current.resolution !== "open") {
           throw conflict("SIGNAL_ALREADY_RESOLVED", `Already closed as ${current.resolution}`);
@@ -215,7 +215,6 @@ export async function registerStaleSignalRoutes(
          */
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           ...(current.project_id ? { projectId: current.project_id } : {}),
           session,
           command: "stale_signal.resolved",
@@ -232,7 +231,6 @@ export async function registerStaleSignalRoutes(
         });
 
         await enqueueEvent(tx, {
-          tenantId,
           eventType: "stale_signal.resolved",
           aggregateId: current.id,
           aggregateVersion: 1,

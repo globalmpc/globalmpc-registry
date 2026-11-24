@@ -40,7 +40,7 @@ export default function GateDecisionPage({
 }) {
   const { id, gateId } = use(params);
   const { session } = useSession();
-  return <GateWorkspace key={JSON.stringify([session?.tenantId, session?.subjectId, id, gateId])} id={id} gateId={gateId} />;
+  return <GateWorkspace key={JSON.stringify([session?.subjectId, id, gateId])} id={id} gateId={gateId} />;
 }
 
 function GateWorkspace({ id, gateId }: { id: string; gateId: string }) {

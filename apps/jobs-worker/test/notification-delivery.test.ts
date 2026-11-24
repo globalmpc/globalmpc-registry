@@ -31,7 +31,6 @@ const PUBLIC_ADDRESS = "203.0.113.10";
  */
 describeDb("notification delivery", () => {
   let sql: postgres.Sql;
-  let tenantId: string;
   let sinkId: string;
 
   const options = {
@@ -57,11 +56,6 @@ describeDb("notification delivery", () => {
 
   beforeAll(async () => {
     sql = await connectIsolated("notify");
-    tenantId = randomUUID();
-    await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenantId}, ${`notify-${tenantId.slice(0, 8)}`}, 'Notify tenant')
-    `;
   });
 
   afterAll(async () => {
@@ -74,16 +68,16 @@ describeDb("notification delivery", () => {
     await sql`DELETE FROM core.notification_sinks`;
     sinkId = randomUUID();
     await sql`
-      INSERT INTO core.notification_sinks (id, tenant_id, url, secret_reference)
-      VALUES (${sinkId}, ${tenantId}, 'https://hooks.example.test/a', 'env:WEBHOOK_SECRET_OK')
+      INSERT INTO core.notification_sinks (id, url, secret_reference)
+      VALUES (${sinkId}, 'https://hooks.example.test/a', 'env:WEBHOOK_SECRET_OK')
     `;
   });
 
   async function makeNotification(): Promise<string> {
     const id = randomUUID();
     await sql`
-      INSERT INTO core.notifications (id, tenant_id, kind, audience_role, summary, link)
-      VALUES (${id}, ${tenantId}, 'registry_revoked', 'administrator', 'Record revoked', '/w/registries')
+      INSERT INTO core.notifications (id, kind, audience_role, summary, link)
+      VALUES (${id}, 'registry_revoked', 'administrator', 'Record revoked', '/w/registries')
     `;
     return id;
   }

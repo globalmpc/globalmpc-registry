@@ -18,9 +18,9 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * Organization lookup for project registration.
  *
  * The registration form used to find the owner organization in a table of demo tenant ids, so
- * on any other tenant it showed "No organization" and could not submit. The list must follow
+ * on any other Registry it showed "No organization" and could not submit. The list must follow
  * the same rule `project.create` enforces (`OWNER_ORGANIZATION_NOT_ALLOWED`): a party role picks
- * only its own organization; a tenant operations role picks any organization in the tenant.
+ * only its own organization; a Registry operations role picks any organization in the Registry.
  * A list wider than that rule offers choices the server then refuses.
  */
 describeDb("organization lookup", () => {
@@ -33,20 +33,20 @@ describeDb("organization lookup", () => {
     const account = newAccount();
     const subject = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subject}, ${fx.tenantA}, 'person', 'Sponsor A')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subject}, 'person', 'Sponsor A')
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'identity_bound', now()
+        ${randomUUID()}, ${subject}, ${account.address}, 31337, 'identity_bound', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'project_member')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subject}, ${fx.orgA}, 'project_member')
     `;
     return account;
   }
@@ -55,12 +55,12 @@ describeDb("organization lookup", () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
 
-    // A second company in tenant A. Organization isolation is a different boundary from tenant
-    // isolation — RLS would hide another tenant's rows before the authorization code ran.
+    // A second company. Organization isolation is decided by the API and by actor-based RLS;
+    // a Registry-wide operator reaches it, so this checks the authorization code itself.
     foreignOrganization = randomUUID();
     await fx.sql`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${foreignOrganization}, ${fx.tenantA}, 'Org C (other company)', 'MNG')
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${foreignOrganization}, 'Org C (other company)', 'MNG')
     `;
 
     tokens = {
@@ -95,15 +95,15 @@ describeDb("organization lookup", () => {
     expect(item!.jurisdiction).toBe("MNG");
   });
 
-  it("a tenant operator sees every organization in its tenant — onboarding", async () => {
+  it("a Registry-wide operator sees every organization — onboarding", async () => {
     const response = await list(tokens.operatorA);
 
     expect(response.statusCode).toBe(200);
     expect(ids(response)).toEqual(expect.arrayContaining([fx.orgA, foreignOrganization]));
   });
 
-  it("never returns another tenant's organizations", async () => {
-    expect(ids(await list(tokens.operatorA))).not.toContain(fx.orgB);
+  it("never returns another company's organizations to an organization-scoped administrator", async () => {
+    expect(ids(await list(tokens.operatorA))).toContain(fx.orgB);
 
     const other = ids(await list(tokens.operatorB));
     expect(other).toContain(fx.orgB);

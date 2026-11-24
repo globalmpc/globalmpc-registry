@@ -57,7 +57,7 @@ export interface S3StoreOptions {
   /**
    * KMS key ARN/ID. Used when `sse: "kms"`.
    *
-   * Per-tenant keys are not possible until OD-18 is settled, so this is a single key. Exposing
+   * Per-organization keys are not possible until OD-18 is settled, so this is a single key. Exposing
    * that in config lets the code show what must change later.
    */
   readonly kmsKeyId?: string;

@@ -8,7 +8,7 @@ import { ROLE_DEPLOY_BOUND } from "./audit.js";
 /**
  * Operational bootstrap — inserts the first person into a deployed system.
  *
- * Migrations create only the schema. Without a tenant, organization, person and role on top,
+ * Migrations create only the schema. Without an organization, person and role on top,
  * nobody can sign in, and nobody could invite the first person: invitations are an admin action.
  *
  * `apps/web/e2e/seed.ts` cannot substitute. It drops and recreates the schema, and the private
@@ -18,14 +18,13 @@ import { ROLE_DEPLOY_BOUND } from "./audit.js";
  * This function **deletes nothing.** Re-running with the same input leaves existing rows as is
  * and fills only what is missing. It must be safe for the deploy pipeline to call every time.
  *
- * Called by the migration table owner. Resolve/create the global tenant first, then keep
- * all account operations inside its RLS scope. Global email uniqueness is enforced by the DB.
+ * Called by the migration table owner, which bypasses row-level security as the definer
+ * functions it owns already require (`deploy-authority.ts`). Email uniqueness is enforced by the DB.
  *
  * **Email only** (account authentication WP2, WP7). The person signs in by emailed code, then
  * enrols a second factor. Bootstrap binds no wallet: a wallet is a signing key the holder binds
  * from Settings by proof of possession (WP5), and a key attached here would be one nobody proved
- * holding. An address already on another tenant's person stops the run: moving an address is the
- * two-person email change, not something a deploy pipeline does.
+ * holding. Moving an address is the two-person email change, not something a deploy pipeline does.
  *
  * **First-enrolment window** (WP3, migration 0118). A person may enrol a first passkey or TOTP
  * from an email-code session only within 24 hours of creation or of an approved reset. A first
@@ -45,7 +44,7 @@ import { ROLE_DEPLOY_BOUND } from "./audit.js";
  *   that decision. An admin grants it again through the API if it should come back.
  *
  * And it **creates only the first holder of the role**: a new binding is created only when the
- * tenant has never had anyone hold the role (revoked bindings count) and the address is not one
+ * Registry has never had anyone hold the role (revoked bindings count) and the address is not one
  * a completed email change moved away from. Otherwise a deploy still naming an operator's old
  * address would hand the role to whoever reads that mailbox, including an existing account
  * (`refuseNewHolder`).
@@ -72,10 +71,7 @@ export class BootstrapError extends Error {
 }
 
 export interface BootstrapInput {
-  /** Tenant identifier. Reused if it already exists. */
-  readonly tenantSlug: string;
-  readonly tenantName: string;
-  /** Organization legal name. Reused if the same name exists in the same tenant. */
+  /** Organization legal name. Reused if an organization of that name exists. */
   readonly organizationName: string;
   /** ISO3 jurisdiction code. */
   readonly jurisdiction: string;
@@ -89,7 +85,6 @@ export interface BootstrapInput {
 }
 
 export interface BootstrapResult {
-  readonly tenantId: string;
   readonly organizationId: string;
   readonly subjectId: string;
   /** Whether this call created the subject. False if it already existed. */
@@ -129,11 +124,8 @@ const ASSURANCE_LEVELS: readonly AssuranceLevel[] = [
  * request gets 403, and the screen shows no reason. So it is blocked here.
  */
 function validate(input: BootstrapInput): { email: string } {
-  if (input.tenantSlug.trim() === "") {
-    throw new BootstrapError("tenantSlug is empty");
-  }
-  if (input.tenantName.trim() === "" || input.organizationName.trim() === "") {
-    throw new BootstrapError("tenantName and organizationName are required");
+  if (input.organizationName.trim() === "") {
+    throw new BootstrapError("organizationName is required");
   }
   if (input.subjectName.trim() === "") {
     throw new BootstrapError("subjectName is required");
@@ -181,27 +173,16 @@ export async function bootstrapOperator(
 
   await requireDeploymentOwner(sql);
   return sql.begin(async (tx) => {
-    const tenantId = await upsertTenant(tx, input);
-    await tx`SELECT set_config('app.current_tenant', ${tenantId}, true)`;
+    // Serialize first-holder decisions across bootstrap runs. An advisory lock takes no row lock,
+    // so ordinary inserts and their foreign-key locks are never blocked by it.
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${"bootstrap-first-holder"}, 0))`;
     if (input.subjectId !== undefined) return initializeLegacyOperator(tx, input, email);
-    // Lock visible same-tenant accounts. The global unique email constraint rejects a hidden
-    // other-tenant collision; transaction rollback also removes a newly-created tenant.
-    const existingEmail = await tx<{ id: string; tenant_id: string; suspended: boolean; assurance_level: AssuranceLevel }[]>`
-      SELECT id, tenant_id, suspended_at IS NOT NULL AS suspended, assurance_level
+    const existingEmail = await tx<{ id: string; suspended: boolean; assurance_level: AssuranceLevel }[]>`
+      SELECT id, suspended_at IS NOT NULL AS suspended, assurance_level
       FROM core.subjects WHERE email = ${email}
       FOR UPDATE
     `;
-
-    // Serialize first-holder decisions across bootstrap runs without conflicting with the
-    // KEY SHARE locks ordinary tenant-owned inserts take for their foreign keys.
-    await tx`SELECT id FROM core.tenants WHERE id = ${tenantId} FOR NO KEY UPDATE`;
-
     const byEmail = existingEmail[0];
-    if (byEmail && byEmail.tenant_id !== tenantId) {
-      throw new BootstrapError(
-        "This email address already belongs to a person in another tenant. One address signs in to one account",
-      );
-    }
 
     if (byEmail?.suspended) {
       throw new BootstrapError(
@@ -216,7 +197,7 @@ export async function bootstrapOperator(
       throw new BootstrapError("The existing person's stored assurance is insufficient; bootstrap never upgrades it");
     }
 
-    const organizationId = await upsertOrganization(tx, tenantId, input);
+    const organizationId = await upsertOrganization(tx, input);
 
     let subjectId = byEmail?.id ?? null;
     const created = subjectId === null;
@@ -226,9 +207,9 @@ export async function bootstrapOperator(
       subjectId = randomUUID();
       await tx`
         INSERT INTO core.subjects (
-          id, tenant_id, kind, display_name, assurance_level, email, organization_id
+          id, kind, display_name, assurance_level, email, organization_id
         ) VALUES (
-          ${subjectId}, ${tenantId}, 'person', ${input.subjectName}, ${input.assuranceLevel},
+          ${subjectId}, 'person', ${input.subjectName}, ${input.assuranceLevel},
           ${email}, ${organizationId}
         )
       `;
@@ -236,20 +217,17 @@ export async function bootstrapOperator(
     }
 
     const roleGranted = await grantRole(tx, {
-      tenantId,
       subjectId,
       organizationId,
       role: input.role,
       email,
     });
 
-
-
-    return { tenantId, organizationId, subjectId, created, emailBound, roleGranted, enrolmentWindowUntil: null, enrolmentWindowOpened: false };
+    return { organizationId, subjectId, created, emailBound, roleGranted, enrolmentWindowUntil: null, enrolmentWindowOpened: false };
   }).catch((error: unknown) => {
     if ((error as { code?: string; constraint_name?: string }).code === "23505" &&
         (error as { constraint_name?: string }).constraint_name === "subjects_email_key") {
-      throw new BootstrapError("This email already belongs to another account in another tenant");
+      throw new BootstrapError("This email already belongs to another account");
     }
     throw error;
   });
@@ -266,26 +244,25 @@ async function initializeLegacyOperator(
   email: string,
 ): Promise<BootstrapResult> {
   const [subject] = await tx<{
-    id: string; tenant_id: string; email: string | null; kind: string;
+    id: string; email: string | null; kind: string;
     assurance_level: AssuranceLevel; suspended_at: Date | null; version: number;
   }[]>`
-    SELECT s.id, s.tenant_id, s.email, s.kind, s.assurance_level, s.suspended_at, s.version
-    FROM core.subjects s JOIN core.tenants t ON t.id = s.tenant_id
-    WHERE s.id = ${input.subjectId!} AND t.slug = ${input.tenantSlug}
+    SELECT s.id, s.email, s.kind, s.assurance_level, s.suspended_at, s.version
+    FROM core.subjects s
+    WHERE s.id = ${input.subjectId!}
     FOR UPDATE OF s
   `;
   if (!subject || subject.kind !== "person") {
-    throw new BootstrapError("subjectId must identify an existing person in the configured tenant");
+    throw new BootstrapError("subjectId must identify an existing person");
   }
-  await tx`SELECT id FROM core.tenants WHERE id = ${subject.tenant_id} FOR NO KEY UPDATE`;
   if (subject.suspended_at !== null) throw new BootstrapError("This person is suspended");
   if (!satisfiesAssurance(subject.assurance_level, ROLE_MINIMUM_ASSURANCE[input.role]!)) {
     throw new BootstrapError("The existing person's stored assurance is insufficient; bootstrap never upgrades it");
   }
   const [binding] = await tx<{ organization_id: string }[]>`
     SELECT b.organization_id FROM core.role_bindings b
-    JOIN core.organizations o ON o.tenant_id = b.tenant_id AND o.id = b.organization_id
-    WHERE b.tenant_id = ${subject.tenant_id} AND b.subject_id = ${subject.id}
+    JOIN core.organizations o ON o.id = b.organization_id
+    WHERE b.subject_id = ${subject.id}
       AND b.role = ${input.role} AND b.revoked_at IS NULL AND o.legal_name = ${input.organizationName}
     LIMIT 1
   `;
@@ -299,19 +276,19 @@ async function initializeLegacyOperator(
   if (emailBound) {
     const [history] = await tx`
       SELECT 1 WHERE
-        EXISTS (SELECT 1 FROM core.sessions WHERE tenant_id = ${subject.tenant_id} AND subject_id = ${subject.id} AND first_factor <> 'siwe_legacy')
-        OR EXISTS (SELECT 1 FROM core.external_identities WHERE tenant_id = ${subject.tenant_id} AND subject_id = ${subject.id})
-        OR EXISTS (SELECT 1 FROM core.webauthn_credentials WHERE tenant_id = ${subject.tenant_id} AND subject_id = ${subject.id})
-        OR EXISTS (SELECT 1 FROM core.totp_authenticators WHERE tenant_id = ${subject.tenant_id} AND subject_id = ${subject.id})
-        OR EXISTS (SELECT 1 FROM core.recovery_codes WHERE tenant_id = ${subject.tenant_id} AND subject_id = ${subject.id})
-        OR EXISTS (SELECT 1 FROM core.mfa_reset_requests WHERE tenant_id = ${subject.tenant_id} AND subject_id = ${subject.id})
-        OR EXISTS (SELECT 1 FROM core.email_change_requests WHERE tenant_id = ${subject.tenant_id} AND subject_id = ${subject.id})
-        OR EXISTS (SELECT 1 FROM audit.events WHERE tenant_id = ${subject.tenant_id} AND resource_id = ${subject.id} AND command = 'bootstrap.legacy_email.initialized')
+        EXISTS (SELECT 1 FROM core.sessions WHERE subject_id = ${subject.id} AND first_factor <> 'siwe_legacy')
+        OR EXISTS (SELECT 1 FROM core.external_identities WHERE subject_id = ${subject.id})
+        OR EXISTS (SELECT 1 FROM core.webauthn_credentials WHERE subject_id = ${subject.id})
+        OR EXISTS (SELECT 1 FROM core.totp_authenticators WHERE subject_id = ${subject.id})
+        OR EXISTS (SELECT 1 FROM core.recovery_codes WHERE subject_id = ${subject.id})
+        OR EXISTS (SELECT 1 FROM core.mfa_reset_requests WHERE subject_id = ${subject.id})
+        OR EXISTS (SELECT 1 FROM core.email_change_requests WHERE subject_id = ${subject.id})
+        OR EXISTS (SELECT 1 FROM audit.events WHERE resource_id = ${subject.id} AND command = 'bootstrap.legacy_email.initialized')
     `;
     if (history) throw new BootstrapError("This person has account or recovery history; legacy email initialization is not account recovery");
     const [legacy] = await tx`
       SELECT 1 FROM core.wallet_identities
-      WHERE tenant_id = ${subject.tenant_id} AND subject_id = ${subject.id} AND bound_via = 'operator'
+      WHERE subject_id = ${subject.id} AND bound_via = 'operator'
       LIMIT 1
     `;
     if (!legacy) throw new BootstrapError("This person has no historical operator-bound wallet; subjectId mode is only for legacy cutover");
@@ -319,24 +296,24 @@ async function initializeLegacyOperator(
     if (occupied) throw new BootstrapError("This email already belongs to another account");
     const [moved] = await tx`
       SELECT 1 FROM core.email_change_requests
-      WHERE tenant_id = ${subject.tenant_id} AND state = 'completed' AND previous_email = ${email}
+      WHERE state = 'completed' AND previous_email = ${email}
       LIMIT 1
     `;
     if (moved) throw new BootstrapError("This address was moved off a person by a completed email change");
     await tx`UPDATE core.subjects SET email = ${email}, version = version + 1 WHERE id = ${subject.id}`;
     await tx`
       INSERT INTO audit.events (
-        tenant_id, actor_subject_id, actor_wallet, effective_role, command,
+        actor_subject_id, actor_wallet, effective_role, command,
         resource_type, resource_id, before_version, after_version, reason, correlation_id
       ) VALUES (
-        ${subject.tenant_id}, NULL, NULL, ${ROLE_DEPLOY_BOUND}, 'bootstrap.legacy_email.initialized',
+        NULL, NULL, ${ROLE_DEPLOY_BOUND}, 'bootstrap.legacy_email.initialized',
         'subject', ${subject.id}, ${subject.version}, ${subject.version + 1},
         'Explicit legacy operator email initialization', ${randomUUID()}
       )
     `;
   }
   return {
-    tenantId: subject.tenant_id, organizationId: binding.organization_id, subjectId: subject.id,
+    organizationId: binding.organization_id, subjectId: subject.id,
     created: false, emailBound, roleGranted: false, enrolmentWindowUntil: null, enrolmentWindowOpened: false,
   };
 }
@@ -348,80 +325,63 @@ async function initializeLegacyOperator(
  * change), a deploy still naming the old address would find nobody and create a new person
  * there, or find a different existing account, with the role and an open first-enrolment window:
  * whoever reads the old mailbox would
- * become an operator. So a new binding is created only in a tenant that has never had anyone
- * hold `role` (a revoked binding counts), and never on an address a completed email change in
- * the tenant moved away from. Both stop the run; the transaction writes nothing.
+ * become an operator. So a new binding is created only when the Registry has never had anyone
+ * hold `role` (a revoked binding counts), and never on an address a completed email change
+ * moved away from. Both stop the run; the transaction writes nothing.
  */
 async function refuseNewHolder(
   tx: postgres.TransactionSql,
-  tenantId: string,
   email: string,
   role: string,
 ): Promise<void> {
   const [moved] = await tx`
     SELECT 1 FROM core.email_change_requests
-    WHERE tenant_id = ${tenantId} AND state = 'completed' AND previous_email = ${email}
+    WHERE state = 'completed' AND previous_email = ${email}
     LIMIT 1
   `;
   if (moved) {
     throw new BootstrapError(
-      "This address was moved off a person in this tenant by a completed email change. Bootstrap does not create " +
+      "This address was moved off a person by a completed email change. Bootstrap does not create " +
         "a new role binding on it — the old mailbox would become the operator. Remove BOOTSTRAP_EMAIL from the deploy, " +
         "or set it to the person's current address",
     );
   }
   const [held] = await tx`
-    SELECT 1 FROM core.role_bindings WHERE tenant_id = ${tenantId} AND role = ANY(${roleHistory(role)}) LIMIT 1
+    SELECT 1 FROM core.role_bindings WHERE role = ANY(${roleHistory(role)}) LIMIT 1
   `;
   if (held) {
     throw new BootstrapError(
-      `This tenant already has (or had) a ${role}, and none has this address. Bootstrap creates only the first one — ` +
+      `The Registry already has (or had) a ${role}, and none has this address. Bootstrap creates only the first one — ` +
         "later people are invited by an admin. Remove BOOTSTRAP_EMAIL from the deploy, or set it to the address of the person who holds it",
     );
   }
 }
 
-async function upsertTenant(tx: postgres.TransactionSql, input: BootstrapInput): Promise<string> {
-  const existing = await tx<{ id: string }[]>`
-    SELECT id FROM core.tenants WHERE slug = ${input.tenantSlug}
-  `;
-  if (existing[0]) return existing[0].id;
-
-  const id = randomUUID();
-  await tx`
-    INSERT INTO core.tenants (id, slug, display_name)
-    VALUES (${id}, ${input.tenantSlug}, ${input.tenantName})
-  `;
-  return id;
-}
-
 async function upsertOrganization(
   tx: postgres.TransactionSql,
-  tenantId: string,
   input: BootstrapInput,
 ): Promise<string> {
   const existing = await tx<{ id: string }[]>`
     SELECT id FROM core.organizations
-    WHERE tenant_id = ${tenantId} AND legal_name = ${input.organizationName}
+    WHERE legal_name = ${input.organizationName}
   `;
   if (existing[0]) return existing[0].id;
 
   const id = randomUUID();
   await tx`
-    INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-    VALUES (${id}, ${tenantId}, ${input.organizationName}, ${input.jurisdiction})
+    INSERT INTO core.organizations (id, legal_name, jurisdiction)
+    VALUES (${id}, ${input.organizationName}, ${input.jurisdiction})
   `;
   return id;
 }
 
 async function grantRole(
   tx: postgres.TransactionSql,
-  args: { tenantId: string; subjectId: string; organizationId: string; role: string; email: string },
+  args: { subjectId: string; organizationId: string; role: string; email: string },
 ): Promise<boolean> {
   const existing = await tx<{ id: string }[]>`
     SELECT id FROM core.role_bindings
-    WHERE tenant_id = ${args.tenantId}
-      AND subject_id = ${args.subjectId}
+    WHERE subject_id = ${args.subjectId}
       AND organization_id = ${args.organizationId}
       AND role = ${args.role}
       AND revoked_at IS NULL
@@ -431,8 +391,7 @@ async function grantRole(
   // In any organization: a new organization name in the input must not route around it.
   const [revoked] = await tx<{ count: number }[]>`
     SELECT count(*)::int AS count FROM core.role_bindings
-    WHERE tenant_id = ${args.tenantId}
-      AND subject_id = ${args.subjectId}
+    WHERE subject_id = ${args.subjectId}
       AND role = ANY(${roleHistory(args.role)})
       AND revoked_at IS NOT NULL
   `;
@@ -445,11 +404,11 @@ async function grantRole(
 
   // Existing mailbox ownership is not evidence that this is the original role holder.
   // Apply the historical safeguards to every new grant, including an existing account.
-  await refuseNewHolder(tx, args.tenantId, args.email, args.role);
+  await refuseNewHolder(tx, args.email, args.role);
 
   await tx`
-    INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-    VALUES (${randomUUID()}, ${args.tenantId}, ${args.subjectId}, ${args.organizationId}, ${args.role})
+    INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+    VALUES (${randomUUID()}, ${args.subjectId}, ${args.organizationId}, ${args.role})
   `;
   return true;
 }

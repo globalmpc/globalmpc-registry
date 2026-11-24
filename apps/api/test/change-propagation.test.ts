@@ -40,10 +40,10 @@ describeDb("change propagation", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id,
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id,
         lifecycle_state
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${`CP-${id.slice(0, 8)}`}, 'Propagation project', 'MNG',
+        ${id}, ${`CP-${id.slice(0, 8)}`}, 'Propagation project', 'MNG',
         ARRAY['copper'], ${fx.orgA}, ${lifecycle}::core.at_lifecycle_state
       )
     `;
@@ -54,10 +54,10 @@ describeDb("change propagation", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.credentials (
-        id, tenant_id, subject_id, organization_id, issuer_reference,
+        id, subject_id, organization_id, issuer_reference,
         credential_type, issued_at, expires_at, current_status
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${fx.reviewerSubjectA}, ${fx.orgA}, 'AusIMM',
+        ${id}, ${fx.reviewerSubjectA}, ${fx.orgA}, 'AusIMM',
         'competent_person', now() - interval '1 year', now() + interval '1 year', 'valid'
       )
     `;
@@ -68,9 +68,9 @@ describeDb("change propagation", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.attestation_schemas (
-        id, tenant_id, schema_key, schema_version, attestation_type, jurisdiction_profile, state
+        id, schema_key, schema_version, attestation_type, jurisdiction_profile, state
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${key}, ${version}, 'professional_signoff', 'MNG', ${state}
+        ${id}, ${key}, ${version}, 'professional_signoff', 'MNG', ${state}
       )
     `;
     return id;
@@ -87,23 +87,23 @@ describeDb("change propagation", () => {
     const schema = opts.schema ?? (await newSchema(`k-${randomUUID().slice(0, 8)}`, "1"));
     const caseId = randomUUID();
     await fx.sql`
-      INSERT INTO core.verification_cases (id, tenant_id, project_id, schema_id, state)
-      VALUES (${caseId}, ${fx.tenantA}, ${opts.project}, ${schema}, 'draft')
+      INSERT INTO core.verification_cases (id, project_id, schema_id, state)
+      VALUES (${caseId}, ${opts.project}, ${schema}, 'draft')
     `;
     const assignmentId = randomUUID();
     await fx.sql`
-      INSERT INTO core.assignments (id, tenant_id, case_id, subject_id, credential_id)
-      VALUES (${assignmentId}, ${fx.tenantA}, ${caseId}, ${fx.reviewerSubjectA}, ${credential})
+      INSERT INTO core.assignments (id, case_id, subject_id, credential_id)
+      VALUES (${assignmentId}, ${caseId}, ${fx.reviewerSubjectA}, ${credential})
     `;
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.verification_attestations (
-        id, tenant_id, case_id, assignment_id, credential_id, schema_id,
+        id, case_id, assignment_id, credential_id, schema_id,
         attestation_type, claim_scope, evidence_snapshot_hash, findings, limitations,
         credential_status_snapshot, method_version, policy_version,
         payload_hash, signature, signer_wallet_address, signed_at, state
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${caseId}, ${assignmentId}, ${credential}, ${schema},
+        ${id}, ${caseId}, ${assignmentId}, ${credential}, ${schema},
         'professional_signoff', ${opts.claims ?? [randomUUID()]}::UUID[],
         ${`0x${"22".repeat(32)}`}, '{"note":"reviewed"}'::jsonb, 'legal_effect_not_determined',
         '{"currentStatus":"valid","validAtAttestationTime":true}'::jsonb, '1', '1',
@@ -199,17 +199,17 @@ describeDb("change propagation", () => {
       const id = await seedAttestation({ project, credential });
       const entry = randomUUID();
       await fx.sql`
-        INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
-        VALUES (${entry}, ${fx.tenantA}, 'project', ${project}, ${`PRJ-${entry.slice(0, 8)}`})
+        INSERT INTO core.registry_entries (id, registry_type, subject_id, public_key)
+        VALUES (${entry}, 'project', ${project}, ${`PRJ-${entry.slice(0, 8)}`})
       `;
       const version = randomUUID();
       await fx.sql`
         INSERT INTO core.registry_entry_versions (
-          id, tenant_id, entry_id, version, status, public_projection,
+          id, entry_id, version, status, public_projection,
           content_hash, source_snapshot_hash, policy_version, schema_version,
           serialization_version, published_at
         ) VALUES (
-          ${version}, ${fx.tenantA}, ${entry}, 1, 'published', '{}'::jsonb,
+          ${version}, ${entry}, 1, 'published', '{}'::jsonb,
           ${`0x${"55".repeat(32)}`}, ${`0x${"66".repeat(32)}`}, '1', '1', '1', now()
         )
       `;
@@ -228,9 +228,9 @@ describeDb("change propagation", () => {
       expect(row?.status).toBe("published");
     });
 
-    // The time-based sweep crosses tenants, so it is exercised in the worker's isolated
+    // The time-based sweep crosses projects, so it is exercised in the worker's isolated
     // database (apps/jobs-worker/test/credential-expiry.test.ts), not in this shared one.
-    it("the API role cannot run the cross-tenant sweep", async () => {
+    it("the API role cannot run the every-project sweep", async () => {
       await expect(
         fx.appSql`SELECT core.sweep_credential_expiry(now())`,
       ).rejects.toThrow(/permission denied/);
@@ -281,10 +281,10 @@ describeDb("change propagation", () => {
       const id = randomUUID();
       await fx.sql`
         INSERT INTO core.compliance_policy_sets (
-          id, tenant_id, rule_set_id, rule_set_version, gate_id,
+          id, rule_set_id, rule_set_version, gate_id,
           jurisdiction_profile, effective_from, definition, state
         ) VALUES (
-          ${id}, ${fx.tenantA}, ${ruleSet}, ${version}, 'registry_publication', 'MNG', now(),
+          ${id}, ${ruleSet}, ${version}, 'registry_publication', 'MNG', now(),
           '{}'::jsonb, ${state}
         )
       `;
@@ -295,10 +295,10 @@ describeDb("change propagation", () => {
       const id = randomUUID();
       await fx.sql`
         INSERT INTO core.compliance_assessments (
-          id, tenant_id, project_id, gate_id, policy_set_id, input_snapshot_hash,
+          id, project_id, gate_id, policy_set_id, input_snapshot_hash,
           evaluated_as_of, status, requirement_results, canonical_result_hash, generated_at, evidence_actor_ids
       ) VALUES (
-          ${id}, ${fx.tenantA}, ${project}, 'registry_publication', ${policy},
+          ${id}, ${project}, 'registry_publication', ${policy},
           ${`0x${"aa".repeat(32)}`}, now(), 'ok', '[]'::jsonb, ${`0x${"bb".repeat(32)}`},
           now() - make_interval(mins => ${ageMinutes}), '{}'::uuid[]
       )
@@ -451,10 +451,10 @@ describeDb("change propagation", () => {
     const authority = randomUUID();
     await fx.sql`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove,
+        id, name, jurisdiction, proves, does_not_prove,
         recognized_scope, verification_method, public_disclosure_level, valid_from, state
       ) VALUES (
-        ${authority}, ${fx.tenantA}, ${`Registry ${authority.slice(0, 8)}`}, 'MNG',
+        ${authority}, ${`Registry ${authority.slice(0, 8)}`}, 'MNG',
         ARRAY['mining_right_registration'], ARRAY['economic_viability'],
         ARRAY['mining_license'], 'authenticated_api', 'public', '2015-01-01', 'accepted'
       )
@@ -462,13 +462,13 @@ describeDb("change propagation", () => {
     const connection = randomUUID();
     await fx.sql`
       INSERT INTO core.source_connections (
-        id, tenant_id, authority_id, connection_key, collection_method,
+        id, authority_id, connection_key, collection_method,
         access_basis, secret_reference, state,
         endpoint, authentication_method, adapter_version, source_schema_version,
         schema_fingerprint, response_record_absent_field, response_record_absent_value,
         response_business_error_field
       ) VALUES (
-        ${connection}, ${fx.tenantA}, ${authority}, ${`conn-${connection.slice(0, 8)}`},
+        ${connection}, ${authority}, ${`conn-${connection.slice(0, 8)}`},
         'authenticated_api', 'agreement', 'vault://mn/x', 'active',
         'https://registry.example.test/x', 'none', 'test', 'test',
         ARRAY['licenseId'], 'found', 'false', 'error'
@@ -477,13 +477,13 @@ describeDb("change propagation", () => {
     const receipt = randomUUID();
     await fx.sql`
       INSERT INTO core.source_receipts (
-        id, tenant_id, project_id, connection_id, authority_id, collection_method,
+        id, project_id, connection_id, authority_id, collection_method,
         result, query_basis, endpoint_or_document_ref, authentication_method,
         raw_hash, source_schema_version, adapter_version, terms_license,
         commercial_reuse, disclosure_permission, received_at, as_of,
         freshness_status, correlation_id, channel_evidence
       ) VALUES (
-        ${receipt}, ${fx.tenantA}, ${project}, ${connection}, ${authority},
+        ${receipt}, ${project}, ${connection}, ${authority},
         'authenticated_api', 'confirmed_from_source', '{}'::jsonb, 'https://x.test/a',
         'none', ${`0x${"11".repeat(32)}`}, '1', '1', 'x', 'unconfirmed', 'restricted',
         now(), now(), 'fresh', 'test', '{"collector":"server_adapter"}'::jsonb
@@ -492,10 +492,10 @@ describeDb("change propagation", () => {
     const claim = randomUUID();
     await fx.sql`
       INSERT INTO core.claims (
-        id, tenant_id, project_id, claim_type, value_text, source_coordinate,
+        id, project_id, claim_type, value_text, source_coordinate,
         evidence_tier, verification_state, grade, source_receipt_id
       ) VALUES (
-        ${claim}, ${fx.tenantA}, ${project}, 'mining_right', 'MN-1', '{"page":"1"}'::jsonb,
+        ${claim}, ${project}, 'mining_right', 'MN-1', '{"page":"1"}'::jsonb,
         'P1', 'analyst_checked', 'verified', ${receipt}
       )
     `;

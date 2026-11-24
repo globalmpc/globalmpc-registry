@@ -25,18 +25,17 @@ describeDb("migrations 0112–0114: account email", () => {
   let admin: postgres.Sql;
   let sql: postgres.Sql;
   const tenant = randomUUID();
-  const otherTenant = randomUUID();
   const person = randomUUID();
   const service = randomUUID();
   const oldSession = randomUUID();
 
   const asApp = <T extends postgres.Row[]>(
     body: (tx: postgres.TransactionSql) => postgres.PendingQuery<T>,
-    tenantId: string | null = tenant,
+    actor: string | null = person,
   ) =>
     sql.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE mpc_app");
-      if (tenantId) await tx`SELECT set_config('app.current_tenant', ${tenantId}, true)`;
+      if (actor) await tx`SELECT set_config('app.actor_subject_id', ${actor}, true)`;
       return [...(await body(tx))];
     }) as unknown as Promise<T>;
 
@@ -53,7 +52,7 @@ describeDb("migrations 0112–0114: account email", () => {
     expect(first).toBeGreaterThan(0);
     await runMigrations(sql, all.slice(0, sessions));
 
-    for (const id of [tenant, otherTenant]) {
+    for (const id of [tenant]) {
       await sql`INSERT INTO core.tenants (id, slug, display_name) VALUES (${id}, ${`m0112-${id.slice(0, 8)}`}, 'Probe')`;
     }
     await sql`INSERT INTO core.subjects (id, tenant_id, kind, display_name) VALUES (${person}, ${tenant}, 'person', 'P')`;
@@ -85,11 +84,11 @@ describeDb("migrations 0112–0114: account email", () => {
     }
   });
 
-  it("keeps an address normalized, unique across tenants, and on persons only", async () => {
+  it("keeps an address normalized, unique in the Registry, and on persons only", async () => {
     await expect(sql`UPDATE core.subjects SET email = 'Upper@Example.com' WHERE id = ${person}`).rejects.toMatchObject({ code: "23514" });
     await sql`UPDATE core.subjects SET email = 'p@example.com' WHERE id = ${person}`;
     await expect(
-      sql`INSERT INTO core.subjects (id, tenant_id, kind, display_name, email) VALUES (${randomUUID()}, ${otherTenant}, 'person', 'Q', 'p@example.com')`,
+      sql`INSERT INTO core.subjects (id, kind, display_name, email) VALUES (${randomUUID()}, 'person', 'Q', 'p@example.com')`,
     ).rejects.toMatchObject({ code: "23505" });
     await expect(sql`UPDATE core.subjects SET email = 's@example.com' WHERE id = ${service}`).rejects.toMatchObject({ code: "23514" });
   });
@@ -97,7 +96,7 @@ describeDb("migrations 0112–0114: account email", () => {
   it("does not let the application role write an address or read the code tables", async () => {
     await expect(asApp((tx) => tx`UPDATE core.subjects SET email = 'x@example.com' WHERE id = ${person}`)).rejects.toThrow(/permission denied/);
     await expect(
-      asApp((tx) => tx`INSERT INTO core.subjects (id, tenant_id, kind, display_name, email) VALUES (${randomUUID()}, ${tenant}, 'person', 'X', 'x@example.com')`),
+      asApp((tx) => tx`INSERT INTO core.subjects (id, kind, display_name, email) VALUES (${randomUUID()}, 'person', 'X', 'x@example.com')`),
     ).rejects.toThrow(/permission denied/);
     // The columns it still writes.
     await asApp((tx) => tx`UPDATE core.subjects SET display_name = 'Renamed' WHERE id = ${person}`);
@@ -105,7 +104,7 @@ describeDb("migrations 0112–0114: account email", () => {
     for (const table of ["email_challenges", "email_outbox", "email_test_sink", "auth_rate_events"]) {
       await expect(asApp((tx) => tx.unsafe(`SELECT 1 FROM core.${table}`)), table).rejects.toThrow(/permission denied/);
     }
-    // It reads invitations and email changes of its own tenant only, and writes neither.
+    // It reads invitations and email changes, and deletes neither.
     await expect(asApp((tx) => tx`DELETE FROM core.invitations`)).rejects.toThrow(/permission denied/);
     await expect(asApp((tx) => tx`DELETE FROM core.email_change_requests`)).rejects.toThrow(/permission denied/);
 
@@ -116,12 +115,12 @@ describeDb("migrations 0112–0114: account email", () => {
 
   it("holds an invitation to exactly 72 hours", async () => {
     const [org] = await sql<{ id: string }[]>`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${randomUUID()}, ${tenant}, 'Probe Org', 'MNG') RETURNING id
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${randomUUID()}, 'Probe Org', 'MNG') RETURNING id
     `;
     const insert = (lifetime: string) => sql`
-      INSERT INTO core.invitations (id, tenant_id, organization_id, email, token_hash, invited_by_subject_id, state, created_at, expires_at)
-      VALUES (${randomUUID()}, ${tenant}, ${org!.id}, ${`i-${randomUUID().slice(0, 6)}@example.com`}, ${hash()}, ${person}, 'pending', now(), now() + ${lifetime}::interval)
+      INSERT INTO core.invitations (id, organization_id, email, token_hash, invited_by_subject_id, state, created_at, expires_at)
+      VALUES (${randomUUID()}, ${org!.id}, ${`i-${randomUUID().slice(0, 6)}@example.com`}, ${hash()}, ${person}, 'pending', now(), now() + ${lifetime}::interval)
     `;
     await expect(insert("73 hours")).rejects.toMatchObject({ code: "23514" });
     await insert("72 hours");
@@ -145,8 +144,8 @@ describeDb("migrations 0112–0114: account email", () => {
     ).rejects.toThrow();
     // Not by a row without a challenge, even as the migration role.
     await expect(sql`
-      INSERT INTO core.sessions (id, token_hash, tenant_id, subject_id, first_factor, expires_at)
-      VALUES (${randomUUID()}, ${hash()}, ${tenant}, ${person}, 'email_code', now() + interval '1 hour')
+      INSERT INTO core.sessions (id, token_hash, subject_id, first_factor, expires_at)
+      VALUES (${randomUUID()}, ${hash()}, ${person}, 'email_code', now() + interval '1 hour')
     `).rejects.toMatchObject({ code: "23514" });
 
     // Through the code path: start, then verify with the same HMAC.
@@ -167,8 +166,8 @@ describeDb("migrations 0112–0114: account email", () => {
       SELECT id FROM core.email_challenges WHERE consumed_txid IS NOT NULL LIMIT 1
     `;
     await expect(sql`
-      INSERT INTO core.sessions (id, token_hash, tenant_id, subject_id, first_factor, expires_at, email_challenge_id)
-      VALUES (${randomUUID()}, ${hash()}, ${tenant}, ${person}, 'email_code', now() + interval '1 hour', ${consumed!.id})
+      INSERT INTO core.sessions (id, token_hash, subject_id, first_factor, expires_at, email_challenge_id)
+      VALUES (${randomUUID()}, ${hash()}, ${person}, 'email_code', now() + interval '1 hour', ${consumed!.id})
     `).rejects.toThrow();
   });
 

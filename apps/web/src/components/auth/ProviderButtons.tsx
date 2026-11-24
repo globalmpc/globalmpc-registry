@@ -13,7 +13,7 @@ export const navigation = {
 };
 
 /**
- * "Continue with Google / Microsoft" — only for the providers this deployment configured.
+ * "Continue with Google" — only when this deployment configured it.
  *
  * Starting a flow sets the browser binding as an HttpOnly cookie (the web server does, `proxy.ts`);
  * this page receives only the provider's URL and leaves for it.
@@ -23,13 +23,13 @@ export function ProviderButtons({
   start,
   disabled,
 }: {
-  readonly methods: Pick<AuthMethods, "google" | "microsoft"> | null;
+  readonly methods: Pick<AuthMethods, "google"> | null;
   readonly start: OidcStart;
   readonly disabled?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const providers = (["google", "microsoft"] as const).filter((provider) => methods?.[provider]);
+  const providers = (["google"] as const).filter((provider) => methods?.[provider]);
   if (providers.length === 0) return null;
 
   async function go(provider: OidcProvider) {

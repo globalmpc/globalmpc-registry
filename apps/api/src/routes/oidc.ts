@@ -1,3 +1,4 @@
+import type { ActorContext } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type postgres from "postgres";
@@ -10,7 +11,7 @@ import {
   oidcSignInStartRequest,
   type OidcProvider,
 } from "@mpc/api-contract";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { createAccountCrypto } from "../account-crypto.js";
 import { ROLE_SELF_BOUND, recordAudit } from "../audit.js";
 import type { AppConfig } from "../config.js";
@@ -43,13 +44,13 @@ import {
 import { codeRefusal, issuedSessionResponse, recordAccountAudit } from "./account-shared.js";
 
 /**
- * Google and Microsoft sign-in, linking and unlinking — account authentication WP4.
+ * Google sign-in, linking and unlinking — account authentication WP4.
  *
  * **Who decides what.** `services/oidc.ts` runs the code flow and validates the ID token;
  * everything else — single use of a `state`, the browser binding, which session may link, that
  * an identity is matched only by its key, that an invitation is accepted only for the address the
  * provider verified, which sessions end on unlink — is decided by 0121's functions. The route
- * never states a factor: a `google` / `microsoft` session exists only because the database
+ * never states a factor: a `google` session exists only because the database
  * completed a login transaction in the same transaction (0120).
  *
  * **Two steps per callback.** The `state` is claimed and committed first, so a second callback
@@ -67,7 +68,6 @@ type Tx = postgres.TransactionSql;
 interface StartRow {
   status: "started" | "rate_limited" | "session_invalid" | "step_up_required" | "invitation_invalid";
   retry_after_seconds: number;
-  tenant_id: string | null;
   subject_id: string | null;
   invitation_id: string | null;
   expires_at: Date | null;
@@ -80,7 +80,6 @@ interface ClaimRow {
   secret: Buffer | null;
   nonce_hash: string | null;
   redirect_uri: string | null;
-  tenant_id: string | null;
   invitation_id: string | null;
 }
 
@@ -88,7 +87,6 @@ interface IdentityRow {
   id: string;
   provider: OidcProvider;
   issuer: string;
-  idp_tenant: string | null;
   linked_via: "link" | "invitation";
   created_at: Date;
   last_used_at: Date | null;
@@ -100,7 +98,6 @@ function toIdentity(row: IdentityRow) {
     id: row.id,
     provider: row.provider,
     issuer: row.issuer,
-    idpTenant: row.idp_tenant,
     linkedVia: row.linked_via,
     createdAt: row.created_at.toISOString(),
     lastUsedAt: row.last_used_at?.toISOString() ?? null,
@@ -122,8 +119,6 @@ function verificationRefusal(caught: OidcError): AppError {
   switch (caught.failure) {
     case "provider_unavailable":
       return unavailable("OIDC_PROVIDER_UNAVAILABLE", "The sign-in provider could not be reached. Try again");
-    case "tenant_not_allowed":
-      return forbidden("OIDC_TENANT_NOT_ALLOWED", "Accounts of this organisation's directory cannot sign in here");
     default:
       return unauthorized("OIDC_TOKEN_INVALID", "The sign-in could not be verified. Start again");
   }
@@ -152,21 +147,21 @@ function translate(caught: unknown): unknown {
 }
 
 interface AccountContext {
-  readonly session: Session & { readonly tenantId: string; readonly subjectId: string };
-  readonly tenantId: string;
+  readonly session: Session & { readonly subjectId: string };
+  readonly actor: ActorContext;
   readonly subjectId: string;
 }
 
-/** A person's account session in a tenant. Services do not link. */
+/** A person's account session. Services do not link. */
 function requireAccountSession(request: FastifyRequest): AccountContext {
   const session = request.session;
   if (!session) throw unauthorized("UNAUTHENTICATED", "Authentication required");
-  if (session.principal !== "person" || session.tenantId === null || session.subjectId === null) {
+  if (session.principal !== "person" || session.subjectId === null) {
     throw forbidden("OIDC_ACCOUNT_SESSION_REQUIRED", "Only an account session can link a sign-in method");
   }
   return {
-    session: { ...session, tenantId: session.tenantId, subjectId: session.subjectId },
-    tenantId: session.tenantId,
+    session: { ...session, subjectId: session.subjectId },
+    actor: { subjectId: session.subjectId },
     subjectId: session.subjectId,
   };
 }
@@ -267,8 +262,8 @@ export async function registerOidcRoutes(
 
   /**
    * From a claimed transaction to a verified identity, or a refusal. A provider `error` and a
-   * failed token are audited when the flow already belongs to a tenant (link, invitation); a
-   * sign-in that failed belongs to nobody yet.
+   * failed token are audited when the flow already belongs to an account or invitation (link,
+   * invitation); a sign-in that failed belongs to nobody yet.
    */
   async function verify(
     request: FastifyRequest,
@@ -279,10 +274,9 @@ export async function registerOidcRoutes(
   ): Promise<VerifiedIdentity> {
     const fail = async (reason: string, refusal: AppError): Promise<never> => {
       request.log.info({ provider, purpose: claimed.purpose, reason }, "oidc callback refused");
-      if (claimed.tenant_id !== null) {
+      if (claimed.purpose !== "sign_in") {
         await sql.begin((tx) =>
           recordAccountAudit(tx, request, {
-            tenantId: claimed.tenant_id!,
             subjectId,
             command: "auth.oidc.failed",
             resourceType: "oidc_login_transaction",
@@ -343,9 +337,8 @@ export async function registerOidcRoutes(
             ${keys.ipKey(request.clientIp)}
           )
         `;
-        if (started!.status === "started" && started!.tenant_id !== null) {
+        if (started!.status === "started" && (started!.subject_id !== null || started!.invitation_id !== null)) {
           await recordAccountAudit(tx, request, {
-            tenantId: started!.tenant_id,
             subjectId: null,
             command: "auth.oidc.started",
             resourceType: "oidc_login_transaction",
@@ -391,7 +384,7 @@ export async function registerOidcRoutes(
           ) AS id
         ` : [];
         const [completed] = await tx<
-          { status: string; tenant_id: string | null; subject_id: string | null; identity_id: string | null; expires_at: Date | null }[]
+          { status: string; subject_id: string | null; identity_id: string | null; expires_at: Date | null }[]
         >`
           SELECT * FROM core.complete_oidc_sign_in(
             ${claimed.transaction_id}, ${identity.issuer}, ${identity.subjectKey},
@@ -401,7 +394,6 @@ export async function registerOidcRoutes(
         if (completed!.status === "session_created") {
           if (linked?.id) {
             await recordAccountAudit(tx, request, {
-              tenantId: completed!.tenant_id!,
               subjectId: completed!.subject_id,
               command: "auth.oidc.identity_linked",
               resourceType: "external_identity",
@@ -424,7 +416,6 @@ export async function registerOidcRoutes(
             },
           ]) {
             await recordAccountAudit(tx, request, {
-              tenantId: completed!.tenant_id!,
               subjectId: completed!.subject_id,
               ...entry,
             });
@@ -450,10 +441,9 @@ export async function registerOidcRoutes(
       // account's sign-up; the address may have changed hands since. The invitation is untouched
       // and still accepts the emailed code.
       request.log.info({ provider }, "oidc invitation refused: address not managed by the provider");
-      if (claimed.tenant_id !== null) {
+      if (claimed.invitation_id !== null) {
         await sql.begin((tx) =>
           recordAccountAudit(tx, request, {
-            tenantId: claimed.tenant_id!,
             subjectId: null,
             command: "auth.oidc.failed",
             resourceType: "oidc_login_transaction",
@@ -473,7 +463,6 @@ export async function registerOidcRoutes(
       const [completed] = await tx<
         {
           status: string;
-          tenant_id: string | null;
           subject_id: string | null;
           organization_id: string | null;
           invitation_id: string | null;
@@ -482,16 +471,15 @@ export async function registerOidcRoutes(
         }[]
       >`
         SELECT * FROM core.complete_oidc_invitation(
-          ${claimed.transaction_id}, ${identity.issuer}, ${identity.subjectKey}, ${identity.idpTenant},
+          ${claimed.transaction_id}, ${identity.issuer}, ${identity.subjectKey},
           ${identity.verifiedEmail}, ${emailHash}, ${identityId}, ${subjectId},
           ${sessionId}, ${hashToken(token)}, ${SESSION_TTL_SECONDS}
         )
       `;
       const result = completed!;
-      if (result.tenant_id === null) return result;
+      if (result.invitation_id === null) return result;
       if (result.status !== "session_created") {
         await recordAccountAudit(tx, request, {
-          tenantId: result.tenant_id,
           subjectId: null,
           command: "auth.oidc.failed",
           resourceType: "oidc_login_transaction",
@@ -525,7 +513,7 @@ export async function registerOidcRoutes(
           detail: { firstFactor: provider, aal: "aal1", identityId: result.identity_id },
         },
       ]) {
-        await recordAccountAudit(tx, request, { tenantId: result.tenant_id, subjectId: result.subject_id, ...entry });
+        await recordAccountAudit(tx, request, { subjectId: result.subject_id, ...entry });
       }
       return result;
     }).catch((caught: unknown) => {
@@ -559,7 +547,6 @@ export async function registerOidcRoutes(
     detail: Record<string, unknown>,
   ) {
     await recordAudit(tx, {
-      tenantId: ctx.tenantId,
       session: { ...ctx.session, device: { userAgentHash: hashUserAgent(request.headers["user-agent"]) } },
       effectiveRole: ROLE_SELF_BOUND,
       command,
@@ -575,7 +562,7 @@ export async function registerOidcRoutes(
     const ctx = requireAccountSession(request);
     const provider = enabledProvider(request);
     return startFlow(request, provider, (row) =>
-      withTenant(sql, { tenantId: ctx.tenantId }, async (tx) => {
+      withActor(sql, ctx.actor, async (tx) => {
         const [started] = await tx<StartRow[]>`
           SELECT * FROM core.start_oidc_transaction(
             ${row.id}, ${provider}::core.oidc_provider, 'link'::core.oidc_purpose,
@@ -600,11 +587,11 @@ export async function registerOidcRoutes(
     const identityId = randomUUID();
     const emailHash = identity.reportedEmail === null ? null : keys.emailKey(identity.reportedEmail);
 
-    const result = await withTenant(sql, { tenantId: ctx.tenantId }, async (tx) => {
+    const result = await withActor(sql, ctx.actor, async (tx) => {
       const [completed] = await tx<{ status: string; identity_id: string | null }[]>`
         SELECT * FROM core.complete_oidc_link(
           ${claimed.transaction_id}, ${ctx.session.sessionId}, ${identity.issuer}, ${identity.subjectKey},
-          ${identity.idpTenant}, ${emailHash}, ${identityId}, ${identity.verifiedEmail}
+          ${emailHash}, ${identityId}, ${identity.verifiedEmail}
         )
       `;
       if (completed!.status === "linked") {
@@ -644,7 +631,7 @@ export async function registerOidcRoutes(
 
   app.get("/api/v1/auth/identities", async (request) => {
     const ctx = requireAccountSession(request);
-    const rows = await withTenant(sql, { tenantId: ctx.tenantId }, (tx) => tx<IdentityRow[]>`
+    const rows = await withActor(sql, ctx.actor, (tx) => tx<IdentityRow[]>`
       SELECT * FROM core.list_external_identities(${ctx.session.sessionId})
     `);
     return { items: rows.map(toIdentity), requestId: request.context.requestId, asOf: request.context.asOf };
@@ -653,7 +640,7 @@ export async function registerOidcRoutes(
   app.post<{ Params: { identityId: string } }>("/api/v1/auth/identities/:identityId/unlink", async (request) => {
     const ctx = requireAccountSession(request);
     const identityId = request.params.identityId;
-    const [row] = await withTenant(sql, { tenantId: ctx.tenantId }, async (tx) => {
+    const [row] = await withActor(sql, ctx.actor, async (tx) => {
       const unlinked = await tx<{ revoked_sessions: number; current_session_ended: boolean }[]>`
         SELECT * FROM core.unlink_external_identity(${ctx.session.sessionId}, ${identityId})
       `;

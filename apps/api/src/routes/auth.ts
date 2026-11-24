@@ -1,7 +1,8 @@
+import type { ActorContext } from "@mpc/db";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type postgres from "postgres";
 import { ACTION_POLICIES, type FirstFactor, type SecondFactor } from "@mpc/api-contract";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { ROLE_SELF_BOUND, recordAudit } from "../audit.js";
 import { hashUserAgent } from "../device.js";
 import { forbidden, notFound, unauthorized } from "../errors.js";
@@ -41,7 +42,7 @@ export function sessionView(session: Session) {
 /**
  * Session routes shared by every sign-in method: sign-out and the current session.
  *
- * Sessions are issued by the account flows (emailed code, invitation, Google / Microsoft); no
+ * Sessions are issued by the account flows (emailed code, invitation, Google); no
  * wallet signature signs anyone in (D3, WP7).
  */
 export async function registerAuthRoutes(app: FastifyInstance, sql: postgres.Sql): Promise<void> {
@@ -51,11 +52,9 @@ export async function registerAuthRoutes(app: FastifyInstance, sql: postgres.Sql
 
     // Only a revocation that happened is recorded; a logout with a dead token changed nothing.
     const session = request.session;
-    if (revoked && session && session.tenantId !== null) {
-      const tenantId = session.tenantId;
-      await withTenant(sql, { tenantId }, (tx) =>
+    if (revoked && session && session.subjectId !== null) {
+      await withActor(sql, { subjectId: session.subjectId }, (tx) =>
         recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole: ROLE_SELF_BOUND,
           command: "auth.session.revoked",
@@ -75,21 +74,26 @@ export async function registerAuthRoutes(app: FastifyInstance, sql: postgres.Sql
     if (!request.session) {
       return { authenticated: false, requestId: request.context.requestId };
     }
-    return {
-      authenticated: true,
-      ...sessionView(request.session),
-      requestId: request.context.requestId,
-    };
+    const view = sessionView(request.session);
+    if (request.headers["x-mpc-session-view"] === "workspace") {
+      return {
+        authenticated: true,
+        ...view,
+        workspaceAvailable: view.subjectId !== null,
+        requestId: request.context.requestId,
+      };
+    }
+    return { authenticated: true, ...view, requestId: request.context.requestId };
   });
 
   /**
    * The caller's own sessions (0126). The request hook already holds these to a second factor and
    * refuses a recovery-limited session; the database functions act only on sessions of the
-   * caller session's subject in its tenant, so no id in the request can reach anyone else's.
+   * caller session's subject, the authenticated actor, so no id in the request can reach anyone else's.
    */
   app.get("/api/v1/auth/sessions", async (request) => {
-    const { session, tenantId } = requireOwnSessions(request);
-    const rows = await ownSessions(sql, tenantId, (tx) =>
+    const { session, actor } = requireOwnSessions(request);
+    const rows = await ownSessions(sql, actor, (tx) =>
       tx<OwnSessionRow[]>`SELECT * FROM core.list_own_sessions(${session.sessionId})`,
     );
     return {
@@ -108,14 +112,14 @@ export async function registerAuthRoutes(app: FastifyInstance, sql: postgres.Sql
   });
 
   app.post<{ Params: { sessionId: string } }>("/api/v1/auth/sessions/:sessionId/revocation", async (request) => {
-    const { session, tenantId } = requireOwnSessions(request);
+    const { session, actor } = requireOwnSessions(request);
     // A malformed id never gets here: `request-context.ts` answers 400 for any `...Id` that is
     // not a UUID.
     // Lower-cased: the id check and PostgreSQL both ignore case, so `current` and the audit row
     // must too (an upper-case spelling of this session's id is still this session).
     const target = request.params.sessionId.toLowerCase();
 
-    return ownSessions(sql, tenantId, async (tx) => {
+    return ownSessions(sql, actor, async (tx) => {
       const [row] = await tx<{ outcome: "revoked" | "already_ended" | "unknown" }[]>`
         SELECT core.revoke_own_session(${session.sessionId}, ${target}) AS outcome
       `;
@@ -123,7 +127,6 @@ export async function registerAuthRoutes(app: FastifyInstance, sql: postgres.Sql
       const current = target === session.sessionId;
       if (row!.outcome === "revoked") {
         await recordAudit(tx, {
-          tenantId,
           session: { ...session, device: { userAgentHash: hashUserAgent(request.headers["user-agent"]) } },
           effectiveRole: ROLE_SELF_BOUND,
           command: "auth.session.revoked",
@@ -149,24 +152,24 @@ interface OwnSessionRow {
   is_current: boolean;
 }
 
-/** A person's session in a tenant. A service token never reaches these routes (no scope). */
-function requireOwnSessions(request: FastifyRequest): { session: Session; tenantId: string } {
+/** A person's own session. A service token never reaches these routes (no scope). */
+function requireOwnSessions(request: FastifyRequest): { session: Session; actor: ActorContext } {
   const session = request.session;
   if (!session) throw unauthorized("UNAUTHENTICATED", "Authentication required");
-  if (session.principal !== "person" || session.tenantId === null) {
+  if (session.principal !== "person" || session.subjectId === null) {
     throw forbidden("ACCOUNT_SESSION_REQUIRED", "Only a person's account session has sessions to manage");
   }
-  return { session, tenantId: session.tenantId };
+  return { session, actor: { subjectId: session.subjectId } };
 }
 
-/** Runs in the caller's tenant; a session that ended mid-request reads as unauthenticated. */
+/** Runs as the caller; a session that ended mid-request reads as unauthenticated. */
 async function ownSessions<T>(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   work: (tx: postgres.TransactionSql) => Promise<T>,
 ): Promise<T> {
   try {
-    return await withTenant(sql, { tenantId }, work);
+    return await withActor(sql, actor, work);
   } catch (caught) {
     if (caught instanceof Error && caught.message.startsWith("MFA_SESSION_INVALID:")) {
       throw unauthorized("UNAUTHENTICATED", "The session is no longer valid");

@@ -39,22 +39,18 @@ it("reports failures without rejecting delivery and allows a later retry", async
 
 const ledger = vi.hoisted(() => ({
   compute: vi.fn(),
-  withTenant: vi.fn(),
 }));
 vi.mock("@mpc/db", async (original) => ({
   ...await original<typeof import("@mpc/db")>(),
   computeEvidenceLedger: ledger.compute,
-  withTenant: ledger.withTenant,
 }));
 beforeEach(() => {
   ledger.compute.mockReset().mockResolvedValue(null);
-  ledger.withTenant.mockReset().mockImplementation(async (_sql, _scope, action) => action({}));
 });
 
 function projectQueue(count: number) {
   const projects = Array.from({length: count}, (_, i) => ({
     id: `00000000-0000-0000-0000-${String(i + 1).padStart(12, "0")}`,
-    tenant_id: `10000000-0000-0000-0000-${String(i + 1).padStart(12, "0")}`,
   }));
   const query = vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     // Exercise the query's externally visible bounds and order, rather than an unbounded fixture.
@@ -63,29 +59,28 @@ function projectQueue(count: number) {
     const limit = values.at(-1) as number;
     return projects.filter(project => cursor === null || project.id > cursor).slice(0, limit);
   });
-  return {projects, query, sql: query as unknown as postgres.Sql};
+  // Each project is assessed in a transaction of its own (`sql.begin`).
+  const begin = vi.fn(async (action: (tx: unknown) => Promise<unknown>) => action({}));
+  return {projects, query, begin, sql: Object.assign(query, {begin}) as unknown as postgres.Sql};
 }
 
-it("bounds each interval and eventually refreshes every tenant before wrapping", async () => {
-  const {projects, query, sql} = projectQueue(5);
+it("bounds each interval and eventually refreshes every project before wrapping", async () => {
+  const {projects, query, begin, sql} = projectQueue(5);
   let now = 0;
   const sweep = createLedgerSweep(sql, 1000, () => now, 2);
   await expect(sweep()).resolves.toEqual({ran: true, recorded: 0});
-  expect(ledger.compute.mock.calls.map(call => call[2])).toEqual(projects.slice(0, 2).map(p => p.id));
+  expect(ledger.compute.mock.calls.map(call => call[1])).toEqual(projects.slice(0, 2).map(p => p.id));
   await expect(sweep()).resolves.toEqual({ran: false, recorded: 0});
   expect(query).toHaveBeenCalledTimes(1);
   now += 1000;
   await sweep();
   now += 1000;
   await sweep();
-  expect(ledger.compute.mock.calls.map(call => call[2])).toEqual(projects.map(p => p.id));
-  for (const [index, call] of ledger.withTenant.mock.calls.entries()) {
-    expect(call[1]).toEqual({tenantId: projects[index]!.tenant_id});
-    expect(ledger.compute.mock.calls[index]!.slice(1, 3)).toEqual([projects[index]!.tenant_id, projects[index]!.id]);
-  }
+  expect(ledger.compute.mock.calls.map(call => call[1])).toEqual(projects.map(p => p.id));
+  expect(begin).toHaveBeenCalledTimes(projects.length);
   now += 1000;
   await sweep();
-  expect(ledger.compute.mock.calls.slice(-2).map(call => call[2])).toEqual(projects.slice(0, 2).map(p => p.id));
+  expect(ledger.compute.mock.calls.slice(-2).map(call => call[1])).toEqual(projects.slice(0, 2).map(p => p.id));
 });
 
 it("continues past a failed project and retries it after completing the cursor cycle", async () => {
@@ -94,13 +89,13 @@ it("continues past a failed project and retries it after completing the cursor c
   ledger.compute.mockRejectedValueOnce(new Error("unavailable project"));
   const sweep = createLedgerSweep(sql, 1000, () => now, 2);
   await expect(sweep()).rejects.toThrow("batch contained failed assessments");
-  expect(ledger.compute.mock.calls.map(call => call[2])).toEqual(projects.slice(0, 2).map(p => p.id));
+  expect(ledger.compute.mock.calls.map(call => call[1])).toEqual(projects.slice(0, 2).map(p => p.id));
   now += 1000;
   await sweep();
-  expect(ledger.compute.mock.calls.at(-1)![2]).toBe(projects[2]!.id);
+  expect(ledger.compute.mock.calls.at(-1)![1]).toBe(projects[2]!.id);
   now += 1000;
   await sweep();
-  expect(ledger.compute.mock.calls.slice(-2).map(call => call[2])).toEqual(projects.slice(0, 2).map(p => p.id));
+  expect(ledger.compute.mock.calls.slice(-2).map(call => call[1])).toEqual(projects.slice(0, 2).map(p => p.id));
 });
 
 it("rejects invalid work bounds before querying", () => {
@@ -122,5 +117,5 @@ it("keeps the current page after a selection outage instead of dropping projects
   await expect(sweep()).rejects.toThrow("database temporarily unavailable");
   now += 1000;
   await sweep();
-  expect(ledger.compute.mock.calls.map(call => call[2])).toEqual(projects.slice(0, 2).map(p => p.id));
+  expect(ledger.compute.mock.calls.map(call => call[1])).toEqual(projects.slice(0, 2).map(p => p.id));
 });

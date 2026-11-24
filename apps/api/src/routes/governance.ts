@@ -1,9 +1,10 @@
+import type { ActorContext } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
 import { governanceAction, recordExecutionRequest } from "@mpc/api-contract";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   canTransition,
   checkProposalSpace,
@@ -22,7 +23,7 @@ import {
   assertAuthorized,
   projectResource,
   sessionFacts,
-  tenantResource,
+  registryResource,
   visibleProjectScope,
 } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
@@ -408,10 +409,10 @@ function toView(loaded: LoadedProposal, requestId: string, asOf: string) {
  */
 async function proposalProjectId(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   proposalId: string,
 ): Promise<string | null> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, actor, (tx) =>
     tx<{ project_id: string | null }[]>`
       SELECT project_id FROM core.governance_proposals WHERE id = ${proposalId}
     `,
@@ -467,10 +468,10 @@ function assertVoteEligible(
 }
 
 /** Proposal resource. A project proposal is judged within that project's scope. */
-function proposalResource(tenantId: string, projectId: string | null) {
+function proposalResource( projectId: string | null) {
   return projectId === null
-    ? tenantResource(tenantId, { sensitivity: "public" })
-    : projectResource(tenantId, projectId, { sensitivity: "public" });
+    ? registryResource({ sensitivity: "public" })
+    : projectResource(projectId, { sensitivity: "public" });
 }
 
 /**
@@ -515,13 +516,13 @@ export async function registerGovernanceRoutes(
   await registerGovernanceCentralizationRoute(app, sql);
 
   app.get("/api/v1/governance/proposals", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     const { requestId, asOf } = request.context;
 
     /**
      * The list has the same sensitivity as a proposal.
      *
-     * This was the only place using the `tenantResource` default (`restricted`). So a
+     * This was the only place using the `registryResource` default (`restricted`). So a
      * former wallet-only voter **could vote but could not list what it was voting
      * on** — the screen showed "no proposals" alongside a 403.
      * A proposal is `public` on every path (`proposalResource` in this file).
@@ -529,14 +530,14 @@ export async function registerGovernanceRoutes(
     assertAuthorized(
       session,
       "governance.read",
-      proposalResource(tenantId, null),
+      proposalResource( null),
       sessionFacts(session),
     );
 
     /**
      * Filters the list to project scope — 02 §2.1.
      *
-     * Write paths scope by the proposal's project, but reads returned the whole tenant. That
+     * Write paths scope by the proposal's project, but reads returned the whole Registry. That
      * leaks titles, rationale, and tallies of out-of-scope projects' proposals — being
      * unable to modify something does not mean being unable to see it.
      *
@@ -545,9 +546,9 @@ export async function registerGovernanceRoutes(
      */
     const visible = visibleProjectScope(session, "governance.read");
 
-    const rows = await withTenant(
+    const rows = await withActor(
       sql,
-      { tenantId },
+      actor,
       (tx) =>
         tx<{ id: string }[]>`
         SELECT id FROM core.governance_proposals
@@ -558,7 +559,7 @@ export async function registerGovernanceRoutes(
     );
     const window = capRows(rows, PROPOSAL_LIST_LIMIT);
 
-    const items = await withTenant(sql, { tenantId }, async (tx) => {
+    const items = await withActor(sql, actor, async (tx) => {
       const loaded = [];
       for (const { id } of window.items) {
         const proposal = await loadProposal(tx, id);
@@ -573,20 +574,20 @@ export async function registerGovernanceRoutes(
   app.get<{ Params: { proposalId: string } }>(
     "/api/v1/governance/proposals/:proposalId",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { requestId, asOf } = request.context;
 
-      const proposal = await withTenant(sql, { tenantId }, (tx) =>
+      const proposal = await withActor(sql, actor, (tx) =>
         loadProposal(tx, request.params.proposalId),
       );
       if (!proposal) throw notFound("Proposal not found");
 
       // Scope can be judged only once the project is known. Protocol proposals are not tied to
-      // a project, so they are judged at tenant scope.
+      // a project, so they are judged at Registry scope.
       assertAuthorized(
         session,
         "governance.read",
-        proposalResource(tenantId, proposal.row.project_id),
+        proposalResource( proposal.row.project_id),
         sessionFacts(session),
       );
 
@@ -595,7 +596,7 @@ export async function registerGovernanceRoutes(
   );
 
   app.post("/api/v1/governance/proposals", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
 
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -612,7 +613,7 @@ export async function registerGovernanceRoutes(
     const data = parsed.data;
 
     // Checked before authorization: a project proposal without a project would otherwise be
-    // judged at tenant scope, where the project boundary is not evaluated.
+    // judged at Registry scope, where the project boundary is not evaluated.
     if (data.space === "project" && !data.projectId) {
       throw badRequest("PROPOSAL_PROJECT_REQUIRED", "projectId is required for project space");
     }
@@ -626,8 +627,8 @@ export async function registerGovernanceRoutes(
       session,
       governanceAction(data.space, "propose"),
       data.projectId === null
-        ? tenantResource(tenantId, { sensitivity: "public" })
-        : projectResource(tenantId, data.projectId, { sensitivity: "public" }),
+        ? registryResource({ sensitivity: "public" })
+        : projectResource(data.projectId, { sensitivity: "public" }),
       sessionFacts(session),
     );
 
@@ -654,18 +655,18 @@ export async function registerGovernanceRoutes(
     const { requestId, asOf, correlationId } = request.context;
     const requestHash = hashRequest(request);
 
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, requestHash, async () => {
         const proposalId = randomUUID();
 
         await tx`
           INSERT INTO core.governance_proposals (
-            id, tenant_id, space, project_id, proposal_type, title, rationale,
+            id, space, project_id, proposal_type, title, rationale,
             proposer_subject_id, quorum_numerator, quorum_denominator,
             threshold_numerator, threshold_denominator, eligible_weight,
             conflict_disclosure, execution_mode
           ) VALUES (
-            ${proposalId}, ${tenantId}, ${data.space}, ${data.projectId},
+            ${proposalId}, ${data.space}, ${data.projectId},
             ${data.proposalType}, ${data.title}, ${data.rationale},
             ${session.subjectId!}, ${data.quorumNumerator}, ${data.quorumDenominator},
             ${data.thresholdNumerator}, ${data.thresholdDenominator}, ${data.eligibleWeight},
@@ -675,7 +676,6 @@ export async function registerGovernanceRoutes(
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           ...(data.projectId ? { projectId: data.projectId } : {}),
           session,
           command: "governance.proposal.created",
@@ -706,7 +706,7 @@ export async function registerGovernanceRoutes(
   app.post<{ Params: { proposalId: string } }>(
     "/api/v1/governance/proposals/:proposalId/transitions",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const parsed = transitionSchema.safeParse(request.body);
@@ -736,19 +736,19 @@ export async function registerGovernanceRoutes(
        * A protocol proposer moving a project proposal forward is a cross-space mutation, the
        * same as creating one.
        */
-      const projectId = await proposalProjectId(sql, tenantId, request.params.proposalId);
+      const projectId = await proposalProjectId(sql, actor, request.params.proposalId);
       const effectiveRole = assertAuthorized(
         session,
         governanceAction(spaceOfProject(projectId), "administer"),
-        proposalResource(tenantId, projectId),
+        proposalResource( projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [current] = await tx<ProposalRow[]>`
             SELECT * FROM core.governance_proposals
             WHERE id = ${request.params.proposalId}
@@ -808,10 +808,10 @@ export async function registerGovernanceRoutes(
 
           await tx`
             INSERT INTO core.governance_transitions (
-              id, tenant_id, proposal_id, from_state, to_state, reason,
+              id, proposal_id, from_state, to_state, reason,
               actor_subject_id, tally_snapshot
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${current.id}, ${current.state},
+              ${randomUUID()}, ${current.id}, ${current.state},
               ${toState}, ${reason}, ${session.subjectId ?? null},
               ${tx.json(view.tally as never)}
             )
@@ -819,7 +819,6 @@ export async function registerGovernanceRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "governance.proposal.transitioned",
             resourceType: "governance_proposal",
@@ -846,7 +845,6 @@ export async function registerGovernanceRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "governance.proposal.transitioned",
             aggregateId: current.id,
             aggregateVersion: current.version + 1,
@@ -870,7 +868,7 @@ export async function registerGovernanceRoutes(
   app.post<{ Params: { proposalId: string } }>(
     "/api/v1/governance/proposals/:proposalId/votes",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = voteSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -879,21 +877,21 @@ export async function registerGovernanceRoutes(
         });
       }
 
-      const projectId = await proposalProjectId(sql, tenantId, request.params.proposalId);
+      const projectId = await proposalProjectId(sql, actor, request.params.proposalId);
       const votingBindings = assertVoteEligible(session.roleBindings, projectId);
 
       const effectiveRole = assertAuthorized(
         { ...session, roleBindings: votingBindings },
         governanceAction(spaceOfProject(projectId), "vote"),
-        proposalResource(tenantId, projectId),
+        proposalResource( projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [proposal] = await tx<ProposalRow[]>`
             SELECT * FROM core.governance_proposals WHERE id = ${request.params.proposalId}
           `;
@@ -932,7 +930,6 @@ export async function registerGovernanceRoutes(
                   const weight = await resolveVoteWeight(
                     tx,
                     {
-                      tenantId,
                       proposalId: proposal.id,
                       walletAddress,
                       snapshotBlock: proposal.snapshot_block ? Number(proposal.snapshot_block) : null,
@@ -965,9 +962,9 @@ export async function registerGovernanceRoutes(
           try {
             await tx`
               INSERT INTO core.governance_votes (
-                id, tenant_id, proposal_id, voter_subject_id, choice, weight, weight_wallet_address
+                id, proposal_id, voter_subject_id, choice, weight, weight_wallet_address
               ) VALUES (
-                ${randomUUID()}, ${tenantId}, ${proposal.id}, ${session.subjectId!},
+                ${randomUUID()}, ${proposal.id}, ${session.subjectId!},
                 ${parsed.data.choice}, ${resolved.weight.toString()}, ${resolved.walletAddress}
               )
               ON CONFLICT (proposal_id, voter_subject_id) DO UPDATE
@@ -987,7 +984,6 @@ export async function registerGovernanceRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "governance.vote.cast",
             resourceType: "governance_proposal",
@@ -1022,7 +1018,7 @@ export async function registerGovernanceRoutes(
   app.post<{ Params: { proposalId: string } }>(
     "/api/v1/governance/proposals/:proposalId/execution-records",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const parsed = recordExecutionRequest.safeParse(request.body);
@@ -1032,11 +1028,11 @@ export async function registerGovernanceRoutes(
         });
       }
 
-      const projectId = await proposalProjectId(sql, tenantId, request.params.proposalId);
+      const projectId = await proposalProjectId(sql, actor, request.params.proposalId);
       const effectiveRole = assertAuthorized(
         session,
         "governance.execution.record",
-        proposalResource(tenantId, projectId),
+        proposalResource( projectId),
         sessionFacts(session),
       );
 
@@ -1044,8 +1040,8 @@ export async function registerGovernanceRoutes(
       const requestHash = hashRequest(request);
       const record = parsed.data;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [current] = await tx<ProposalRow[]>`
             SELECT * FROM core.governance_proposals
             WHERE id = ${request.params.proposalId}
@@ -1075,11 +1071,11 @@ export async function registerGovernanceRoutes(
 
           await tx`
             INSERT INTO core.governance_execution_records (
-              id, tenant_id, proposal_id, from_state, outcome, recorder_subject_id,
+              id, proposal_id, from_state, outcome, recorder_subject_id,
               executor, authority, executed_action, contract_reference, contract_hash,
               external_reference, effective_date, evidence_reference, evidence_hash, limitations
             ) VALUES (
-              ${recordId}, ${tenantId}, ${current.id}, ${current.state}, ${record.outcome},
+              ${recordId}, ${current.id}, ${current.state}, ${record.outcome},
               ${session.subjectId!}, ${record.executor}, ${record.authority},
               ${record.executedAction}, ${record.contractReference}, ${record.contractHash},
               ${record.externalReference}, ${record.effectiveDate}, ${record.evidenceReference},
@@ -1098,10 +1094,10 @@ export async function registerGovernanceRoutes(
           const reason = `Execution recorded as ${record.outcome}`;
           await tx`
             INSERT INTO core.governance_transitions (
-              id, tenant_id, proposal_id, from_state, to_state, reason,
+              id, proposal_id, from_state, to_state, reason,
               actor_subject_id, tally_snapshot
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${current.id}, ${current.state},
+              ${randomUUID()}, ${current.id}, ${current.state},
               ${record.outcome}, ${reason}, ${session.subjectId ?? null},
               ${tx.json(view.tally as never)}
             )
@@ -1109,7 +1105,6 @@ export async function registerGovernanceRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             ...(projectId ? { projectId } : {}),
             session,
             command: "governance.execution.recorded",
@@ -1130,7 +1125,6 @@ export async function registerGovernanceRoutes(
 
           // 07 §7.4 `execution.status.changed` — kept apart from the proposal's vote events.
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "execution.status.changed",
             aggregateId: current.id,
             aggregateVersion: current.version + 1,

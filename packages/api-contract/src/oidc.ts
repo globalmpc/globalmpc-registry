@@ -5,24 +5,25 @@ import { isoDateTime } from "./common.js";
 import type { RouteDefinition } from "./routes.js";
 
 /**
- * Google and Microsoft sign-in — account authentication WP4 (decisions D1, D2, D6; plan §3).
+ * Google sign-in — account authentication WP4 (decisions D1, D6; plan §3). Microsoft sign-in
+ * was removed in 0171.
  *
  * Rules the schemas below only describe, and the API and database (migrations 0120–0121)
  * enforce:
  *
- * - **An identity is matched only by its key**: Google `(iss, sub)`, Microsoft `(tid, oid)`.
+ * - **An identity is matched only by its key**: Google `(iss, sub)`.
  *   The email in a token never finds an account, so a provider account that merely claims a
  *   person's address signs nobody in (`OIDC_ACCOUNT_NOT_FOUND`, the same answer as for any
  *   identity that is not linked).
  * - **Sign-in only for a linked identity.** No account is created by signing in; accounts come
  *   from invitations (D5).
  * - **Linking** needs a session past its second factor (aal2+) and comes back to the same
- *   session. An identity linked anywhere — this account, another one, another tenant — answers
+ *   session. An identity linked anywhere — this account or another one — answers
  *   the one code `OIDC_IDENTITY_UNAVAILABLE` (D6).
- * - **Accepting an invitation** with Google or Microsoft instead of an emailed code works only
- *   when the provider verified the invited address for this token (Google `email_verified`;
- *   Microsoft the `xms_edov` claim). The account starts with no role, as with a code.
- * - A Google or Microsoft session is first-factor only (`aal1`), like an email-code session.
+ * - **Accepting an invitation** with Google instead of an emailed code works only when Google
+ *   verified the invited address for this token (`email_verified`, for an address Google
+ *   manages). The account starts with no role, as with a code.
+ * - A Google session is first-factor only (`aal1`), like an email-code session.
  * - The flow is the authorization code flow with PKCE (S256), `state` and `nonce`. `start`
  *   returns, besides the provider URL, a `browserBinding` the client keeps (WP6: in an HttpOnly
  *   cookie on the web origin) and sends back with the callback; a callback carrying someone
@@ -32,7 +33,7 @@ import type { RouteDefinition } from "./routes.js";
  *   provider's error text is never echoed.
  */
 
-export const OIDC_PROVIDERS = ["google", "microsoft"] as const;
+export const OIDC_PROVIDERS = ["google"] as const;
 export const oidcProvider = z.enum(OIDC_PROVIDERS);
 export type OidcProvider = z.infer<typeof oidcProvider>;
 
@@ -88,10 +89,8 @@ export const oidcCallbackRequest = z.union([
 export const externalIdentity = z.object({
   id: z.string(),
   provider: oidcProvider,
-  /** The ID token issuer. For Microsoft it names the person's directory. */
+  /** The ID token issuer. */
   issuer: z.string(),
-  /** Microsoft directory (`tid`). Null for Google. */
-  idpTenant: z.string().nullable(),
   /** `link` from settings, or `invitation` when the account was created with it. */
   linkedVia: z.enum(["link", "invitation"]),
   createdAt: isoDateTime,
@@ -117,7 +116,7 @@ export const unlinkIdentityResponse = z.object({
 
 /** No live account is linked to this identity. Same answer whatever the token's email says. */
 export const OIDC_ACCOUNT_NOT_FOUND = "OIDC_ACCOUNT_NOT_FOUND";
-/** The identity is already linked — to this account or any other, in any tenant. */
+/** The identity is already linked — to this account or any other. */
 export const OIDC_IDENTITY_UNAVAILABLE = "OIDC_IDENTITY_UNAVAILABLE";
 /**
  * Google says the address is verified, but Google does not manage it — a consumer Google account
@@ -152,7 +151,7 @@ export const OIDC_ROUTES: readonly RouteDefinition[] = [
     ...publicOidcRoute,
     method: "post",
     path: "/api/v1/auth/oidc/{provider}/start",
-    summary: "Start Google / Microsoft sign-in, or accepting an invitation with it",
+    summary: "Start Google sign-in, or accepting an invitation with it",
     operationId: "startOidcSignIn",
     paramsSchema: oidcProviderParams,
     requestSchema: oidcSignInStartRequest,
@@ -163,7 +162,7 @@ export const OIDC_ROUTES: readonly RouteDefinition[] = [
     ...publicOidcRoute,
     method: "post",
     path: "/api/v1/auth/oidc/{provider}/callback",
-    summary: "Finish Google / Microsoft sign-in — an aal1 session for a linked identity only",
+    summary: "Finish Google sign-in — an aal1 session for a linked identity only",
     operationId: "completeOidcSignIn",
     paramsSchema: oidcProviderParams,
     requestSchema: oidcCallbackRequest,
@@ -178,7 +177,6 @@ export const OIDC_ROUTES: readonly RouteDefinition[] = [
       "OIDC_EMAIL_NOT_VERIFIED",
       OIDC_EMAIL_CODE_REQUIRED,
       "OIDC_EMAIL_MISMATCH",
-      "OIDC_TENANT_NOT_ALLOWED",
       "INVITATION_INVALID",
     ],
   },
@@ -186,7 +184,7 @@ export const OIDC_ROUTES: readonly RouteDefinition[] = [
     ...self,
     method: "post",
     path: "/api/v1/auth/oidc/{provider}/link/start",
-    summary: "Start linking a Google / Microsoft identity to this account — needs aal2",
+    summary: "Start linking a Google identity to this account — needs aal2",
     operationId: "startOidcLink",
     paramsSchema: oidcProviderParams,
     responseSchema: oidcStartResponse,
@@ -208,7 +206,6 @@ export const OIDC_ROUTES: readonly RouteDefinition[] = [
       "OIDC_PROVIDER_ERROR",
       OIDC_IDENTITY_UNAVAILABLE,
       "OIDC_PROVIDER_ALREADY_LINKED",
-      "OIDC_TENANT_NOT_ALLOWED",
       "MFA_STEP_UP_REQUIRED",
     ],
   },
@@ -216,7 +213,7 @@ export const OIDC_ROUTES: readonly RouteDefinition[] = [
     ...self,
     method: "get",
     path: "/api/v1/auth/identities",
-    summary: "The Google / Microsoft identities linked to this account",
+    summary: "The Google identities linked to this account",
     operationId: "listExternalIdentities",
     responseSchema: externalIdentityList,
   },

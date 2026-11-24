@@ -38,7 +38,6 @@ export interface ReplayOptions {
 
 export interface ReplayPlanItem {
   readonly eventId: string;
-  readonly tenantId: string;
   readonly eventType: string;
   readonly status: "dead_lettered" | "published" | "pending";
   readonly handlers: readonly {
@@ -55,7 +54,6 @@ export interface ReplayResult {
 
 interface SelectedRow {
   id: string;
-  tenant_id: string;
   event_type: string;
   published_at: Date | null;
   dead_lettered_at: Date | null;
@@ -96,7 +94,7 @@ export async function replayEvents(
 
   const ids = selection.eventIds ?? [];
   const rows = await sql<SelectedRow[]>`
-    SELECT id, tenant_id, event_type, published_at, dead_lettered_at
+    SELECT id, event_type, published_at, dead_lettered_at
     FROM core.outbox
     WHERE (${ids.length === 0} OR id = ANY(${ids as string[]}::uuid[]))
       AND (${selection.eventType ?? null}::text IS NULL OR event_type = ${selection.eventType ?? null})
@@ -117,7 +115,6 @@ export async function replayEvents(
 
     items.push({
       eventId: row.id,
-      tenantId: row.tenant_id,
       eventType: row.event_type,
       status: row.dead_lettered_at ? "dead_lettered" : row.published_at ? "published" : "pending",
       handlers: handlers
@@ -151,10 +148,10 @@ export async function replayEvents(
       // says so rather than inventing an identity or a role decision (see apps/api audit.ts).
       await tx`
         INSERT INTO audit.events (
-          tenant_id, effective_role, command, resource_type, resource_id,
+          effective_role, command, resource_type, resource_id,
           reason, correlation_id, detail
         ) VALUES (
-          ${item.tenantId}, 'deploy_bound', 'outbox.event.replayed', 'outbox_event',
+          'deploy_bound', 'outbox.event.replayed', 'outbox_event',
           ${item.eventId}, ${options.reason}, ${correlationId},
           ${tx.json({
             eventType: item.eventType,

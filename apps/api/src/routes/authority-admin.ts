@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   authorityMachine,
   canTransition,
@@ -15,7 +15,7 @@ import { badRequest, conflict, forbidden, notFound, unprocessable } from "../err
 import {
   assertAuthorized,
   sessionFacts,
-  tenantResource,
+  registryResource,
 } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
@@ -191,18 +191,17 @@ function toConnectionView(row: ConnectionRow) {
 /** One history row. Freezes the post-change state as is. */
 async function recordVersion(
   tx: postgres.TransactionSql,
-  tenantId: string,
   row: AuthorityRow,
   changeReason: string,
   changedBy: string | null,
 ): Promise<void> {
   await tx`
     INSERT INTO core.authority_versions (
-      id, tenant_id, authority_id, version, name, jurisdiction, proves, does_not_prove,
+      id, authority_id, version, name, jurisdiction, proves, does_not_prove,
       recognized_scope, verification_method, public_disclosure_level,
       valid_from, valid_until, state, state_reason, change_reason, changed_by
     ) VALUES (
-      ${randomUUID()}, ${tenantId}, ${row.id}, ${row.version}, ${row.name},
+      ${randomUUID()}, ${row.id}, ${row.version}, ${row.name},
       ${row.jurisdiction}, ${row.proves}, ${row.does_not_prove}, ${row.recognized_scope},
       ${row.verification_method}, ${row.public_disclosure_level},
       ${row.valid_from}, ${row.valid_until}, ${row.state}, ${row.state_reason},
@@ -291,7 +290,7 @@ export async function registerAuthorityAdminRoutes(
   // --- Registration ----------------------------------------------------------------
 
   app.post("/api/v1/authorities", async (request, reply) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
 
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -303,7 +302,7 @@ export async function registerAuthorityAdminRoutes(
     const effectiveRole = assertAuthorized(
       session,
       "authority.register",
-      tenantResource(tenantId),
+      registryResource(),
       sessionFacts(session),
     );
 
@@ -311,8 +310,8 @@ export async function registerAuthorityAdminRoutes(
     const requestHash = hashRequest(request);
     const data = parsed.data;
 
-    const result = await withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+    const result = await withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, requestHash, async () => {
         const id = randomUUID();
 
         /**
@@ -323,11 +322,11 @@ export async function registerAuthorityAdminRoutes(
          */
         const [row] = await tx<AuthorityRow[]>`
           INSERT INTO core.authorities (
-            id, tenant_id, name, jurisdiction, proves, does_not_prove,
+            id, name, jurisdiction, proves, does_not_prove,
             recognized_scope, verification_method, public_disclosure_level,
             valid_from, valid_until, state, registered_by
           ) VALUES (
-            ${id}, ${tenantId}, ${data.name}, ${data.jurisdiction.toUpperCase()},
+            ${id}, ${data.name}, ${data.jurisdiction.toUpperCase()},
             ${data.proves}, ${data.doesNotProve}, ${data.recognizedScope},
             ${data.verificationMethod}, ${data.publicDisclosureLevel},
             ${data.validFrom}, ${data.validUntil ?? null}, 'proposed', ${session.subjectId}
@@ -335,11 +334,10 @@ export async function registerAuthorityAdminRoutes(
           RETURNING *
         `;
 
-        await recordVersion(tx, tenantId, row!, data.reason, session.subjectId);
+        await recordVersion(tx, row!, data.reason, session.subjectId);
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           session,
           command: "authority.registered",
           resourceType: "authority",
@@ -352,7 +350,6 @@ export async function registerAuthorityAdminRoutes(
         });
 
         await enqueueEvent(tx, {
-          tenantId,
           eventType: "authority.registered",
           aggregateId: id,
           aggregateVersion: 1,
@@ -372,7 +369,7 @@ export async function registerAuthorityAdminRoutes(
   app.patch<{ Params: { authorityId: string } }>(
     "/api/v1/authorities/:authorityId",
     async (request) => {
-      const { session, tenantId } = requireMutationContext(request);
+      const { session, actor } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const parsed = updateSchema.safeParse(request.body);
@@ -385,14 +382,14 @@ export async function registerAuthorityAdminRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "authority.register",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const data = parsed.data;
 
-      return withTenant(sql, { tenantId }, async (tx) => {
+      return withActor(sql, actor, async (tx) => {
         const [current] = await tx<AuthorityRow[]>`
           SELECT * FROM core.authorities
           WHERE id = ${request.params.authorityId}
@@ -415,11 +412,10 @@ export async function registerAuthorityAdminRoutes(
           RETURNING *
         `;
 
-        await recordVersion(tx, tenantId, row!, data.reason, session.subjectId);
+        await recordVersion(tx, row!, data.reason, session.subjectId);
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           session,
           command: "authority.updated",
           resourceType: "authority",
@@ -442,7 +438,7 @@ export async function registerAuthorityAdminRoutes(
   app.post<{ Params: { authorityId: string } }>(
     "/api/v1/authorities/:authorityId/state",
     async (request) => {
-      const { session, tenantId } = requireMutationContext(request);
+      const { session, actor } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const parsed = stateSchema.safeParse(request.body);
@@ -455,7 +451,7 @@ export async function registerAuthorityAdminRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "authority.review",
-        tenantResource(tenantId, {
+        registryResource({
           // This decision requires independence. It is blocked while a conflict is unresolved.
           separationSensitive: true,
         }),
@@ -465,7 +461,7 @@ export async function registerAuthorityAdminRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const data = parsed.data;
 
-      return withTenant(sql, { tenantId }, async (tx) => {
+      return withActor(sql, actor, async (tx) => {
         const [current] = await tx<AuthorityRow[]>`
           SELECT * FROM core.authorities
           WHERE id = ${request.params.authorityId}
@@ -524,11 +520,10 @@ export async function registerAuthorityAdminRoutes(
           RETURNING *
         `;
 
-        await recordVersion(tx, tenantId, row!, data.reason, session.subjectId);
+        await recordVersion(tx, row!, data.reason, session.subjectId);
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           session,
           command: "authority.state_changed",
           resourceType: "authority",
@@ -542,7 +537,6 @@ export async function registerAuthorityAdminRoutes(
         });
 
         await enqueueEvent(tx, {
-          tenantId,
           eventType: "authority.state_changed",
           aggregateId: current.id,
           aggregateVersion: row!.version,
@@ -569,19 +563,19 @@ export async function registerAuthorityAdminRoutes(
   app.get<{ Params: { authorityId: string } }>(
     "/api/v1/authorities/:authorityId/versions",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { requestId, asOf } = request.context;
 
       assertAuthorized(
         session,
         "authority.read",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
 
-      const rows = await withTenant(
+      const rows = await withActor(
         sql,
-        { tenantId },
+        actor,
         (tx) =>
           tx<
             {
@@ -629,19 +623,19 @@ export async function registerAuthorityAdminRoutes(
   app.get<{ Params: { authorityId: string } }>(
     "/api/v1/authorities/:authorityId/connections",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { requestId, asOf } = request.context;
 
       assertAuthorized(
         session,
         "authority.read",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
 
-      const rows = await withTenant(
+      const rows = await withActor(
         sql,
-        { tenantId },
+        actor,
         (tx) =>
           tx<ConnectionRow[]>`
           SELECT id, authority_id, connection_key, collection_method::text AS collection_method,
@@ -659,7 +653,7 @@ export async function registerAuthorityAdminRoutes(
   app.post<{ Params: { authorityId: string } }>(
     "/api/v1/authorities/:authorityId/connections",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = connectionSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -679,15 +673,15 @@ export async function registerAuthorityAdminRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "connection.configure",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      const result = await withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      const result = await withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [authority] = await tx<{ id: string; state: string }[]>`
             SELECT id, state::text AS state FROM core.authorities
             WHERE id = ${request.params.authorityId}
@@ -713,12 +707,12 @@ export async function registerAuthorityAdminRoutes(
 
           const [row] = await tx<ConnectionRow[]>`
             INSERT INTO core.source_connections (
-              id, tenant_id, authority_id, connection_key, collection_method,
+              id, authority_id, connection_key, collection_method,
               access_basis, secret_reference, state, endpoint, timeout_ms,
               effective_at_field, authentication_method, adapter_version,
               source_schema_version, terms_license, commercial_reuse, disclosure_permission
             ) VALUES (
-              ${id}, ${tenantId}, ${authority.id}, ${data.connectionKey!},
+              ${id}, ${authority.id}, ${data.connectionKey!},
               ${data.collectionMethod!}, ${data.accessBasis!}, ${data.secretReference ?? null},
               ${data.state ?? "planned"}, ${data.endpoint ?? null},
               ${data.timeoutMs ?? 10_000}, ${data.effectiveAtField ?? null},
@@ -733,7 +727,6 @@ export async function registerAuthorityAdminRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "source_connection.configured",
             resourceType: "source_connection",
@@ -757,7 +750,7 @@ export async function registerAuthorityAdminRoutes(
   app.patch<{ Params: { connectionId: string } }>(
     "/api/v1/source-connections/:connectionId",
     async (request) => {
-      const { session, tenantId } = requireMutationContext(request);
+      const { session, actor } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const parsed = connectionSchema.safeParse(request.body);
@@ -770,14 +763,14 @@ export async function registerAuthorityAdminRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "connection.configure",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const data = parsed.data;
 
-      return withTenant(sql, { tenantId }, async (tx) => {
+      return withActor(sql, actor, async (tx) => {
         const [current] = await tx<ConnectionSettingsRow[]>`
           SELECT c.*, c.collection_method::text AS collection_method,
                  c.state::text AS state,
@@ -808,7 +801,6 @@ export async function registerAuthorityAdminRoutes(
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           session,
           command: "source_connection.configured",
           resourceType: "source_connection",

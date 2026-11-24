@@ -252,8 +252,8 @@ describeDb("Governance", () => {
     expect(response.statusCode).toBe(403);
   });
 
-  it("proposals of another tenant are not visible", async () => {
-    await propose(proposerToken, {});
+  it("protocol proposals are Registry-wide: another company's administrator sees them too", async () => {
+    const created = (await propose(proposerToken, {})).json();
 
     const response = await app.inject({
       method: "GET",
@@ -262,7 +262,7 @@ describeDb("Governance", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().items).toEqual([]);
+    expect(response.json().items.map((item: { id: string }) => item.id)).toContain(created.id);
   });
 
   /**
@@ -530,7 +530,7 @@ describeDb("Governance — on-chain snapshot", () => {
       const walletless = await addGovernanceAccount(fx, "project_member");
       const subjectId = await subjectOf(walletless.address);
       await fx.sql`UPDATE core.wallet_identities SET disabled_at = now() WHERE wallet_address = ${walletless.address}`;
-      const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, {
+      const token = await issueTestSession(fx.appSql, subjectId, {
         firstFactor: "email_code",
         secondFactor: "passkey",
       });
@@ -552,7 +552,7 @@ describeDb("Governance — on-chain snapshot", () => {
       expect(await stored(id, voterSubject)).toEqual({ choice: "for", weight: "5", weight_wallet_address: voter.address });
 
       // The voter replaces their wallet with one holding more at the snapshot block.
-      const passkey = await issueTestSession(fx.appSql, fx.tenantA, voterSubject, {
+      const passkey = await issueTestSession(fx.appSql, voterSubject, {
         firstFactor: "email_code",
         secondFactor: "passkey",
       });
@@ -579,7 +579,7 @@ describeDb("Governance — on-chain snapshot", () => {
       const holder = await addGovernanceAccount(fx, "project_member");
       const holderSubject = await subjectOf(holder.address);
       const holderToken = await signIn(app, holder);
-      const holderPasskey = await issueTestSession(fx.appSql, fx.tenantA, holderSubject, {
+      const holderPasskey = await issueTestSession(fx.appSql, holderSubject, {
         firstFactor: "email_code",
         secondFactor: "passkey",
       });
@@ -621,8 +621,8 @@ describeDb("Governance — on-chain snapshot", () => {
       const voter = await addGovernanceAccount(fx, "project_member");
       const voterSubject = await subjectOf(voter.address);
       await fx.sql`
-        INSERT INTO core.governance_votes (id, tenant_id, proposal_id, voter_subject_id, choice, weight)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${proposalId}, ${voterSubject}, 'for', 5)
+        INSERT INTO core.governance_votes (id, proposal_id, voter_subject_id, choice, weight)
+        VALUES (${randomUUID()}, ${proposalId}, ${voterSubject}, 'for', 5)
       `;
       await expect(
         fx.sql`UPDATE core.governance_votes SET weight = 999 WHERE voter_subject_id = ${voterSubject}`,

@@ -18,6 +18,8 @@ import {
   signIn,
   testEnv,
   type TestAccount,
+  setupBareRegistry,
+  type BareRegistry,
   type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
 import rulesFixture from "../../../packages/policy/test/fixtures/registry-gate.rules.json" with { type: "json" };
 
@@ -60,7 +62,7 @@ describeDb("review registry proposals", () => {
   let stewardToken: string;
   let operatorBToken: string;
 
-  /** Inserts a person with the given roles in tenant A. Returns the subject id. */
+  /** Inserts a person with the given roles in company A. Returns the subject id. */
   async function addPerson(
     label: string,
     roles: readonly string[],
@@ -68,21 +70,21 @@ describeDb("review registry proposals", () => {
   ): Promise<string> {
     const subjectId = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subjectId}, ${fx.tenantA}, 'person', ${label})
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subjectId}, 'person', ${label})
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${account.address}, 31337, 'high_assurance', now()
+        ${randomUUID()}, ${subjectId}, ${account.address}, 31337, 'high_assurance', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     for (const role of roles) {
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, ${role})
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, ${role})
       `;
     }
     return subjectId;
@@ -149,11 +151,11 @@ describeDb("review registry proposals", () => {
     expect((await post(operatorBToken, `/api/v1/projects/${fx.projectA}/claims`, input)).statusCode).not.toBe(200);
     expect((await post(stewardToken, path, { ...input, documentUploadIds: [randomUUID()] })).statusCode).toBe(422);
     const uploadId = randomUUID();
-    await fx.sql`INSERT INTO core.object_uploads (id, tenant_id, project_id, object_key, content_hash, byte_size, content_type, sensitivity, state)
-      VALUES (${uploadId}, ${fx.tenantA}, ${fx.projectA}, ${`objects/${uploadId}`}, ${`0x${"ab".repeat(32)}`}, 10, 'application/pdf', 'restricted', 'scanned_clean')`;
+    await fx.sql`INSERT INTO core.object_uploads (id, project_id, object_key, content_hash, byte_size, content_type, sensitivity, state)
+      VALUES (${uploadId}, ${fx.projectA}, ${`objects/${uploadId}`}, ${`0x${"ab".repeat(32)}`}, 10, 'application/pdf', 'restricted', 'scanned_clean')`;
     const otherUploadId = randomUUID();
-    await fx.sql`INSERT INTO core.object_uploads (id, tenant_id, project_id, object_key, content_hash, byte_size, content_type, sensitivity, state)
-      VALUES (${otherUploadId}, ${fx.tenantA}, ${fx.otherProjectA}, ${`objects/${otherUploadId}`}, ${`0x${"ac".repeat(32)}`}, 10, 'application/pdf', 'restricted', 'scanned_clean')`;
+    await fx.sql`INSERT INTO core.object_uploads (id, project_id, object_key, content_hash, byte_size, content_type, sensitivity, state)
+      VALUES (${otherUploadId}, ${fx.otherProjectA}, ${`objects/${otherUploadId}`}, ${`0x${"ac".repeat(32)}`}, 10, 'application/pdf', 'restricted', 'scanned_clean')`;
     expect((await post(stewardToken, path, { ...input, documentUploadIds: [otherUploadId] })).statusCode).toBe(422);
     const created = await post(stewardToken, path, { ...input, documentUploadIds: [uploadId] });
     expect(created.statusCode).toBe(200);
@@ -184,7 +186,7 @@ describeDb("review registry proposals", () => {
     expect(response.json().code).toBe("CLAIM_CATALOG_UNAVAILABLE");
   });
 
-  it("catalog requires independent approval, preserves versions and isolates tenants", async () => {
+  it("catalog requires independent approval, preserves versions and is shared Registry-wide", async () => {
     const body = catalogBody();
     const proposed = await post(dualToken, catalogBase, body);
     expect(proposed.statusCode).toBe(200);
@@ -210,7 +212,8 @@ describeDb("review registry proposals", () => {
     expect(parsedDetail).toMatchObject({ requestId: first.json().requestId, asOf: first.json().asOf });
     expect(Object.keys(first.json()).every((key) => key in parsedDetail)).toBe(true);
     expect(first.json()).toMatchObject({ claimType: body.claimType, catalogVersion: 1, definition: body.definition });
-    expect((await get(operatorBToken, `/api/v1/claim-types/${body.claimType}/versions/1`)).statusCode).toBe(404);
+    // The catalog is Registry reference data: another company reads the same approved version.
+    expect((await get(operatorBToken, `/api/v1/claim-types/${body.claimType}/versions/1`)).json()).toMatchObject({ claimType: body.claimType, catalogVersion: 1 });
     expect((await get(stewardToken, catalogBase)).statusCode).toBe(403);
     expect((await post(operatorToken, catalogBase, { ...body, effectiveFrom: "2025-01-01T00:00:00Z" })).statusCode).toBe(422);
     const next = await post(operatorToken, catalogBase, { ...body, displayName: "Revised licence" });
@@ -231,7 +234,7 @@ describeDb("review registry proposals", () => {
     expect((await post(approverToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Replay" }, 2)).statusCode).toBe(422);
   });
 
-  it("serializes concurrent catalog proposals and decisions and paginates without tenant leakage", async () => {
+  it("serializes concurrent catalog proposals and decisions and paginates without repeats", async () => {
     const body = catalogBody();
     const attempts = await Promise.all([post(operatorToken, catalogBase, body), post(operatorToken, catalogBase, body)]);
     expect(attempts.map((response) => response.statusCode).sort()).toEqual([200, 409]);
@@ -241,7 +244,7 @@ describeDb("review registry proposals", () => {
       post(approverToken, `${catalogBase}/${proposal.id}/decision`, { decision: "approve", reason: "Reviewed" }, 1),
     ]);
     expect(decisions.map((response) => response.statusCode).sort()).toEqual([200, 412]);
-    const [count] = await fx.sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM core.claim_types WHERE tenant_id = ${fx.tenantA} AND claim_type = ${body.claimType}`;
+    const [count] = await fx.sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM core.claim_types WHERE claim_type = ${body.claimType}`;
     expect(count!.count).toBe(1);
     const seen: string[] = [];
     let cursor: string | null = null;
@@ -256,8 +259,6 @@ describeDb("review registry proposals", () => {
     expect(seen.length).toBeGreaterThanOrEqual(2);
     expect(new Set(seen).size).toBe(seen.length);
     expect(seen).toContain(body.claimType);
-    const other = (await get(operatorBToken, "/api/v1/claim-types")).json<{ items: { claimType: string }[] }>();
-    expect(other.items.some((item) => seen.includes(item.claimType))).toBe(false);
   });
 
   it("future catalog versions and rejected proposals are absent from reader catalog", async () => {
@@ -276,7 +277,7 @@ describeDb("review registry proposals", () => {
     for (const effectiveFrom of ["0000-01-01T00:00:00Z", "2026-02-31T00:00:00Z", "2026-02-29T00:00:00Z", "2026-13-01T00:00:00Z", "2026-01-01T24:00:00Z", "2026-01-01T00:00:00.1234Z"]) {
       const body = catalogBody({ effectiveFrom });
       expect((await post(operatorToken, catalogBase, body)).statusCode).toBe(400);
-      const [count] = await fx.sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM core.registry_proposals WHERE tenant_id = ${fx.tenantA} AND item_key = ${body.claimType}`;
+      const [count] = await fx.sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM core.registry_proposals WHERE item_key = ${body.claimType}`;
       expect(count!.count).toBe(0);
     }
   });
@@ -362,7 +363,7 @@ describeDb("review registry proposals", () => {
 
       const rows = await fx.sql`
         SELECT id FROM core.compliance_policy_sets
-        WHERE tenant_id = ${fx.tenantA} AND rule_set_id = ${definition.ruleSetId}
+        WHERE rule_set_id = ${definition.ruleSetId}
       `;
       expect(rows).toHaveLength(0);
     });
@@ -391,7 +392,7 @@ describeDb("review registry proposals", () => {
       expect(decided.json().materializedId).toBeNull();
       const rows = await fx.sql`
         SELECT id FROM core.compliance_policy_sets
-        WHERE tenant_id = ${fx.tenantA} AND rule_set_id = ${definition.ruleSetId}
+        WHERE rule_set_id = ${definition.ruleSetId}
       `;
       expect(rows).toHaveLength(0);
     });
@@ -412,7 +413,7 @@ describeDb("review registry proposals", () => {
       // The application role, with RLS on — the same connection the API uses.
       await expect(
         fx.appSql.begin(async (tx) => {
-          await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+          await tx`SELECT set_config('app.actor_subject_id', ${fx.operatorSubjectA}, true)`;
           await tx`
             UPDATE core.registry_proposals
             SET state = 'approved', decided_by_subject_id = proposed_by_subject_id,
@@ -427,11 +428,11 @@ describeDb("review registry proposals", () => {
       await expect(
         fx.sql`
           INSERT INTO core.registry_proposals (
-            id, tenant_id, kind, item_key, item_version, payload, rationale, effective_from,
+            id, kind, item_key, item_version, payload, rationale, effective_from,
             proposed_by_subject_id, state, decided_by_subject_id, decided_at, decision_reason,
             materialized_id
           ) VALUES (
-            ${randomUUID()}, ${fx.tenantA}, 'policy_set', 'forged', 1, '{}'::jsonb, 'forged',
+            ${randomUUID()}, 'policy_set', 'forged', 1, '{}'::jsonb, 'forged',
             now(), ${fx.operatorSubjectA}, 'approved', ${approverSubject}, now(), 'forged',
             ${randomUUID()}
           )
@@ -511,10 +512,10 @@ describeDb("review registry proposals", () => {
       await expect(
         fx.sql`
           INSERT INTO core.registry_proposals (
-            id, tenant_id, kind, item_key, item_version, payload, rationale, effective_from,
+            id, kind, item_key, item_version, payload, rationale, effective_from,
             proposed_by_subject_id
           ) VALUES (
-            ${randomUUID()}, ${fx.tenantA}, 'policy_set', ${`blank-${randomUUID()}`}, 1,
+            ${randomUUID()}, 'policy_set', ${`blank-${randomUUID()}`}, 1,
             '{}'::jsonb, '   ', now(), ${fx.operatorSubjectA}
           )
         `,
@@ -602,23 +603,22 @@ describeDb("review registry proposals", () => {
     });
   });
 
-  describe("tenant isolation", () => {
-    it("another tenant cannot list, read or decide the proposal", async () => {
+  describe("Registry-wide authority", () => {
+    it("another company's organization-scoped administrator cannot list, read or decide the proposal", async () => {
       const proposal = await proposePolicy(ruleSet());
 
-      const listed = (await get(operatorBToken, `${BASE}/policy-sets/proposals`)).json() as {
-        items: Proposal[];
-      };
-      expect(listed.items.map((item) => item.id)).not.toContain(proposal.id);
+      const listed = await get(operatorBToken, `${BASE}/policy-sets/proposals`);
+      expect(listed.statusCode).toBe(403);
+      expect(JSON.stringify(listed.json())).not.toContain(proposal.id);
 
       const read = await get(operatorBToken, `${BASE}/policy-sets/proposals/${proposal.id}`);
-      expect(read.statusCode).toBe(404);
+      expect(read.statusCode).toBe(403);
+      expect(JSON.stringify(read.json())).not.toContain(proposal.id);
 
-      const rows = await fx.appSql.begin(async (tx) => {
-        await tx`SELECT set_config('app.current_tenant', ${fx.tenantB}, true)`;
-        return tx`SELECT id FROM core.registry_proposals WHERE id = ${proposal.id}`;
-      });
-      expect(rows).toHaveLength(0);
+      const decided = await post(operatorBToken, `${BASE}/policy-sets/proposals/${proposal.id}/decision`, { decision: "approve", reason: "Not ours" }, 1);
+      expect(decided.statusCode).toBe(403);
+      const [row] = await fx.sql`SELECT state FROM core.registry_proposals WHERE id = ${proposal.id}`;
+      expect(row!.state).toBe("pending");
     });
   });
 
@@ -712,7 +712,7 @@ describeDb("review registry proposals", () => {
       expect(self.json().code).toBe("REGISTRY_CREDENTIAL_SELF_APPROVAL");
     });
 
-    it("does not attach a credential to a subject outside the tenant", async () => {
+    it("does not attach a credential to a subject outside the Registry", async () => {
       const response = await post(
         operatorToken,
         `${BASE}/credentials/proposals`,
@@ -742,15 +742,21 @@ describeDb("review registry proposals", () => {
    * leaves to a default shows up here instead of in a signing check months later.
    */
   describe("bootstrap and API approval produce identical rows", () => {
-    let bootstrapSlug: string;
     let bootstrapEmail: string;
+    /**
+     * Bootstrap seeds a Registry before anyone can use it, so it runs against a Registry of its
+     * own; the API path runs against the fixture. Catalog keys are Registry-wide, so the two
+     * cannot share one database.
+     */
+    let bootstrapped: BareRegistry;
 
     beforeAll(async () => {
-      bootstrapSlug = `rr-${randomUUID().slice(0, 8)}`;
+      const fixtureUrl = process.env["DATABASE_URL"];
+      bootstrapped = await setupBareRegistry();
+      // Keep the fixture's database for everything else in this suite.
+      process.env["DATABASE_URL"] = fixtureUrl;
       bootstrapEmail = `parity-${randomUUID().slice(0, 8)}@example.test`;
-      await bootstrapOperator(fx.sql, {
-        tenantSlug: bootstrapSlug,
-        tenantName: "Review registry parity tenant",
+      await bootstrapOperator(bootstrapped.sql, {
         organizationName: "Parity org",
         jurisdiction: "MNG",
         subjectName: "Parity reviewer",
@@ -759,12 +765,13 @@ describeDb("review registry proposals", () => {
         assuranceLevel: "high_assurance",
       });
     });
+    afterAll(async () => { await bootstrapped?.close(); });
 
-    const IDENTITY = ["id", "tenant_id", "created_at"] as const;
+    const IDENTITY = ["id", "created_at"] as const;
 
-    async function rowOf(table: string, id: string, extra: readonly string[] = []) {
-      const [row] = await fx.sql<{ row: Record<string, unknown> }[]>`
-        SELECT to_jsonb(t) AS row FROM ${fx.sql(table)} t WHERE id = ${id}
+    async function rowOf(table: string, id: string, extra: readonly string[] = [], sql = fx.sql) {
+      const [row] = await sql<{ row: Record<string, unknown> }[]>`
+        SELECT to_jsonb(t) AS row FROM ${sql(table)} t WHERE id = ${id}
       `;
       const copy = { ...row!.row };
       for (const column of [...IDENTITY, ...extra]) delete copy[column];
@@ -773,8 +780,7 @@ describeDb("review registry proposals", () => {
 
     it("policy set", async () => {
       const definition = ruleSet();
-      const viaBootstrap = await bootstrapPolicySet(fx.sql, {
-        tenantSlug: bootstrapSlug,
+      const viaBootstrap = await bootstrapPolicySet(bootstrapped.sql, {
         definition,
         approvedBy: "Verification lead",
       });
@@ -783,14 +789,13 @@ describeDb("review registry proposals", () => {
       ).json() as Proposal;
 
       expect(await rowOf("core.compliance_policy_sets", viaApi.materializedId!)).toEqual(
-        await rowOf("core.compliance_policy_sets", viaBootstrap.id),
+        await rowOf("core.compliance_policy_sets", viaBootstrap.id, [], bootstrapped.sql),
       );
     });
 
     it("attestation schema", async () => {
       const body = schemaBody();
-      const viaBootstrap = await bootstrapAttestationSchema(fx.sql, {
-        tenantSlug: bootstrapSlug,
+      const viaBootstrap = await bootstrapAttestationSchema(bootstrapped.sql, {
         schemaKey: body.schemaKey,
         schemaVersion: body.schemaVersion,
         attestationType: body.attestationType,
@@ -806,14 +811,13 @@ describeDb("review registry proposals", () => {
       ).json() as Proposal;
 
       expect(await rowOf("core.attestation_schemas", viaApi.materializedId!)).toEqual(
-        await rowOf("core.attestation_schemas", viaBootstrap.id),
+        await rowOf("core.attestation_schemas", viaBootstrap.id, [], bootstrapped.sql),
       );
     });
 
     it("credential", async () => {
       const body = credentialBody(fx.reviewerSubjectA);
-      const viaBootstrap = await bootstrapCredential(fx.sql, {
-        tenantSlug: bootstrapSlug,
+      const viaBootstrap = await bootstrapCredential(bootstrapped.sql, {
         email: bootstrapEmail,
         issuerReference: body.issuerReference,
         credentialType: body.credentialType,
@@ -825,11 +829,11 @@ describeDb("review registry proposals", () => {
       const proposed = await post(operatorToken, `${BASE}/credentials/proposals`, body);
       const viaApi = (await decide(approverToken, "credentials", proposed.json())).json() as Proposal;
 
-      // Holder, organization and issuer authority are tenant-bound identities; everything else
-      // must match.
+      // Holder, organization and issuer authority are identities of each Registry; everything
+      // else must match.
       const holder = ["subject_id", "organization_id", "issuer_authority_id"];
       expect(await rowOf("core.credentials", viaApi.materializedId!, holder)).toEqual(
-        await rowOf("core.credentials", viaBootstrap.id, holder),
+        await rowOf("core.credentials", viaBootstrap.id, holder, bootstrapped.sql),
       );
     });
   });
@@ -864,7 +868,7 @@ describeDb("review registry proposals", () => {
       >`
         SELECT id, profile_version, state, environmental_requirement_basis
         FROM core.jurisdiction_profiles
-        WHERE tenant_id = ${fx.tenantA} AND jurisdiction = ${key}
+        WHERE jurisdiction = ${key}
         ORDER BY profile_version
       `;
     }
@@ -903,7 +907,7 @@ describeDb("review registry proposals", () => {
 
       const events = await fx.sql<{ event_type: string; aggregate_version: number; payload: Record<string, unknown> }[]>`
         SELECT event_type, aggregate_version, payload FROM core.outbox
-        WHERE tenant_id = ${fx.tenantA} AND aggregate_id = ${suspended.materializedId}
+        WHERE aggregate_id = ${suspended.materializedId}
       `;
       expect(events).toHaveLength(1);
       expect(events[0]?.event_type).toBe("jurisdiction_profile.suspended");

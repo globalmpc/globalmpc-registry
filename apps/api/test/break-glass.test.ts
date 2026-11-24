@@ -1,36 +1,36 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import {
   idempotencyKey,
   newAccount,
-  setupFixture,
+  setupBareRegistry,
   signIn,
   testEnv,
   type TestAccount,
-  type TestFixture, syncSubjectAssurance } from "./helpers/db.js";
+  type BareRegistry, syncSubjectAssurance } from "./helpers/db.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
  * Break-glass elevation — 02 §2.6, 13 §13.6 "admin JIT elevation expiry".
  *
- * Each test gets its own tenant-level people so one test's open or overdue elevation does not
- * block another's request (both rules are deliberately tenant-wide).
+ * Each test gets its own Registry so one test's open or overdue elevation does not block
+ * another's request (both rules are deliberately Registry-wide).
  */
 describeDb("break-glass elevation", () => {
-  let fx: TestFixture;
+  let fx: BareRegistry;
   let app: FastifyInstance;
 
-  beforeAll(async () => {
-    fx = await setupFixture();
+  beforeEach(async () => {
+    fx = await setupBareRegistry();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     await app.ready();
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await app.close();
     await fx.close();
   });
@@ -41,43 +41,38 @@ describeDb("break-glass elevation", () => {
     token: string;
   }
 
-  /** A person in a fresh tenant, so tenant-wide rules do not leak between tests. */
-  async function newTenant(): Promise<{ tenantId: string; orgId: string }> {
-    const tenantId = randomUUID();
+  /** An organization of its own per team; administrator rules are Registry-wide. */
+  async function newTenant(): Promise<{ orgId: string }> {
     const orgId = randomUUID();
     await fx.sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenantId}, ${`bg-${tenantId.slice(0, 8)}`}, 'Break-glass tenant')
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${orgId}, 'Break-glass org', 'MNG')
     `;
-    await fx.sql`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${orgId}, ${tenantId}, 'Break-glass org', 'MNG')
-    `;
-    return { tenantId, orgId };
+    return { orgId };
   }
 
   async function person(
-    tenant: { tenantId: string; orgId: string },
+    tenant: { orgId: string },
     role: string,
   ): Promise<Person> {
     const account = newAccount();
     const subjectId = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subjectId}, ${tenant.tenantId}, 'person', ${role})
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subjectId}, 'person', ${role})
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${tenant.tenantId}, ${subjectId}, ${account.address}, 31337,
+        ${randomUUID()}, ${subjectId}, ${account.address}, 31337,
         'high_assurance', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${tenant.tenantId}, ${subjectId}, ${tenant.orgId}, ${role})
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subjectId}, ${tenant.orgId}, ${role})
     `;
     return { account, subjectId, token: await signIn(app, account) };
   }
@@ -199,7 +194,7 @@ describeDb("break-glass elevation", () => {
 
     const [audit] = await fx.sql<{ effective_role: string; user_agent_hash: string | null; request_ip_class: string | null }[]>`
       SELECT effective_role, user_agent_hash, request_ip_class FROM audit.events
-      WHERE tenant_id = ${t.tenant.tenantId} AND command = 'break_glass.access_quarantined'
+      WHERE command = 'break_glass.access_quarantined'
     `;
     expect(audit?.effective_role).toBe("break_glass");
     // 02 §2.7 device metadata — observed facts only.
@@ -213,10 +208,10 @@ describeDb("break-glass elevation", () => {
     // would make the test slow and timing-dependent.
     await fx.sql`
       INSERT INTO core.break_glass_elevations (
-        id, tenant_id, subject_id, purpose, target, requested_at, expires_at, state,
+        id, subject_id, purpose, target, requested_at, expires_at, state,
         decided_by_subject_id, decided_at, decision_reason
       ) VALUES (
-        ${randomUUID()}, ${t.tenant.tenantId}, ${t.responder.subjectId}, 'Incident', 'subject',
+        ${randomUUID()}, ${t.responder.subjectId}, 'Incident', 'subject',
         now() - interval '2 hours', now() - interval '1 minute', 'active',
         ${t.approver.subjectId}, now() - interval '2 hours', 'ok'
       )
@@ -256,10 +251,10 @@ describeDb("break-glass elevation", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.break_glass_elevations (
-        id, tenant_id, subject_id, purpose, target, requested_at, expires_at, state,
+        id, subject_id, purpose, target, requested_at, expires_at, state,
         decided_by_subject_id, decided_at, decision_reason
       ) VALUES (
-        ${id}, ${t.tenant.tenantId}, ${t.responder.subjectId}, 'Incident', 'subject',
+        ${id}, ${t.responder.subjectId}, 'Incident', 'subject',
         now() - interval '25 hours', now() + interval '1 day', 'active',
         ${t.approver.subjectId}, now() - interval '25 hours', 'ok'
       )
@@ -288,12 +283,12 @@ describeDb("break-glass elevation", () => {
 
     const [audit] = await fx.sql<{ detail: { late: boolean } }[]>`
       SELECT detail FROM audit.events
-      WHERE tenant_id = ${t.tenant.tenantId} AND command = 'break_glass.incident_recorded'
+      WHERE command = 'break_glass.incident_recorded'
     `;
     expect(audit?.detail.late).toBe(true);
 
     const [event] = await fx.sql<{ event_type: string }[]>`
-      SELECT event_type FROM core.outbox WHERE tenant_id = ${t.tenant.tenantId}
+      SELECT event_type FROM core.outbox
     `;
     expect(event?.event_type).toBe("incident.opened");
 
@@ -305,14 +300,14 @@ describeDb("break-glass elevation", () => {
     expect(next.statusCode).toBe(201);
   });
 
-  it.each(["organization", "jurisdiction"])("ends an elevation when tenant authority is replaced by a %s-limited grant", async (limit) => {
+  it.each(["organization", "jurisdiction"])("ends an elevation when Registry-wide authority is replaced by a %s-limited grant", async (limit) => {
     const t = await team();
     await activeElevation(t);
     const readSession = () => app.inject({ method: "GET", url: "/api/v1/auth/session", headers: { authorization: `Bearer ${t.responder.token}` } });
     expect((await readSession()).json().roleBindings.map((b: { role: string }) => b.role)).toContain("break_glass");
     await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE subject_id=${t.responder.subjectId} AND role='administrator'`;
-    await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role,scope_kind,jurisdiction)
-      VALUES(${randomUUID()},${t.tenant.tenantId},${t.responder.subjectId},${t.tenant.orgId},'administrator',${limit === "organization" ? "organization" : "tenant"},${limit === "jurisdiction" ? ["MNG"] : null}::text[])`;
+    await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,role,scope_kind,jurisdiction)
+      VALUES(${randomUUID()},${t.responder.subjectId},${t.tenant.orgId},'administrator',${limit === "organization" ? "organization" : "registry"},${limit === "jurisdiction" ? ["MNG"] : null}::text[])`;
     expect((await readSession()).json().roleBindings.map((b: { role: string }) => b.role)).not.toContain("break_glass");
     expect((await quarantine(t.responder.token, t.target.subjectId)).statusCode).toBe(403);
   });

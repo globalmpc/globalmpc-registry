@@ -18,15 +18,12 @@ import { e2eScanServiceToken } from "./scan-service-token";
  * previous run.
  */
 
-export const E2E_TENANT_A = "e0000000-0000-4000-8000-00000000000a";
-export const E2E_TENANT_B = "e0000000-0000-4000-8000-00000000000b";
-export const E2E_TENANT_C = "e0000000-0000-4000-8000-00000000000c";
 export const E2E_ORG_A = "aaaaaaaa-0000-0000-0000-000000000001";
 export const E2E_ORG_B = "bbbbbbbb-0000-0000-0000-000000000001";
 export const E2E_ORG_C = "cccccccc-1000-0000-0000-000000000001";
 /**
  * The reviewer's own organization. A reviewer from the organization operating the project is not
- * independent (02 §2.4 rule 2), and tenant A's projects are owned by `E2E_ORG_A`.
+ * independent (02 §2.4 rule 2), and company A's projects are owned by `E2E_ORG_A`.
  */
 export const E2E_ORG_REVIEW = "aaaaaaaa-1000-0000-0000-000000000001";
 /** Accepted authority that issued the reviewer's credential (AC-15·AC-16). */
@@ -154,10 +151,12 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       GRANT USAGE ON SCHEMA core, chain, audit TO mpc_app_login;
     `);
 
+    // Three companies. Operator A administers the Registry; operators B and C administer only
+    // their own organization, so their reach is their company's projects.
     const accounts = [
       {
-        tenant: E2E_TENANT_A,
-        slug: "tenant-a",
+        scope: "registry",
+        slug: "company-a",
         org: E2E_ORG_A,
         subject: "aaaaaaaa-0000-0000-0000-000000000002",
         wallet: OPERATOR_A,
@@ -166,8 +165,8 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
         role: "administrator",
       },
       {
-        tenant: E2E_TENANT_B,
-        slug: "tenant-b",
+        scope: "organization",
+        slug: "company-b",
         org: E2E_ORG_B,
         subject: "bbbbbbbb-0000-0000-0000-000000000002",
         wallet: OPERATOR_B,
@@ -178,8 +177,8 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       // An account with permission but no data. To check that the screen distinguishes
       // "empty list" from "no permission", this state must not be affected by other tests.
       {
-        tenant: E2E_TENANT_C,
-        slug: "tenant-c",
+        scope: "organization",
+        slug: "company-c",
         org: E2E_ORG_C,
         subject: "cccccccc-1000-0000-0000-000000000002",
         wallet: OPERATOR_C,
@@ -191,56 +190,52 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
 
     for (const account of accounts) {
       await sql`
-        INSERT INTO core.tenants (id, slug, display_name)
-        VALUES (${account.tenant}, ${account.slug}, ${account.label})
+        INSERT INTO core.organizations (id, legal_name, jurisdiction)
+        VALUES (${account.org}, ${`MPC Operations ${account.slug}`}, 'MNG')
       `;
       await sql`
-        INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-        VALUES (${account.org}, ${account.tenant}, ${`MPC Operations ${account.slug}`}, 'MNG')
-      `;
-      await sql`
-        INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-        VALUES (${account.subject}, ${account.tenant}, 'person', ${account.label})
+        INSERT INTO core.subjects (id, kind, display_name)
+        VALUES (${account.subject}, 'person', ${account.label})
       `;
       await sql`
         INSERT INTO core.wallet_identities (
-          id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+          id, subject_id, wallet_address, chain_id, assurance_level, bound_at
         ) VALUES (
-          gen_random_uuid(), ${account.tenant}, ${account.subject}, ${account.wallet},
+          gen_random_uuid(), ${account.subject}, ${account.wallet},
           31337, ${account.assurance}, now()
         )
       `;
       await sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role, scope_kind)
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role, scope_kind)
         VALUES (
-          gen_random_uuid(), ${account.tenant}, ${account.subject}, ${account.org}, ${account.role},
-          ${"tenant"}
+          gen_random_uuid(), ${account.subject}, ${account.org}, ${account.role},
+          ${account.scope}
         )
       `;
     }
 
-    // An account in tenant A without a role. Used to verify that the screen distinguishes
+    // An account in company A without a role. Used to verify that the screen distinguishes
     // 401 (not registered) from 403 (insufficient permission).
     const readerSubject = "aaaaaaaa-0000-0000-0000-000000000003";
     await sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${readerSubject}, ${E2E_TENANT_A}, 'person', 'Reader A')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${readerSubject}, 'person', 'Reader A')
     `;
     await sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        gen_random_uuid(), ${E2E_TENANT_A}, ${readerSubject}, ${READER_A}, 31337, 'wallet_only', now()
+        gen_random_uuid(), ${readerSubject}, ${READER_A}, 31337, 'wallet_only', now()
       )
     `;
 
     // Demo authority, connection and rule set used by the Data Room and readiness screens.
     await sql`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove,
+        id, name, jurisdiction, proves, does_not_prove,
         recognized_scope, verification_method, public_disclosure_level, valid_from, state
       ) VALUES (
-        'cccccccc-0000-0000-0000-000000000001', ${E2E_TENANT_A},
+        'cccccccc-0000-0000-0000-000000000001', 
         'Mineral Resources Authority', 'MNG',
         ARRAY['mining_right_registration'],
         ARRAY['economic_viability','rights_completeness','investment_suitability'],
@@ -249,11 +244,11 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     `;
     await sql`
       INSERT INTO core.source_connections (
-        id, tenant_id, authority_id, connection_key, collection_method,
+        id, authority_id, connection_key, collection_method,
         access_basis, secret_reference, state,
         endpoint, authentication_method, adapter_version, source_schema_version
       ) VALUES (
-        'cccccccc-0000-0000-0000-000000000002', ${E2E_TENANT_A},
+        'cccccccc-0000-0000-0000-000000000002', 
         'cccccccc-0000-0000-0000-000000000001', 'mn-mineral-registry',
         'authenticated_api', 'data sharing agreement 2026-01', 'vault://mn/registry', 'active',
         -- .test is a reserved TLD and does not resolve. This keeps the test fixture from
@@ -263,18 +258,18 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     `;
     await sql`
       INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id,
+        id, rule_set_id, rule_set_version, gate_id,
         jurisdiction_profile, effective_from, definition, state
       ) VALUES (
-        'dddddddd-0000-0000-0000-000000000001', ${E2E_TENANT_A},
+        'dddddddd-0000-0000-0000-000000000001', 
         'registry-publication-gate', '1.0.0', 'registry_publication', 'MNG',
         now(), ${sql.json(RULE_SET as never)}, 'effective'
       )
     `;
 
     await sql`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${E2E_ORG_REVIEW}, ${E2E_TENANT_A}, 'Independent Review Firm', 'AUS')
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${E2E_ORG_REVIEW}, 'Independent Review Firm', 'AUS')
     `;
 
     // steward, gate approver, reviewer. Checking role separation on screen needs separate
@@ -290,23 +285,23 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
       { subject: "aaaaaaaa-0000-0000-0000-00000000000a", wallet: DISCLOSURE_APPROVER_A, label: "Publisher A", role: "reviewer", assurance: "high_assurance" },
     ]) {
       await sql`
-        INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-        VALUES (${extra.subject}, ${E2E_TENANT_A}, 'person', ${extra.label})
+        INSERT INTO core.subjects (id, kind, display_name)
+        VALUES (${extra.subject}, 'person', ${extra.label})
       `;
       await sql`
         INSERT INTO core.wallet_identities (
-          id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+          id, subject_id, wallet_address, chain_id, assurance_level, bound_at
         ) VALUES (
-          gen_random_uuid(), ${E2E_TENANT_A}, ${extra.subject}, ${extra.wallet},
+          gen_random_uuid(), ${extra.subject}, ${extra.wallet},
           31337, ${extra.assurance}, now()
         )
       `;
       await sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role, scope_kind)
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role, scope_kind)
         VALUES (
-          gen_random_uuid(), ${E2E_TENANT_A}, ${extra.subject},
+          gen_random_uuid(), ${extra.subject},
           ${extra.subject === E2E_REVIEWER_SUBJECT || extra.label === "Dispute Reviewer A" ? E2E_ORG_REVIEW : E2E_ORG_A}, ${extra.role},
-          ${extra.label === "Steward A" || extra.role === "project_member" ? "organization" : "tenant"}
+          ${extra.label === "Steward A" || extra.role === "project_member" ? "organization" : "registry"}
         )
       `;
     }
@@ -341,19 +336,19 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     // The wallet above stays a signing key only.
     for (const label of DEMO_PEOPLE) {
       const wallet = addressOfLabel(label);
-      const [person] = await sql<{ id: string; tenant_id: string }[]>`
+      const [person] = await sql<{ id: string }[]>`
         UPDATE core.subjects SET email = ${demoEmail(label)}
         WHERE id = (SELECT subject_id FROM core.wallet_identities WHERE wallet_address = ${wallet})
-        RETURNING id, tenant_id
+        RETURNING id
       `;
       if (!person) throw new Error(`no seeded subject holds the wallet of "${label}"`);
       const passkey = demoPasskey(label);
       await sql`
         INSERT INTO core.webauthn_credentials (
-          id, tenant_id, subject_id, credential_id, public_key, sign_count, transports, aaguid,
+          id, subject_id, credential_id, public_key, sign_count, transports, aaguid,
           user_verified, device_type, backed_up, name
         ) VALUES (
-          gen_random_uuid(), ${person.tenant_id}, ${person.id}, ${passkey.credentialId},
+          gen_random_uuid(), ${person.id}, ${passkey.credentialId},
           ${cosePublicKey(passkey)}, 0, ${["internal"]}, '00000000-0000-0000-0000-000000000000',
           true, 'singleDevice', false, 'E2E virtual authenticator'
         )
@@ -365,23 +360,23 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     // deploy runs after migrating (`service-token ensure`, decision D7), which creates the
     // `scan-worker` service subject and stores only the token's hash. The token is new on every
     // run, derived from this run's demo keys (`scan-service-token.ts`), and lives a day.
-    registerScanServiceToken(databaseUrl, "tenant-a", e2eScanServiceToken());
+    registerScanServiceToken(databaseUrl, e2eScanServiceToken());
 
     // Test-only assurance reviewer approves catalog and stage-rule fixtures independently
     // from Operator A, who proposes them. No application approval path is bypassed.
     await sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (gen_random_uuid(), ${E2E_TENANT_A}, ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_REVIEW}, 'reviewer')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (gen_random_uuid(), ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_REVIEW}, 'reviewer')
     `;
 
     // An unintegrated authority and a planned-stage authority. Leaving them out of the list
     // hides "why is this authority missing"; marking them active promises an integration that does not exist (R5 gate).
     await sql`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove,
+        id, name, jurisdiction, proves, does_not_prove,
         recognized_scope, verification_method, public_disclosure_level, valid_from, state
       ) VALUES (
-        'cccccccc-0000-0000-0000-000000000003', ${E2E_TENANT_A},
+        'cccccccc-0000-0000-0000-000000000003', 
         'Land Administration Office', 'MNG',
         ARRAY['land_use_right'],
         ARRAY['economic_viability','environmental_compliance'],
@@ -390,10 +385,10 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     `;
     await sql`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove,
+        id, name, jurisdiction, proves, does_not_prove,
         recognized_scope, verification_method, public_disclosure_level, valid_from, state
       ) VALUES (
-        'cccccccc-0000-0000-0000-000000000004', ${E2E_TENANT_A},
+        'cccccccc-0000-0000-0000-000000000004', 
         'Environmental Agency', 'MNG',
         ARRAY['environmental_permit'],
         ARRAY['economic_viability','rights_completeness'],
@@ -402,10 +397,10 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     `;
     await sql`
       INSERT INTO core.source_connections (
-        id, tenant_id, authority_id, connection_key, collection_method,
+        id, authority_id, connection_key, collection_method,
         access_basis, state
       ) VALUES (
-        'cccccccc-0000-0000-0000-000000000005', ${E2E_TENANT_A},
+        'cccccccc-0000-0000-0000-000000000005', 
         'cccccccc-0000-0000-0000-000000000004', 'mn-environmental',
         'authenticated_api', 'Access agreement planned', 'planned'
       )
@@ -417,10 +412,10 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     const reviewScope = ["mining_right_registration", "resource_estimate", ...CATALOG_FIXTURE_KEYS];
     await sql`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove,
+        id, name, jurisdiction, proves, does_not_prove,
         recognized_scope, verification_method, public_disclosure_level, valid_from, state
       ) VALUES (
-        ${E2E_ISSUER_AUTHORITY_ID}, ${E2E_TENANT_A}, 'Professional Institute', 'AUS',
+        ${E2E_ISSUER_AUTHORITY_ID}, 'Professional Institute', 'AUS',
         ARRAY['member_competence'], ARRAY['opinion_accuracy','rights_completeness'],
         ${reviewScope}::text[],
         'verifiable_signed_document', 'public', '2000-01-01', 'accepted'
@@ -430,11 +425,11 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     // The reviewer's credential and the scope it covers. An attestation cannot be created without it.
     await sql`
       INSERT INTO core.credentials (
-        id, tenant_id, subject_id, organization_id, issuer_reference, issuer_authority_id,
+        id, subject_id, organization_id, issuer_reference, issuer_authority_id,
         credential_type, credential_scope, jurisdiction, issued_at, expires_at,
         current_status
       ) VALUES (
-        ${E2E_CREDENTIAL_ID}, ${E2E_TENANT_A}, ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_REVIEW},
+        ${E2E_CREDENTIAL_ID}, ${E2E_REVIEWER_SUBJECT}, ${E2E_ORG_REVIEW},
         'AusIMM CP(Geology) #123456', ${E2E_ISSUER_AUTHORITY_ID}, 'competent_person',
         ${reviewScope}::text[], ARRAY['MNG','AUS'],
         '2024-01-01', '2030-01-01', 'valid'
@@ -442,23 +437,24 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
     `;
     await sql`
       INSERT INTO core.attestation_schemas (
-        id, tenant_id, schema_key, schema_version, attestation_type,
+        id, schema_key, schema_version, attestation_type,
         required_evidence, accepted_authority_types, mandatory_limitations,
         jurisdiction_profile, state
       ) VALUES (
-        ${E2E_ATTESTATION_SCHEMA_ID}, ${E2E_TENANT_A}, 'mining-right-signoff', '1',
+        ${E2E_ATTESTATION_SCHEMA_ID}, 'mining-right-signoff', '1',
         'professional_signoff', ARRAY['mining_right_registration'],
         ARRAY['government_registry'], ARRAY['Does not include site due diligence'],
         'MNG', 'active'
       )
     `;
 
-    // Create one project in tenant B. If it shows up on tenant A's screens, isolation is broken.
+    // One project of company B. If it shows up on company C's screens, isolation is broken; the
+    // Registry-wide operator A reaches it.
     await sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        gen_random_uuid(), ${E2E_TENANT_B}, 'TENANT-B-ONLY', 'Tenant B only project',
+        gen_random_uuid(), 'COMPANY-B-ONLY', 'Company B only project',
         'MNG', ARRAY['gold'], ${E2E_ORG_B}
       )
     `;
@@ -472,7 +468,7 @@ export async function seedE2eDatabase(databaseUrl: string): Promise<void> {
  * child's environment only — never on its command line — and its output (which never contains
  * the token) is not echoed.
  */
-function registerScanServiceToken(databaseUrl: string, tenantSlug: string, token: string): void {
+function registerScanServiceToken(databaseUrl: string, token: string): void {
   execFileSync(
     process.execPath,
     [
@@ -480,7 +476,6 @@ function registerScanServiceToken(databaseUrl: string, tenantSlug: string, token
       "tsx",
       "src/service-token-cli.ts",
       "ensure",
-      tenantSlug,
       "scan-worker",
       "scan_service",
       "scan_result",

@@ -33,8 +33,7 @@ const EXPLANATIONS: Readonly<Record<AccessRequestKind, string>> = {
     "sign-in and from holding a credential (02 §2.9). Without one, reads work and " +
     "change requests are refused.",
   project:
-    "Having the role is not enough if the role is not bound to this project. Tenant " +
-    "and project scope are decided by the server, not by the screen.",
+    "Your role must grant access to this project.",
 };
 
 export function AccessRequestPanel({
@@ -57,7 +56,7 @@ export function AccessRequestPanel({
 
       <div className="notice" style={{ color: "var(--alert)" }}>
         <div className="title">This screen does not file a request</div>
-        There is no intake API yet. A tenant operator grants access directly on the
+        There is no intake API yet. A Registry operator grants access directly on the
         deployment (<span className="mono">docker compose … --profile bootstrap</span>).
         What this screen is for: <strong>what is missing</strong> and{" "}
         <strong>what to hand the operator</strong>.
@@ -69,9 +68,6 @@ export function AccessRequestPanel({
           <p className="sub">Loading…</p>
         ) : session?.authenticated ? (
           <div className="meta">
-            <div>
-              Tenant <span className="mono">{session.tenantId?.slice(0, 8) ?? "—"}</span>
-            </div>
             <div>
               Account <span className="mono" data-testid="access-subject">{session.subjectId ?? "—"}</span>
             </div>
@@ -120,7 +116,7 @@ export function AccessRequestPanel({
           <li>
             {kind === "assurance"
               ? "Required assurance level — the value on the refusal. Granting less than the role requires still writes the row, and every request is then refused"
-              : "Scope — the tenant and the project"}
+              : "Scope — the organization or project that needs the role"}
           </li>
         </ul>
         <p className="meta">

@@ -12,7 +12,7 @@ import type { RouteDefinition } from "./routes.js";
  * - **No passwords** (D1). The first factor is a code mailed to the account's address.
  * - **Sign-up by invitation only** (D5). An invitation names one address, one organisation and
  *   optionally a standing human role authorized by the inviter.
- * - One address belongs to one subject in one tenant (D6). Every refusal to invite an address that
+ * - One address belongs to one subject in the Registry (D6). Every refusal to invite an address that
  *   is taken returns the one code `INVITATION_EMAIL_UNAVAILABLE`.
  * - Asking for a sign-in code always answers the same way, whether or not the address has an
  *   account (plan §5, enumeration).
@@ -83,14 +83,13 @@ export const emailCodeStartResponse = z.object({
 export const emailCodeVerifyRequest = z.object({ email: emailAddress, code: emailCode });
 
 /**
- * Which ways in this deployment offers — WP6. Public, so the sign-in screen shows a Google or
- * Microsoft button only where the provider is configured. It says nothing about any account.
+ * Which ways in this deployment offers — WP6. Public, so the sign-in screen shows a Google
+ * button only where the provider is configured. It says nothing about any account.
  */
 export const authMethodsResponse = z.object({
   /** Always true: the emailed code is the one first factor every account has. */
   emailCode: z.literal(true),
   google: z.boolean(),
-  microsoft: z.boolean(),
   /** Digits in an emailed code and minutes it lives, so the screen does not restate them. */
   emailCodeDigits: z.number().int().positive(),
   emailCodeTtlMinutes: z.number().int().positive(),
@@ -326,7 +325,7 @@ export const ACCOUNT_ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/admin/invitations",
-    summary: "List invitations of this tenant",
+    summary: "List invitations",
     operationId: "listInvitations",
     public: false,
     mutation: false,
@@ -363,7 +362,7 @@ export const ACCOUNT_ROUTES: readonly RouteDefinition[] = [
   {
     method: "get",
     path: "/api/v1/admin/email-changes",
-    summary: "List email change requests of this tenant",
+    summary: "List email change requests",
     operationId: "listEmailChangeRequests",
     public: false,
     mutation: false,

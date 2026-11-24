@@ -244,7 +244,6 @@ export type Log = (record: Record<string, unknown>) => void;
 
 interface PendingRow {
   readonly id: string;
-  readonly tenant_id: string;
   readonly batch_id: string | null;
   readonly state: TransactionState;
   readonly tx_hash: string | null;
@@ -394,7 +393,7 @@ async function claimPending(
   recheckIntervalMs: number,
 ): Promise<PendingRow | undefined> {
   const [row] = await tx<PendingRow[]>`
-    SELECT t.id, t.tenant_id, t.batch_id, t.state, t.tx_hash,
+    SELECT t.id, t.batch_id, t.state, t.tx_hash,
            t.block_number, t.block_hash, t.attempts, t.submitted_at,
            b.batch_id AS external_batch_id, b.merkle_root, b.manifest_hash,
            b.schema_version, b.record_count, t.contract_address, t.chain_search_failed_since
@@ -555,8 +554,8 @@ async function trackProposal(
         WHERE id = ${proposal.id}
       `;
       await tx`
-        INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, tenant_id, chain_id, execution_tx_hash)
-        SELECT id, transaction_id, tenant_id, chain_id, ${status.transactionHash.toLowerCase()}
+        INSERT INTO chain.safe_execution_history (proposal_id, transaction_id, chain_id, execution_tx_hash)
+        SELECT id, transaction_id, chain_id, ${status.transactionHash.toLowerCase()}
         FROM chain.anchor_proposals WHERE id = ${proposal.id}
         ON CONFLICT DO NOTHING
       `;
@@ -646,7 +645,7 @@ async function closeUnexecutable(
  * `chain.transactions` describe only the latest attempt: a resubmission clears the row and the
  * next receipt overwrites it, so an earlier attempt's gas would drop out of the total.
  *
- * Counts across tenants. The wallet is one, not split per tenant.
+ * Counts across the Registry. The wallet is one.
  *
  * The day boundary is UTC and the day is the one the receipt was first seen. Following the server
  * timezone would silently shift when the cap reopens whenever the deployment location changes.
@@ -922,10 +921,10 @@ async function recordSend(
   // Re-signing identical input gives the identical transaction and hash: one row.
   await sql`
     INSERT INTO chain.anchor_sends (
-      chain_id, tx_hash, transaction_id, tenant_id, signer, nonce, gas_limit, max_fee_per_gas,
+      chain_id, tx_hash, transaction_id, signer, nonce, gas_limit, max_fee_per_gas,
       l1_fee_bound
     ) VALUES (
-      ${config.chainId}, ${prepared.txHash.toLowerCase()}, ${row.id}, ${row.tenant_id},
+      ${config.chainId}, ${prepared.txHash.toLowerCase()}, ${row.id}, 
       ${prepared.from.toLowerCase()}, ${prepared.nonce}, ${prepared.gasLimit.toString()},
       ${prepared.maxFeePerGas.toString()}, ${l1FeeBound.toString()}
     )
@@ -966,7 +965,6 @@ const SENDS_PER_PASS = 10;
 interface OpenSend {
   readonly tx_hash: string;
   readonly transaction_id: string;
-  readonly tenant_id: string;
   readonly signer: string | null;
   readonly nonce: string | null;
 }
@@ -993,7 +991,7 @@ async function settleSends(
   log: Log,
 ): Promise<void> {
   const sends = await sql<OpenSend[]>`
-    SELECT tx_hash, transaction_id, tenant_id, signer, nonce::TEXT AS nonce
+    SELECT tx_hash, transaction_id, signer, nonce::TEXT AS nonce
     FROM chain.anchor_sends
     WHERE chain_id = ${config.chainId}
       AND settled_at IS NULL
@@ -1067,9 +1065,9 @@ async function settleSend(
     await sql.begin(async (tx) => {
       await tx`
         INSERT INTO chain.gas_spend (
-          chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price, l1_fee
+          chain_id, tx_hash, transaction_id, gas_used, effective_gas_price, l1_fee
         ) VALUES (
-          ${config.chainId}, ${send.tx_hash}, ${send.transaction_id}, ${send.tenant_id},
+          ${config.chainId}, ${send.tx_hash}, ${send.transaction_id}, 
           ${observation.gasUsed.toString()}, ${observation.effectiveGasPrice.toString()},
           ${observation.l1Fee.toString()}
         )
@@ -1386,10 +1384,10 @@ async function proposeToSafe(
   const proposalId = randomUUID();
   await tx`
     INSERT INTO chain.anchor_proposals (
-      id, tenant_id, transaction_id, chain_id, safe_address,
+      id, transaction_id, chain_id, safe_address,
       contract_address, calldata, calldata_hash, safe_tx_hash
     ) VALUES (
-      ${proposalId}, ${row.tenant_id}, ${row.id}, ${config.chainId},
+      ${proposalId}, ${row.id}, ${config.chainId},
       ${config.safeAddress!.toLowerCase()}, ${config.contractAddress.toLowerCase()},
       ${calldata}, ${calldataHash}, ${safeTxHash}
     )
@@ -1475,9 +1473,9 @@ async function trackPending(
       `;
       await tx`
         INSERT INTO chain.gas_spend (
-          chain_id, tx_hash, transaction_id, tenant_id, gas_used, effective_gas_price, l1_fee
+          chain_id, tx_hash, transaction_id, gas_used, effective_gas_price, l1_fee
         ) VALUES (
-          ${config.chainId}, ${row.tx_hash}, ${row.id}, ${row.tenant_id},
+          ${config.chainId}, ${row.tx_hash}, ${row.id}, 
           ${observation.gasUsed.toString()}, ${observation.effectiveGasPrice.toString()},
           ${observation.l1Fee.toString()}
         )
@@ -1552,10 +1550,10 @@ async function trackPending(
       // result, the fact that it flipped once is itself evidence for judging reliability.
       await tx`
         INSERT INTO chain.reorg_events (
-          id, tenant_id, transaction_id, previous_block_number,
+          id, transaction_id, previous_block_number,
           previous_block_hash, detected_state
         ) VALUES (
-          ${randomUUID()}, ${row.tenant_id}, ${row.id}, ${row.block_number},
+          ${randomUUID()}, ${row.id}, ${row.block_number},
           ${row.block_hash}, ${row.state}
         )
       `;
@@ -1880,7 +1878,6 @@ export type ChainMoveOutcome =
 
 interface MoveRequest {
   readonly id: string;
-  readonly tenant_id: string;
   readonly batch_id: string;
   readonly state: string;
   readonly tx_hash: string | null;
@@ -1913,7 +1910,7 @@ export async function processChainMoves(
   // The partial index on requests (0105) keeps this to rows with one. A row without a batch has
   // nothing to anchor and cannot be resubmitted, so it never carries a request.
   const requests = await sql<MoveRequest[]>`
-    SELECT t.id, t.tenant_id, t.batch_id, t.state, t.tx_hash, t.contract_address,
+    SELECT t.id, t.batch_id, t.state, t.tx_hash, t.contract_address,
            t.move_to_chain_id, t.move_requested_at::text AS move_requested_at,
            t.updated_at::text AS updated_at,
            b.batch_id AS external_batch_id, b.merkle_root,
@@ -2021,7 +2018,7 @@ async function dropStaleMoveRequests(
       `SET LOCAL lock_timeout = '${MOVE_LOCK_TIMEOUT}'; SET LOCAL statement_timeout = '${MOVE_STATEMENT_TIMEOUT}'`,
     );
     const rows = await tx<
-      { id: string; tenant_id: string; batch_id: string | null; state: string; move_to_chain_id: number }[]
+      { id: string; batch_id: string | null; state: string; move_to_chain_id: number }[]
     >`
       WITH stale AS (
         SELECT t.id, t.move_to_chain_id FROM chain.transactions t
@@ -2036,15 +2033,15 @@ async function dropStaleMoveRequests(
       SET ${clearMove(tx)}, updated_at = now()
       FROM stale
       WHERE t.id = stale.id
-      RETURNING t.id, t.tenant_id, t.batch_id, t.state, stale.move_to_chain_id
+      RETURNING t.id, t.batch_id, t.state, stale.move_to_chain_id
     `;
     for (const row of rows) {
       if (row.batch_id === null) continue;
       await tx`
         INSERT INTO audit.events (
-          tenant_id, command, resource_type, resource_id, reason, correlation_id, detail
+          command, resource_type, resource_id, reason, correlation_id, detail
         ) VALUES (
-          ${row.tenant_id}, 'anchor.batch.chain_move_refused', 'anchor_batch', ${row.batch_id},
+          'anchor.batch.chain_move_refused', 'anchor_batch', ${row.batch_id},
           'not_movable', ${`anchor-worker:${row.id}`},
           ${tx.json({
             actor: "anchor_worker",
@@ -2328,9 +2325,9 @@ async function applyMove(
 
     const audit = (command: string, reason: string, detail: Record<string, unknown>) => tx`
       INSERT INTO audit.events (
-        tenant_id, command, resource_type, resource_id, reason, correlation_id, detail
+        command, resource_type, resource_id, reason, correlation_id, detail
       ) VALUES (
-        ${request.tenant_id}, ${command}, 'anchor_batch', ${request.batch_id}, ${reason},
+        ${command}, 'anchor_batch', ${request.batch_id}, ${reason},
         ${`anchor-worker:${request.id}`},
         ${tx.json({
           actor: "anchor_worker",

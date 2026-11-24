@@ -41,10 +41,10 @@ describeDb("disclosure restrictions", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, owner_organization_id,
+        id, project_key, name, host_country_iso3, owner_organization_id,
         lifecycle_state
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${`BO-${id.slice(0, 8)}`}, 'Blackout check', 'MNG', ${fx.orgA},
+        ${id}, ${`BO-${id.slice(0, 8)}`}, 'Blackout check', 'MNG', ${fx.orgA},
         'registered'
       )
     `;
@@ -60,27 +60,27 @@ describeDb("disclosure restrictions", () => {
     for (const precondition of OFFERING_PRECONDITIONS) {
       await fx.sql`
         INSERT INTO core.project_facts (
-          id, tenant_id, project_id, fact_key, status, evidence_ref, evidence_kind
+          id, project_id, fact_key, status, evidence_ref, evidence_kind
         )
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${projectId}, ${precondition.key},
+        VALUES (${randomUUID()}, ${projectId}, ${precondition.key},
                 'confirmed', ${randomUUID()}, 'upload')
       `;
     }
     const [policy] = await fx.sql<{ id: string }[]>`
       INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id,
+        id, rule_set_id, rule_set_version, gate_id,
         jurisdiction_profile, effective_from, definition
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${`bo-${randomUUID().slice(0, 8)}`}, '1.0.0',
+        ${randomUUID()}, ${`bo-${randomUUID().slice(0, 8)}`}, '1.0.0',
         'offering_activation', 'MNG', now(), '{}'::jsonb
       ) RETURNING id
     `;
     const [assessment] = await fx.sql<{ id: string }[]>`
       INSERT INTO core.compliance_assessments (
-        id, tenant_id, project_id, gate_id, policy_set_id,
+        id, project_id, gate_id, policy_set_id,
         input_snapshot_hash, evaluated_as_of, status, requirement_results, canonical_result_hash, evidence_actor_ids
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${projectId}, 'offering_activation', ${policy!.id},
+        ${randomUUID()}, ${projectId}, 'offering_activation', ${policy!.id},
         ${"0x" + "aa".repeat(32)}, now(), 'ok', '[]'::jsonb, ${"0x" + "bb".repeat(32)}, '{}'::uuid[]
       ) RETURNING id
     `;
@@ -89,11 +89,11 @@ describeDb("disclosure restrictions", () => {
     `;
     await fx.sql`
       INSERT INTO core.gate_decisions (
-        id, tenant_id, project_id, gate_id, decision, input_assessment_id,
+        id, project_id, gate_id, decision, input_assessment_id,
         evidence_snapshot_hash, decision_authority, decision_maker_subject_id,
         rationale, signature, signed_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${projectId}, 'offering_activation', 'go',
+        ${randomUUID()}, ${projectId}, 'offering_activation', 'go',
         ${assessment!.id}, ${"0x" + "cc".repeat(32)}, 'Gate approver', ${decider!.subject_id},
         'recorded for the blackout test', '0xsig', now()
       )
@@ -372,7 +372,7 @@ describeDb("disclosure restrictions", () => {
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
     const activation = fx.sql.begin(async (tx) => {
-      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`disclosure:${fx.tenantA}:${projectId}`}, 0))`;
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`disclosure:${projectId}`}, 0))`;
       await tx`
         UPDATE core.disclosure_restrictions SET state = 'active', effective_at = now()
         WHERE id = ${created.restrictionId}

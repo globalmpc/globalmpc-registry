@@ -5,7 +5,7 @@ import { createOidcTestRelayFetch } from "./services/oidc-test-relay.js";
 
 const config = loadConfig(process.env);
 const sql = createDb(config);
-// E2E only: the relay that stands in for Google and Microsoft. `loadConfig` refuses it in
+// E2E only: the relay that stands in for Google. `loadConfig` refuses it in
 // production and on mainnet, so a deployed API always reaches the real providers.
 const app = await buildServer(
   config,

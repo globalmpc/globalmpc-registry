@@ -56,7 +56,7 @@ const base = {
   authenticated: true,
   requestId: "r",
   subjectId: "person",
-  tenantId: "t",
+  workspaceAvailable: true,
   firstFactor: "email_code",
   secondFactor: "passkey",
   aal: "aal3",
@@ -132,7 +132,7 @@ describe("what the session can use", () => {
     expect(accessPending(steward)).toBe(false);
     expect(accessPending({ ...pending, aal: "aal1" })).toBe(true);
     expect(accessPending({ ...pending, recoveryLimited: true })).toBe(false);
-    expect(accessPending({ ...pending, tenantId: null })).toBe(false);
+    expect(accessPending({ ...pending, workspaceAvailable: false })).toBe(false);
     expect(accessPending({ ...pending, authenticated: false })).toBe(false);
     expect(accessPending({ ...pending, narrowedRoles: [{ role: "reviewer", requiredAal: "aal3" }] })).toBe(
       false,

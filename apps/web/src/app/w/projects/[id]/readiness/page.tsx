@@ -24,7 +24,7 @@ import type { ReadinessStatus } from "@mpc/domain";
 export default function ReadinessPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { session } = useSession();
-  return <ReadinessWorkspace key={JSON.stringify([session?.tenantId, session?.subjectId, id])} id={id} />;
+  return <ReadinessWorkspace key={JSON.stringify([session?.subjectId, id])} id={id} />;
 }
 
 function ReadinessWorkspace({ id }: { id: string }) {

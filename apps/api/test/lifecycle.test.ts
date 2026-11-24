@@ -58,16 +58,16 @@ describeDb("project lifecycle", () => {
     const account = privateKeyToAccount(generatePrivateKey());
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subject.id},
+        ${randomUUID()}, ${subject.id},
         ${account.address.toLowerCase()}, 31337, 'high_assurance', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject.id}, ${fx.orgA}, 'reviewer')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subject.id}, ${fx.orgA}, 'reviewer')
     `;
     issuerToken = await signIn(app, {
       address: account.address.toLowerCase() as `0x${string}`,
@@ -132,19 +132,19 @@ describeDb("project lifecycle", () => {
   async function recordAssessment(projectId: string, gateId = "registry_publication") {
     const [policy] = await fx.sql<{ id: string }[]>`
       INSERT INTO core.compliance_policy_sets (
-        id, tenant_id, rule_set_id, rule_set_version, gate_id,
+        id, rule_set_id, rule_set_version, gate_id,
         jurisdiction_profile, effective_from, definition
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${`lc-${randomUUID().slice(0, 8)}`}, '1.0.0', ${gateId},
+        ${randomUUID()}, ${`lc-${randomUUID().slice(0, 8)}`}, '1.0.0', ${gateId},
         'MNG', now(), '{}'::jsonb
       ) RETURNING id
     `;
     const [assessment] = await fx.sql<{ id: string }[]>`
       INSERT INTO core.compliance_assessments (
-        id, tenant_id, project_id, gate_id, policy_set_id,
+        id, project_id, gate_id, policy_set_id,
         input_snapshot_hash, evaluated_as_of, status, requirement_results, canonical_result_hash, evidence_actor_ids
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${projectId}, ${gateId}, ${policy!.id},
+        ${randomUUID()}, ${projectId}, ${gateId}, ${policy!.id},
         ${"0x" + "aa".repeat(32)}, now(), 'ok', '[]'::jsonb, ${"0x" + "bb".repeat(32)}, '{}'::uuid[]
       ) RETURNING id
     `;
@@ -156,9 +156,9 @@ describeDb("project lifecycle", () => {
     for (const precondition of OFFERING_PRECONDITIONS.filter((p) => p.key !== except)) {
       await fx.sql`
         INSERT INTO core.project_facts (
-          id, tenant_id, project_id, fact_key, status, evidence_ref, evidence_kind
+          id, project_id, fact_key, status, evidence_ref, evidence_kind
         )
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${projectId}, ${precondition.key},
+        VALUES (${randomUUID()}, ${projectId}, ${precondition.key},
                 'confirmed', ${randomUUID()}, 'upload')
       `;
     }
@@ -168,11 +168,11 @@ describeDb("project lifecycle", () => {
     const assessmentId = await recordAssessment(projectId, "offering_activation");
     await fx.sql`
       INSERT INTO core.gate_decisions (
-        id, tenant_id, project_id, gate_id, decision, input_assessment_id,
+        id, project_id, gate_id, decision, input_assessment_id,
         evidence_snapshot_hash, decision_authority, decision_maker_subject_id,
         rationale, signature, signed_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${projectId}, 'offering_activation', ${decision},
+        ${randomUUID()}, ${projectId}, 'offering_activation', ${decision},
         ${assessmentId}, ${"0x" + "cc".repeat(32)}, 'Gate approver', ${issuerSubjectId},
         'recorded for the lifecycle guard test', '0xsig', now()
       )
@@ -520,8 +520,8 @@ describeDb("project lifecycle", () => {
       const project = await newProject();
       for (const key of ["issuer_identified", "host_country_spv", "legal_issuance_decision"]) {
         await fx.sql`
-          INSERT INTO core.project_facts (id, tenant_id, project_id, fact_key, status)
-          VALUES (${randomUUID()}, ${fx.tenantA}, ${project.id}, ${key}, 'pending')
+          INSERT INTO core.project_facts (id, project_id, fact_key, status)
+          VALUES (${randomUUID()}, ${project.id}, ${key}, 'pending')
         `;
       }
       // Registry publication works with the offering conditions pending.

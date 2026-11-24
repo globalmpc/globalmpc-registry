@@ -1,7 +1,7 @@
 import type { BrowserContext, Cookie, Page, Route } from "@playwright/test";
 
 /**
- * The person at Google or Microsoft, for the specs (WP7).
+ * The person at Google, for the specs (WP7).
  *
  * The browser is sent to the real authorization URL the API produced. The spec intercepts that
  * one top-level navigation — it never reaches the internet — hands the URL to the mock provider
@@ -13,10 +13,7 @@ import type { BrowserContext, Cookie, Page, Route } from "@playwright/test";
 
 export const OIDC_RELAY = `http://127.0.0.1:${process.env["E2E_OIDC_PORT"] ?? 3102}`;
 
-/** The Microsoft directory the mock provider's tokens name, allowed by the run's API. */
-export const MOCK_MICROSOFT_TENANT = "11111111-1111-4111-8111-111111111111";
-
-const PROVIDER_PAGES = /^https:\/\/(accounts\.google\.com|login\.microsoftonline\.com)\//;
+const PROVIDER_PAGES = /^https:\/\/accounts\.google\.com\//;
 
 export interface ProviderVisit {
   /** The authorization URL the browser was sent to. */

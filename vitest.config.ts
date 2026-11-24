@@ -40,6 +40,8 @@ export default defineConfig(({ mode }) => {
           test: {
             root,
             name: JSON.parse(readFileSync(`${root}/package.json`, "utf8")).name as string,
+            // The API's fixtures clone one migrated template database, prepared once.
+            ...(root === "apps/api" ? { globalSetup: ["test/helpers/template-setup.ts"] } : {}),
             ...(root === "packages/db" && mode === "unit"
               ? { include: ["test/**/*.unit.test.ts"] }
               : {}),
@@ -59,7 +61,7 @@ export default defineConfig(({ mode }) => {
       /**
        * The DB tests share one PostgreSQL instance.
        * `packages/db` verifies the schema lifecycle itself and therefore runs DROP SCHEMA;
-       * `apps/*` isolate themselves on top of it with unique tenants. In parallel, one side's
+       * `apps/*` isolate themselves on top of it (the API with a database per fixture). In parallel, one side's
        * DROP cuts into the middle of the other side's tests.
        *
        * **`fileParallelism` alone does not prevent this.** It applies only within a project,

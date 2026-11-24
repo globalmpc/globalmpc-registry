@@ -14,9 +14,9 @@ it("commits receipt-only document uploads and refuses missing referenced bytes",
   if(sql.includes('FROM core.object_uploads'))return uploadPresent?[{id:uploadId,content_hash:hash}]:[];
   throw new Error('Unexpected query');
  }) as unknown as postgres.TransactionSql;
- const result=await freezeReviewBundle(tx,crypto.randomUUID(),crypto.randomUUID(),'verification',attestationId,{});
+ const result=await freezeReviewBundle(tx,crypto.randomUUID(),'verification',attestationId,{});
  expect(result.bundle.uploads).toEqual([{uploadId,contentHash:hash}]);
  expect(result.bundle.receipts).toEqual([{receiptId,rawHash:hash,documentUploadId:uploadId,documentHash:hash}]);
  uploadPresent=false;
- await expect(freezeReviewBundle(tx,crypto.randomUUID(),crypto.randomUUID(),'verification',attestationId,{})).rejects.toMatchObject({code:'REVIEW_DOCUMENT_MISSING'});
+ await expect(freezeReviewBundle(tx,crypto.randomUUID(),'verification',attestationId,{})).rejects.toMatchObject({code:'REVIEW_DOCUMENT_MISSING'});
 });

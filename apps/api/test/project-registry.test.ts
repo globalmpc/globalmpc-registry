@@ -38,18 +38,18 @@ describeDb("project registry content", () => {
     const account = newAccount();
     const subject = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subject}, ${fx.tenantA}, 'person', 'Sponsor A')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subject}, 'person', 'Sponsor A')
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
-      ) VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'high_assurance', now())
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+      ) VALUES (${randomUUID()}, ${subject}, ${account.address}, 31337, 'high_assurance', now())
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'project_member')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subject}, ${fx.orgA}, 'project_member')
     `;
     sponsor = await signIn(app, account);
   });
@@ -95,13 +95,13 @@ describeDb("project registry content", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.source_receipts (
-        id, tenant_id, project_id, connection_id, authority_id, collection_method,
+        id, project_id, connection_id, authority_id, collection_method,
         result, query_basis, endpoint_or_document_ref, authentication_method,
         raw_hash, source_schema_version, adapter_version, terms_license,
         commercial_reuse, disclosure_permission, received_at, as_of,
         freshness_status, correlation_id, first_confirmed_by, second_confirmed_by
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${projectId}, ${fx.connectionA}, ${fx.authorityA},
+        ${id}, ${projectId}, ${fx.connectionA}, ${fx.authorityA},
         -- A manual official-registry confirmation by two different people: the one channel on
         -- which the database accepts a confirmed result without a server-side collection.
         'manual_official_registry_confirmation', ${result}, '{}'::jsonb, 'synthetic', 'none',
@@ -115,8 +115,8 @@ describeDb("project registry content", () => {
   async function claim(projectId: string): Promise<string> {
     const id = randomUUID();
     await fx.sql`
-      INSERT INTO core.claims (id, tenant_id, project_id, claim_type, value_text, unit, source_coordinate)
-      VALUES (${id}, ${fx.tenantA}, ${projectId}, 'synthetic_tonnage', '12.5', 'Mt',
+      INSERT INTO core.claims (id, project_id, claim_type, value_text, unit, source_coordinate)
+      VALUES (${id}, ${projectId}, 'synthetic_tonnage', '12.5', 'Mt',
               ${fx.sql.json({ document: "synthetic-report", page: "4" })})
     `;
     return id;
@@ -250,9 +250,9 @@ describeDb("project registry content", () => {
         .factKey as string;
       await fx.sql`
         INSERT INTO core.project_facts (
-          id, tenant_id, project_id, fact_key, status, evidence_ref, evidence_kind
+          id, project_id, fact_key, status, evidence_ref, evidence_kind
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${id}, ${factKey}, 'confirmed', ${randomUUID()}, 'upload'
+          ${randomUUID()}, ${id}, ${factKey}, 'confirmed', ${randomUUID()}, 'upload'
         )
       `;
 
@@ -388,8 +388,8 @@ describeDb("project registry content", () => {
       await expect(
         fx.sql`
           INSERT INTO core.project_fact_versions (
-            id, tenant_id, project_id, fact_key, version, status, reason, recorded_by_subject_id
-          ) VALUES (${randomUUID()}, ${fx.tenantA}, ${id}, 'rights', 1, 'confirmed', 'r', ${fx.operatorSubjectA})
+            id, project_id, fact_key, version, status, reason, recorded_by_subject_id
+          ) VALUES (${randomUUID()}, ${id}, 'rights', 1, 'confirmed', 'r', ${fx.operatorSubjectA})
         `,
       ).rejects.toThrow(/confirmed_requires_evidence/);
 
@@ -643,7 +643,7 @@ describeDb("project registry content", () => {
         });
 
       expect((await send(steward)).statusCode).toBe(200);
-      expect((await send(await signIn(app, fx.readerA))).statusCode).toBe(403);
+      expect((await send(await signIn(app, fx.readerA))).statusCode).toBe(404);
     });
 
     it("refuses inputs from another project", async () => {
@@ -660,7 +660,8 @@ describeDb("project registry content", () => {
     it("is not readable outside the caller's project scope", async () => {
       const foreign = await claim(fx.otherProjectA);
       const detail = await call("GET", `/api/v1/claims/${foreign}`, scopedSteward);
-      expect(detail.statusCode).toBe(403);
+      // Row-level security hides the claim of a project outside the caller's reach.
+      expect(detail.statusCode).toBe(404);
     });
   });
 });

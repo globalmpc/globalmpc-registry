@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { snapshotClaimFingerprint, hashSnapshotInput, type SnapshotClaimRow } from "../src/services/evidence-snapshot.js";
@@ -20,16 +20,16 @@ describeDb("historical reserved catalog claim corrections", () => {
       await tx`ALTER TABLE core.claims DISABLE TRIGGER catalog_claim_reserved_key_guard`;
       for (const [id,version] of [[catalogId,1],[otherCatalogId,2]] as const) {
         const proposal=randomUUID(),payload={claimType:'rights',displayName:'Historical rights',description:null,definition:{fields:[{key:'note',label:'Note',type:'string',required:true}]}};
-        await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-          VALUES(${proposal},${fx.tenantA},'claim_type','rights',${version},${tx.json(payload)},'Historical fixture',now(),${fx.operatorSubjectA})`;
-        await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-          SELECT ${id},tenant_id,item_key,item_version,'Historical rights',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
+        await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+          VALUES(${proposal},'claim_type','rights',${version},${tx.json(payload)},'Historical fixture',now(),${fx.operatorSubjectA})`;
+        await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+          SELECT ${id},item_key,item_version,'Historical rights',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
         await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Historical approval',materialized_id=${id},version=2 WHERE id=${proposal}`;
       }
-      await tx`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state)
-        VALUES(${uploadId},${fx.tenantA},${fx.projectA},${uploadId},${'0x'+'ab'.repeat(32)},123,'application/pdf','restricted','scanned_clean')`;
-      await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,catalog_entry_id,catalog_version,structured_values,document_upload_ids)
-        VALUES(${claimId},${fx.tenantA},${fx.projectA},'rights','Original rights','{}',${catalogId},1,'{"note":"original"}',${[uploadId]}::uuid[])`;
+      await tx`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state)
+        VALUES(${uploadId},${fx.projectA},${uploadId},${'0x'+'ab'.repeat(32)},123,'application/pdf','restricted','scanned_clean')`;
+      await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,catalog_entry_id,catalog_version,structured_values,document_upload_ids)
+        VALUES(${claimId},${fx.projectA},'rights','Original rights','{}',${catalogId},1,'{"note":"original"}',${[uploadId]}::uuid[])`;
       await tx`SET CONSTRAINTS ALL IMMEDIATE`;
       await tx`ALTER TABLE core.registry_proposals ENABLE TRIGGER catalog_proposal_reserved_key_guard`;
       await tx`ALTER TABLE core.claim_types ENABLE TRIGGER catalog_type_reserved_key_guard`;
@@ -43,14 +43,14 @@ describeDb("historical reserved catalog claim corrections", () => {
   it("keeps creation closed and rejects mismatched correction parents at API service and DB boundaries",async()=>{
     const fresh=await app.inject({method:'POST',url:`/api/v1/projects/${fx.projectA}/claims`,headers:headers(),payload:{claimType:'rights',valueText:'New rights',sourceCoordinate:{},catalogEntryId:catalogId,structuredValues:{note:'new'},previousClaimId:claimId}});
     expect(fresh.statusCode,fresh.body).toBe(422);expect(fresh.json().code).toBe('CLAIM_TYPE_RESERVED');
-    await expect(withTenant(fx.appSql,{tenantId:fx.tenantB},tx=>resolveCatalogClaim(tx,fx.projectA,'rights',{catalogEntryId:catalogId,structuredValues:{note:'new'}},claimId)))
+    await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectB },tx=>resolveCatalogClaim(tx,fx.projectA,'rights',{catalogEntryId:catalogId,structuredValues:{note:'new'}},claimId)))
       .rejects.toMatchObject({code:'CLAIM_TYPE_RESERVED'});
     for(const [parent,project,catalog] of [[randomUUID(),fx.projectA,catalogId],[claimId,fx.otherProjectA,catalogId],[claimId,fx.projectA,otherCatalogId]] as const){
-      await expect(withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>resolveCatalogClaim(tx,project,'rights',{catalogEntryId:catalog,structuredValues:{note:'new'}},parent)))
+      await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>resolveCatalogClaim(tx,project,'rights',{catalogEntryId:catalog,structuredValues:{note:'new'}},parent)))
         .rejects.toMatchObject({code:'CLAIM_TYPE_RESERVED'});
       const version=catalog===catalogId?1:2;
-      await expect(withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,catalog_entry_id,catalog_version,structured_values,supersedes_claim_id,correction_reason)
-        VALUES(${randomUUID()},${fx.tenantA},${project},'rights','New rights','{}',${catalog},${version},'{"note":"new"}',${parent},'Correction')`)).rejects.toThrow(/reserved/);
+      await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,catalog_entry_id,catalog_version,structured_values,supersedes_claim_id,correction_reason)
+        VALUES(${randomUUID()},${project},'rights','New rights','{}',${catalog},${version},'{"note":"new"}',${parent},'Correction')`)).rejects.toThrow(/reserved/);
     }
   });
 

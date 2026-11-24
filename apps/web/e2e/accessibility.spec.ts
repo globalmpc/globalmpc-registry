@@ -101,7 +101,7 @@ test.describe("accessibility (WCAG 2.2 AA)", () => {
     await page.getByRole("textbox", { name: "Project key" }).fill(`A11Y-${Date.now()}`);
     await page.getByRole("textbox", { name: "Name" }).fill("For the accessibility check");
     await page.getByRole("textbox", { name: "Minerals (comma separated)" }).fill("copper");
-    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    // Company A's operator also may register for the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
     await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
@@ -128,7 +128,7 @@ test.describe("accessibility (WCAG 2.2 AA)", () => {
     await page.getByRole("textbox", { name: "Project key" }).fill(`A11Y-OV-${Date.now()}`);
     await page.getByRole("textbox", { name: "Name" }).fill("For the overview check");
     await page.getByRole("checkbox", { name: "Synthetic test project" }).check();
-    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    // Company A's operator also may register for the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
     await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
       "aaaaaaaa-0000-0000-0000-000000000001",
     );
@@ -221,7 +221,7 @@ test.describe("accessibility (WCAG 2.2 AA)", () => {
     await page.goto("/w/projects/new");
     await page.getByRole("textbox", { name: "Project key" }).fill(`A11Y-AUDIT-${Date.now()}`);
     await page.getByRole("textbox", { name: "Name" }).fill("For the audit check");
-    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    // Company A's operator also may register for the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
     await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
       "aaaaaaaa-0000-0000-0000-000000000001",
     );

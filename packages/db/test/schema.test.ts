@@ -2,20 +2,20 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { listMigrations, runMigrations } from "../src/migrate.js";
-import { withTenant } from "../src/session.js";
+import { withActor } from "../src/session.js";
 
 /**
  * Schema, RLS, and guard integration tests.
  *
  * Skips entirely without `DATABASE_URL`. CI must always set it —
- * if this file is skipped, tenant isolation and append-only guarantees pass unverified.
+ * if this file is skipped, actor isolation and append-only guarantees pass unverified.
  */
 
 const DATABASE_URL = process.env["DATABASE_URL"];
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
-const TENANT_A = "11111111-1111-1111-1111-111111111111";
-const TENANT_B = "22222222-2222-2222-2222-222222222222";
+/** A Registry-wide administrator: the actor of every application-role transaction below. */
+const OPERATOR = "11111111-1111-1111-1111-111111111111";
 
 describeDb("schema, RLS, guards", () => {
   let sql: postgres.Sql;
@@ -50,16 +50,8 @@ describeDb("schema, RLS, guards", () => {
     url.password = "app";
     appSql = postgres(url.toString(), { onnotice: () => {} });
 
-    const seedTenants: readonly [string, string][] = [
-      [TENANT_A, "tenant-a"],
-      [TENANT_B, "tenant-b"],
-    ];
-    for (const [id, slug] of seedTenants) {
-      await sql`
-        INSERT INTO core.tenants (id, slug, display_name)
-        VALUES (${id}, ${slug}, ${slug})
-      `;
-    }
+    await sql`INSERT INTO core.subjects (id, kind, display_name) VALUES (${OPERATOR}, 'person', 'Synthetic operator')`;
+    await sql`INSERT INTO core.role_bindings (id, subject_id, role, scope_kind) VALUES (gen_random_uuid(), ${OPERATOR}, 'administrator', 'registry')`;
   });
 
   afterAll(async () => {
@@ -108,96 +100,65 @@ describeDb("schema, RLS, guards", () => {
     });
   });
 
-  describe("tenant isolation (RLS)", () => {
+  describe("actor isolation (RLS)", () => {
     beforeAll(async () => {
-      for (const tenant of [TENANT_A, TENANT_B]) {
-        await sql`
-          INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-          VALUES (gen_random_uuid(), ${tenant}, ${'Org of ' + tenant}, 'MNG')
-        `;
-      }
+      await sql`
+        INSERT INTO core.organizations (id, legal_name, jurisdiction)
+        VALUES (gen_random_uuid(), 'Synthetic organization', 'MNG')
+      `;
     });
 
-    it("no rows are visible without a tenant set", async () => {
-      const rows = await appSql`SELECT id FROM core.organizations`;
-      expect(rows).toHaveLength(0);
+    it("no rows are visible without an actor", async () => {
+      expect(await appSql`SELECT id FROM core.organizations`).toHaveLength(0);
+      expect(await appSql`SELECT id FROM audit.events`).toHaveLength(0);
     });
 
-    it("only the own tenant's rows are visible", async () => {
-      const rowsA = await withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
-        tx`SELECT tenant_id FROM core.organizations`,
-      );
-      expect(rowsA).toHaveLength(1);
-      expect(rowsA[0]!["tenant_id"]).toBe(TENANT_A);
-    });
-
-    it("another tenant's rows stay invisible even when queried explicitly", async () => {
-      const rows = await withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
-        tx`SELECT id FROM core.organizations WHERE tenant_id = ${TENANT_B}`,
-      );
-      expect(rows).toHaveLength(0);
-    });
-
-    it("cannot INSERT another tenant's rows", async () => {
+    it("an unknown actor sees nothing and cannot write", async () => {
+      const stranger = randomUUID();
+      expect(await withActor(appSql, { subjectId: stranger }, (tx) => tx`SELECT id FROM core.organizations`)).toHaveLength(0);
       await expect(
-        withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
-          tx`
-            INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-            VALUES (gen_random_uuid(), ${TENANT_B}, 'cross tenant', 'MNG')
-          `,
-        ),
-      ).rejects.toThrow();
+        withActor(appSql, { subjectId: stranger }, (tx) => tx`
+          INSERT INTO audit.events (command, resource_type, correlation_id)
+          VALUES ('project.registered', 'project', 'unknown-actor-audit')`),
+      ).rejects.toThrow(/row-level security/);
     });
 
-    /**
-     * `0002` enabled RLS by looping over `core` and `chain` only, so `audit.events` — which has a
-     * `tenant_id` like every other tenant table — was left out. Every route filters it by tenant
-     * by hand; the policy makes a route that forgets the filter return nothing instead of
-     * another tenant's audit trail.
-     */
-    it("every table with tenant_id has RLS enabled and forced", async () => {
+    it("a live actor reads Registry records", async () => {
+      const rows = await withActor(appSql, { subjectId: OPERATOR }, (tx) => tx`SELECT id FROM core.organizations`);
+      expect(rows.length).toBeGreaterThan(0);
+    });
+
+    it("no tenant column or tenant table remains", async () => {
+      const left = await sql`
+        SELECT attrelid::regclass::text AS relation FROM pg_attribute
+        WHERE attname = 'tenant_id' AND NOT attisdropped
+          AND attrelid IN (SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                           WHERE n.nspname IN ('core', 'chain', 'audit'))
+      `;
+      expect(left).toEqual([]);
+      expect(await sql`SELECT to_regclass('core.tenants') AS t`).toEqual([{ t: null }]);
+    });
+
+    /** Every RLS table needs a permissive policy, or the application reads nothing from it. */
+    it("every table with RLS is forced and has a policy", async () => {
       const unprotected = await sql<{ table: string }[]>`
         SELECT c.oid::regclass::text AS table
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id' AND NOT a.attisdropped
-        WHERE n.nspname IN ('core', 'chain', 'audit')
-          AND c.relkind = 'r'
-          AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
+        WHERE n.nspname IN ('core', 'chain', 'audit') AND c.relkind = 'r' AND c.relrowsecurity
+          AND (NOT c.relforcerowsecurity
+               OR NOT EXISTS (SELECT FROM pg_policy p WHERE p.polrelid = c.oid AND p.polpermissive))
         ORDER BY 1
       `;
       expect(unprotected.map((row) => row.table)).toEqual([]);
-    });
-
-    it("another tenant's audit events are invisible even without a tenant filter", async () => {
-      const correlationId = `rls-audit-${randomUUID()}`;
-      await sql`
-        INSERT INTO audit.events (tenant_id, command, resource_type, correlation_id)
-        VALUES (${TENANT_B}, 'project.registered', 'project', ${correlationId})
-      `;
-      const rows = await withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
-        tx`SELECT id FROM audit.events WHERE correlation_id = ${correlationId}`,
-      );
-      expect(rows).toHaveLength(0);
-    });
-
-    it("cannot INSERT an audit event for another tenant", async () => {
-      await expect(
-        withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
-          tx`
-            INSERT INTO audit.events (tenant_id, command, resource_type, correlation_id)
-            VALUES (${TENANT_B}, 'project.registered', 'project', 'cross-tenant-audit')
-          `,
-        ),
-      ).rejects.toThrow(/row-level security/);
     });
   });
 
   describe("audit is append-only (02 §2.7)", () => {
     beforeAll(async () => {
       await sql`
-        INSERT INTO audit.events (tenant_id, command, resource_type, correlation_id)
-        VALUES (${TENANT_A}, 'project.registered', 'project', 'corr-1')
+        INSERT INTO audit.events (command, resource_type, correlation_id)
+        VALUES ('project.registered', 'project', 'corr-1')
       `;
     });
 
@@ -242,7 +203,7 @@ describeDb("schema, RLS, guards", () => {
     });
 
     it("TRUNCATE … CASCADE from a parent table is rejected at the append-only child", async () => {
-      await expect(truncateRolledBack("TRUNCATE core.tenants CASCADE")).rejects.toThrow(
+      await expect(truncateRolledBack("TRUNCATE core.organizations CASCADE")).rejects.toThrow(
         /append-only/,
       );
     });
@@ -277,12 +238,12 @@ describeDb("schema, RLS, guards", () => {
       await expect(
         sql.unsafe(`
           INSERT INTO core.verification_attestations (
-            id, tenant_id, case_id, assignment_id, credential_id, schema_id,
+            id, case_id, assignment_id, credential_id, schema_id,
             attestation_type, claim_scope, evidence_snapshot_hash, limitations,
             credential_status_snapshot, method_version, policy_version, payload_hash,
             signature, signer_wallet_address, signed_at
           ) VALUES (
-            gen_random_uuid(), '${TENANT_A}', gen_random_uuid(), gen_random_uuid(),
+            gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
             gen_random_uuid(), gen_random_uuid(), 'professional_signoff',
             ARRAY[gen_random_uuid()], '0x${"11".repeat(32)}', '',
             '{}'::jsonb, 'm1', 'p1', '0x${"22".repeat(32)}',
@@ -296,12 +257,12 @@ describeDb("schema, RLS, guards", () => {
       await expect(
         sql.unsafe(`
           INSERT INTO core.verification_attestations (
-            id, tenant_id, case_id, assignment_id, credential_id, schema_id,
+            id, case_id, assignment_id, credential_id, schema_id,
             attestation_type, claim_scope, evidence_snapshot_hash, limitations,
             credential_status_snapshot, method_version, policy_version, payload_hash,
             signature, signer_wallet_address, signed_at
           ) VALUES (
-            gen_random_uuid(), '${TENANT_A}', gen_random_uuid(), gen_random_uuid(),
+            gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
             gen_random_uuid(), gen_random_uuid(), 'professional_signoff',
             ARRAY[gen_random_uuid()], '0x${"11".repeat(32)}', '   ',
             '{}'::jsonb, 'm1', 'p1', '0x${"22".repeat(32)}',
@@ -317,10 +278,10 @@ describeDb("schema, RLS, guards", () => {
       await expect(
         sql`
           INSERT INTO chain.anchor_batches (
-            id, tenant_id, batch_id, merkle_root, manifest_hash,
+            id, batch_id, merkle_root, manifest_hash,
             manifest_object_key, schema_version, record_count
           ) VALUES (
-            gen_random_uuid(), ${TENANT_A}, ${"0x" + "AB".repeat(32)},
+            gen_random_uuid(), ${"0x" + "AB".repeat(32)},
             ${"0x" + "cd".repeat(32)}, ${"0x" + "ef".repeat(32)},
             'manifests/1.json', '1', 3
           )
@@ -332,10 +293,10 @@ describeDb("schema, RLS, guards", () => {
       await expect(
         sql`
           INSERT INTO chain.anchor_batches (
-            id, tenant_id, batch_id, merkle_root, manifest_hash,
+            id, batch_id, merkle_root, manifest_hash,
             manifest_object_key, schema_version, record_count
           ) VALUES (
-            gen_random_uuid(), ${TENANT_A}, ${"0x" + "11".repeat(32)},
+            gen_random_uuid(), ${"0x" + "11".repeat(32)},
             ${"0x" + "22".repeat(32)}, ${"0x" + "33".repeat(32)},
             'manifests/2.json', '1', 0
           )
@@ -350,10 +311,10 @@ describeDb("schema, RLS, guards", () => {
     beforeAll(async () => {
       await sql`
         INSERT INTO chain.anchor_batches (
-          id, tenant_id, batch_id, merkle_root, manifest_hash,
+          id, batch_id, merkle_root, manifest_hash,
           manifest_object_key, schema_version, record_count
         ) VALUES (
-          gen_random_uuid(), ${TENANT_A}, ${batchId},
+          gen_random_uuid(), ${batchId},
           ${"0x" + "55".repeat(32)}, ${"0x" + "66".repeat(32)},
           'manifests/3.json', '1', 5
         )
@@ -379,10 +340,10 @@ describeDb("schema, RLS, guards", () => {
       await expect(
         sql`
           INSERT INTO chain.anchor_batches (
-            id, tenant_id, batch_id, merkle_root, manifest_hash,
+            id, batch_id, merkle_root, manifest_hash,
             manifest_object_key, schema_version, record_count
           ) VALUES (
-            gen_random_uuid(), ${TENANT_A}, ${batchId},
+            gen_random_uuid(), ${batchId},
             ${"0x" + "88".repeat(32)}, ${"0x" + "99".repeat(32)},
             'manifests/4.json', '1', 5
           )
@@ -398,21 +359,21 @@ describeDb("schema, RLS, guards", () => {
 
     beforeAll(async () => {
       const [org] = await sql<{ id: string }[]>`
-        SELECT id FROM core.organizations WHERE tenant_id = ${TENANT_A} LIMIT 1
+        SELECT id FROM core.organizations LIMIT 1
       `;
       const [project] = await sql<{ id: string }[]>`
-        INSERT INTO core.projects (id, tenant_id, project_key, name, host_country_iso3, owner_organization_id)
-        VALUES (gen_random_uuid(), ${TENANT_A}, 'SYNTH-PROJECT-001', 'Synthetic', 'MNG', ${org!.id})
+        INSERT INTO core.projects (id, project_key, name, host_country_iso3, owner_organization_id)
+        VALUES (gen_random_uuid(), 'SYNTH-PROJECT-001', 'Synthetic', 'MNG', ${org!.id})
         RETURNING id
       `;
       projectId = project!.id;
 
       const [policy] = await sql<{ id: string }[]>`
         INSERT INTO core.compliance_policy_sets (
-          id, tenant_id, rule_set_id, rule_set_version, gate_id,
+          id, rule_set_id, rule_set_version, gate_id,
           jurisdiction_profile, effective_from, definition
         ) VALUES (
-          gen_random_uuid(), ${TENANT_A}, 'registry-publication-gate', '1.0.0',
+          gen_random_uuid(), 'registry-publication-gate', '1.0.0',
           'registry_publication', 'MNG', now(), '{}'::jsonb
         ) RETURNING id
       `;
@@ -420,10 +381,10 @@ describeDb("schema, RLS, guards", () => {
 
       const [assessment] = await sql<{ id: string }[]>`
         INSERT INTO core.compliance_assessments (
-          id, tenant_id, project_id, gate_id, policy_set_id,
+          id, project_id, gate_id, policy_set_id,
           input_snapshot_hash, evaluated_as_of, status, requirement_results, canonical_result_hash, evidence_actor_ids
         ) VALUES (
-          gen_random_uuid(), ${TENANT_A}, ${projectId}, 'registry_publication', ${policySetId},
+          gen_random_uuid(), ${projectId}, 'registry_publication', ${policySetId},
           ${"0x" + "aa".repeat(32)}, now(), 'gap', '[]'::jsonb, ${"0x" + "bb".repeat(32)}, '{}'::uuid[]
         ) RETURNING id
       `;
@@ -444,17 +405,17 @@ describeDb("schema, RLS, guards", () => {
 
     it("gate decisions cannot be modified either", async () => {
       const [subject] = await sql<{ id: string }[]>`
-        INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-        VALUES (gen_random_uuid(), ${TENANT_A}, 'person', 'Approver')
+        INSERT INTO core.subjects (id, kind, display_name)
+        VALUES (gen_random_uuid(), 'person', 'Approver')
         RETURNING id
       `;
       const [decision] = await sql<{ id: string }[]>`
         INSERT INTO core.gate_decisions (
-          id, tenant_id, project_id, gate_id, decision, input_assessment_id,
+          id, project_id, gate_id, decision, input_assessment_id,
           evidence_snapshot_hash, decision_authority, decision_maker_subject_id,
           rationale, signature, signed_at
         ) VALUES (
-          gen_random_uuid(), ${TENANT_A}, ${projectId}, 'registry_publication', 'hold',
+          gen_random_uuid(), ${projectId}, 'registry_publication', 'hold',
           ${assessmentId}, ${"0x" + "cc".repeat(32)}, 'MPC Gate Approver', ${subject!.id},
           'Held for insufficient evidence', '0xsig', now()
         ) RETURNING id
@@ -466,16 +427,16 @@ describeDb("schema, RLS, guards", () => {
 
     it("cannot record a decision with an empty rationale", async () => {
       const [subject] = await sql<{ id: string }[]>`
-        SELECT id FROM core.subjects WHERE tenant_id = ${TENANT_A} LIMIT 1
+        SELECT id FROM core.subjects LIMIT 1
       `;
       await expect(
         sql`
           INSERT INTO core.gate_decisions (
-            id, tenant_id, project_id, gate_id, decision, input_assessment_id,
+            id, project_id, gate_id, decision, input_assessment_id,
             evidence_snapshot_hash, decision_authority, decision_maker_subject_id,
             rationale, signature, signed_at
           ) VALUES (
-            gen_random_uuid(), ${TENANT_A}, ${projectId}, 'registry_publication', 'go',
+            gen_random_uuid(), ${projectId}, 'registry_publication', 'go',
             ${assessmentId}, ${"0x" + "cc".repeat(32)}, 'MPC Gate Approver', ${subject!.id},
             '  ', '0xsig', now()
           )
@@ -487,15 +448,15 @@ describeDb("schema, RLS, guards", () => {
   describe("lifecycle constraints", () => {
     it("cannot have prior_lifecycle_state unless suspended", async () => {
       const [org] = await sql<{ id: string }[]>`
-        SELECT id FROM core.organizations WHERE tenant_id = ${TENANT_A} LIMIT 1
+        SELECT id FROM core.organizations LIMIT 1
       `;
       await expect(
         sql`
           INSERT INTO core.projects (
-            id, tenant_id, project_key, name, host_country_iso3,
+            id, project_key, name, host_country_iso3,
             owner_organization_id, lifecycle_state, prior_lifecycle_state
           ) VALUES (
-            gen_random_uuid(), ${TENANT_A}, 'BAD-STATE-001', 'Bad', 'MNG',
+            gen_random_uuid(), 'BAD-STATE-001', 'Bad', 'MNG',
             ${org!.id}, 'registered', 'registered'
           )
         `,
@@ -504,15 +465,15 @@ describeDb("schema, RLS, guards", () => {
 
     it("prior_lifecycle_state is required when suspended", async () => {
       const [org] = await sql<{ id: string }[]>`
-        SELECT id FROM core.organizations WHERE tenant_id = ${TENANT_A} LIMIT 1
+        SELECT id FROM core.organizations LIMIT 1
       `;
       await expect(
         sql`
           INSERT INTO core.projects (
-            id, tenant_id, project_key, name, host_country_iso3,
+            id, project_key, name, host_country_iso3,
             owner_organization_id, lifecycle_state
           ) VALUES (
-            gen_random_uuid(), ${TENANT_A}, 'BAD-STATE-002', 'Bad', 'MNG',
+            gen_random_uuid(), 'BAD-STATE-002', 'Bad', 'MNG',
             ${org!.id}, 'suspended'
           )
         `,
@@ -525,10 +486,10 @@ describeDb("schema, RLS, guards", () => {
       await expect(
         sql`
           INSERT INTO core.authorities (
-            id, tenant_id, name, jurisdiction, proves, does_not_prove,
+            id, name, jurisdiction, proves, does_not_prove,
             recognized_scope, verification_method, public_disclosure_level, valid_from
           ) VALUES (
-            gen_random_uuid(), ${TENANT_A}, 'Mineral Registry', 'MNG',
+            gen_random_uuid(), 'Mineral Registry', 'MNG',
             ARRAY['license_registration'], ARRAY[]::text[],
             ARRAY['mining_license'], 'authenticated_api', 'public', '2020-01-01'
           )
@@ -539,10 +500,10 @@ describeDb("schema, RLS, guards", () => {
     it("passes when limitations are stated", async () => {
       const rows = await sql`
         INSERT INTO core.authorities (
-          id, tenant_id, name, jurisdiction, proves, does_not_prove,
+          id, name, jurisdiction, proves, does_not_prove,
           recognized_scope, verification_method, public_disclosure_level, valid_from
         ) VALUES (
-          gen_random_uuid(), ${TENANT_A}, 'Mineral Registry', 'MNG',
+          gen_random_uuid(), 'Mineral Registry', 'MNG',
           ARRAY['license_registration'],
           ARRAY['economic_viability','rights_completeness','investment_suitability'],
           ARRAY['mining_license'], 'authenticated_api', 'public', '2020-01-01'
@@ -557,16 +518,16 @@ describeDb("schema, RLS, guards", () => {
 
     beforeAll(async () => {
       const [entry] = await sql<{ id: string }[]>`
-        INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
-        VALUES (gen_random_uuid(), ${TENANT_A}, 'project', gen_random_uuid(), 'SYNTH-PROJECT-001')
+        INSERT INTO core.registry_entries (id, registry_type, subject_id, public_key)
+        VALUES (gen_random_uuid(), 'project', gen_random_uuid(), 'SYNTH-PROJECT-001')
         RETURNING id
       `;
       const [version] = await sql<{ id: string }[]>`
         INSERT INTO core.registry_entry_versions (
-          id, tenant_id, entry_id, version, status, public_projection,
+          id, entry_id, version, status, public_projection,
           content_hash, source_snapshot_hash, policy_version, schema_version, published_at
         ) VALUES (
-          gen_random_uuid(), ${TENANT_A}, ${entry!.id}, 1, 'published',
+          gen_random_uuid(), ${entry!.id}, 1, 'published',
           '{"projectKey":"SYNTH-PROJECT-001"}'::jsonb,
           ${"0x" + "dd".repeat(32)}, ${"0x" + "ee".repeat(32)}, 'p1', 's1', now()
         ) RETURNING id
@@ -596,15 +557,15 @@ describeDb("schema, RLS, guards", () => {
 
     it("cannot store published without a projection", async () => {
       const [entry] = await sql<{ id: string }[]>`
-        SELECT id FROM core.registry_entries WHERE tenant_id = ${TENANT_A} LIMIT 1
+        SELECT id FROM core.registry_entries LIMIT 1
       `;
       await expect(
         sql`
           INSERT INTO core.registry_entry_versions (
-            id, tenant_id, entry_id, version, status,
+            id, entry_id, version, status,
             source_snapshot_hash, policy_version, schema_version
           ) VALUES (
-            gen_random_uuid(), ${TENANT_A}, ${entry!.id}, 2, 'published',
+            gen_random_uuid(), ${entry!.id}, 2, 'published',
             ${"0x" + "ee".repeat(32)}, 'p1', 's1'
           )
         `,
@@ -615,7 +576,7 @@ describeDb("schema, RLS, guards", () => {
   /**
    * The review registries take rows only from an approved proposal — spec 02 §2.8.
    *
-   * `0002_rls.sql` gives `mpc_app` INSERT and UPDATE on every tenant table. The two-person rule
+   * `0002_rls.sql` gives `mpc_app` INSERT and UPDATE on every RLS table. The two-person rule
    * of `0043` sits on the proposal table, so a plain INSERT from any other route would still
    * produce a credential that can sign, a schema that is signable, or a policy set that decides
    * readiness — with nobody having proposed or approved it. These tests run as the role the API
@@ -632,13 +593,13 @@ describeDb("schema, RLS, guards", () => {
         [DECIDER, "decider"],
       ] as const) {
         await sql`
-          INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-          VALUES (${id}, ${TENANT_A}, 'person', ${name})
+          INSERT INTO core.subjects (id, kind, display_name)
+          VALUES (${id}, 'person', ${name})
           ON CONFLICT (id) DO NOTHING
         `;
       }
       const [org] = await sql<{ id: string }[]>`
-        SELECT id FROM core.organizations WHERE tenant_id = ${TENANT_A} LIMIT 1
+        SELECT id FROM core.organizations LIMIT 1
       `;
       reviewerOrg = org!.id;
     });
@@ -647,10 +608,10 @@ describeDb("schema, RLS, guards", () => {
     function insertCredential(tx: postgres.TransactionSql, id: string) {
       return tx`
         INSERT INTO core.credentials (
-          id, tenant_id, subject_id, organization_id, issuer_reference,
+          id, subject_id, organization_id, issuer_reference,
           credential_type, credential_scope, jurisdiction, issued_at, expires_at, current_status
         ) VALUES (
-          ${id}, ${TENANT_A}, ${PROPOSER}, ${reviewerOrg}, 'AusIMM',
+          ${id}, ${PROPOSER}, ${reviewerOrg}, 'AusIMM',
           'competent_person', ARRAY['resource_estimate'], ARRAY['MNG'],
           now() - interval '1 year', now() + interval '1 year', 'valid'
         )
@@ -660,10 +621,10 @@ describeDb("schema, RLS, guards", () => {
     function insertSchema(tx: postgres.TransactionSql, id: string, key: string) {
       return tx`
         INSERT INTO core.attestation_schemas (
-          id, tenant_id, schema_key, schema_version, attestation_type, required_evidence,
+          id, schema_key, schema_version, attestation_type, required_evidence,
           accepted_authority_types, mandatory_limitations, jurisdiction_profile, state
         ) VALUES (
-          ${id}, ${TENANT_A}, ${key}, '1', 'professional_signoff',
+          ${id}, ${key}, '1', 'professional_signoff',
           ARRAY['mining_right_registration'], ARRAY['government_registry'],
           ARRAY['legal_effect_not_determined'], 'MNG', 'active'
         )
@@ -673,10 +634,10 @@ describeDb("schema, RLS, guards", () => {
     function insertPolicySet(tx: postgres.TransactionSql, id: string, ruleSetId: string) {
       return tx`
         INSERT INTO core.compliance_policy_sets (
-          id, tenant_id, rule_set_id, rule_set_version, gate_id,
+          id, rule_set_id, rule_set_version, gate_id,
           jurisdiction_profile, effective_from, definition, state
         ) VALUES (
-          ${id}, ${TENANT_A}, ${ruleSetId}, '1.0.0', 'registry_publication',
+          ${id}, ${ruleSetId}, '1.0.0', 'registry_publication',
           'MNG', now(), '{}'::jsonb, 'effective'
         )
       `;
@@ -692,10 +653,10 @@ describeDb("schema, RLS, guards", () => {
       const proposalId = randomUUID();
       await tx`
         INSERT INTO core.registry_proposals (
-          id, tenant_id, kind, item_key, item_version, payload, rationale,
+          id, kind, item_key, item_version, payload, rationale,
           effective_from, proposed_by_subject_id
         ) VALUES (
-          ${proposalId}, ${TENANT_A}, ${kind}::core.registry_kind, ${itemKey}, 1,
+          ${proposalId}, ${kind}::core.registry_kind, ${itemKey}, 1,
           '{}'::jsonb, 'reviewed against the issuer register', now(), ${PROPOSER}
         )
       `;
@@ -704,19 +665,19 @@ describeDb("schema, RLS, guards", () => {
         SET state = 'approved', decided_by_subject_id = ${DECIDER}, decided_at = now(),
             decision_reason = 'checked', materialized_id = ${materializedId},
             version = version + 1
-        WHERE tenant_id = ${TENANT_A} AND id = ${proposalId}
+        WHERE id = ${proposalId}
       `;
     }
 
     it("rejects a credential nobody approved", async () => {
       await expect(
-        withTenant(appSql, { tenantId: TENANT_A }, (tx) => insertCredential(tx, randomUUID())),
+        withActor(appSql, { subjectId: OPERATOR }, (tx) => insertCredential(tx, randomUUID())),
       ).rejects.toThrow(/approving a proposal/);
     });
 
     it("rejects an attestation schema nobody approved", async () => {
       await expect(
-        withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
+        withActor(appSql, { subjectId: OPERATOR }, (tx) =>
           insertSchema(tx, randomUUID(), "unapproved-schema"),
         ),
       ).rejects.toThrow(/approving a proposal/);
@@ -724,7 +685,7 @@ describeDb("schema, RLS, guards", () => {
 
     it("rejects a policy set nobody approved", async () => {
       await expect(
-        withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
+        withActor(appSql, { subjectId: OPERATOR }, (tx) =>
           insertPolicySet(tx, randomUUID(), "unapproved-rule-set"),
         ),
       ).rejects.toThrow(/approving a proposal/);
@@ -736,13 +697,13 @@ describeDb("schema, RLS, guards", () => {
      */
     it("rejects a row an approved proposal does not point at", async () => {
       const approved = randomUUID();
-      await withTenant(appSql, { tenantId: TENANT_A }, async (tx) => {
+      await withActor(appSql, { subjectId: OPERATOR }, async (tx) => {
         await insertCredential(tx, approved);
         await approveProposal(tx, "credential", "pointed-at-credential", approved);
       });
 
       await expect(
-        withTenant(appSql, { tenantId: TENANT_A }, (tx) => insertCredential(tx, randomUUID())),
+        withActor(appSql, { subjectId: OPERATOR }, (tx) => insertCredential(tx, randomUUID())),
       ).rejects.toThrow(/approving a proposal/);
     });
 
@@ -751,7 +712,7 @@ describeDb("schema, RLS, guards", () => {
       const schema = randomUUID();
       const policySet = randomUUID();
 
-      await withTenant(appSql, { tenantId: TENANT_A }, async (tx) => {
+      await withActor(appSql, { subjectId: OPERATOR }, async (tx) => {
         await insertCredential(tx, credential);
         await approveProposal(tx, "credential", "accepted-credential", credential);
         await insertSchema(tx, schema, "approved-schema");
@@ -760,7 +721,7 @@ describeDb("schema, RLS, guards", () => {
         await approveProposal(tx, "policy_set", "approved-rule-set-v1", policySet);
       });
 
-      const rows = await withTenant(appSql, { tenantId: TENANT_A }, (tx) =>
+      const rows = await withActor(appSql, { subjectId: OPERATOR }, (tx) =>
         tx<{ id: string }[]>`
           SELECT id FROM core.credentials WHERE id = ${credential}
           UNION ALL SELECT id FROM core.attestation_schemas WHERE id = ${schema}
@@ -777,10 +738,10 @@ describeDb("schema, RLS, guards", () => {
     it("the seed path still writes without a proposal", async () => {
       const [row] = await sql<{ id: string }[]>`
         INSERT INTO core.attestation_schemas (
-          id, tenant_id, schema_key, schema_version, attestation_type, required_evidence,
+          id, schema_key, schema_version, attestation_type, required_evidence,
           accepted_authority_types, mandatory_limitations, jurisdiction_profile, state
         ) VALUES (
-          gen_random_uuid(), ${TENANT_A}, 'seeded-schema', '1', 'professional_signoff',
+          gen_random_uuid(), 'seeded-schema', '1', 'professional_signoff',
           ARRAY['mining_right_registration'], ARRAY['government_registry'],
           ARRAY['legal_effect_not_determined'], 'MNG', 'draft'
         ) RETURNING id
@@ -833,8 +794,8 @@ describeDb("schema, RLS, guards", () => {
       );
       for (let i = 0; i < ids.length - 1; i += 1) {
         await sql`
-          INSERT INTO core.lineage_edges (id, tenant_id, from_id, to_id, relation_type)
-          VALUES (gen_random_uuid(), ${TENANT_A}, ${ids[i]!}, ${ids[i + 1]!}, 'derived_from')
+          INSERT INTO core.lineage_edges (id, from_id, to_id, relation_type)
+          VALUES (gen_random_uuid(), ${ids[i]!}, ${ids[i + 1]!}, 'derived_from')
         `;
       }
 

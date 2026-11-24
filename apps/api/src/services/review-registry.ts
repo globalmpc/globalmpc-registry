@@ -125,14 +125,11 @@ export function validateCredential(input: CredentialFields, now: Date): Validate
  */
 export async function holderOrganization(
   tx: Tx,
-  tenantId: string,
   subjectId: string,
 ): Promise<string | null> {
+  // All of the holder's bindings, not only those in the caller's reach (0170).
   const [binding] = await tx<{ organization_id: string | null }[]>`
-    SELECT organization_id FROM core.role_bindings
-    WHERE tenant_id = ${tenantId} AND subject_id = ${subjectId} AND revoked_at IS NULL
-    ORDER BY granted_at, id
-    LIMIT 1
+    SELECT core.subject_holder_organization(${subjectId}) AS organization_id
   `;
   return binding?.organization_id ?? null;
 }
@@ -140,13 +137,12 @@ export async function holderOrganization(
 /** A holder's credential with this issuer reference. Holder + reference is the credential's identity. */
 export async function findCredential(
   tx: Tx,
-  tenantId: string,
   subjectId: string,
   issuerReference: string,
 ): Promise<{ readonly id: string; readonly currentStatus: string } | null> {
   const [row] = await tx<{ id: string; current_status: string }[]>`
     SELECT id, current_status FROM core.credentials
-    WHERE tenant_id = ${tenantId} AND subject_id = ${subjectId}
+    WHERE subject_id = ${subjectId}
       AND issuer_reference = ${issuerReference}
     ORDER BY created_at, id
     LIMIT 1
@@ -156,7 +152,6 @@ export async function findCredential(
 
 export interface CredentialRow {
   readonly id: string;
-  readonly tenantId: string;
   readonly subjectId: string;
   readonly organizationId: string | null;
   readonly credential: ValidCredential;
@@ -167,11 +162,11 @@ export async function materializeCredential(tx: Tx, row: CredentialRow): Promise
   const { credential } = row;
   await tx`
     INSERT INTO core.credentials (
-      id, tenant_id, subject_id, organization_id, issuer_reference, issuer_authority_id,
+      id, subject_id, organization_id, issuer_reference, issuer_authority_id,
       credential_type, credential_scope, jurisdiction, issued_at, expires_at,
       current_status
     ) VALUES (
-      ${row.id}, ${row.tenantId}, ${row.subjectId}, ${row.organizationId},
+      ${row.id}, ${row.subjectId}, ${row.organizationId},
       ${credential.issuerReference}, ${credential.issuerAuthorityId}, ${credential.credentialType},
       ${credential.credentialScope as string[]}, ${credential.jurisdiction as string[]},
       ${credential.issuedAt}, ${credential.expiresAt}, 'valid'
@@ -237,13 +232,12 @@ export function validateAttestationSchema(
 
 export async function findAttestationSchema(
   tx: Tx,
-  tenantId: string,
   schemaKey: string,
   schemaVersion: string,
 ): Promise<{ readonly id: string; readonly state: string } | null> {
   const [row] = await tx<{ id: string; state: string }[]>`
     SELECT id, state FROM core.attestation_schemas
-    WHERE tenant_id = ${tenantId} AND schema_key = ${schemaKey}
+    WHERE schema_key = ${schemaKey}
       AND schema_version = ${schemaVersion}
   `;
   return row ?? null;
@@ -256,7 +250,6 @@ export async function materializeAttestationSchema(
   tx: Tx,
   row: {
     readonly id: string;
-    readonly tenantId: string;
     readonly schema: ValidAttestationSchema;
     readonly state: AttestationSchemaState;
   },
@@ -264,11 +257,11 @@ export async function materializeAttestationSchema(
   const { schema } = row;
   await tx`
     INSERT INTO core.attestation_schemas (
-      id, tenant_id, schema_key, schema_version, attestation_type,
+      id, schema_key, schema_version, attestation_type,
       required_evidence, accepted_authority_types, mandatory_limitations,
       jurisdiction_profile, state
     ) VALUES (
-      ${row.id}, ${row.tenantId}, ${schema.schemaKey}, ${schema.schemaVersion},
+      ${row.id}, ${schema.schemaKey}, ${schema.schemaVersion},
       ${schema.attestationType}::core.attestation_type,
       ${schema.requiredEvidence as string[]}, ${schema.acceptedAuthorityTypes as string[]},
       ${schema.mandatoryLimitations as string[]}, ${schema.jurisdictionProfile}, ${row.state}
@@ -296,13 +289,12 @@ export function validatePolicySet(definition: unknown): Validated<RuleSet> {
 
 export async function findPolicySet(
   tx: Tx,
-  tenantId: string,
   ruleSetId: string,
   version: string,
 ): Promise<{ readonly id: string; readonly state: string } | null> {
   const [row] = await tx<{ id: string; state: string }[]>`
     SELECT id, state FROM core.compliance_policy_sets
-    WHERE tenant_id = ${tenantId} AND rule_set_id = ${ruleSetId}
+    WHERE rule_set_id = ${ruleSetId}
       AND rule_set_version = ${version}
   `;
   return row ?? null;
@@ -319,7 +311,6 @@ export async function materializePolicySet(
   tx: Tx,
   row: {
     readonly id: string;
-    readonly tenantId: string;
     readonly ruleSet: RuleSet;
     readonly definition: unknown;
     readonly state: PolicySetState;
@@ -328,10 +319,10 @@ export async function materializePolicySet(
   const { ruleSet } = row;
   await tx`
     INSERT INTO core.compliance_policy_sets (
-      id, tenant_id, rule_set_id, rule_set_version, gate_id,
+      id, rule_set_id, rule_set_version, gate_id,
       jurisdiction_profile, effective_from, retroactive, definition, state
     ) VALUES (
-      ${row.id}, ${row.tenantId}, ${ruleSet.ruleSetId}, ${ruleSet.version}, ${ruleSet.gateId},
+      ${row.id}, ${ruleSet.ruleSetId}, ${ruleSet.version}, ${ruleSet.gateId},
       ${ruleSet.jurisdictionProfile}, ${new Date(ruleSet.effectiveFrom)},
       ${ruleSet.retroactive}, ${tx.json(row.definition as never)}, ${row.state}
     )
@@ -426,7 +417,6 @@ export function validateJurisdictionProfile(
 /** The latest version regardless of effective date — the one the next version follows. */
 export async function findLatestJurisdictionProfile(
   tx: Tx,
-  tenantId: string,
   jurisdiction: string,
 ): Promise<JurisdictionProfileVersion | null> {
   const [row] = await tx<
@@ -440,7 +430,7 @@ export async function findLatestJurisdictionProfile(
   >`
     SELECT id, profile_version, state, environmental_requirement_basis, effective_from
     FROM core.jurisdiction_profiles
-    WHERE tenant_id = ${tenantId} AND jurisdiction = ${jurisdiction}
+    WHERE jurisdiction = ${jurisdiction}
     ORDER BY profile_version DESC
     LIMIT 1
   `;
@@ -460,7 +450,6 @@ export async function materializeJurisdictionProfile(
   tx: Tx,
   row: {
     readonly id: string;
-    readonly tenantId: string;
     readonly profileVersion: number;
     readonly profile: JurisdictionProfileFields;
     readonly effectiveFrom: Date;
@@ -469,10 +458,10 @@ export async function materializeJurisdictionProfile(
   const { profile } = row;
   await tx`
     INSERT INTO core.jurisdiction_profiles (
-      id, tenant_id, jurisdiction, profile_version, state,
+      id, jurisdiction, profile_version, state,
       environmental_requirement_basis, effective_from
     ) VALUES (
-      ${row.id}, ${row.tenantId}, ${profile.jurisdiction}, ${row.profileVersion}, ${profile.state},
+      ${row.id}, ${profile.jurisdiction}, ${row.profileVersion}, ${profile.state},
       ${profile.environmentalRequirementBasis}, ${row.effectiveFrom}
     )
   `;

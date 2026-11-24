@@ -1,3 +1,4 @@
+import type { ActorContext } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
@@ -6,10 +7,10 @@ import {
   decideSubjectSuspensionRequest,
   SUSPENSION_STATE_CONFLICT,
 } from "@mpc/api-contract";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { recordAudit } from "../audit.js";
 import { AppError, badRequest, conflict, notFound, preconditionFailed, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recoverySeparationRequired } from "./account-shared.js";
 import {
@@ -94,32 +95,32 @@ function toSuspension(row: SuspensionRow, requestId: string, asOf: string) {
 }
 
 
-async function inTenant<T>(sql: postgres.Sql, tenantId: string, work: (tx: Tx) => Promise<T>): Promise<T> {
+async function asActor<T>(sql: postgres.Sql, actor: ActorContext, work: (tx: Tx) => Promise<T>): Promise<T> {
   try {
-    return await withTenant(sql, { tenantId }, work);
+    return await withActor(sql, actor, work);
   } catch (caught) {
     throw translate(caught);
   }
 }
 
 export async function registerSubjectSuspensionRoutes(app: FastifyInstance, sql: postgres.Sql): Promise<void> {
-  const activeTenant = (tenantId: string) =>
-    tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] });
+  const activeRegistry = () =>
+    registryResource({ state: "active", statesAllowingAction: ["active"] });
 
   app.get("/api/v1/admin/subject-suspensions", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
-    assertAuthorized(session, "admin.read", activeTenant(tenantId), sessionFacts(session));
+    const { session, actor } = requireReadContext(request);
+    assertAuthorized(session, "admin.read", activeRegistry(), sessionFacts(session));
     const { requestId, asOf } = request.context;
-    const rows = await withTenant(sql, { tenantId }, (tx) => readSuspensions(tx));
+    const rows = await withActor(sql, actor, (tx) => readSuspensions(tx));
     return { items: rows.map((row) => toSuspension(row, requestId, asOf)), requestId, asOf };
   });
 
   app.post("/api/v1/admin/subject-suspensions", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "admin.subject_suspension.propose",
-      activeTenant(tenantId),
+      activeRegistry(),
       sessionFacts(session),
     );
     const parsed = createSubjectSuspensionRequest.safeParse(request.body);
@@ -129,8 +130,8 @@ export async function registerSubjectSuspensionRoutes(app: FastifyInstance, sql:
     }
 
     const { requestId, asOf, correlationId } = request.context;
-    return inTenant(sql, tenantId, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+    return asActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
         const [target] = await tx<{ kind: string }[]>`
           SELECT kind FROM core.subjects WHERE id = ${parsed.data.subjectId}
         `;
@@ -140,9 +141,9 @@ export async function registerSubjectSuspensionRoutes(app: FastifyInstance, sql:
         const id = randomUUID();
         try {
           await tx`
-            INSERT INTO core.subject_suspensions (id, tenant_id, subject_id, action, reason, requested_by_subject_id)
+            INSERT INTO core.subject_suspensions (id, subject_id, action, reason, requested_by_subject_id)
             VALUES (
-              ${id}, ${tenantId}, ${parsed.data.subjectId}, ${parsed.data.action}, ${parsed.data.reason},
+              ${id}, ${parsed.data.subjectId}, ${parsed.data.action}, ${parsed.data.reason},
               ${session.subjectId}
             )
           `;
@@ -154,7 +155,6 @@ export async function registerSubjectSuspensionRoutes(app: FastifyInstance, sql:
         }
 
         await recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: `admin.subject_suspension.${parsed.data.action}_proposed`,
@@ -175,11 +175,11 @@ export async function registerSubjectSuspensionRoutes(app: FastifyInstance, sql:
   app.post<{ Params: { suspensionId: string } }>(
     "/api/v1/admin/subject-suspensions/:suspensionId/decision",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
         "admin.subject_suspension.approve",
-        tenantResource(tenantId, { state: "pending", statesAllowingAction: ["pending"] }),
+        registryResource({ state: "pending", statesAllowingAction: ["pending"] }),
         sessionFacts(session),
       );
       // If-Match before the body — a missing header must not hide behind a body error.
@@ -188,8 +188,8 @@ export async function registerSubjectSuspensionRoutes(app: FastifyInstance, sql:
       if (!parsed.success) throw badRequest("REQUEST_INVALID", "Request format is invalid", { issues: parsed.error.issues });
 
       const { requestId, asOf, correlationId } = request.context;
-      return inTenant(sql, tenantId, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return asActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [current] = await readSuspensions(tx, request.params.suspensionId);
           if (!current) throw notFound("Suspension request not found");
           assertVersionMatches(expected, current.version, "subject_suspension");
@@ -215,7 +215,6 @@ export async function registerSubjectSuspensionRoutes(app: FastifyInstance, sql:
           `;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: `admin.subject_suspension.${current.action}_${approved ? "approved" : "rejected"}`,
@@ -240,7 +239,6 @@ export async function registerSubjectSuspensionRoutes(app: FastifyInstance, sql:
           // audit row of its own, attributed to this decision.
           for (const closed of effect!.closed_requests) {
             await recordAudit(tx, {
-              tenantId,
               session,
               effectiveRole,
               command: "admin.subject_suspension.request_closed",

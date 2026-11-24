@@ -8,7 +8,7 @@ import { decideSigned, requestGateDecisionSignature, submitGateDecision } from "
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { collectRequirementFacts } from "../src/routes/readiness.js";
 import { loadConfig } from "../src/config.js";
@@ -56,20 +56,20 @@ describeDb("attestation integrity", () => {
     const account = newAccount();
     const subjectId = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subjectId}, ${fx.tenantA}, 'person', ${`${role} ${subjectId.slice(0, 4)}`})
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subjectId}, 'person', ${`${role} ${subjectId.slice(0, 4)}`})
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${account.address}, 31337, 'high_assurance', now()
+        ${randomUUID()}, ${subjectId}, ${account.address}, 31337, 'high_assurance', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${organizationId}, ${role})
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subjectId}, ${organizationId}, ${role})
     `;
     return { account, subjectId, token: await signIn(app, account) };
   }
@@ -81,10 +81,10 @@ describeDb("attestation integrity", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove, recognized_scope,
+        id, name, jurisdiction, proves, does_not_prove, recognized_scope,
         verification_method, public_disclosure_level, valid_from, state, state_reason
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${`Issuer ${id.slice(0, 6)}`}, 'AUS', ARRAY['member_competence'],
+        ${id}, ${`Issuer ${id.slice(0, 6)}`}, 'AUS', ARRAY['member_competence'],
         ARRAY['opinion_accuracy'], ${scope as string[]}, 'verifiable_signed_document', 'public',
         '2000-01-01', ${state}, ${state === "suspended" ? "fixture" : null}
       )
@@ -101,10 +101,10 @@ describeDb("attestation integrity", () => {
     const id = randomUUID();
     await fx.sql`
       INSERT INTO core.credentials (
-        id, tenant_id, subject_id, organization_id, issuer_reference, issuer_authority_id,
+        id, subject_id, organization_id, issuer_reference, issuer_authority_id,
         credential_type, credential_scope, jurisdiction, issued_at, expires_at, current_status
       ) VALUES (
-        ${id}, ${fx.tenantA}, ${subjectId}, ${organizationId}, ${`CP #${id.slice(0, 6)}`},
+        ${id}, ${subjectId}, ${organizationId}, ${`CP #${id.slice(0, 6)}`},
         ${issuerAuthorityId}, 'competent_person', ${scope as string[]}, ARRAY['MNG'],
         now() - interval '1 year', now() + interval '1 year', 'valid'
       )
@@ -289,10 +289,10 @@ describeDb("attestation integrity", () => {
       // A policy becomes effective between the draft and the signature. The record is as of signing.
       await fx.sql`
         INSERT INTO core.compliance_policy_sets (
-          id, tenant_id, rule_set_id, rule_set_version, gate_id, jurisdiction_profile,
+          id, rule_set_id, rule_set_version, gate_id, jurisdiction_profile,
           effective_from, definition, state
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, 'registry-publication-gate', '2.1.0',
+          ${randomUUID()}, 'registry-publication-gate', '2.1.0',
           'registry_publication', 'MNG', now() - interval '1 day', '{}'::jsonb, 'effective'
         )
       `;
@@ -339,10 +339,10 @@ describeDb("attestation integrity", () => {
       const claimId = randomUUID();
       await fx.sql`
         INSERT INTO core.claims (
-          id, tenant_id, project_id, claim_type, value_text, source_coordinate, evidence_tier,
+          id, project_id, claim_type, value_text, source_coordinate, evidence_tier,
           submitted_by
         ) VALUES (
-          ${claimId}, ${fx.tenantA}, ${fx.projectA}, 'mining_right_registration', 'MV-SELF',
+          ${claimId}, ${fx.projectA}, 'mining_right_registration', 'MV-SELF',
           '{"page":"1"}', 'P1', ${fx.reviewerSubjectA}
         )
       `;
@@ -376,9 +376,9 @@ describeDb("attestation integrity", () => {
       // A claim from before submitters were recorded.
       await fx.sql`
         INSERT INTO core.claims (
-          id, tenant_id, project_id, claim_type, value_text, source_coordinate, evidence_tier
+          id, project_id, claim_type, value_text, source_coordinate, evidence_tier
         ) VALUES (
-          ${claimId}, ${fx.tenantA}, ${fx.projectA}, 'mining_right_registration', 'MV-LEGACY',
+          ${claimId}, ${fx.projectA}, 'mining_right_registration', 'MV-LEGACY',
           '{"page":"1"}', 'P1'
         )
       `;
@@ -548,8 +548,8 @@ describeDb("attestation integrity", () => {
     it("an artifact's lifecycle follows its allowed transitions, each recorded", async () => {
       const artifactId = randomUUID();
       await fx.sql`
-        INSERT INTO core.artifacts (id, tenant_id, project_id, kind, content_hash, sensitivity)
-        VALUES (${artifactId}, ${fx.tenantA}, ${fx.projectA}, 'raw_source',
+        INSERT INTO core.artifacts (id, project_id, kind, content_hash, sensitivity)
+        VALUES (${artifactId}, ${fx.projectA}, 'raw_source',
                 ${`0x${"ab".repeat(32)}`}, 'restricted')
       `;
       // Revocation is recorded by its timestamp; the lifecycle follows it.
@@ -642,7 +642,7 @@ describeDb("attestation integrity", () => {
       const claim = await createClaim(claimType);
       expect((await correct(claim["id"] as string, claim["version"] as number)).statusCode).toBe(200);
 
-      const facts = await withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) =>
+      const facts = await withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) =>
         collectRequirementFacts(
           tx,
           fx.projectA,
@@ -982,31 +982,40 @@ describeDb("attestation integrity", () => {
       const migrations=listMigrations(), boundary=migrations.findIndex(m=>m.name==='0021_evidence_channels.sql');
       expect(boundary).toBeGreaterThan(0);
       await runMigrations(legacy,migrations.slice(0,boundary));
-      for(const [table,id] of [["tenants",fx.tenantA],["organizations",fx.orgA],["projects",fx.projectA],["authorities",fx.authorityA],["source_connections",fx.connectionA]]){
+      // The pre-0021 schema still names its single tenant on every row.
+      const tenant=randomUUID();
+      await legacy`INSERT INTO core.tenants(id,slug,display_name) VALUES(${tenant},'registry','Legacy Registry')`;
+      for(const [table,id] of [["organizations",fx.orgA],["projects",fx.projectA],["authorities",fx.authorityA],["source_connections",fx.connectionA]]){
         const [row]=await fx.sql.unsafe(`SELECT to_jsonb(t) AS value FROM core.${table} t WHERE id=$1`,[id!]);
-        const value=typeof row!.value === "string" ? JSON.parse(row!.value) : row!.value;
+        const value={...(typeof row!.value === "string" ? JSON.parse(row!.value) : row!.value),tenant_id:tenant};
         await legacy`INSERT INTO ${legacy(`core.${table}`)} SELECT * FROM jsonb_populate_record(NULL::${legacy(`core.${table}`)},${legacy.json(value)})`;
       }
       const automaticProject=randomUUID(), looseProject=randomUUID(), manualReceipt=randomUUID(), automaticReceipt=randomUUID(), globalReceipt=randomUUID();
       for(const project of [automaticProject,looseProject]) await legacy`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-        VALUES(${project},${fx.tenantA},${`receipt-${project}`},'Receipt contrast','MNG',ARRAY['copper'],${fx.orgA})`;
+        VALUES(${project},${tenant},${`receipt-${project}`},'Receipt contrast','MNG',ARRAY['copper'],${fx.orgA})`;
       for(const [receipt,project,method] of [[manualReceipt,fx.projectA,'manual_official_registry_confirmation'],[automaticReceipt,automaticProject,'authenticated_api'],[globalReceipt,null,'manual_official_registry_confirmation']]){
         await legacy`INSERT INTO core.source_receipts(id,tenant_id,project_id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id)
-          VALUES(${receipt!},${fx.tenantA},${project!},${fx.connectionA},${fx.authorityA},${method!},'confirmed_from_source','{}','Historical source','none',${`0x${"ab".repeat(32)}`},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test')`;
+          VALUES(${receipt!},${tenant},${project!},${fx.connectionA},${fx.authorityA},${method!},'confirmed_from_source','{}','Historical source','none',${`0x${"ab".repeat(32)}`},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test')`;
       }
       await runMigrations(legacy,migrations);
+      // After 0169: a Registry-wide administrator, and company B's member who reaches nothing here.
+      const operator=randomUUID(), outsider=randomUUID(), outsiderOrg=randomUUID();
+      await legacy`INSERT INTO core.organizations(id,legal_name,jurisdiction) VALUES(${outsiderOrg},'Legacy company B','MNG')`;
+      for(const subject of [operator,outsider]) await legacy`INSERT INTO core.subjects(id,kind,display_name) VALUES(${subject},'person','Legacy actor')`;
+      await legacy`INSERT INTO core.role_bindings(id,subject_id,role,scope_kind) VALUES(${randomUUID()},${operator},'administrator','registry')`;
+      await legacy`INSERT INTO core.role_bindings(id,subject_id,organization_id,role,scope_kind) VALUES(${randomUUID()},${outsider},${outsiderOrg},'project_member','organization')`;
       const author=randomUUID(), manualClaim=randomUUID(), automaticClaim=randomUUID(), looseClaim=randomUUID();
-      await legacy`INSERT INTO core.subjects(id,tenant_id,kind,display_name) VALUES(${author},${fx.tenantA},'person','Known claim author')`;
+      await legacy`INSERT INTO core.subjects(id,kind,display_name) VALUES(${author},'person','Known claim author')`;
       for(const [claim,project,receipt] of [[manualClaim,fx.projectA,manualReceipt],[automaticClaim,automaticProject,automaticReceipt],[looseClaim,looseProject,globalReceipt]]){
-        await legacy`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,submitted_by,source_receipt_id)
-          VALUES(${claim!},${fx.tenantA},${project!},'mining_right_registration','Historical evidence','{}',${author},${receipt!})`;
+        await legacy`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,submitted_by,source_receipt_id)
+          VALUES(${claim!},${project!},'mining_right_registration','Historical evidence','{}',${author},${receipt!})`;
       }
       const before=await legacy`SELECT * FROM core.source_receipts ORDER BY id`;
       url.username='mpc_app_login';url.password='app';
       runtime=postgres(url.toString(),{onnotice:()=>{},max:1});
       const [role]=await runtime`SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user`;
       expect(role).toMatchObject({rolsuper:false,rolbypassrls:false});
-      await withTenant(runtime,{tenantId:fx.tenantA},async tx=>{
+      await withActor(runtime, { subjectId: operator },async tx=>{
         const manual=await loadEvidenceSubmitters(tx,[manualClaim]);
         expect(manual).toEqual({submitterIds:[author],allKnown:false});
         expect((await loadEvidenceSubmitters(tx,[automaticClaim])).allKnown).toBe(true);
@@ -1016,7 +1025,7 @@ describeDb("attestation integrity", () => {
         expect(provenance.complete).toBe(false);
         expect([...provenance.actors]).toEqual([author]);
       });
-      expect(await withTenant(runtime,{tenantId:fx.tenantB},tx=>tx`SELECT id FROM core.source_receipts`)).toEqual([]);
+      expect(await withActor(runtime, { subjectId: outsider },tx=>tx`SELECT id FROM core.source_receipts WHERE project_id IS NOT NULL`)).toEqual([]);
       expect(await legacy`SELECT * FROM core.source_receipts ORDER BY id`).toEqual(before);
     } finally {
       await runtime?.end();await legacy.end();
@@ -1027,29 +1036,29 @@ describeDb("attestation integrity", () => {
   it.each([true,false])("preserves legacy snapshot time and standing provenance (known uploader=%s)", async (known) => {
     const projectId=randomUUID(), artifact=randomUUID(), upload=randomUUID(), caseId=randomUUID(), assignmentId=randomUUID();
     const hash=`0x${"dc".repeat(32)}`;
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-      VALUES(${projectId},${fx.tenantA},${`legacy-time-${projectId}`},'Legacy time boundary','MNG',ARRAY['copper'],${fx.orgA})`;
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity)
-      VALUES(${artifact},${fx.tenantA},${projectId},'raw_source',${hash},'restricted')`;
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
-      VALUES(${upload},${fx.tenantA},${projectId},${`legacy-time-${upload}`},${hash},1,'application/pdf','restricted','promoted',${known ? verifier.subjectId : null},${artifact})`;
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+      VALUES(${projectId},${`legacy-time-${projectId}`},'Legacy time boundary','MNG',ARRAY['copper'],${fx.orgA})`;
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity)
+      VALUES(${artifact},${projectId},'raw_source',${hash},'restricted')`;
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
+      VALUES(${upload},${projectId},${`legacy-time-${upload}`},${hash},1,'application/pdf','restricted','promoted',${known ? verifier.subjectId : null},${artifact})`;
     const claim=await createClaim("mining_right_registration",projectId), claimId=claim["id"] as string;
-    const snapshot=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>buildEvidenceSnapshot(tx,projectId,[claimId]));
-    await fx.sql`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id,state,evidence_snapshot_hash)
-      VALUES(${caseId},${fx.tenantA},${projectId},${fx.schemaA},'assigned',${snapshot.hash})`;
-    await fx.sql`INSERT INTO core.verification_case_claims(tenant_id,case_id,claim_id) VALUES(${fx.tenantA},${caseId},${claimId})`;
-    await fx.sql`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id,independence_reviewed,assigned_by)
-      VALUES(${assignmentId},${fx.tenantA},${caseId},${fx.reviewerSubjectA},${fx.credentialA},true,${fx.stewardSubjectA})`;
+    const snapshot=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>buildEvidenceSnapshot(tx,projectId,[claimId]));
+    await fx.sql`INSERT INTO core.verification_cases(id,project_id,schema_id,state,evidence_snapshot_hash)
+      VALUES(${caseId},${projectId},${fx.schemaA},'assigned',${snapshot.hash})`;
+    await fx.sql`INSERT INTO core.verification_case_claims(case_id,claim_id) VALUES(${caseId},${claimId})`;
+    await fx.sql`INSERT INTO core.assignments(id,case_id,subject_id,credential_id,independence_reviewed,assigned_by)
+      VALUES(${assignmentId},${caseId},${fx.reviewerSubjectA},${fx.credentialA},true,${fx.stewardSubjectA})`;
     const laterArtifact=randomUUID(), laterUpload=randomUUID();
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity,created_at)
-      SELECT ${laterArtifact},${fx.tenantA},${projectId},'raw_source',${`0x${"ed".repeat(32)}`},'restricted',created_at+interval '1 second' FROM core.verification_cases WHERE id=${caseId}`;
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
-      VALUES(${laterUpload},${fx.tenantA},${projectId},${`later-${laterUpload}`},${`0x${"ed".repeat(32)}`},1,'application/pdf','restricted','promoted',${fx.reviewerSubjectA},${laterArtifact})`;
-    await fx.sql`INSERT INTO core.source_receipts(id,tenant_id,project_id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id,created_at)
-      SELECT ${randomUUID()},${fx.tenantA},${projectId},${fx.connectionA},${fx.authorityA},'manual_official_registry_confirmation','manual_review_required','{}','Later unrelated source','none',${hash},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test',created_at+interval '1 second' FROM core.verification_cases WHERE id=${caseId}`;
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity,created_at)
+      SELECT ${laterArtifact},${projectId},'raw_source',${`0x${"ed".repeat(32)}`},'restricted',created_at+interval '1 second' FROM core.verification_cases WHERE id=${caseId}`;
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
+      VALUES(${laterUpload},${projectId},${`later-${laterUpload}`},${`0x${"ed".repeat(32)}`},1,'application/pdf','restricted','promoted',${fx.reviewerSubjectA},${laterArtifact})`;
+    await fx.sql`INSERT INTO core.source_receipts(id,project_id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id,created_at)
+      SELECT ${randomUUID()},${projectId},${fx.connectionA},${fx.authorityA},'manual_official_registry_confirmation','manual_review_required','{}','Later unrelated source','none',${hash},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test',created_at+interval '1 second' FROM core.verification_cases WHERE id=${caseId}`;
     const revoked=await app.inject({method:"POST",url:`/api/v1/uploads/${upload}/revoke`,headers:{...bearer(steward),"idempotency-key":idempotencyKey(),"if-match":'"1"'},payload:{reason:"Retire historical raw attachment"}});
     expect(revoked.statusCode,revoked.body).toBe(200);
-    const actors=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[claimId],caseId));
+    const actors=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[claimId],caseId));
     expect(actors.allKnown).toBe(known);
     expect(actors.submitterIds).not.toContain(fx.reviewerSubjectA);
     if (known) {
@@ -1059,10 +1068,10 @@ describeDb("attestation integrity", () => {
       expect((await submit(drafted.json().id,requested.json())).statusCode).toBe(200);
     } else {
       // Historical accepted reviews can predate uploader tracking; preserve their incomplete basis.
-      await fx.sql`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-        VALUES(${randomUUID()},${fx.tenantA},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${[claimId]}::uuid[],${snapshot.hash},'Historical synthetic review','{}','1','1',${hash},'',${reviewer.account.address.toLowerCase()},now(),'signed')`;
+      await fx.sql`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
+        VALUES(${randomUUID()},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},'professional_signoff',${[claimId]}::uuid[],${snapshot.hash},'Historical synthetic review','{}','1','1',${hash},'',${reviewer.account.address.toLowerCase()},now(),'signed')`;
       const unused={actors:new Set<string>(),complete:true};
-      await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>collectRequirementFacts(tx,projectId,'MNG',[],new Date(),unused));
+      await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>collectRequirementFacts(tx,projectId,'MNG',[],new Date(),unused));
       expect(unused.complete).toBe(true);
       await createClaim("resource_estimate",projectId);
       const base={...rulesFixture.requirements[1]!,minimumGrade:"unverified",freshnessThresholdDays:null,requiredAttestations:[],notEvaluableWhen:{op:"never"},watchWhen:null};
@@ -1072,8 +1081,8 @@ describeDb("attestation integrity", () => {
           {...base,requirementId:"applicable",requiredClaimTypes:["resource_estimate"],appliesWhen:{op:"always"}},
           {...base,requirementId:"historical",requiredClaimTypes:["mining_right_registration"],appliesWhen:{op:applies ? "always" : "never"}},
         ]};
-        await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-          VALUES(${policy},${fx.tenantA},${`historical-provenance-${policy}`},'1.0.0','registry_publication','MNG',${new Date(Date.now()-60000)},${fx.sql.json(definition as never)},'effective')`;
+        await fx.sql`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+          VALUES(${policy},${`historical-provenance-${policy}`},'1.0.0','registry_publication','MNG',${new Date(Date.now()-60000)},${fx.sql.json(definition as never)},'effective')`;
         const assessed=await app.inject({method:"POST",url:`/api/v1/projects/${projectId}/readiness-assessments`,headers:{...bearer(steward),"idempotency-key":idempotencyKey()},payload:{policySetId:policy}});
         expect(assessed.statusCode,assessed.body).toBe(200);
         const [basis]=await fx.sql`SELECT evidence_actor_ids,requirement_results FROM core.compliance_assessments WHERE id=${assessed.json().id}`;
@@ -1102,8 +1111,8 @@ describeDb("attestation integrity", () => {
     const requested=await requestSignature(drafted.json().id);
     expect(requested.statusCode,requested.body).toBe(200);
     const binding=source === "binding" ? randomUUID() : await addCredential(fx.reviewerSubjectA,fx.orgA,fx.issuerAuthorityA);
-    if(source === "binding") await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
-      VALUES(${binding},${fx.tenantA},${fx.reviewerSubjectA},${fx.orgA},'project_member')`;
+    if(source === "binding") await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,role)
+      VALUES(${binding},${fx.reviewerSubjectA},${fx.orgA},'project_member')`;
     try {
       for(const response of [
         await draft(opened.id,opened.assignmentId,[claim["id"] as string]),
@@ -1121,6 +1130,42 @@ describeDb("attestation integrity", () => {
     expect((await submit(drafted.json().id,requested.json())).statusCode).toBe(200);
   });
 
+  it("does not restore a review whose signer joined the operator on a project the resolver cannot reach", async () => {
+    // A resolver bound to this project only sees the signer's bindings in its own reach (0169). The
+    // signer's operator binding on another project must still make it not independent (0170).
+    const signer=await addPerson("reviewer",fx.reviewOrgA), resolver=await addPerson("reviewer",fx.reviewOrgA);
+    await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE subject_id=${resolver.subjectId}`;
+    await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,project_id,role)
+      VALUES(${randomUUID()},${resolver.subjectId},${fx.reviewOrgA},${fx.projectA},'reviewer')`;
+    const credential=await addCredential(signer.subjectId,null,fx.issuerAuthorityA), claim=await createClaim();
+    const opened=await createCase([claim["id"] as string],signer.subjectId,credential);
+    expect(opened.statusCode,opened.body).toBe(200);
+    const drafted=await draft(opened.json().id,opened.json().assignmentId,[claim["id"] as string],{},signer.token);
+    expect(drafted.statusCode,drafted.body).toBe(200);
+    const attestationId=drafted.json().id, request=await requestSignature(attestationId,signer.token);
+    expect((await submit(attestationId,request.json(),signer)).statusCode).toBe(200);
+    const objection=await app.inject({method:"POST",url:`/api/v1/attestations/${attestationId}/disputes`,
+      headers:{...bearer(steward),"idempotency-key":idempotencyKey()},payload:{reasonCode:"X",detail:"Check"}});
+    expect(objection.statusCode,objection.body).toBe(200);
+    const elsewhere=randomUUID();
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+      VALUES(${elsewhere},${`AFF-${elsewhere.slice(0,8)}`},'Operator side project','MNG',ARRAY['copper'],${fx.orgA})`;
+    const joined=randomUUID();
+    await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,project_id,role)
+      VALUES(${joined},${signer.subjectId},${fx.orgA},${elsewhere},'project_member')`;
+    try {
+      const [record]=await fx.sql`SELECT id FROM core.attestation_disputes WHERE attestation_id=${attestationId}`;
+      const resolved=await app.inject({method:"POST",url:`/api/v1/disputes/${record!.id}/resolution`,
+        headers:{...bearer(resolver.token),"idempotency-key":idempotencyKey()},payload:{outcome:"dismissed",resolution:"Finding checked"}});
+      expect(resolved.statusCode,resolved.body).toBe(200);
+      expect(resolved.json().attestationState).toBe("stale_candidate");
+      const [after]=await fx.sql`SELECT stale_reason FROM core.verification_attestations WHERE id=${attestationId}`;
+      expect(after!.stale_reason).toContain("SIGNER_ORGANIZATION_NOT_INDEPENDENT");
+    } finally {
+      await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE id=${joined}`;
+    }
+  });
+
   it("does not restore a review after its original signer's organization becomes unknown", async () => {
     const signer=await addPerson("reviewer",fx.reviewOrgA), resolver=await addPerson("reviewer",fx.reviewOrgA);
     const credential=await addCredential(signer.subjectId,null,fx.issuerAuthorityA), claim=await createClaim();
@@ -1134,7 +1179,7 @@ describeDb("attestation integrity", () => {
       headers:{...bearer(steward),"idempotency-key":idempotencyKey()},payload:{reasonCode:"X",detail:"Check"}});
     expect(objection.statusCode,objection.body).toBe(200);
     await fx.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE subject_id=${signer.subjectId} AND revoked_at IS NULL`;
-    await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,role) VALUES(${randomUUID()},${fx.tenantA},${signer.subjectId},'reviewer')`;
+    await fx.sql`INSERT INTO core.role_bindings(id,subject_id,role) VALUES(${randomUUID()},${signer.subjectId},'reviewer')`;
     const [record]=await fx.sql`SELECT id FROM core.attestation_disputes WHERE attestation_id=${attestationId}`;
     const resolved=await app.inject({method:"POST",url:`/api/v1/disputes/${record!.id}/resolution`,
       headers:{...bearer(resolver.token),"idempotency-key":idempotencyKey()},payload:{outcome:"dismissed",resolution:"Finding checked; original affiliation needs review"}});
@@ -1145,62 +1190,67 @@ describeDb("attestation integrity", () => {
   });
 
   it.each([0,-1])("checks direct document validity at restoration (UTC day offset=%s)", async (day) => {
+    // A Registry of its own, served by its own local.
     const extra=await setupFixture();
+    const local=await buildServer(loadConfig(testEnv()),extra.appSql);
+    // The file's helpers reach the shared `app`; point it at this Registry for the test.
+    const shared=app;
+    app=local;
     try {
-      const author=await signIn(app,extra.stewardA), signer={account:extra.reviewerA,subjectId:extra.reviewerSubjectA,token:await signIn(app,extra.reviewerA)};
+      const author=await signIn(local,extra.stewardA), signer={account:extra.reviewerA,subjectId:extra.reviewerSubjectA,token:await signIn(local,extra.reviewerA)};
       const [resolver]=await extra.sql`SELECT subject_id FROM core.wallet_identities WHERE wallet_address=${extra.approverA.address}`;
       await extra.sql`UPDATE core.role_bindings SET revoked_at=now() WHERE subject_id=${resolver!.subject_id} AND revoked_at IS NULL`;
-      await extra.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role) VALUES(${randomUUID()},${extra.tenantA},${resolver!.subject_id},${extra.reviewOrgA},'reviewer')`;
-      const resolverToken=await signIn(app,extra.approverA), upload=randomUUID(),artifact=randomUUID(),catalog=randomUUID(),proposal=randomUUID();
+      await extra.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,role) VALUES(${randomUUID()},${resolver!.subject_id},${extra.reviewOrgA},'reviewer')`;
+      const resolverToken=await signIn(local,extra.approverA), upload=randomUUID(),artifact=randomUUID(),catalog=randomUUID(),proposal=randomUUID();
       const hash=`0x${randomUUID().replaceAll("-","").repeat(2)}`;
-      await extra.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity)
-        VALUES(${artifact},${extra.tenantA},${extra.projectA},'raw_source',${hash},'restricted')`;
-      await extra.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id,valid_until)
-        VALUES(${upload},${extra.tenantA},${extra.projectA},${`expiry-${upload}`},${hash},1,'text/plain','restricted','promoted',${extra.stewardSubjectA},${artifact},(now() AT TIME ZONE 'UTC')::date)`;
+      await extra.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity)
+        VALUES(${artifact},${extra.projectA},'raw_source',${hash},'restricted')`;
+      await extra.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id,valid_until)
+        VALUES(${upload},${extra.projectA},${`expiry-${upload}`},${hash},1,'text/plain','restricted','promoted',${extra.stewardSubjectA},${artifact},(now() AT TIME ZONE 'UTC')::date)`;
       const payload={claimType:"mining_right_registration",displayName:"Direct expiry",description:null,definition:{fields:[{key:"reference",label:"Reference",type:"string",required:true}]}};
       await extra.sql.begin(async tx=>{
-      await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${proposal},${extra.tenantA},'claim_type','mining_right_registration',1,${tx.json(payload)},'Expiry regression',now()-interval '1 minute',${extra.operatorSubjectA})`;
-      await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-        VALUES(${catalog},${extra.tenantA},'mining_right_registration',1,'Direct expiry',${tx.json(payload.definition)},now()-interval '1 minute')`;
+      await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+        VALUES(${proposal},'claim_type','mining_right_registration',1,${tx.json(payload)},'Expiry regression',now()-interval '1 minute',${extra.operatorSubjectA})`;
+      await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+        VALUES(${catalog},'mining_right_registration',1,'Direct expiry',${tx.json(payload.definition)},now()-interval '1 minute')`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${extra.reviewerSubjectA},decided_at=now(),decision_reason='Expiry regression',materialized_id=${catalog},version=2 WHERE id=${proposal}`;
       });
-      const claim=await app.inject({method:"POST",url:`/api/v1/projects/${extra.projectA}/claims`,headers:{...bearer(author),"idempotency-key":idempotencyKey()},
+      const claim=await local.inject({method:"POST",url:`/api/v1/projects/${extra.projectA}/claims`,headers:{...bearer(author),"idempotency-key":idempotencyKey()},
         payload:{claimType:"mining_right_registration",valueText:"Direct file",catalogEntryId:catalog,structuredValues:{reference:"Direct file"},documentUploadIds:[upload],sourceCoordinate:{page:"1"},evidenceTier:"P1"}});
       expect(claim.statusCode,claim.body).toBe(200);const claimId=claim.json().id;
-      const opened=await app.inject({method:"POST",url:"/api/v1/verification-cases",headers:{...bearer(author),"idempotency-key":idempotencyKey()},
+      const opened=await local.inject({method:"POST",url:"/api/v1/verification-cases",headers:{...bearer(author),"idempotency-key":idempotencyKey()},
         payload:{projectId:extra.projectA,schemaId:extra.schemaA,claimIds:[claimId],reviewerSubjectId:signer.subjectId,credentialId:extra.credentialA,conflictStatus:"none"}});
       expect(opened.statusCode,opened.body).toBe(200);
       const drafted=await draft(opened.json().id,opened.json().assignmentId,[claimId],{},signer.token);
       expect(drafted.statusCode,drafted.body).toBe(200);const attestationId=drafted.json().id;
       expect((await submit(attestationId,(await requestSignature(attestationId,signer.token)).json(),signer)).statusCode).toBe(200);
-      const objection=await app.inject({method:"POST",url:`/api/v1/attestations/${attestationId}/disputes`,headers:{...bearer(author),"idempotency-key":idempotencyKey()},payload:{reasonCode:"X",detail:"Check direct attachment"}});
+      const objection=await local.inject({method:"POST",url:`/api/v1/attestations/${attestationId}/disputes`,headers:{...bearer(author),"idempotency-key":idempotencyKey()},payload:{reasonCode:"X",detail:"Check direct attachment"}});
       expect(objection.statusCode,objection.body).toBe(200);
       await extra.sql`UPDATE core.object_uploads SET valid_until=(now() AT TIME ZONE 'UTC')::date+${day}::int WHERE id=${upload}`;
       const [raw]=await extra.sql`SELECT source_receipt_id,stale_since FROM core.claims WHERE id=${claimId}`;
       expect(raw).toMatchObject({source_receipt_id:null,stale_since:null});
       const [record]=await extra.sql`SELECT id FROM core.attestation_disputes WHERE attestation_id=${attestationId}`;
-      const resolved=await app.inject({method:"POST",url:`/api/v1/disputes/${record!.id}/resolution`,headers:{...bearer(resolverToken),"idempotency-key":idempotencyKey()},payload:{outcome:"dismissed",resolution:"Finding checked; document validity decides ongoing support"}});
+      const resolved=await local.inject({method:"POST",url:`/api/v1/disputes/${record!.id}/resolution`,headers:{...bearer(resolverToken),"idempotency-key":idempotencyKey()},payload:{outcome:"dismissed",resolution:"Finding checked; document validity decides ongoing support"}});
       expect(resolved.statusCode,resolved.body).toBe(200);expect(resolved.json().attestationState).toBe(day<0 ? "stale_candidate" : "active");
-    } finally {await extra.close();}
+    } finally {app=shared;await local.close();await extra.close();}
   });
 
   it.each([false,true])("checks every case claim when an attestation selects a subset (manifest=%s)", async (withManifest) => {
     const projectId=randomUUID(), otherClaim=randomUUID(), caseId=randomUUID(), assignmentId=randomUUID();
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-      VALUES(${projectId},${fx.tenantA},${`subset-${projectId}`},'Subset independence','MNG',ARRAY['copper'],${fx.orgA})`;
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+      VALUES(${projectId},${`subset-${projectId}`},'Subset independence','MNG',ARRAY['copper'],${fx.orgA})`;
     const claim=await createClaim("mining_right_registration",projectId);
-    await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,submitted_by)
-      VALUES(${otherClaim},${fx.tenantA},${projectId},'mining_right_registration','Reviewer contribution','{}',${fx.reviewerSubjectA})`;
+    await fx.sql`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,submitted_by)
+      VALUES(${otherClaim},${projectId},'mining_right_registration','Reviewer contribution','{}',${fx.reviewerSubjectA})`;
     const claims=[claim["id"] as string,otherClaim];
-    const snapshot=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>buildEvidenceSnapshot(tx,projectId,claims,{effectiveReceipts:withManifest}));
-    await fx.sql`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id,state,evidence_snapshot_hash,evidence_snapshot)
-      VALUES(${caseId},${fx.tenantA},${projectId},${fx.schemaA},'assigned',${snapshot.hash},${withManifest ? fx.sql.json(snapshot.manifest) : null})`;
-    for(const id of claims) await fx.sql`INSERT INTO core.verification_case_claims(tenant_id,case_id,claim_id) VALUES(${fx.tenantA},${caseId},${id})`;
+    const snapshot=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>buildEvidenceSnapshot(tx,projectId,claims,{effectiveReceipts:withManifest}));
+    await fx.sql`INSERT INTO core.verification_cases(id,project_id,schema_id,state,evidence_snapshot_hash,evidence_snapshot)
+      VALUES(${caseId},${projectId},${fx.schemaA},'assigned',${snapshot.hash},${withManifest ? fx.sql.json(snapshot.manifest) : null})`;
+    for(const id of claims) await fx.sql`INSERT INTO core.verification_case_claims(case_id,claim_id) VALUES(${caseId},${id})`;
     // Simulate an older assignment that incorrectly claimed independence was reviewed.
-    await fx.sql`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id,independence_reviewed,assigned_by)
-      VALUES(${assignmentId},${fx.tenantA},${caseId},${fx.reviewerSubjectA},${fx.credentialA},true,${fx.stewardSubjectA})`;
-    const actors=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[claims[0]!],caseId));
+    await fx.sql`INSERT INTO core.assignments(id,case_id,subject_id,credential_id,independence_reviewed,assigned_by)
+      VALUES(${assignmentId},${caseId},${fx.reviewerSubjectA},${fx.credentialA},true,${fx.stewardSubjectA})`;
+    const actors=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[claims[0]!],caseId));
     expect(actors.submitterIds).toContain(fx.reviewerSubjectA);
     const response=await draft(caseId,assignmentId,[claims[0]!]);
     expect(response.statusCode,response.body).toBe(422);
@@ -1212,16 +1262,16 @@ describeDb("attestation integrity", () => {
   it("recovers new reviews and gate decisions after replacing legacy manual evidence without rewriting history", async () => {
     const projectId=randomUUID(), receipt=randomUUID(), artifact=randomUUID(), upload=randomUUID();
     const hash=`0x${"ab".repeat(32)}`;
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-      VALUES(${projectId},${fx.tenantA},${`receipt-recovery-${projectId}`},'Receipt recovery','MNG',ARRAY['copper'],${fx.orgA})`;
-    await fx.sql`INSERT INTO core.source_receipts(id,tenant_id,project_id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id)
-      VALUES(${receipt},${fx.tenantA},${projectId},${fx.connectionA},${fx.authorityA},'manual_official_registry_confirmation','manual_review_required','{}','Historical manual source','none',${hash},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test')`;
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity,source_receipt_id)
-      VALUES(${artifact},${fx.tenantA},${projectId},'raw_source',${hash},'restricted',${receipt})`;
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
-      VALUES(${upload},${fx.tenantA},${projectId},${`recovery-${upload}`},${hash},1,'application/pdf','restricted','promoted',${fx.stewardSubjectA},${artifact})`;
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+      VALUES(${projectId},${`receipt-recovery-${projectId}`},'Receipt recovery','MNG',ARRAY['copper'],${fx.orgA})`;
+    await fx.sql`INSERT INTO core.source_receipts(id,project_id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id)
+      VALUES(${receipt},${projectId},${fx.connectionA},${fx.authorityA},'manual_official_registry_confirmation','manual_review_required','{}','Historical manual source','none',${hash},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test')`;
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity,source_receipt_id)
+      VALUES(${artifact},${projectId},'raw_source',${hash},'restricted',${receipt})`;
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
+      VALUES(${upload},${projectId},${`recovery-${upload}`},${hash},1,'application/pdf','restricted','promoted',${fx.stewardSubjectA},${artifact})`;
     const emptyProjectProvenance={actors:new Set<string>(),complete:true};
-    await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>collectRequirementFacts(tx,projectId,'MNG',[],new Date(),emptyProjectProvenance));
+    await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>collectRequirementFacts(tx,projectId,'MNG',[],new Date(),emptyProjectProvenance));
     expect(emptyProjectProvenance.complete).toBe(false);
     expect([...emptyProjectProvenance.actors]).toContain(fx.stewardSubjectA);
     const claim=await createClaim("mining_right_registration",projectId,{sourceReceiptId:receipt});
@@ -1230,8 +1280,8 @@ describeDb("attestation integrity", () => {
     const [beforeCase]=await fx.sql`SELECT evidence_snapshot_hash,evidence_snapshot FROM core.verification_cases WHERE id=${original.id}`;
     expect((await draft(original.id,original.assignmentId,[claim["id"] as string])).statusCode).toBe(422);
     const policy=randomUUID();
-    await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-      VALUES(${policy},${fx.tenantA},${`receipt-recovery-${policy}`},'1.0.0','registry_publication','MNG',${new Date(Date.now()-60000)},${fx.sql.json(rulesFixture as never)},'effective')`;
+    await fx.sql`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+      VALUES(${policy},${`receipt-recovery-${policy}`},'1.0.0','registry_publication','MNG',${new Date(Date.now()-60000)},${fx.sql.json(rulesFixture as never)},'effective')`;
     const assess=()=>app.inject({method:"POST",url:`/api/v1/projects/${projectId}/readiness-assessments`,headers:{...bearer(steward),"idempotency-key":idempotencyKey()},payload:{policySetId:policy}});
     const oldAssessment=await assess();
     expect(oldAssessment.statusCode,oldAssessment.body).toBe(200);
@@ -1250,9 +1300,9 @@ describeDb("attestation integrity", () => {
     expect(corrected.statusCode,corrected.body).toBe(200);
     const correctedId=corrected.json().id as string;
     // The old source is still in use by an active artifact, so correcting only the claim is insufficient.
-    expect((await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(false);
+    expect((await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(false);
     await fx.sql`UPDATE core.artifacts SET revoked_at=now() WHERE id=${artifact}`;
-    const recovered=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[correctedId]));
+    const recovered=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[correctedId]));
     expect(recovered.allKnown).toBe(true);
     expect(recovered.submitterIds).toEqual(expect.arrayContaining([fx.stewardSubjectA,secondVerifier.subjectId]));
     const fresh=await openCase([correctedId],projectId);
@@ -1260,10 +1310,10 @@ describeDb("attestation integrity", () => {
     expect(frozen!.evidence_snapshot).toMatchObject({snapshotVersion:"3",receiptIds:[confirmed.json().receiptId],artifactIds:[]});
     // An unrelated later source/artifact cannot silently become part of an existing case.
     const later=randomUUID();
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity,source_receipt_id)
-      VALUES(${later},${fx.tenantA},${projectId},'raw_source',${`0x${"cd".repeat(32)}`},'restricted',${receipt})`;
-    expect((await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[correctedId],fresh.id))).allKnown).toBe(true);
-    expect((await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(false);
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity,source_receipt_id)
+      VALUES(${later},${projectId},'raw_source',${`0x${"cd".repeat(32)}`},'restricted',${receipt})`;
+    expect((await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[correctedId],fresh.id))).allKnown).toBe(true);
+    expect((await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(false);
     await fx.sql`UPDATE core.artifacts SET revoked_at=now() WHERE id=${later}`;
     const drafted=await draft(fresh.id,fresh.assignmentId,[correctedId]);
     expect(drafted.statusCode,drafted.body).toBe(200);
@@ -1278,13 +1328,13 @@ describeDb("attestation integrity", () => {
     expect((await requestGateDecisionSignature(app,verifier.token,projectId,content)).statusCode).toBe(409);
     expect((await draft(original.id,original.assignmentId,[claim["id"] as string])).statusCode).toBe(422);
     const attributedRaw=randomUUID();
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity,source_receipt_id)
-      VALUES(${attributedRaw},${fx.tenantA},${projectId},'raw_source',${`0x${"ac".repeat(32)}`},'restricted',${confirmed.json().receiptId})`;
-    expect((await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(true);
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity,source_receipt_id)
+      VALUES(${attributedRaw},${projectId},'raw_source',${`0x${"ac".repeat(32)}`},'restricted',${confirmed.json().receiptId})`;
+    expect((await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(true);
     const orphan=randomUUID();
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity)
-      VALUES(${orphan},${fx.tenantA},${projectId},'raw_source',${`0x${"ce".repeat(32)}`},'restricted')`;
-    expect((await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(false);
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity)
+      VALUES(${orphan},${projectId},'raw_source',${`0x${"ce".repeat(32)}`},'restricted')`;
+    expect((await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(false);
     const orphanCase=await openCase([correctedId],projectId);
     const orphanDraft=await draft(orphanCase.id,orphanCase.assignmentId,[correctedId]);
     expect(orphanDraft.statusCode,orphanDraft.body).toBe(422);
@@ -1296,35 +1346,35 @@ describeDb("attestation integrity", () => {
     expect((await submitGateDecision(app,verifier.token,projectId,{...orphanDecision,signatureRequestId:randomUUID(),signature:`0x${"ab".repeat(65)}`})).statusCode).toBe(409);
     // Simulate explicit owner retirement of legacy metadata that has no upload API record.
     await fx.sql`UPDATE core.artifacts SET revoked_at=now() WHERE id=${orphan}`;
-    expect((await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[correctedId],orphanCase.id))).allKnown).toBe(false);
-    expect((await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(true);
+    expect((await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[correctedId],orphanCase.id))).allKnown).toBe(false);
+    expect((await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[correctedId]))).allKnown).toBe(true);
     await signOver([correctedId],{},projectId);
     const [afterReceipt]=await fx.sql`SELECT to_jsonb(r) AS value FROM core.source_receipts r WHERE id=${receipt}`;
     const [afterCase]=await fx.sql`SELECT evidence_snapshot_hash,evidence_snapshot FROM core.verification_cases WHERE id=${original.id}`;
     expect(afterReceipt).toEqual(beforeReceipt);expect(afterCase).toEqual(beforeCase);
-    expect(await withTenant(fx.appSql,{tenantId:fx.tenantB},tx=>loadEvidenceSubmitters(tx,[correctedId],fresh.id))).toEqual({submitterIds:[],allKnown:false});
+    expect(await withActor(fx.appSql, { subjectId: fx.operatorSubjectB },tx=>loadEvidenceSubmitters(tx,[correctedId],fresh.id))).toEqual({submitterIds:[],allKnown:false});
   });
 
   it("freezes gate contributors and refuses their own decision at both signature boundaries", async () => {
     const projectId=randomUUID();
-    await fx.sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-      VALUES(${projectId},${fx.tenantA},${`gate-isolation-${projectId}`},'Gate independence','MNG',ARRAY['copper'],${fx.orgA})`;
+    await fx.sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+      VALUES(${projectId},${`gate-isolation-${projectId}`},'Gate independence','MNG',ARRAY['copper'],${fx.orgA})`;
     const sourceAuthor=await addPerson("reviewer",fx.reviewOrgA), uploader=await addPerson("reviewer",fx.reviewOrgA);
     const receipt=randomUUID(), document=randomUUID(), hash=`0x${"ab".repeat(32)}`;
-    await fx.sql`INSERT INTO core.source_receipts(id,tenant_id,project_id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id,first_confirmed_by,second_confirmed_by,second_confirmed_at)
-      VALUES(${receipt},${fx.tenantA},${projectId},${fx.connectionA},${fx.authorityA},'manual_official_registry_confirmation','confirmed_from_source','{}','Synthetic source','none',${hash},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test',${sourceAuthor.subjectId},${verifier.subjectId},now())`;
+    await fx.sql`INSERT INTO core.source_receipts(id,project_id,connection_id,authority_id,collection_method,result,query_basis,endpoint_or_document_ref,authentication_method,raw_hash,source_schema_version,adapter_version,terms_license,commercial_reuse,disclosure_permission,received_at,as_of,freshness_status,correlation_id,first_confirmed_by,second_confirmed_by,second_confirmed_at)
+      VALUES(${receipt},${projectId},${fx.connectionA},${fx.authorityA},'manual_official_registry_confirmation','confirmed_from_source','{}','Synthetic source','none',${hash},'1','1','Test only','unconfirmed','restricted',now(),now(),'fresh','test',${sourceAuthor.subjectId},${verifier.subjectId},now())`;
     const wrongProject=await app.inject({method:"POST",url:`/api/v1/projects/${fx.projectA}/claims`,headers:{...bearer(steward),"idempotency-key":idempotencyKey()},payload:{claimType:"resource_estimate",valueText:"Wrong project source",sourceCoordinate:{document:"Synthetic source"},sourceReceiptId:receipt}});
     expect(wrongProject.statusCode,wrongProject.body).toBe(422);
     expect(wrongProject.json().code).toBe("CLAIM_RECEIPT_UNAVAILABLE");
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by)
-      VALUES(${document},${fx.tenantA},${projectId},${`test/${document}`},${hash},1,'text/plain','restricted','scanned_clean',${uploader.subjectId})`;
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by)
+      VALUES(${document},${projectId},${`test/${document}`},${hash},1,'text/plain','restricted','scanned_clean',${uploader.subjectId})`;
     const catalog=randomUUID(),catalogProposal=randomUUID(),effectiveAt=new Date(Date.now()-60000);
     const catalogPayload={claimType:"mining_right_registration",displayName:"Synthetic mining licence",description:null,definition:{fields:[{key:"reference",label:"Reference",type:"string",required:true}]}};
     await fx.sql.begin(async tx=>{
-      await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${catalogProposal},${fx.tenantA},'claim_type','mining_right_registration',1,${tx.json(catalogPayload)},'Synthetic regression',${effectiveAt},${fx.operatorSubjectA})`;
-      await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-        VALUES(${catalog},${fx.tenantA},'mining_right_registration',1,'Synthetic mining licence',${tx.json(catalogPayload.definition)},${effectiveAt})`;
+      await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+        VALUES(${catalogProposal},'claim_type','mining_right_registration',1,${tx.json(catalogPayload)},'Synthetic regression',${effectiveAt},${fx.operatorSubjectA})`;
+      await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+        VALUES(${catalog},'mining_right_registration',1,'Synthetic mining licence',${tx.json(catalogPayload.definition)},${effectiveAt})`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic regression',materialized_id=${catalog},version=2 WHERE id=${catalogProposal}`;
     });
     const claim = await createClaim("mining_right_registration",projectId,{catalogEntryId:catalog,structuredValues:{reference:"Synthetic proof"},sourceReceiptId:receipt,documentUploadIds:[document]});
@@ -1332,12 +1382,12 @@ describeDb("attestation integrity", () => {
     const legacyUploader=await addPerson("reviewer",fx.reviewOrgA);
     const legacyCredential=await addCredential(legacyUploader.subjectId,fx.reviewOrgA,fx.issuerAuthorityA);
     const legacyArtifact=randomUUID(), legacyUpload=randomUUID(), legacyHash=`0x${"cd".repeat(32)}`;
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity)
-      VALUES(${legacyArtifact},${fx.tenantA},${projectId},'raw_source',${legacyHash},'restricted')`;
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
-      VALUES(${legacyUpload},${fx.tenantA},${projectId},${`legacy-${legacyUpload}`},${legacyHash},1,'application/pdf','restricted','promoted',${legacyUploader.subjectId},${legacyArtifact})`;
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity)
+      VALUES(${legacyArtifact},${projectId},'raw_source',${legacyHash},'restricted')`;
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
+      VALUES(${legacyUpload},${projectId},${`legacy-${legacyUpload}`},${legacyHash},1,'application/pdf','restricted','promoted',${legacyUploader.subjectId},${legacyArtifact})`;
     const unstructured=await createClaim("resource_estimate",projectId);
-    const legacySnapshot=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>buildEvidenceSnapshot(tx,projectId,[unstructured["id"] as string]));
+    const legacySnapshot=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>buildEvidenceSnapshot(tx,projectId,[unstructured["id"] as string]));
     expect(legacySnapshot.artifactIds).toContain(legacyArtifact);
     const legacyAssignmentAttempt=await createCase([unstructured["id"] as string],legacyUploader.subjectId,legacyCredential,steward,projectId);
     expect(legacyAssignmentAttempt.statusCode,legacyAssignmentAttempt.body).toBe(409);
@@ -1347,28 +1397,28 @@ describeDb("attestation integrity", () => {
     expect(refusedAssignment.json().details.violations).toContain("REVIEWER_SUBMITTED_EVIDENCE");
     // A historical assignment/draft made before uploader tracking must fail every later signing boundary.
     const legacyCase=randomUUID(), legacyAssignment=randomUUID(), legacyDraft=randomUUID();
-    const snapshot=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>buildEvidenceSnapshot(tx,projectId,[claim["id"] as string]));
-    await fx.sql`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id,state,evidence_snapshot_hash)
-      VALUES(${legacyCase},${fx.tenantA},${projectId},${fx.schemaA},'assigned',${snapshot.hash})`;
-    await fx.sql`INSERT INTO core.verification_case_claims(tenant_id,case_id,claim_id) VALUES(${fx.tenantA},${legacyCase},${claim["id"] as string})`;
-    await fx.sql`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id,independence_reviewed,assigned_by)
-      VALUES(${legacyAssignment},${fx.tenantA},${legacyCase},${legacyUploader.subjectId},${legacyCredential},true,${fx.stewardSubjectA})`;
+    const snapshot=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>buildEvidenceSnapshot(tx,projectId,[claim["id"] as string]));
+    await fx.sql`INSERT INTO core.verification_cases(id,project_id,schema_id,state,evidence_snapshot_hash)
+      VALUES(${legacyCase},${projectId},${fx.schemaA},'assigned',${snapshot.hash})`;
+    await fx.sql`INSERT INTO core.verification_case_claims(case_id,claim_id) VALUES(${legacyCase},${claim["id"] as string})`;
+    await fx.sql`INSERT INTO core.assignments(id,case_id,subject_id,credential_id,independence_reviewed,assigned_by)
+      VALUES(${legacyAssignment},${legacyCase},${legacyUploader.subjectId},${legacyCredential},true,${fx.stewardSubjectA})`;
     const refusedDraft=await draft(legacyCase,legacyAssignment,[claim["id"] as string],{},legacyUploader.token);
     expect(refusedDraft.statusCode).toBe(422);
     expect(refusedDraft.json().code).toBe("ATTESTATION_SELF_ASSURANCE");
-    await fx.sql`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-      VALUES(${legacyDraft},${fx.tenantA},${legacyCase},${legacyAssignment},${legacyCredential},${fx.schemaA},'professional_signoff',${[claim["id"] as string]}::uuid[],${snapshot.hash},'Historical synthetic draft','{}','1','1',${hash},'',${`0x${"00".repeat(20)}`},now(),'draft')`;
+    await fx.sql`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,attestation_type,claim_scope,evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
+      VALUES(${legacyDraft},${legacyCase},${legacyAssignment},${legacyCredential},${fx.schemaA},'professional_signoff',${[claim["id"] as string]}::uuid[],${snapshot.hash},'Historical synthetic draft','{}','1','1',${hash},'',${`0x${"00".repeat(20)}`},now(),'draft')`;
     await fx.sql`UPDATE core.artifacts SET revoked_at=now() WHERE id=${legacyArtifact}`;
-    const historicalActors=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[unstructured["id"] as string],legacyCase));
+    const historicalActors=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[unstructured["id"] as string],legacyCase));
     expect(historicalActors.submitterIds).toContain(legacyUploader.subjectId);
-    const liveActors=await withTenant(fx.appSql,{tenantId:fx.tenantA},tx=>loadEvidenceSubmitters(tx,[unstructured["id"] as string]));
+    const liveActors=await withActor(fx.appSql, { subjectId: fx.operatorSubjectA },tx=>loadEvidenceSubmitters(tx,[unstructured["id"] as string]));
     expect(liveActors.submitterIds).not.toContain(legacyUploader.subjectId);
     const refusedRequest=await requestSignature(legacyDraft,legacyUploader.token);
     expect(refusedRequest.statusCode).toBe(422);
     expect(refusedRequest.json().code).toBe("ATTESTATION_SELF_ASSURANCE");
     const requestId=randomUUID(), issuedAt=BigInt(Math.floor(Date.now()/1000)),expiresAt=issuedAt+600n,nonce=newSignatureNonce();
-    await fx.sql`INSERT INTO core.attestation_signature_requests(id,tenant_id,attestation_id,nonce,evidence_snapshot_hash,payload_hash,issued_at,expires_at)
-      VALUES(${requestId},${fx.tenantA},${legacyDraft},${nonce},${snapshot.hash},${hash},${new Date(Number(issuedAt)*1000)},${new Date(Number(expiresAt)*1000)})`;
+    await fx.sql`INSERT INTO core.attestation_signature_requests(id,attestation_id,nonce,evidence_snapshot_hash,payload_hash,issued_at,expires_at)
+      VALUES(${requestId},${legacyDraft},${nonce},${snapshot.hash},${hash},${new Date(Number(issuedAt)*1000)},${new Date(Number(expiresAt)*1000)})`;
     const typedData=buildTypedData(loadConfig(testEnv()),{attestationId:uuidToBytes32(legacyDraft),schemaId:uuidToBytes32(fx.schemaA),schemaVersion:1,evidenceSnapshotHash:snapshot.hash,assignmentId:uuidToBytes32(legacyAssignment),credentialId:uuidToBytes32(legacyCredential),payloadHash:hash as `0x${string}`,issuedAt,expiresAt,nonce:nonce as `0x${string}`});
     for (const signer of [legacyUploader,{...legacyUploader,token:steward}]) {
       const refused=await submit(legacyDraft,{typedData,signatureRequestId:requestId},signer);
@@ -1376,18 +1426,18 @@ describeDb("attestation integrity", () => {
       expect(refused.json().code).toBe("ATTESTATION_SELF_ASSURANCE");
     }
     const rawUploader=await addPerson("reviewer",fx.reviewOrgA), rawArtifact=randomUUID(), rawUpload=randomUUID();
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity)
-      VALUES(${rawArtifact},${fx.tenantA},${projectId},'raw_source',${`0x${"ba".repeat(32)}`},'restricted')`;
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
-      VALUES(${rawUpload},${fx.tenantA},${projectId},${`standing-${rawUpload}`},${`0x${"ba".repeat(32)}`},1,'application/pdf','restricted','promoted',${rawUploader.subjectId},${rawArtifact})`;
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity)
+      VALUES(${rawArtifact},${projectId},'raw_source',${`0x${"ba".repeat(32)}`},'restricted')`;
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,uploaded_by,promoted_artifact_id)
+      VALUES(${rawUpload},${projectId},${`standing-${rawUpload}`},${`0x${"ba".repeat(32)}`},1,'application/pdf','restricted','promoted',${rawUploader.subjectId},${rawArtifact})`;
     const standing=await signOver([claim["id"] as string],{},projectId);
     const revoked=await app.inject({method:"POST",url:`/api/v1/uploads/${rawUpload}/revoke`,headers:{...bearer(steward),"idempotency-key":idempotencyKey(),"if-match":'"1"'},payload:{reason:"Retire raw attachment"}});
     expect(revoked.statusCode,revoked.body).toBe(200);
     const [stillStanding]=await fx.sql`SELECT state FROM core.verification_attestations WHERE id=${standing.attestationId}`;
     expect(stillStanding!.state).toBe("signed");
     const policy = randomUUID();
-    await fx.sql`INSERT INTO core.compliance_policy_sets(id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-      VALUES(${policy},${fx.tenantA},${`gate-independence-${policy}`},'1.0.0','registry_publication','MNG',now(),${fx.sql.json(rulesFixture as never)},'effective')`;
+    await fx.sql`INSERT INTO core.compliance_policy_sets(id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+      VALUES(${policy},${`gate-independence-${policy}`},'1.0.0','registry_publication','MNG',now(),${fx.sql.json(rulesFixture as never)},'effective')`;
     const assess = () => app.inject({method:"POST",url:`/api/v1/projects/${projectId}/readiness-assessments`,headers:{...bearer(steward),"idempotency-key":idempotencyKey()},payload:{policySetId:policy}});
     const assessed = await assess();
     expect(assessed.statusCode,assessed.body).toBe(200);
@@ -1404,21 +1454,21 @@ describeDb("attestation integrity", () => {
       expect(submission.statusCode).toBe(403);
       expect(submission.json().code).toBe("GATE_DECISION_NOT_INDEPENDENT");
     }
-    await expect(fx.sql`INSERT INTO core.gate_decisions(id,tenant_id,project_id,gate_id,decision,input_assessment_id,evidence_snapshot_hash,decision_authority,decision_maker_subject_id,rationale)
-      VALUES(${randomUUID()},${fx.tenantA},${projectId},'registry_publication','hold',${assessmentId},${`0x${"ab".repeat(32)}`},'Test',${fx.reviewerSubjectA},'Self approval')`).rejects.toThrow("Gate decider must be independent");
+    await expect(fx.sql`INSERT INTO core.gate_decisions(id,project_id,gate_id,decision,input_assessment_id,evidence_snapshot_hash,decision_authority,decision_maker_subject_id,rationale)
+      VALUES(${randomUUID()},${projectId},'registry_publication','hold',${assessmentId},${`0x${"ab".repeat(32)}`},'Test',${fx.reviewerSubjectA},'Self approval')`).rejects.toThrow("Gate decider must be independent");
     const independent = await addPerson("reviewer",fx.reviewOrgA);
     // Later evidence does not change who contributed to an already-frozen assessment.
-    await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,submitted_by)
-      VALUES(${randomUUID()},${fx.tenantA},${projectId},'later_context','Later evidence','{}',${independent.subjectId})`;
+    await fx.sql`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,submitted_by)
+      VALUES(${randomUUID()},${projectId},'later_context','Later evidence','{}',${independent.subjectId})`;
     const accepted=await decideSigned(app,independent.token,independent.account,projectId,content);
     expect(accepted.statusCode,accepted.body).toBe(200);
     const next=await assess();
     expect((await requestGateDecisionSignature(app,independent.token,projectId,{...content,inputAssessmentId:next.json().id})).statusCode).toBe(403);
     const anonymousArtifact=randomUUID(), anonymousUpload=randomUUID(), anonymousHash=`0x${"ef".repeat(32)}`;
-    await fx.sql`INSERT INTO core.artifacts(id,tenant_id,project_id,kind,content_hash,sensitivity)
-      VALUES(${anonymousArtifact},${fx.tenantA},${projectId},'raw_source',${anonymousHash},'restricted')`;
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,promoted_artifact_id)
-      VALUES(${anonymousUpload},${fx.tenantA},${projectId},${`anonymous-${anonymousUpload}`},${anonymousHash},1,'application/pdf','restricted','promoted',${anonymousArtifact})`;
+    await fx.sql`INSERT INTO core.artifacts(id,project_id,kind,content_hash,sensitivity)
+      VALUES(${anonymousArtifact},${projectId},'raw_source',${anonymousHash},'restricted')`;
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state,promoted_artifact_id)
+      VALUES(${anonymousUpload},${projectId},${`anonymous-${anonymousUpload}`},${anonymousHash},1,'application/pdf','restricted','promoted',${anonymousArtifact})`;
     const unknownUpload=await assess();
     const [unknownBasis]=await fx.sql`SELECT evidence_actor_ids FROM core.compliance_assessments WHERE id=${unknownUpload.json().id}`;
     expect(unknownBasis!.evidence_actor_ids).toBeNull();
@@ -1426,8 +1476,8 @@ describeDb("attestation integrity", () => {
     expect((await requestGateDecisionSignature(app,verifier.token,projectId,unknownContent)).statusCode).toBe(409);
     expect((await submitGateDecision(app,verifier.token,projectId,{...unknownContent,signatureRequestId:randomUUID(),signature:`0x${"ab".repeat(65)}`})).statusCode).toBe(409);
     await fx.sql`UPDATE core.artifacts SET revoked_at=now() WHERE id=${anonymousArtifact}`;
-    await fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate)
-      VALUES(${randomUUID()},${fx.tenantA},${projectId},'unknown_legacy_author','Unattributed legacy evidence','{}')`;
+    await fx.sql`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate)
+      VALUES(${randomUUID()},${projectId},'unknown_legacy_author','Unattributed legacy evidence','{}')`;
     const unknown=await assess();
     const blocked=await requestGateDecisionSignature(app,verifier.token,projectId,{...content,inputAssessmentId:unknown.json().id});
     expect(blocked.statusCode).toBe(409);
@@ -1466,8 +1516,8 @@ describeDb("attestation integrity", () => {
       const {id}=await freshCredential();
       expect((await change(id,"suspended",verifier.token)).statusCode).toBe(200);
       const both=await addPerson("reviewer",fx.reviewOrgA);
-      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
-        VALUES(${randomUUID()},${fx.tenantA},${both.subjectId},${fx.orgA},'administrator')`;
+      await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,role)
+        VALUES(${randomUUID()},${both.subjectId},${fx.orgA},'administrator')`;
       const auth=await signIn(app,both.account);
       const restored=await change(id,"valid",auth);
       expect(restored.statusCode,restored.body).toBe(200);

@@ -50,10 +50,10 @@ describeDb("account sessions", () => {
     expect(response.json().authenticated).toBe(false);
   });
 
-  it("gives a person their roles and tenant, and names no wallet", async () => {
+  it("gives a person their roles, and names no wallet or instance", async () => {
     const body = (await session(await signIn(app, fx.operatorA))).json();
     expect(body.authenticated).toBe(true);
-    expect(body.tenantId).toBe(fx.tenantA);
+    expect(body).not.toHaveProperty("tenantId");
     expect(body.subjectId).toBe(fx.operatorSubjectA);
     expect(body.assuranceLevel).toBe("high_assurance");
     expect(body.firstFactor).toBe("email_code");
@@ -64,7 +64,7 @@ describeDb("account sessions", () => {
   });
 
   it("gives a first-factor-only session the administrator view without wallet fields either", async () => {
-    const token = await issueTestSession(fx.appSql, fx.tenantA, fx.operatorSubjectA, { firstFactor: "email_code" });
+    const token = await issueTestSession(fx.appSql, fx.operatorSubjectA, { firstFactor: "email_code" });
     const body = (await session(token)).json();
     expect(body).toMatchObject({ authenticated: true, aal: "aal1", roleBindings: expect.arrayContaining([expect.objectContaining({ role: "administrator" })]) });
     expect(body).not.toHaveProperty("walletAddress");
@@ -182,7 +182,7 @@ describeDb("own sessions", () => {
     const other = await signIn(app, fx.approverA);
     const ended = await signIn(app, fx.approverA);
     await app.inject({ method: "POST", url: "/api/v1/auth/logout", headers: bearer(ended) });
-    // Someone else's session in the same tenant never appears.
+    // Someone else's session never appears.
     const stranger = await signIn(app, fx.reviewerA);
 
     const response = await list(mine);
@@ -246,7 +246,7 @@ describeDb("own sessions", () => {
     expect(audit!.detail.current).toBe(true);
   });
 
-  it("cannot end another person's session, in this tenant or another, and says nothing about it", async () => {
+  it("cannot end another person's session, and says nothing about it", async () => {
     const mine = await signIn(app, fx.disclosureApproverA);
     const neighbour = await signIn(app, fx.stewardA);
     const foreign = await signIn(app, fx.operatorB);
@@ -267,12 +267,12 @@ describeDb("own sessions", () => {
   });
 
   it("allows a primary session to manage its own sessions and rejects limited or anonymous callers", async () => {
-    const firstFactorOnly = await issueTestSession(fx.appSql, fx.tenantA, fx.operatorSubjectA, { firstFactor: "email_code" });
+    const firstFactorOnly = await issueTestSession(fx.appSql, fx.operatorSubjectA, { firstFactor: "email_code" });
     const target = await sessionIdOf(await signIn(app, fx.operatorA));
     expect((await list(firstFactorOnly)).statusCode).toBe(200);
     expect((await revoke(firstFactorOnly, target)).statusCode).toBe(200);
 
-    const recovering = await issueTestSession(fx.appSql, fx.tenantA, fx.operatorSubjectA, {
+    const recovering = await issueTestSession(fx.appSql, fx.operatorSubjectA, {
       firstFactor: "email_code",
       secondFactor: "recovery_code",
     });
@@ -283,18 +283,18 @@ describeDb("own sessions", () => {
     expect((await app.inject({ method: "POST", url: `/api/v1/auth/sessions/${target}/revocation` })).statusCode).toBe(401);
   });
 
-  it("refuses at the database a caller session from another tenant", async () => {
+  it("refuses at the database a caller session of another subject", async () => {
     const foreign = await sessionIdOf(await signIn(app, fx.operatorB));
     const target = await sessionIdOf(await signIn(app, fx.operatorA));
     await expect(
       fx.appSql.begin(async (tx) => {
-        await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+        await tx`SELECT set_config('app.actor_subject_id', ${fx.operatorSubjectA}, true)`;
         return tx`SELECT core.revoke_own_session(${foreign}, ${target})`;
       }),
     ).rejects.toThrow(/MFA_SESSION_INVALID/);
     await expect(
       fx.appSql.begin(async (tx) => {
-        await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+        await tx`SELECT set_config('app.actor_subject_id', ${fx.operatorSubjectA}, true)`;
         return tx`SELECT * FROM core.list_own_sessions(${foreign})`;
       }),
     ).rejects.toThrow(/MFA_SESSION_INVALID/);

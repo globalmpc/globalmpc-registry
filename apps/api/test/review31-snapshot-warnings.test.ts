@@ -51,23 +51,23 @@ describeDb("approved manual exclusion with unreviewed evidence", () => {
     expect(response.statusCode, response.body).toBe(422);
     expect(response.json().code).toBe("CLAIM_CATALOG_REQUIRED");
     const documentId = randomUUID();
-    await fx.sql`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state)
-      VALUES(${documentId},${fx.tenantA},${fx.projectA},${documentId},${"0x"+"ab".repeat(32)},123,'application/pdf','restricted','scanned_clean')`;
-    await expect(fx.sql`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,document_upload_ids)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.projectA},'legacy_evidence','Legacy evidence','{}',${[documentId]}::uuid[])`)
+    await fx.sql`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state)
+      VALUES(${documentId},${fx.projectA},${documentId},${"0x"+"ab".repeat(32)},123,'application/pdf','restricted','scanned_clean')`;
+    await expect(fx.sql`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,document_upload_ids)
+      VALUES(${randomUUID()},${fx.projectA},'legacy_evidence','Legacy evidence','{}',${[documentId]}::uuid[])`)
       .rejects.toThrow("Claim document attachments require a catalog entry");
   });
 
   it("corrects historical legacy attachments without inheriting unsigned links or rewriting history", async () => {
     const documentId = randomUUID(), claimId = randomUUID();
     await fx.sql.begin(async tx => {
-      await tx`INSERT INTO core.object_uploads(id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state)
-        VALUES(${documentId},${fx.tenantA},${fx.projectA},${documentId},${"0x"+"cd".repeat(32)},123,'application/pdf','restricted','scanned_clean')`;
+      await tx`INSERT INTO core.object_uploads(id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state)
+        VALUES(${documentId},${fx.projectA},${documentId},${"0x"+"cd".repeat(32)},123,'application/pdf','restricted','scanned_clean')`;
       // Simulate data written before0089. The bypass exists only while seeding this
       // isolated transaction, and is restored before any authenticated API request.
       await tx`ALTER TABLE core.claims DISABLE TRIGGER legacy_claim_document_guard`;
-      await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,document_upload_ids)
-        VALUES(${claimId},${fx.tenantA},${fx.projectA},'historical_legacy','Original value','{}',${[documentId]}::uuid[])`;
+      await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,document_upload_ids)
+        VALUES(${claimId},${fx.projectA},'historical_legacy','Original value','{}',${[documentId]}::uuid[])`;
       await tx`ALTER TABLE core.claims ENABLE TRIGGER legacy_claim_document_guard`;
     });
     const readOld = async () => (await fx.sql<SnapshotClaimRow[]>`SELECT id,value_text,grade,catalog_entry_id,catalog_version,structured_values,document_upload_ids
@@ -96,15 +96,15 @@ describeDb("approved manual exclusion with unreviewed evidence", () => {
     const claimType = `excluded_${randomUUID().replaceAll("-", "")}`;
     const payload = { claimType, displayName: "Excluded evidence", description: null, definition: { fields: [] } };
     await fx.sql.begin(async tx => {
-      await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${proposal},${fx.tenantA},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic test',now(),${fx.operatorSubjectA})`;
-      await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-        SELECT ${catalogId},tenant_id,item_key,1,'Excluded evidence',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
+      await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+        VALUES(${proposal},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic test',now(),${fx.operatorSubjectA})`;
+      await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+        SELECT ${catalogId},item_key,1,'Excluded evidence',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Synthetic test',materialized_id=${catalogId},version=2 WHERE id=${proposal}`;
-      await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,as_of)
-        VALUES(${claimId},${fx.tenantA},${fx.projectA},${claimType},'Excluded old evidence','{}','unverified',${catalogId},1,'{}',DATE '2000-01-01')`;
-      await tx`INSERT INTO core.project_fact_versions(id,tenant_id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
-        VALUES(${randomUUID()},${fx.tenantA},${fx.projectA},${claimType},1,'not_applicable','Excluded before approval',${fx.operatorSubjectA})`;
+      await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,catalog_entry_id,catalog_version,structured_values,as_of)
+        VALUES(${claimId},${fx.projectA},${claimType},'Excluded old evidence','{}','unverified',${catalogId},1,'{}',DATE '2000-01-01')`;
+      await tx`INSERT INTO core.project_fact_versions(id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
+        VALUES(${randomUUID()},${fx.projectA},${claimType},1,'not_applicable','Excluded before approval',${fx.operatorSubjectA})`;
     });
     const assessed = await app.inject({ method: "POST", url: `/api/v1/projects/${fx.projectA}/evidence-ledger`,
       headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() }, payload: {} });
@@ -125,15 +125,15 @@ describeDb("approved manual exclusion with unreviewed evidence", () => {
       await expect(fx.sql.begin(async tx => {
         if (status === "needs_re_review") await tx`UPDATE core.claims SET stale_since=now(),stale_reason='Synthetic stale signal' WHERE id=${claimId}`;
         if (status === "rejected") await tx`UPDATE core.claims SET grade='rejected' WHERE id=${claimId}`;
-        if (status === "conflicting") await tx`INSERT INTO core.claim_conflicts(id,tenant_id,claim_id,conflict_type)
-          VALUES(${randomUUID()},${fx.tenantA},${claimId},'contradiction')`;
+        if (status === "conflicting") await tx`INSERT INTO core.claim_conflicts(id,claim_id,conflict_type)
+          VALUES(${randomUUID()},${claimId},'contradiction')`;
         const [live] = await tx`SELECT core.public_evidence_ledger_current(${publication.json().id}) AS current`;
         expect(live!.current.warnings).toMatchObject([{ claimType, status }]);
         throw rollback;
       })).rejects.toBe(rollback);
     }
-    await fx.sql`INSERT INTO core.project_fact_versions(id,tenant_id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.projectA},${claimType},2,'pending','Exclusion withdrawn',${fx.operatorSubjectA})`;
+    await fx.sql`INSERT INTO core.project_fact_versions(id,project_id,fact_key,version,status,reason,recorded_by_subject_id)
+      VALUES(${randomUUID()},${fx.projectA},${claimType},2,'pending','Exclusion withdrawn',${fx.operatorSubjectA})`;
     const withdrawn = await app.inject({ method: "GET", url });
     expect(withdrawn.json().evidenceLedgerCurrent.warnings).toEqual([{ claimType, catalogVersion: "1", status: "needs_re_review", reasons: ["EVIDENCE_OR_REVIEW_NO_LONGER_CURRENT"] }]);
     expect(withdrawn.json().evidenceLedger).toEqual(projection);

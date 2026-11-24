@@ -74,7 +74,7 @@ describeDb("source lookup", () => {
   /**
    * The receipt is written to the project named in the body, so that project is what gets
    * authorized. A steward bound to one project must not create receipts in another project of
-   * the same tenant.
+   * the same Registry.
    */
   it("does not collect into a project outside the caller's scope", async () => {
     const scopedToken = await signIn(app, fx.scopedStewardA);
@@ -361,10 +361,10 @@ describeDb("source lookup", () => {
       // by someone other than the operator who reactivates.
       await fx.sql`
         INSERT INTO core.connection_security_reviews (
-          id, tenant_id, connection_id, connection_version, decision, reason,
+          id, connection_id, connection_version, decision, reason,
           reviewed_by_subject_id
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${fx.connectionA}, ${connection!.version}, 'approved',
+          ${randomUUID()}, ${fx.connectionA}, ${connection!.version}, 'approved',
           'reviewed after the outage', ${fx.stewardSubjectA}
         )
       `;
@@ -391,7 +391,7 @@ describeDb("source lookup", () => {
     expect((await collect(operatorToken)).statusCode).toBe(200);
   });
 
-  it("does not expose another tenant's connection", async () => {
+  it("does not let another company's administrator collect for this project", async () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/source-connections/${fx.connectionA}/collect`,
@@ -402,7 +402,7 @@ describeDb("source lookup", () => {
       payload: { projectId: fx.projectA, queryBasis: {} },
     });
 
-    expect(response.statusCode).toBe(404);
+    expect(response.statusCode).toBe(403);
     expect(calls).toHaveLength(0);
   });
 

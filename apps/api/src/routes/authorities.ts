@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   adapterStateReason,
   checkAdapterAvailable,
@@ -13,7 +13,7 @@ import {
   assertAuthorized,
   projectResource,
   sessionFacts,
-  tenantResource,
+  registryResource,
 } from "../plugins/authorize.js";
 import { requireReadContext } from "./shared.js";
 
@@ -142,17 +142,17 @@ export async function registerAuthorityRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   app.get("/api/v1/authorities", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     const { requestId, asOf } = request.context;
 
     assertAuthorized(
       session,
       "authority.read",
-      tenantResource(tenantId),
+      registryResource(),
       sessionFacts(session),
     );
 
-    const rows = await withTenant(sql, { tenantId }, (tx) =>
+    const rows = await withActor(sql, actor, (tx) =>
       tx<AuthorityRow[]>`
         SELECT a.id, a.name, a.jurisdiction, a.proves, a.does_not_prove,
                a.recognized_scope, a.verification_method, a.state,
@@ -181,17 +181,17 @@ export async function registerAuthorityRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/offering-gate",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { requestId, asOf } = request.context;
 
       assertAuthorized(
         session,
         "project.read",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
-      const facts = await withTenant(sql, { tenantId }, (tx) =>
+      const facts = await withActor(sql, actor, (tx) =>
         tx<{ fact_key: string; status: string; evidence_ref: string | null }[]>`
           SELECT fact_key, status, evidence_ref
           FROM core.project_facts
@@ -232,17 +232,17 @@ export async function registerAuthorityRoutes(
   app.get<{ Params: { jurisdiction: string } }>(
     "/api/v1/jurisdictions/:jurisdiction/profile",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       const { requestId, asOf } = request.context;
 
       assertAuthorized(
         session,
         "authority.read",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
 
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
+      const rows = await withActor(sql, actor, (tx) =>
         tx<AuthorityRow[]>`
           SELECT a.id, a.name, a.jurisdiction, a.proves, a.does_not_prove,
                  a.recognized_scope, a.verification_method, a.state,

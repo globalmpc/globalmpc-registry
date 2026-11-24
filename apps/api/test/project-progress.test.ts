@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { savedProjectProgress } from "../src/services/project-progress.js";
@@ -11,20 +11,20 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 describeDb("saved stage progress in the private project list", () => {
   let fx: TestFixture;
   let app: FastifyInstance;
-  let operator: string, otherTenant: string, scoped: string, reader: string;
+  let operator: string, otherCompany: string, scoped: string, reader: string;
   const evaluatedAt = "2026-10-01T00:00:00.000Z";
   const stage = { gateId: "stage.exploration", ruleSetVersion: "1", status: "gap", missing: ["permit"], reviewedItems: "1", requiredItems: "2" };
   const summary = { evaluatedAt, currentStage: null, stages: [stage] };
   async function save(projectId: string, snapshot: Record<string, unknown>, createdAt: string, id: string = randomUUID()) {
     await fx.sql`INSERT INTO core.evidence_ledger_snapshots
-      (id, tenant_id, project_id, evaluated_at, input_snapshot_hash, snapshot, created_at)
-      VALUES (${id}, ${fx.tenantA}, ${projectId}, ${evaluatedAt}, ${"0x" + "a".repeat(64)}, ${fx.sql.json(snapshot as never)}, ${createdAt})`;
+      (id, project_id, evaluated_at, input_snapshot_hash, snapshot, created_at)
+      VALUES (${id}, ${projectId}, ${evaluatedAt}, ${"0x" + "a".repeat(64)}, ${fx.sql.json(snapshot as never)}, ${createdAt})`;
   }
   beforeAll(async () => {
     fx = await setupFixture();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
     operator = await signIn(app, fx.operatorA);
-    otherTenant = await signIn(app, fx.operatorB);
+    otherCompany = await signIn(app, fx.operatorB);
     scoped = await signIn(app, fx.scopedStewardA);
     reader = await signIn(app, fx.readerA);
     await save(fx.projectA, { ...summary, evaluatedAt: "2026-10-05T00:00:00.000Z", currentStage: "old" }, "2026-10-06T00:00:00Z");
@@ -37,17 +37,17 @@ describeDb("saved stage progress in the private project list", () => {
   it("uses a non-superuser NOBYPASSRLS runtime and returns only the latest saved summary without evaluation", async () => {
     const [role] = await fx.appSql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
     expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
-    const before = await fx.sql`SELECT count(*) FROM core.evidence_ledger_snapshots WHERE tenant_id = ${fx.tenantA}`;
+    const before = await fx.sql`SELECT count(*) FROM core.evidence_ledger_snapshots`;
     const response = await list(operator);
     expect(response.statusCode).toBe(200);
     expect(response.json().items.find((item: { id: string }) => item.id === fx.projectA).stageProgress).toEqual(summary);
     expect(response.json().items.find((item: { id: string }) => item.id === fx.otherProjectA).stageProgress).toBeNull();
-    const after = await fx.sql`SELECT count(*) FROM core.evidence_ledger_snapshots WHERE tenant_id = ${fx.tenantA}`;
+    const after = await fx.sql`SELECT count(*) FROM core.evidence_ledger_snapshots`;
     expect(after).toEqual(before);
-    // Real endpoint and batch helper both honor tenant context, even for a known foreign ID.
-    const foreign = await withTenant(fx.appSql, { tenantId: fx.tenantB }, tx => savedProjectProgress(tx, fx.tenantB, [fx.projectA]));
+    // Real endpoint and batch helper both honor actor context, even for a known foreign ID.
+    const foreign = await withActor(fx.appSql, { subjectId: fx.operatorSubjectB }, tx => savedProjectProgress(tx, [fx.projectA]));
     expect(foreign.size).toBe(0);
-    expect((await list(otherTenant)).json().items.some((item: { id: string }) => item.id === fx.projectA)).toBe(false);
+    expect((await list(otherCompany)).json().items.some((item: { id: string }) => item.id === fx.projectA)).toBe(false);
   });
   it("retains project scope and rejects anonymous and wrong-role access", async () => {
     const response = await list(scoped);
@@ -75,16 +75,15 @@ describeDb("saved stage progress in the private project list", () => {
     const response = await list(operator);
     expect(response.statusCode).toBe(200);
     expect(response.json().items.find((item: { id: string }) => item.id === fx.otherProjectA).stageProgress).toEqual(latest);
-    const [workerChoice] = await withTenant(fx.appSql, { tenantId: fx.tenantA }, tx => tx`
-      SELECT id FROM core.evidence_ledger_snapshots WHERE tenant_id=${fx.tenantA}
-      AND project_id=${fx.otherProjectA} ORDER BY created_at DESC, id DESC LIMIT 1`);
+    const [workerChoice] = await withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, tx => tx`
+      SELECT id FROM core.evidence_ledger_snapshots WHERE project_id=${fx.otherProjectA} ORDER BY created_at DESC, id DESC LIMIT 1`);
     expect(workerChoice!.id).toBe(high);
     await save(fx.otherProjectA, { ...summary, stages: null }, "2026-10-10T00:00:00Z", "ff000000" + suffix);
     const invalid = await list(operator);
     expect(invalid.json().items.find((item: { id: string }) => item.id === fx.otherProjectA).stageProgress).toBeNull();
   });
   it("handles an empty capped selection without evaluating or fetching anything", async () => {
-    const result = await withTenant(fx.appSql, { tenantId: fx.tenantA }, tx => savedProjectProgress(tx, fx.tenantA, []));
+    const result = await withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, tx => savedProjectProgress(tx, []));
     expect(result.size).toBe(0);
   });
 });

@@ -11,22 +11,20 @@ import {
 } from "../src/storage.js";
 
 describe("store key rules", () => {
-  it("quarantine keys are separated by tenant", () => {
-    const a = quarantineKey("tenant-a", "upload-1");
-    const b = quarantineKey("tenant-b", "upload-1");
-    expect(a).not.toBe(b);
-    expect(a.startsWith("quarantine/tenant-a/")).toBe(true);
+  it("keys are named by the upload or artifact id alone", () => {
+    expect(quarantineKey("upload-1")).toBe("quarantine/upload-1");
+    expect(evidenceKey("artifact-1")).toBe("evidence/artifact-1");
   });
 
   it("quarantine and evidence paths do not overlap", () => {
-    expect(quarantineKey("t", "u")).not.toContain("evidence/");
-    expect(evidenceKey("t", "a")).not.toContain("quarantine/");
+    expect(quarantineKey("u")).not.toContain("evidence/");
+    expect(evidenceKey("a")).not.toContain("quarantine/");
   });
 
   it("keys contain no file name — not even a document title may leak", () => {
-    const key = quarantineKey("tenant-a", "upload-1");
+    const key = quarantineKey("upload-1");
     expect(key).not.toContain(".pdf");
-    expect(key.split("/")).toHaveLength(3);
+    expect(key.split("/")).toHaveLength(2);
   });
 });
 
@@ -77,12 +75,12 @@ describe("memory store", () => {
   it("copies from quarantine to evidence — the source remains", async () => {
     const store = createMemoryObjectStore();
     const body = new TextEncoder().encode("x");
-    await store.put(quarantineKey("t", "u"), body, "text/plain");
+    await store.put(quarantineKey("u"), body, "text/plain");
 
-    await store.copy(quarantineKey("t", "u"), evidenceKey("t", "a"));
+    await store.copy(quarantineKey("u"), evidenceKey("a"));
 
-    expect(await store.get(evidenceKey("t", "a"))).toEqual(body);
-    expect(await store.get(quarantineKey("t", "u"))).toEqual(body);
+    expect(await store.get(evidenceKey("a"))).toEqual(body);
+    expect(await store.get(quarantineKey("u"))).toEqual(body);
   });
 
   it("copying a missing object fails", async () => {

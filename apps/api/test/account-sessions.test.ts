@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { hashToken, revokeSubjectSessions } from "../src/plugins/session-token.js";
 import {
   bearer,
@@ -53,7 +53,7 @@ describeDb("account sessions", () => {
 
   describe("human session authorization", () => {
     it("uses the member's live binding after email sign-in and revokes access on logout", async () => {
-      const token = await issueTestSession(fx.appSql, fx.tenantA, memberSubjectId, { firstFactor: "email_code" });
+      const token = await issueTestSession(fx.appSql, memberSubjectId, { firstFactor: "email_code" });
       const own = await session(token);
       expect(own).toMatchObject({ authenticated: true, subjectId: memberSubjectId, aal: "aal1", secondFactor: null });
       expect(own.roleBindings).toContainEqual(expect.objectContaining({ role: "project_member" }));
@@ -64,9 +64,26 @@ describeDb("account sessions", () => {
       expect((await session(token)).authenticated).toBe(false);
     });
 
+    it("returns workspace access without an instance identifier in the workspace session view", async () => {
+      const token = await issueTestSession(fx.appSql, memberSubjectId, { firstFactor: "email_code" });
+      expect((await session(token)).tenantId).toBeUndefined();
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/session",
+        headers: { ...bearer(token), "x-mpc-session-view": "workspace" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        authenticated: true,
+        workspaceAvailable: true,
+        subjectId: memberSubjectId,
+      });
+      expect(response.json()).not.toHaveProperty("tenantId");
+    });
+
     it.each([null, "totp", "passkey"] as const)("resolves the same reviewer binding with historical factor %s", async factor => {
-      const token = await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, {
-        firstFactor: "microsoft", ...(factor ? { secondFactor: factor } : {}),
+      const token = await issueTestSession(fx.appSql, fx.reviewerSubjectA, {
+        firstFactor: "google", ...(factor ? { secondFactor: factor } : {}),
       });
       expect((await session(token)).roleBindings).toContainEqual(expect.objectContaining({ role: "reviewer" }));
       expect((await get(`/api/v1/projects/${fx.projectA}`, token)).statusCode).toBe(200);
@@ -75,7 +92,7 @@ describeDb("account sessions", () => {
 
   describe("session lifetime", () => {
     it("refuses a session idle for 30 minutes, though its absolute expiry is hours away", async () => {
-      const token = await issueTestSession(fx.appSql, fx.tenantA, memberSubjectId, {
+      const token = await issueTestSession(fx.appSql, memberSubjectId, {
         firstFactor: "email_code",
         secondFactor: "totp",
       });
@@ -90,7 +107,7 @@ describeDb("account sessions", () => {
     });
 
     it("a session used within the idle window stays alive", async () => {
-      const token = await issueTestSession(fx.appSql, fx.tenantA, memberSubjectId, {
+      const token = await issueTestSession(fx.appSql, memberSubjectId, {
         firstFactor: "email_code",
         secondFactor: "totp",
       });
@@ -103,25 +120,21 @@ describeDb("account sessions", () => {
 
     it("revoking a subject's sessions ends every one of them, whatever their factors", async () => {
       const tokens = [
-        await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, { firstFactor: "email_code", secondFactor: "passkey" }),
-        await issueTestSession(fx.appSql, fx.tenantA, fx.reviewerSubjectA, { firstFactor: "google", secondFactor: "totp" }),
+        await issueTestSession(fx.appSql, fx.reviewerSubjectA, { firstFactor: "email_code", secondFactor: "passkey" }),
+        await issueTestSession(fx.appSql, fx.reviewerSubjectA, { firstFactor: "google", secondFactor: "totp" }),
         await signIn(app, fx.reviewerA),
       ];
       for (const token of tokens) expect((await session(token)).authenticated).toBe(true);
 
       // Another subject's session is untouched.
-      const other = await issueTestSession(fx.appSql, fx.tenantA, memberSubjectId, { firstFactor: "email_code", secondFactor: "totp" });
+      const other = await issueTestSession(fx.appSql, memberSubjectId, { firstFactor: "email_code", secondFactor: "totp" });
 
-      // From another tenant's context nothing is revoked.
-      expect(
-        await withTenant(fx.appSql, { tenantId: fx.tenantB }, (tx) =>
-          revokeSubjectSessions(tx, fx.reviewerSubjectA, "test_revocation"),
-        ),
-      ).toBe(0);
+      // Revocation is also reached from flows without an actor (an email change completed by
+      // code), so the function itself is not bounded by the caller; the routes that call it are.
       for (const token of tokens) expect((await session(token)).authenticated).toBe(true);
 
       expect(
-        await withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) =>
+        await withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) =>
           revokeSubjectSessions(tx, fx.reviewerSubjectA, "test_revocation"),
         ),
       ).toBeGreaterThanOrEqual(3);
@@ -136,23 +149,23 @@ describeDb("account sessions", () => {
 
     it("never issues a session to a service subject", async () => {
       // A service authenticates with a service token; no identity can be linked to it, so no
-      // Google / Microsoft sign-in can name it, and the general session function refuses every
+      // Google sign-in can name it, and the general session function refuses every
       // first factor (0121).
       await expect(
         fx.sql`
-          INSERT INTO core.external_identities (id, tenant_id, subject_id, provider, issuer, subject_key, linked_via)
-          VALUES (${randomUUID()}, ${fx.tenantA}, ${fx.scanServiceSubjectA}, 'google', 'https://accounts.google.com', ${randomUUID()}, 'link')
+          INSERT INTO core.external_identities (id, subject_id, provider, issuer, subject_key, linked_via)
+          VALUES (${randomUUID()}, ${fx.scanServiceSubjectA}, 'google', 'https://accounts.google.com', ${randomUUID()}, 'link')
         `,
       ).rejects.toThrow(/person subject/);
-      await expect(issueTestSession(fx.appSql, fx.tenantA, fx.scanServiceSubjectA, { firstFactor: "google" })).rejects.toThrow(
+      await expect(issueTestSession(fx.appSql, fx.scanServiceSubjectA, { firstFactor: "google" })).rejects.toThrow(
         /no person subject/,
       );
     });
 
     it("no caller can state a first factor: the general session function refuses every one", async () => {
-      for (const factor of ["google", "microsoft", "email_code", "siwe_legacy"]) {
+      for (const factor of ["google", "email_code", "siwe_legacy"]) {
         await expect(
-          withTenant(fx.sql, { tenantId: fx.tenantA }, (tx) =>
+          withActor(fx.sql, { subjectId: fx.operatorSubjectA }, (tx) =>
             tx`SELECT core.create_subject_session(${randomUUID()}, ${hashToken(randomUUID())}, ${memberSubjectId}, ${factor}::core.session_first_factor, NULL, 3600)`,
           ),
           factor,
@@ -160,22 +173,19 @@ describeDb("account sessions", () => {
       }
       // And the application role may not even call it any more.
       await expect(
-        withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) =>
+        withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) =>
           tx`SELECT core.create_subject_session(${randomUUID()}, ${hashToken(randomUUID())}, ${memberSubjectId}, 'google', NULL, 3600)`,
         ),
       ).rejects.toThrow(/permission denied/);
     });
 
-    it("a Google sign-in session lands in the identity's tenant, whatever context the caller set", async () => {
-      // The tenant comes from the linked identity, never from the caller; RLS cannot be used to
-      // steer a session into another tenant.
-      const token = await issueTestSession(fx.appSql, fx.tenantA, memberSubjectId, { firstFactor: "google", secondFactor: "totp" });
-      const [row] = await fx.sql<{ tenant_id: string }[]>`
-        SELECT tenant_id FROM core.sessions WHERE token_hash = ${hashToken(token)}
+    it("a Google sign-in session lands on the identity's subject, whatever context the caller set", async () => {
+      // The subject comes from the linked identity, never from the caller.
+      const token = await issueTestSession(fx.appSql, memberSubjectId, { firstFactor: "google", secondFactor: "totp" });
+      const [row] = await fx.sql<{ subject_id: string }[]>`
+        SELECT subject_id FROM core.sessions WHERE token_hash = ${hashToken(token)}
       `;
-      expect(row!.tenant_id).toBe(fx.tenantA);
-      // The completion run from inside tenant B's context still lands in A; covered end to end
-      // in oidc.test.ts ("tenant isolation").
+      expect(row!.subject_id).toBe(memberSubjectId);
     });
   });
 
@@ -187,16 +197,16 @@ describeDb("account sessions", () => {
       const hot = newAccount();
       const subjectId = randomUUID();
       await fx.sql`
-        INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-        VALUES (${subjectId}, ${fx.tenantA}, 'person', 'Hot key holder', 'high_assurance')
+        INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+        VALUES (${subjectId}, 'person', 'Hot key holder', 'high_assurance')
       `;
       await fx.sql`
-        INSERT INTO core.wallet_identities (id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${hot.address}, 31337, 'wallet_only', now())
+        INSERT INTO core.wallet_identities (id, subject_id, wallet_address, chain_id, assurance_level, bound_at)
+        VALUES (${randomUUID()}, ${subjectId}, ${hot.address}, 31337, 'wallet_only', now())
       `;
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.reviewOrgA}, 'reviewer')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${subjectId}, ${fx.reviewOrgA}, 'reviewer')
       `;
       const viaHot = await session(await signIn(app, hot));
       const viaMain = await session(await signIn(app, fx.reviewerA));
@@ -261,13 +271,13 @@ describeDb("account sessions", () => {
     async function serviceSubject(role: string | null, label: string): Promise<string> {
       const subject = randomUUID();
       await fx.sql`
-        INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-        VALUES (${subject}, ${fx.tenantA}, 'service', ${label}, 'high_assurance')
+        INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+        VALUES (${subject}, 'service', ${label}, 'high_assurance')
       `;
       if (role !== null) {
         await fx.sql`
-          INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-          VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, ${role})
+          INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+          VALUES (${randomUUID()}, ${subject}, ${fx.orgA}, ${role})
         `;
       }
       return subject;
@@ -288,7 +298,6 @@ describeDb("account sessions", () => {
 
     it("cannot reach a service route outside its scopes", async () => {
       const creOnly = await issueTestServiceToken(fx.sql, {
-        tenantId: fx.tenantA,
         subjectId: await serviceSubject("scan_service", "Scan with CRE scope"),
         scopes: ["cre_report"],
       });
@@ -309,7 +318,6 @@ describeDb("account sessions", () => {
     it("never makes a person role effective", async () => {
       // A service subject that (wrongly) holds a person role allowed on the CRE route.
       const token = await issueTestServiceToken(fx.sql, {
-        tenantId: fx.tenantA,
         subjectId: await serviceSubject("reviewer", "Service with a person role"),
         scopes: ["cre_report"],
       });
@@ -328,16 +336,16 @@ describeDb("account sessions", () => {
       const person = randomUUID();
       const wallet = newAccount();
       await fx.sql`
-        INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-        VALUES (${person}, ${fx.tenantA}, 'person', 'Person with scan role', 'high_assurance')
+        INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+        VALUES (${person}, 'person', 'Person with scan role', 'high_assurance')
       `;
       await fx.sql`
-        INSERT INTO core.wallet_identities (id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${person}, ${wallet.address}, 31337, 'high_assurance', now())
+        INSERT INTO core.wallet_identities (id, subject_id, wallet_address, chain_id, assurance_level, bound_at)
+        VALUES (${randomUUID()}, ${person}, ${wallet.address}, 31337, 'high_assurance', now())
       `;
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${person}, ${fx.orgA}, 'scan_service')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${person}, ${fx.orgA}, 'scan_service')
       `;
       const token = await signIn(app, wallet);
       const view = await session(token);
@@ -352,13 +360,13 @@ describeDb("account sessions", () => {
 
     it("is refused once expired or revoked", async () => {
       const subject = await serviceSubject("scan_service", "Short-lived scanner");
-      const token = await issueTestServiceToken(fx.sql, { tenantId: fx.tenantA, subjectId: subject, scopes: ["scan_result"] });
+      const token = await issueTestServiceToken(fx.sql, { subjectId: subject, scopes: ["scan_result"] });
       expect((await scanResult(await pendingUpload(), token)).statusCode).toBe(200);
 
       await fx.sql`UPDATE core.service_tokens SET revoked_at = now() WHERE subject_id = ${subject}`;
       expect((await scanResult(randomUUID(), token)).statusCode).toBe(401);
 
-      const expiring = await issueTestServiceToken(fx.sql, { tenantId: fx.tenantA, subjectId: subject, scopes: ["scan_result"] });
+      const expiring = await issueTestServiceToken(fx.sql, { subjectId: subject, scopes: ["scan_result"] });
       await fx.sql`
         UPDATE core.service_tokens SET issued_at = now() - interval '2 days', expires_at = now() - interval '1 second'
         WHERE subject_id = ${subject} AND revoked_at IS NULL
@@ -368,12 +376,12 @@ describeDb("account sessions", () => {
 
     it("cannot be bound to a person, and only lists known scopes", async () => {
       await expect(
-        issueTestServiceToken(fx.sql, { tenantId: fx.tenantA, subjectId: memberSubjectId, scopes: ["scan_result"] }),
+        issueTestServiceToken(fx.sql, { subjectId: memberSubjectId, scopes: ["scan_result"] }),
       ).rejects.toThrow(/not a service subject/);
       await expect(
         fx.sql`
-          INSERT INTO core.service_tokens (id, tenant_id, subject_id, label, token_hash, scopes, expires_at)
-          VALUES (${randomUUID()}, ${fx.tenantA}, ${fx.scanServiceSubjectA}, 'x', ${`0x${"ab".repeat(32)}`},
+          INSERT INTO core.service_tokens (id, subject_id, label, token_hash, scopes, expires_at)
+          VALUES (${randomUUID()}, ${fx.scanServiceSubjectA}, 'x', ${`0x${"ab".repeat(32)}`},
                   ARRAY['admin'], now() + interval '1 day')
         `,
       ).rejects.toThrow(/check constraint/);

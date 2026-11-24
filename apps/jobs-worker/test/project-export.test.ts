@@ -20,7 +20,6 @@ const randomHex32 = () => `0x${randomBytes(32).toString("hex")}` as Hex;
 function job(clearance: string[]): ExportJob {
   return {
     id: randomUUID(),
-    tenant_id: randomUUID(),
     project_id: randomUUID(),
     requested_by_subject_id: randomUUID(),
     requested_by_wallet: `0x${"ab".repeat(20)}`,
@@ -121,7 +120,6 @@ describe("export package assembly", () => {
 
 describeDb("export build", () => {
   let sql: postgres.Sql;
-  const tenant = randomUUID();
   const project = randomUUID();
   const subject = randomUUID();
   const versionId = randomUUID();
@@ -131,24 +129,22 @@ describeDb("export build", () => {
   beforeAll(async () => {
     sql = await connectIsolated("project_export");
     const org = randomUUID();
-    await sql`INSERT INTO core.tenants (id, slug, display_name)
-              VALUES (${tenant}, ${`e-${tenant.slice(0, 8)}`}, 'export test')`;
-    await sql`INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-              VALUES (${org}, ${tenant}, 'Org', 'MNG')`;
-    await sql`INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-              VALUES (${subject}, ${tenant}, 'person', 'Requester')`;
-    await sql`INSERT INTO core.projects (id, tenant_id, project_key, name, host_country_iso3, owner_organization_id)
-              VALUES (${project}, ${tenant}, ${`K-${project.slice(0, 6)}`}, 'Export', 'MNG', ${org})`;
+    await sql`INSERT INTO core.organizations (id, legal_name, jurisdiction)
+              VALUES (${org}, 'Org', 'MNG')`;
+    await sql`INSERT INTO core.subjects (id, kind, display_name)
+              VALUES (${subject}, 'person', 'Requester')`;
+    await sql`INSERT INTO core.projects (id, project_key, name, host_country_iso3, owner_organization_id)
+              VALUES (${project}, ${`K-${project.slice(0, 6)}`}, 'Export', 'MNG', ${org})`;
 
     const entry = randomUUID();
-    await sql`INSERT INTO core.registry_entries (id, tenant_id, registry_type, subject_id, public_key)
-              VALUES (${entry}, ${tenant}, 'project', ${project}, ${`pk-${entry}`})`;
+    await sql`INSERT INTO core.registry_entries (id, registry_type, subject_id, public_key)
+              VALUES (${entry}, 'project', ${project}, ${`pk-${entry}`})`;
     await sql`
       INSERT INTO core.registry_entry_versions (
-        id, tenant_id, entry_id, version, status, public_projection, content_hash,
+        id, entry_id, version, status, public_projection, content_hash,
         source_snapshot_hash, policy_version, schema_version, published_at
       ) VALUES (
-        ${versionId}, ${tenant}, ${entry}, 1, 'published', '{"name":"Export","holes":3}'::jsonb,
+        ${versionId}, ${entry}, 1, 'published', '{"name":"Export","holes":3}'::jsonb,
         ${hex32("cc")}, ${hex32("dd")}, 'p1', 's1', now()
       )
     `;
@@ -157,21 +153,21 @@ describeDb("export build", () => {
     const root = buildMerkleTree([leaf, sibling]).root;
     await sql`
       INSERT INTO chain.anchor_batches (
-        id, tenant_id, batch_id, merkle_root, manifest_hash, manifest_object_key,
+        id, batch_id, merkle_root, manifest_hash, manifest_object_key,
         schema_version, record_count
-      ) VALUES (${batch}, ${tenant}, ${randomHex32()}, ${root}, ${hex32("ff")}, 'm.json', '1', 2)
+      ) VALUES (${batch}, ${randomHex32()}, ${root}, ${hex32("ff")}, 'm.json', '1', 2)
     `;
     // The sibling belongs to another version; only the leaf set matters for the proof.
     const other = randomUUID();
     await sql`
       INSERT INTO core.registry_entry_versions (
-        id, tenant_id, entry_id, version, status, source_snapshot_hash, policy_version, schema_version
-      ) VALUES (${other}, ${tenant}, ${entry}, 2, 'draft', ${hex32("dd")}, 'p1', 's1')
+        id, entry_id, version, status, source_snapshot_hash, policy_version, schema_version
+      ) VALUES (${other}, ${entry}, 2, 'draft', ${hex32("dd")}, 'p1', 's1')
     `;
     await sql`INSERT INTO chain.anchor_batch_leaves (batch_id, leaf_hash, entry_version_id, leaf_index)
               VALUES (${batch}, ${leaf}, ${versionId}, 0), (${batch}, ${sibling}, ${other}, 1)`;
-    await sql`INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, state, tx_hash, block_number, block_hash)
-              VALUES (${randomUUID()}, ${tenant}, ${batch}, ${`anchor:${batch}`}, 31337, 'confirmed', ${randomHex32()}, 42, ${randomHex32()})`;
+    await sql`INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, state, tx_hash, block_number, block_hash)
+              VALUES (${randomUUID()}, ${batch}, ${`anchor:${batch}`}, 31337, 'confirmed', ${randomHex32()}, 42, ${randomHex32()})`;
   });
 
   afterAll(async () => {
@@ -181,10 +177,10 @@ describeDb("export build", () => {
   async function newJob(): Promise<string> {
     const id = randomUUID();
     await sql`
-      INSERT INTO core.project_exports (
-        id, tenant_id, project_id, requested_by_subject_id, requested_by_wallet,
+      INSERT INTO core.project_export_jobs (
+        id, project_id, requested_by_subject_id, requested_by_wallet,
         sensitivity_clearance
-      ) VALUES (${id}, ${tenant}, ${project}, ${subject}, ${`0x${"ab".repeat(20)}`}, '{public}')
+      ) VALUES (${id}, ${project}, ${subject}, ${`0x${"ab".repeat(20)}`}, '{public}')
     `;
     return id;
   }
@@ -203,7 +199,7 @@ describeDb("export build", () => {
     }
 
     const [stored] = await sql<{ state: string; package: Record<string, any>; manifest_hash: string }[]>`
-      SELECT state, package, manifest_hash FROM core.project_exports WHERE id = ${id}
+      SELECT state, package, manifest_hash FROM core.project_export_jobs WHERE id = ${id}
     `;
     expect(stored!.state).toBe("succeeded");
     expect(stored!.manifest_hash).toMatch(/^[0-9a-f]{64}$/);
@@ -233,13 +229,13 @@ describeDb("export build", () => {
     const id = await newJob();
     await buildProjectExport(sql, id);
     const [first] = await sql<{ manifest_hash: string }[]>`
-      SELECT manifest_hash FROM core.project_exports WHERE id = ${id}`;
+      SELECT manifest_hash FROM core.project_export_jobs WHERE id = ${id}`;
 
     expect(await buildProjectExport(sql, id, () => new Date("2030-01-01T00:00:00Z"))).toBe(
       "already_built",
     );
     const [second] = await sql<{ manifest_hash: string }[]>`
-      SELECT manifest_hash FROM core.project_exports WHERE id = ${id}`;
+      SELECT manifest_hash FROM core.project_export_jobs WHERE id = ${id}`;
     expect(second!.manifest_hash).toBe(first!.manifest_hash);
   });
 
@@ -247,13 +243,13 @@ describeDb("export build", () => {
     await sql`TRUNCATE core.outbox, core.inbox`;
     const id = randomUUID();
     await sql`
-      INSERT INTO core.project_exports (
-        id, tenant_id, project_id, requested_by_subject_id, requested_by_wallet, sensitivity_clearance
-      ) VALUES (${id}, ${tenant}, ${project}, ${subject}, ${`0x${"ab".repeat(20)}`}, '{public}')
+      INSERT INTO core.project_export_jobs (
+        id, project_id, requested_by_subject_id, requested_by_wallet, sensitivity_clearance
+      ) VALUES (${id}, ${project}, ${subject}, ${`0x${"ab".repeat(20)}`}, '{public}')
     `;
     await sql`
-      INSERT INTO core.outbox (id, tenant_id, event_type, aggregate_id, aggregate_version, payload, correlation_id)
-      VALUES (${randomUUID()}, ${tenant}, 'project.export.requested', ${id}, 1,
+      INSERT INTO core.outbox (id, event_type, aggregate_id, aggregate_version, payload, correlation_id)
+      VALUES (${randomUUID()}, 'project.export.requested', ${id}, 1,
               ${sql.json({ exportId: id, projectId: project })}, 'dead-export')
     `;
     const handler = projectExportHandler(sql);
@@ -266,7 +262,7 @@ describeDb("export build", () => {
     });
 
     const [failed] = await sql<{ state: string; failure_reason: string; completed_at: Date | null }[]>`
-      SELECT state, failure_reason, completed_at FROM core.project_exports WHERE id = ${id}`;
+      SELECT state, failure_reason, completed_at FROM core.project_export_jobs WHERE id = ${id}`;
     expect(failed).toMatchObject({ state: "failed", failure_reason: "EXPORT_BUILD_FAILED" });
     expect(failed!.completed_at).toBeInstanceOf(Date);
   });

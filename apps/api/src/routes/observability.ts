@@ -1,13 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { myActivityQuery } from "@mpc/api-contract";
 import { badRequest } from "../errors.js";
 import {
   assertAuthorized,
   sessionFacts,
-  tenantResource,
+  registryResource,
 } from "../plugins/authorize.js";
 import { requireReadContext } from "./shared.js";
 
@@ -43,11 +43,11 @@ export async function registerObservabilityRoutes(
    *
    * Returns only mutations made by the subject bound to this wallet. **The missing role check is
    * intentional** — these are the caller's own records, not someone else's. The question differs
-   * from the tenant-wide audit trail (`audit.read`): that one asks "what happened here", this one
+   * from the Registry-wide audit trail (`audit.read`): that one asks "what happened here", this one
    * asks "what did I do".
    */
   app.get("/api/v1/me/activity", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
 
     const parsed = myActivityQuery.safeParse(request.query);
     if (!parsed.success) {
@@ -62,7 +62,7 @@ export async function registerObservabilityRoutes(
     if (session.subjectId === null) return { items: [], nextCursor: null, requestId, asOf };
     const subjectId = session.subjectId;
 
-    const rows = await withTenant(sql, { tenantId }, (tx) =>
+    const rows = await withActor(sql, actor, (tx) =>
       tx<
         {
           id: string;
@@ -79,8 +79,7 @@ export async function registerObservabilityRoutes(
         SELECT id::text, occurred_at, command, resource_type, resource_id, project_id,
                effective_role, reason, signature_or_tx
         FROM audit.events
-        WHERE tenant_id = ${tenantId}
-          AND actor_subject_id = ${subjectId}
+        WHERE actor_subject_id = ${subjectId}
           AND (${cursor ?? null}::bigint IS NULL OR id < ${cursor ?? null}::bigint)
         ORDER BY id DESC
         LIMIT ${limit + 1}
@@ -108,9 +107,9 @@ export async function registerObservabilityRoutes(
   });
 
   app.get("/api/v1/audit-events", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
 
-    assertAuthorized(session, "audit.read", tenantResource(tenantId), sessionFacts(session));
+    assertAuthorized(session, "audit.read", registryResource(), sessionFacts(session));
 
     const parsed = auditQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -122,9 +121,9 @@ export async function registerObservabilityRoutes(
     const { resourceType, resourceId, projectId, command, limit } = parsed.data;
     const { requestId, asOf } = request.context;
 
-    const rows = await withTenant(
+    const rows = await withActor(
       sql,
-      { tenantId },
+      actor,
       (tx) =>
         tx<
           {
@@ -146,8 +145,7 @@ export async function registerObservabilityRoutes(
                actor_wallet, effective_role, before_version, after_version,
                reason, correlation_id, project_id
         FROM audit.events
-        WHERE tenant_id = ${tenantId}
-          AND (${resourceType ?? null}::text IS NULL OR resource_type = ${resourceType ?? null})
+        WHERE (${resourceType ?? null}::text IS NULL OR resource_type = ${resourceType ?? null})
           AND (${resourceId ?? null}::uuid IS NULL OR resource_id = ${resourceId ?? null})
           AND (${projectId ?? null}::uuid IS NULL OR project_id = ${projectId ?? null})
           AND (${command ?? null}::text IS NULL OR command = ${command ?? null})
@@ -185,13 +183,13 @@ export async function registerObservabilityRoutes(
    * which produces real duplicates.
    */
   app.get("/api/v1/outbox-backlog", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
 
-    assertAuthorized(session, "audit.read", tenantResource(tenantId), sessionFacts(session));
+    assertAuthorized(session, "audit.read", registryResource(), sessionFacts(session));
 
     const { requestId, asOf } = request.context;
 
-    return withTenant(sql, { tenantId }, async (tx) => {
+    return withActor(sql, actor, async (tx) => {
       const [summary] = await tx<
         { pending: string; oldest: Date | null; published_last_hour: string }[]
       >`

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import type { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   BREAK_GLASS_INCIDENT_DUE_HOURS,
   BREAK_GLASS_ROLE,
@@ -13,7 +13,7 @@ import {
   requestBreakGlassRequest,
 } from "@mpc/api-contract";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { enqueueEvent } from "../outbox.js";
@@ -38,7 +38,7 @@ import {
  * that needs more time is a new request, approved again.
  *
  * **Incident record within 24 hours (02 §2.6).** Past that deadline without a record, the
- * elevation stops granting and no new elevation can be requested in the tenant until the record
+ * elevation stops granting and no new elevation can be requested in the Registry until the record
  * is filed. The requester or any other security operator may file it.
  *
  * Not built here: the "pre-approved security multisig" (OD-12 is pending; the second approver
@@ -115,19 +115,18 @@ function toView(row: ElevationRow) {
 
 async function loadElevation(
   tx: postgres.TransactionSql,
-  tenantId: string,
   elevationId: string,
   lock: boolean,
 ): Promise<ElevationRow> {
   const rows = lock
     ? await tx<ElevationRow[]>`
         SELECT e.*, now() AS now FROM core.break_glass_elevations e
-        WHERE e.tenant_id = ${tenantId} AND e.id = ${elevationId}
+        WHERE e.id = ${elevationId}
         FOR UPDATE
       `
     : await tx<ElevationRow[]>`
         SELECT e.*, now() AS now FROM core.break_glass_elevations e
-        WHERE e.tenant_id = ${tenantId} AND e.id = ${elevationId}
+        WHERE e.id = ${elevationId}
       `;
   const row = rows[0];
   if (!row) throw notFound("Elevation not found");
@@ -149,31 +148,30 @@ export async function registerBreakGlassRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   app.get("/api/v1/admin/break-glass", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
-    assertAuthorized(session, "break_glass.read", tenantResource(tenantId), sessionFacts(session));
+    const { session, actor } = requireReadContext(request);
+    assertAuthorized(session, "break_glass.read", registryResource(), sessionFacts(session));
 
     const { requestId, asOf } = request.context;
-    const rows = await withTenant(sql, { tenantId }, (tx) => tx<ElevationRow[]>`
+    const rows = await withActor(sql, actor, (tx) => tx<ElevationRow[]>`
       SELECT e.*, now() AS now FROM core.break_glass_elevations e
-      WHERE e.tenant_id = ${tenantId}
       ORDER BY e.requested_at DESC
     `);
     return { items: rows.map(toView), requestId, asOf };
   });
 
   app.post("/api/v1/admin/break-glass", async (request, reply) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "break_glass.request",
-      tenantResource(tenantId),
+      registryResource(),
       sessionFacts(session),
     );
     const data = parse(requestBreakGlassRequest, request.body);
 
     const { requestId, asOf, correlationId } = request.context;
-    const result = await withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+    const result = await withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
         const [clock] = await tx<{ now: Date }[]>`SELECT now() AS now`;
         if (new Date(data.expiresAt).getTime() <= clock!.now.getTime()) {
           throw unprocessable("BREAK_GLASS_EXPIRY_IN_PAST", "Expiry must be in the future");
@@ -182,13 +180,12 @@ export async function registerBreakGlassRoutes(
         /**
          * An unaccounted-for use blocks the next one — 02 §2.6.
          *
-         * Checked tenant-wide, not per person: the record is owed by the security function, and
+         * Checked Registry-wide, not per person: the record is owed by the security function, and
          * letting a colleague open a fresh elevation would let the overdue one be forgotten.
          */
         const [overdue] = await tx<{ id: string }[]>`
           SELECT id FROM core.break_glass_elevations
-          WHERE tenant_id = ${tenantId}
-            AND state IN ('active', 'released')
+          WHERE state IN ('active', 'released')
             AND incident_recorded_at IS NULL
             AND decided_at + make_interval(hours => ${BREAK_GLASS_INCIDENT_DUE_HOURS}) <= now()
           LIMIT 1
@@ -204,8 +201,8 @@ export async function registerBreakGlassRoutes(
         const id = randomUUID();
         try {
           await tx`
-            INSERT INTO core.break_glass_elevations (id, tenant_id, subject_id, purpose, target, expires_at)
-            VALUES (${id}, ${tenantId}, ${session.subjectId}, ${data.purpose}, ${data.target},
+            INSERT INTO core.break_glass_elevations (id, subject_id, purpose, target, expires_at)
+            VALUES (${id}, ${session.subjectId}, ${data.purpose}, ${data.target},
                     ${data.expiresAt})
           `;
         } catch (caught) {
@@ -216,7 +213,6 @@ export async function registerBreakGlassRoutes(
         }
 
         await recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: "break_glass.requested",
@@ -229,7 +225,7 @@ export async function registerBreakGlassRoutes(
           detail: { target: data.target, expiresAt: data.expiresAt },
         });
 
-        return toView(await loadElevation(tx, tenantId, id, false));
+        return toView(await loadElevation(tx, id, false));
       }),
     );
     return reply.code(201).send({ ...result, requestId, asOf });
@@ -238,21 +234,21 @@ export async function registerBreakGlassRoutes(
   app.post<{ Params: { elevationId: string } }>(
     "/api/v1/admin/break-glass/:elevationId/decision",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       // A missing If-Match is reported before authorization, like every versioned route.
       const expected = requireIfMatch(request);
       const effectiveRole = assertAuthorized(
         session,
         "break_glass.approve",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
       const data = parse(decideBreakGlassRequest, request.body);
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          const current = await loadElevation(tx, tenantId, request.params.elevationId, true);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          const current = await loadElevation(tx, request.params.elevationId, true);
           assertVersionMatches(expected, current.version, "break_glass_elevation");
 
           if (current.state !== "pending") {
@@ -276,7 +272,6 @@ export async function registerBreakGlassRoutes(
           `;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: approved ? "break_glass.approved" : "break_glass.rejected",
@@ -291,7 +286,7 @@ export async function registerBreakGlassRoutes(
           });
 
           reply.header("etag", etagOf(current.version + 1));
-          return { ...toView(await loadElevation(tx, tenantId, current.id, false)), requestId, asOf };
+          return { ...toView(await loadElevation(tx, current.id, false)), requestId, asOf };
         }),
       );
     },
@@ -300,21 +295,21 @@ export async function registerBreakGlassRoutes(
   app.post<{ Params: { elevationId: string } }>(
     "/api/v1/admin/break-glass/:elevationId/incident",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       // A missing If-Match is reported before authorization, like every versioned route.
       const expected = requireIfMatch(request);
       const effectiveRole = assertAuthorized(
         session,
         "break_glass.incident",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
       const data = parse(recordBreakGlassIncidentRequest, request.body);
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          const current = await loadElevation(tx, tenantId, request.params.elevationId, true);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          const current = await loadElevation(tx, request.params.elevationId, true);
           assertVersionMatches(expected, current.version, "break_glass_elevation");
 
           if (current.state === "pending" || current.state === "rejected") {
@@ -339,7 +334,6 @@ export async function registerBreakGlassRoutes(
           `;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: "break_glass.incident_recorded",
@@ -355,7 +349,6 @@ export async function registerBreakGlassRoutes(
 
           // 07 §7.4 `incident.opened`. The summary stays internal; the event carries references.
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "incident.opened",
             aggregateId: current.id,
             aggregateVersion: current.version + 1,
@@ -364,7 +357,7 @@ export async function registerBreakGlassRoutes(
           });
 
           reply.header("etag", etagOf(current.version + 1));
-          return { ...toView(await loadElevation(tx, tenantId, current.id, false)), requestId, asOf };
+          return { ...toView(await loadElevation(tx, current.id, false)), requestId, asOf };
         }),
       );
     },
@@ -373,21 +366,21 @@ export async function registerBreakGlassRoutes(
   app.post<{ Params: { elevationId: string } }>(
     "/api/v1/admin/break-glass/:elevationId/release",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       // A missing If-Match is reported before authorization, like every versioned route.
       const expected = requireIfMatch(request);
       const effectiveRole = assertAuthorized(
         session,
         "break_glass.release",
-        tenantResource(tenantId),
+        registryResource(),
         sessionFacts(session),
       );
       const data = parse(releaseBreakGlassRequest, request.body);
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-          const current = await loadElevation(tx, tenantId, request.params.elevationId, true);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          const current = await loadElevation(tx, request.params.elevationId, true);
           assertVersionMatches(expected, current.version, "break_glass_elevation");
 
           if (current.state !== "active") {
@@ -407,7 +400,6 @@ export async function registerBreakGlassRoutes(
           `;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: "break_glass.released",
@@ -421,7 +413,7 @@ export async function registerBreakGlassRoutes(
           });
 
           reply.header("etag", etagOf(current.version + 1));
-          return { ...toView(await loadElevation(tx, tenantId, current.id, false)), requestId, asOf };
+          return { ...toView(await loadElevation(tx, current.id, false)), requestId, asOf };
         }),
       );
     },
@@ -436,19 +428,19 @@ export async function registerBreakGlassRoutes(
    * `role_bindings.revoked_at` and nothing else.
    */
   app.post("/api/v1/admin/break-glass/quarantine", async (request, reply) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "break_glass.quarantine",
-      tenantResource(tenantId),
+      registryResource(),
       sessionFacts(session),
     );
     const data = parse(quarantineAccessRequest, request.body);
     const elevationId = elevationOf(session);
 
     const { requestId, asOf, correlationId } = request.context;
-    const result = await withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+    const result = await withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
         if (data.subjectId === session.subjectId) {
           throw unprocessable(
             "BREAK_GLASS_SELF_QUARANTINE",
@@ -456,18 +448,17 @@ export async function registerBreakGlassRoutes(
           );
         }
         const [subject] = await tx<{ id: string }[]>`
-          SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${data.subjectId}
+          SELECT id FROM core.subjects WHERE id = ${data.subjectId}
         `;
         if (!subject) throw notFound("Subject not found");
 
         const revoked = await tx<{ id: string }[]>`
           UPDATE core.role_bindings SET revoked_at = now(), version = version + 1
-          WHERE tenant_id = ${tenantId} AND subject_id = ${data.subjectId} AND revoked_at IS NULL
+          WHERE subject_id = ${data.subjectId} AND revoked_at IS NULL
           RETURNING id
         `;
 
         await recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: "break_glass.access_quarantined",

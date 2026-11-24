@@ -17,7 +17,7 @@ import { keccak256 } from "@mpc/canonical";
  * - **Opaque random tokens**, not JWT — they must be revocable at once on key loss, role change,
  *   or incident (AC-27). A JWT cannot be invalidated before it expires.
  * - The DB stores only the token's **hash**. A DB leak does not allow session theft.
- * - Lookup uses SECURITY DEFINER functions. The tenant is unknown before the token is found.
+ * - Lookup uses SECURITY DEFINER functions. The actor is unknown before the token is found.
  * - A session belongs to a **subject** and records the factors it proved (0108). The wallet
  *   columns of the table held what a SIWE session signed with; SIWE sign-in is gone (0125) and
  *   nothing reads them.
@@ -43,7 +43,6 @@ export interface IssuedSession {
 export interface ResolvedSessionRow {
   readonly sessionId: string;
   readonly subjectId: string;
-  readonly tenantId: string;
   readonly firstFactor: FirstFactor;
   readonly secondFactor: SecondFactor | null;
   /** Restored by a recovery code: only re-enrolment, recovery codes and logout (WP3). */
@@ -56,7 +55,6 @@ export interface ResolvedSessionRow {
 export interface ResolvedServiceToken {
   readonly tokenId: string;
   readonly subjectId: string;
-  readonly tenantId: string;
   readonly scopes: readonly ServiceScope[];
   readonly assuranceLevel: AssuranceLevel;
 }
@@ -80,7 +78,7 @@ export function newSessionToken(): string {
 /*
  * There is no general "issue a session for this subject" here: every account session is created
  * by the database function that consumed its first factor — an emailed code
- * (`core.verify_sign_in_code`, `core.accept_invitation`, 0114) or a completed Google / Microsoft
+ * (`core.verify_sign_in_code`, `core.accept_invitation`, 0114) or a completed Google
  * login transaction (`core.complete_oidc_sign_in`, `core.complete_oidc_invitation`, 0121) — and
  * `core.create_subject_session` refuses every first factor (0121). A second factor is recorded
  * only by the MFA functions that consume its evidence (0116).
@@ -94,7 +92,6 @@ export async function resolveSessionToken(
     {
       session_id: string;
       subject_id: string | null;
-      tenant_id: string | null;
       first_factor: FirstFactor;
       second_factor: SecondFactor | null;
       recovery_limited: boolean;
@@ -111,12 +108,11 @@ export async function resolveSessionToken(
   // live one, so a `siwe_legacy` row, or one without a subject, cannot reach here; if one ever
   // did (a database restored from before 0125), it carries no session rather than an unbound one.
   if (!firstFactorSchema.safeParse(row.first_factor).success) return null;
-  if (row.subject_id === null || row.tenant_id === null || row.assurance_level === null) return null;
+  if (row.subject_id === null || row.assurance_level === null) return null;
 
   return {
     sessionId: row.session_id,
     subjectId: row.subject_id,
-    tenantId: row.tenant_id,
     firstFactor: row.first_factor,
     secondFactor: row.second_factor,
     recoveryLimited: row.recovery_limited,
@@ -134,8 +130,8 @@ export async function revokeSessionToken(sql: postgres.Sql, token: string): Prom
  * Ends every live session of a subject — wallet disable now; recovery, email change and
  * authenticator removal later. `reason` is a short code stored with each revoked session.
  *
- * Call it inside `withTenant` of the subject's tenant: the database ends only sessions in the
- * current tenant, so outside it this ends none.
+ * Call it inside `withActor` of the acting subject: the sessions table is visible only to a live
+ * actor, so outside it this ends none.
  */
 export async function revokeSubjectSessions(
   sql: postgres.TransactionSql,
@@ -166,7 +162,6 @@ export async function resolveServiceToken(
     {
       token_id: string;
       subject_id: string;
-      tenant_id: string;
       scopes: ServiceScope[];
       assurance_level: AssuranceLevel;
     }[]
@@ -176,7 +171,6 @@ export async function resolveServiceToken(
   return {
     tokenId: row.token_id,
     subjectId: row.subject_id,
-    tenantId: row.tenant_id,
     scopes: row.scopes,
     assuranceLevel: row.assurance_level,
   };

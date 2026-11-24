@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { createProjectRequest, projectListQuery, updateProjectRequest } from "@mpc/api-contract";
-import { AppError, badRequest, forbidden, notFound } from "../errors.js";
+import { AppError, badRequest, conflict, forbidden, notFound } from "../errors.js";
 import { capRows } from "../list-window.js";
 import {
   actableOrganizations,
@@ -11,7 +11,7 @@ import {
   assertAuthorized,
   projectResource,
   sessionFacts,
-  tenantResource,
+  registryResource,
   visibleProjectScope,
 } from "../plugins/authorize.js";
 import {
@@ -62,10 +62,15 @@ function toSummary(project: ProjectRow, requestId: string, asOf: string) {
 /**
  * Cap on the project list, most recently updated first.
  *
- * A flag rather than pages: a tenant holds few projects. Past the cap the response says
+ * A flag rather than pages: the Registry holds few projects. Past the cap the response says
  * `truncated`, so a project that was not updated lately is not read as missing.
  */
 const PROJECT_LIST_LIMIT = 50;
+
+function isProjectKeyViolation(caught: unknown): boolean {
+  const error = caught as { code?: unknown; constraint_name?: unknown } | null;
+  return error?.code === "23505" && error.constraint_name === "projects_project_key_key";
+}
 
 export async function registerProjectRoutes(
   app: FastifyInstance,
@@ -91,11 +96,11 @@ export async function registerProjectRoutes(
     }
 
     // Project creation skips the project scope check because no project exists yet.
-    // Only tenant, role, and assurance are checked.
+    // Only role and assurance are checked.
     const effectiveRole = assertAuthorized(
       session,
       "project.create",
-      tenantResource(session.tenantId, { state: "new", statesAllowingAction: ["new"] }),
+      registryResource({ state: "new", statesAllowingAction: ["new"] }),
       sessionFacts(session),
     );
 
@@ -107,29 +112,35 @@ export async function registerProjectRoutes(
       );
     }
 
-    const tenantId = session.tenantId;
+    const actor = { subjectId: session.subjectId };
     const requestHash = hashRequest(request);
     const { requestId, asOf, correlationId } = request.context;
 
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, requestHash, async () => {
         const id = randomUUID();
 
         const [project] = await tx<ProjectRow[]>`
           INSERT INTO core.projects (
-            id, tenant_id, project_key, name, host_country_iso3, minerals,
+            id, project_key, name, host_country_iso3, minerals,
             owner_organization_id, reference_status
           ) VALUES (
-            ${id}, ${tenantId}, ${parsed.data.projectKey}, ${parsed.data.name},
+            ${id}, ${parsed.data.projectKey}, ${parsed.data.name},
             ${parsed.data.hostCountryIso3}, ${parsed.data.minerals},
             ${parsed.data.ownerOrganizationId}, ${parsed.data.referenceStatus}
           )
           RETURNING *, 'pending' AS relationship_status
-        `;
+        `.catch((caught: unknown) => {
+          // Project keys are unique across the Registry. The holder may be a project this caller
+          // cannot see, so the answer names neither the project nor its company.
+          if (isProjectKeyViolation(caught)) {
+            throw conflict("PROJECT_KEY_TAKEN", "This project key is already in use");
+          }
+          throw caught;
+        });
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           projectId: id,
           session,
           command: "project.registered",
@@ -141,7 +152,6 @@ export async function registerProjectRoutes(
         });
 
         await enqueueEvent(tx, {
-          tenantId,
           eventType: "project.registered",
           aggregateId: id,
           aggregateVersion: 1,
@@ -161,29 +171,28 @@ export async function registerProjectRoutes(
   /**
    * Organizations this session may name as a project's owner.
    *
-   * The registration form used to look the organization up in a table of demo tenant ids, so on
-   * any other tenant it had nothing to submit. The list follows the same rule as the create check
+   * The registration form used to look the organization up in a table of demo ids, so outside
+   * the demo it had nothing to submit. The list follows the same rule as the create check
    * above (`actableOrganizations`); a wider list would offer choices the server then refuses.
    *
    * Authorized with `project.create` itself: someone who cannot register a project has no reason
-   * to read the tenant's organizations, and the denial tells them which role they would need.
+   * to read the Registry's organizations, and the denial tells them which role they would need.
    */
   app.get("/api/v1/organizations", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "project.create",
-      tenantResource(tenantId, { state: "new", statesAllowingAction: ["new"] }),
+      registryResource({ state: "new", statesAllowingAction: ["new"] }),
       sessionFacts(session),
     );
 
     const scope = actableOrganizations(session, "project.create");
-    const rows = await withTenant(sql, { tenantId }, (tx) =>
+    const rows = await withActor(sql, actor, (tx) =>
       tx<{ id: string; legal_name: string; jurisdiction: string }[]>`
         SELECT id, legal_name, jurisdiction
         FROM core.organizations
-        WHERE tenant_id = ${tenantId}
-          AND ${scope === "all" ? tx`TRUE` : tx`id = ANY(${scope as string[]}::uuid[])`}
+        WHERE ${scope === "all" ? tx`TRUE` : tx`id = ANY(${scope as string[]}::uuid[])`}
         ORDER BY legal_name, id
       `,
     );
@@ -202,16 +211,16 @@ export async function registerProjectRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId",
     async (request, reply) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
 
       assertAuthorized(
         session,
         "project.read",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
-      const rows = await withTenant(sql, { tenantId }, (tx) =>
+      const rows = await withActor(sql, actor, (tx) =>
         tx<ProjectRow[]>`
           SELECT id, project_key, name, host_country_iso3, minerals,
                  reference_status, COALESCE(
@@ -228,7 +237,7 @@ export async function registerProjectRoutes(
       const project = rows[0];
       if (!project) {
         // Filtered-by-RLS and nonexistent are not distinguished in the response.
-        // Whether an ID exists in another tenant must not leak.
+        // Whether an ID exists outside the caller's reach must not leak.
         return reply.status(404).send({
           code: "NOT_FOUND",
           message: "Project not found",
@@ -244,19 +253,19 @@ export async function registerProjectRoutes(
   );
 
   app.get("/api/v1/projects", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
 
     /**
-     * The list holds **only visible projects**, not the whole tenant.
+     * The list holds **only visible projects**, not the whole Registry.
      *
-     * An organization-level binding sees every project in the tenant; a project-level binding
-     * sees only its listed projects. Blocking only single lookups without filtering the list
+     * A Registry-wide binding sees every project; an organization-level binding sees its
+     * organization's projects; a project-level binding sees only its listed projects. Blocking only single lookups without filtering the list
      * leaks project names and IDs.
      */
     assertAuthorized(
       session,
       "project.read",
-      tenantResource(tenantId, { filteredByProjectScope: true }),
+      registryResource({ filteredByProjectScope: true }),
       sessionFacts(session),
     );
 
@@ -272,10 +281,9 @@ export async function registerProjectRoutes(
     const visible = visibleProjectScope(session, "project.read");
     const filteredAfterAggregation =
       query.data.grade !== undefined || query.data.gap !== undefined || query.data.stale !== undefined;
-    const items = await withTenant(sql, { tenantId }, (tx) =>
+    const items = await withActor(sql, actor, (tx) =>
       listProjectItems(
         tx,
-        tenantId,
         visible,
         query.data,
         session.subjectId,
@@ -286,14 +294,14 @@ export async function registerProjectRoutes(
     const window = capRows(items, PROJECT_LIST_LIMIT);
     const progressIds = window.items.filter(item => {
       try {
-        assertAuthorized(session, "readiness.read", projectResource(tenantId, item.id), sessionFacts(session));
+        assertAuthorized(session, "readiness.read", projectResource(item.id), sessionFacts(session));
         return true;
       } catch (error) {
         if (error instanceof AppError && error.statusCode === 403) return false;
         throw error;
       }
     }).map(item => item.id);
-    const progress = await withTenant(sql, { tenantId }, tx => savedProjectProgress(tx, tenantId, progressIds));
+    const progress = await withActor(sql, actor, tx => savedProjectProgress(tx, progressIds));
 
     return {
       // Capped after the filters, most recently updated first: a filtered list that stops at the
@@ -316,7 +324,7 @@ export async function registerProjectRoutes(
   app.patch<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
 
       const parsed = updateProjectRequest.safeParse(request.body);
@@ -329,16 +337,16 @@ export async function registerProjectRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "project.update",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [current] = await tx<{ id: string; name: string; minerals: string[]; version: number }[]>`
             SELECT id, name, minerals, version FROM core.projects
-            WHERE tenant_id = ${tenantId} AND id = ${request.params.projectId}
+            WHERE id = ${request.params.projectId}
             FOR UPDATE
           `;
           if (!current) throw notFound("Project not found");
@@ -349,12 +357,11 @@ export async function registerProjectRoutes(
           const [updated] = await tx<{ version: number }[]>`
             UPDATE core.projects
             SET name = ${name}, minerals = ${minerals}, version = version + 1, updated_at = now()
-            WHERE tenant_id = ${tenantId} AND id = ${current.id}
+            WHERE id = ${current.id}
             RETURNING version
           `;
 
           await recordAudit(tx, {
-            tenantId,
             projectId: current.id,
             session,
             effectiveRole,
@@ -373,7 +380,6 @@ export async function registerProjectRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "project.updated",
             aggregateId: current.id,
             aggregateVersion: updated!.version,
@@ -384,7 +390,6 @@ export async function registerProjectRoutes(
 
           const [item] = await listProjectItems(
             tx,
-            tenantId,
             "all",
             {},
             session.subjectId,

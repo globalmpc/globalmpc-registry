@@ -38,7 +38,7 @@ const nextConfig: NextConfig = {
    *
    * WP6 added no source: the authenticator QR code is drawn as inline SVG elements (no `data:` image,
    * no QR service), passkeys use `navigator.credentials` (governed by Permissions-Policy, whose
-   * `publickey-credentials-*` default is this origin), and Google / Microsoft are reached by a
+   * `publickey-credentials-*` default is this origin), and Google is reached by a
    * top-level navigation, which `connect-src` and `form-action` do not govern.
    *
    * **`script-src` still contains `'unsafe-inline'`.** Next injects its hydration

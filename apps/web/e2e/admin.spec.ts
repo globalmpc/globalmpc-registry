@@ -107,7 +107,7 @@ test.describe("Administration", () => {
     await connectAs(page, "Operator A");
     await page.goto("/w/admin");
 
-    // Operator A is the only approver in tenant A. Revoking that role would leave the tenant
+    // Operator A is the only Registry-wide approver. Revoking that role would leave the Registry
     // recoverable only through the bootstrap CLI, so the server refuses the proposal.
     const row = page.getByTestId("admin-subjects").locator("tr", { hasText: "Operator A" });
     await row.getByRole("button", { name: "Propose revocation" }).click();

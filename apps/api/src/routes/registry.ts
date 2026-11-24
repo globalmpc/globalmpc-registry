@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { hashProjection, verifyMerkleProof, type Hex } from "@mpc/canonical";
 import { checkPublishable, isPublicField, sameChainEnvironment } from "@mpc/domain";
 import {
@@ -21,7 +21,7 @@ import { capRows } from "../list-window.js";
 import {
   assertAuthorized,
   sessionFacts,
-  tenantResource,
+  registryResource,
   projectResource,
 } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
@@ -80,7 +80,7 @@ import {
  */
 const ANCHOR_BATCH_LIST_LIMIT = 100;
 
-/** One wording for a taken key, whether this tenant or another one holds it. */
+/** One wording for a taken key, whoever holds it. */
 const REGISTRY_KEY_TAKEN_MESSAGE = "This public key belongs to another subject";
 
 function isRegistryKeyViolation(caught: unknown): boolean {
@@ -104,20 +104,20 @@ export async function registerRegistryRoutes(
 
   app.get<{Params:{id:string}}>("/api/v1/registry-entries/versions/:id/review-bundle", async (request,reply) => {
     reply.header("Cache-Control","private, no-store");
-    const {session,tenantId}=requireReadContext(request);
+    const {session,actor}=requireReadContext(request);
     if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.params.id))throw notFound("Review bundle not available for this version");
-    return withTenant(sql,{tenantId},async tx=>{
+    return withActor(sql, actor,async tx=>{
       const stored=await authorizedProjectLookup(session,"registry.read",async()=>{
         const [row]=await tx<{project_id:string;bundle:unknown;bundle_hash:string;public_projection:unknown;leaf_payload:unknown;id:string;registry_type:"project"|"verification"|"asset";subject_id:string;version:number;status:"published"|"revoked"|"superseded";content_hash:string;policy_version:string;schema_version:string;serialization_version:string}[]>`
           SELECT b.project_id,b.bundle,b.bundle_hash,v.*,e.registry_type,e.subject_id,l.leaf_payload
-          FROM core.registry_review_bundles b JOIN core.registry_entry_versions v ON v.id=b.entry_version_id AND v.tenant_id=b.tenant_id
-          JOIN core.registry_entries e ON e.id=v.entry_id AND e.tenant_id=v.tenant_id
+          FROM core.registry_review_bundles b JOIN core.registry_entry_versions v ON v.id=b.entry_version_id
+          JOIN core.registry_entries e ON e.id=v.entry_id
           LEFT JOIN chain.anchor_batch_leaves l ON l.entry_version_id=v.id
-          WHERE b.tenant_id=${tenantId} AND b.entry_version_id=${request.params.id}::uuid`;
+          WHERE b.entry_version_id=${request.params.id}::uuid`;
         if(!row) throw notFound("Review bundle not available for this version");
         return row;
       },row=>row.project_id);
-      assertAuthorized(session,"registry.read",projectResource(tenantId,stored.project_id,{sensitivity:"restricted"}),sessionFacts(session));
+      assertAuthorized(session,"registry.read",projectResource(stored.project_id,{sensitivity:"restricted"}),sessionFacts(session));
       return {entryVersionId:stored.id,bundle:stored.bundle,bundleHash:stored.bundle_hash,projection:stored.public_projection,
         leaf:stored.leaf_payload ?? {registryType:stored.registry_type,entryVersionId:stored.id,subjectId:stored.subject_id,version:String(stored.version),status:stored.status,
           contentHash:stored.content_hash,policyVersion:stored.policy_version,schemaVersion:stored.schema_version,serializationVersion:stored.serialization_version}};
@@ -127,16 +127,16 @@ export async function registerRegistryRoutes(
   app.post<{ Params: { draftId: string } }>(
     "/api/v1/registry-entries/drafts/:draftId/publish",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       // The approver states which revision of the draft they read.
       const expectedDraftVersion = requireIfMatch(request);
 
       const projectId = await authorizedProjectLookup(session, "registry.publish",
-        () => draftProjectId(sql, tenantId, request.params.draftId), id => id);
+        () => draftProjectId(sql, actor, request.params.draftId), id => id);
       const effectiveRole = assertAuthorized(
         session,
         "registry.publish",
-        projectResource(tenantId, projectId, {
+        projectResource(projectId, {
           sensitivity: "public",
           state: "pending",
           statesAllowingAction: ["pending"],
@@ -151,9 +151,9 @@ export async function registerRegistryRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
-          const draft = await lockDraft(tx, tenantId, request.params.draftId);
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
+          const draft = await lockDraft(tx, request.params.draftId);
           if (!draft) throw notFound("Draft not found");
           // A blackout on the project blocks publication (11 §11.12), checked at the publish step.
           assertVersionMatches(expectedDraftVersion, draft.version, "registry_publication_draft");
@@ -193,13 +193,12 @@ export async function registerRegistryRoutes(
           if (draft.registry_type === "project") {
             await tx`
               SELECT 1 FROM core.projects
-              WHERE tenant_id = ${tenantId} AND id = ${draft.subject_id}
+              WHERE id = ${draft.subject_id}
               FOR UPDATE
             `;
           }
           const subject = await resolvePublicationSubject(
             tx,
-            tenantId,
             draft.registry_type,
             draft.subject_id,
           );
@@ -207,14 +206,13 @@ export async function registerRegistryRoutes(
           // verification entry is about an attestation in that project.
           await assertActionNotRestricted(
             tx,
-            tenantId,
             subject.projectId,
             "registry.publish",
             session.subjectId,
           );
           assertDraftStillPublishable(draft, subject, body.personIdentifierPublicationApproved);
           await assertEvidenceLedgerProjection(
-            tx, tenantId, draft.registry_type, subject.projectId, draft.projection, new Date(),
+            tx, draft.registry_type, subject.projectId, draft.projection, new Date(),
           );
 
           /**
@@ -225,7 +223,7 @@ export async function registerRegistryRoutes(
            * creates that record. The server decides; lifecycle is **not a value the client
            * gets to claim.**
            */
-          const reviewBundle = await freezeReviewBundle(tx, tenantId, subject.projectId, draft.registry_type, draft.subject_id, draft.projection);
+          const reviewBundle = await freezeReviewBundle(tx, subject.projectId, draft.registry_type, draft.subject_id, draft.projection);
           const publishedProjection = { ...draft.projection, status: subject.publishedStatus, reviewCommitment: reviewBundle.commitment };
           const projectionCheck = publicProjection.safeParse(publishedProjection);
           if (!projectionCheck.success) {
@@ -248,17 +246,17 @@ export async function registerRegistryRoutes(
           const entryId = existingEntry?.id ?? randomUUID();
           if (!existingEntry) {
             /**
-             * `UNIQUE (registry_type, public_key)` spans tenants on purpose: the public URL is
-             * `/registries/{type}/{publicKey}` with no tenant in it, so one key must name one
-             * entry. Another tenant's entry is invisible under RLS, so the lookup above misses it
+             * `UNIQUE (registry_type, public_key)` spans the Registry on purpose: the public URL
+             * is `/registries/{type}/{publicKey}`, so one key must name one entry. An entry
+             * outside the caller's reach is invisible under RLS, so the lookup above misses it
              * and the constraint is what refuses it — answered as the same conflict, in the same
-             * words, so the response does not reveal that another tenant holds the key.
+             * words, so the response does not reveal who holds the key.
              */
             await tx`
               INSERT INTO core.registry_entries (
-                id, tenant_id, registry_type, subject_id, public_key
+                id, registry_type, subject_id, public_key
               ) VALUES (
-                ${entryId}, ${tenantId}, ${draft.registry_type}, ${draft.subject_id},
+                ${entryId}, ${draft.registry_type}, ${draft.subject_id},
                 ${draft.public_key}
               )
             `.catch((caught: unknown) => {
@@ -279,19 +277,19 @@ export async function registerRegistryRoutes(
 
           await tx`
             INSERT INTO core.registry_entry_versions (
-              id, tenant_id, entry_id, version, status, public_projection,
+              id, entry_id, version, status, public_projection,
               content_hash, source_snapshot_hash, policy_version, schema_version,
               previous_version_id, published_at, serialization_version
             ) VALUES (
-              ${versionId}, ${tenantId}, ${entryId}, ${nextVersion}, 'published',
+              ${versionId}, ${entryId}, ${nextVersion}, 'published',
               ${tx.json(publishedProjection as never)}, ${contentHash},
               ${draft.source_snapshot_hash}, ${draft.policy_version}, ${draft.schema_version},
               ${previous?.id ?? null}, now(), '2'
             )
           `;
 
-          await tx`INSERT INTO core.registry_review_bundles(entry_version_id,tenant_id,project_id,bundle,bundle_hash)
-            VALUES(${versionId},${tenantId},${subject.projectId},${tx.json(reviewBundle.bundle as never)},${reviewBundle.bundleHash})`;
+          await tx`INSERT INTO core.registry_review_bundles(entry_version_id,project_id,bundle,bundle_hash)
+            VALUES(${versionId},${subject.projectId},${tx.json(reviewBundle.bundle as never)},${reviewBundle.bundleHash})`;
 
           // The previous version is not deleted; it is linked as superseded (invariant 4).
           if (previous) {
@@ -307,7 +305,7 @@ export async function registerRegistryRoutes(
             SET state = 'published', decided_by_subject_id = ${publisher}, decided_at = now(),
                 person_identifier_publication_approved = ${body.personIdentifierPublicationApproved},
                 entry_version_id = ${versionId}, version = version + 1
-            WHERE tenant_id = ${tenantId} AND id = ${draft.id}
+            WHERE id = ${draft.id}
           `;
 
           /**
@@ -341,9 +339,9 @@ export async function registerRegistryRoutes(
                */
               await tx`
                 INSERT INTO core.project_lifecycle_transitions (
-                  tenant_id, project_id, from_state, to_state, reason, actor_subject_id
+                  project_id, from_state, to_state, reason, actor_subject_id
                 ) VALUES (
-                  ${tenantId}, ${subject.projectId}, 'draft', 'registered',
+                  ${subject.projectId}, 'draft', 'registered',
                   'Project Registry publication satisfied the 04 §4.3 guard',
                   ${session.subjectId}
                 )
@@ -351,7 +349,6 @@ export async function registerRegistryRoutes(
 
               await recordAudit(tx, {
                 effectiveRole,
-                tenantId,
                 session,
                 command: "project.lifecycle.transitioned",
                 resourceType: "project",
@@ -366,7 +363,6 @@ export async function registerRegistryRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "registry.version.published",
             resourceType: "registry_entry_version",
@@ -384,7 +380,6 @@ export async function registerRegistryRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "registry.version.published",
             aggregateId: versionId,
             aggregateVersion: nextVersion,
@@ -417,7 +412,7 @@ export async function registerRegistryRoutes(
   app.post<{ Params: { entryId: string } }>(
     "/api/v1/registry-entries/:entryId/revoke",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       // States which version is revoked. Otherwise, if a new version was published after the
       // lookup, the wrong one would be revoked.
       const expectedVersion = requireIfMatch(request);
@@ -425,16 +420,16 @@ export async function registerRegistryRoutes(
       const parsed = z.object({ reasonCode: z.string().min(1) }).safeParse(request.body);
       if (!parsed.success) throw badRequest("REQUEST_INVALID", "reasonCode is required");
 
-      const projectId = await authorizedProjectLookup(session, "registry.revoke", () => withTenant(sql, { tenantId }, async tx => {
+      const projectId = await authorizedProjectLookup(session, "registry.revoke", () => withActor(sql, actor, async tx => {
         const [entry] = await tx<{registry_type:"project"|"verification";subject_id:string}[]>`
-          SELECT registry_type,subject_id FROM core.registry_entries WHERE tenant_id=${tenantId} AND id=${request.params.entryId}`;
+          SELECT registry_type,subject_id FROM core.registry_entries WHERE id=${request.params.entryId}`;
         if (!entry) throw notFound("Registry entry not found");
-        return registrySubjectProjectId(tx, tenantId, entry.registry_type, entry.subject_id);
+        return registrySubjectProjectId(tx, entry.registry_type, entry.subject_id);
       }), id => id);
       const effectiveRole = assertAuthorized(
         session,
         "registry.revoke",
-        projectResource(tenantId, projectId, {
+        projectResource(projectId, {
           sensitivity: "public",
           state: "published",
           statesAllowingAction: ["published"],
@@ -445,8 +440,8 @@ export async function registerRegistryRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [version] = await tx<{ id: string; status: string; version: number }[]>`
             SELECT id, status, version FROM core.registry_entry_versions
             WHERE entry_id = ${request.params.entryId} AND status = 'published'
@@ -467,7 +462,6 @@ export async function registerRegistryRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "registry.version.revoked",
             resourceType: "registry_entry_version",
@@ -478,7 +472,6 @@ export async function registerRegistryRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "registry.version.revoked",
             aggregateId: version.id,
             aggregateVersion: version.version,
@@ -501,20 +494,20 @@ export async function registerRegistryRoutes(
   // --- anchor ------------------------------------------------------------
 
   app.post("/api/v1/anchor-batches", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
 
     const body = parseBody(createProjectAnchorBatchRequest, request.body);
     const projectId = body.projectId.toLowerCase();
     const action = "anchor.batch.create";
-    await authorizedProjectLookup(session, action, () => withTenant(sql, { tenantId }, async tx => {
-      const [project] = await tx`SELECT id FROM core.projects WHERE tenant_id = ${tenantId} AND id = ${projectId}`;
+    await authorizedProjectLookup(session, action, () => withActor(sql, actor, async tx => {
+      const [project] = await tx`SELECT id FROM core.projects WHERE id = ${projectId}`;
       if (!project) throw notFound("Project not found");
       return projectId;
     }), id => id);
     const effectiveRole = assertAuthorized(
       session,
       action,
-      projectResource(tenantId, projectId, {
+      projectResource(projectId, {
         sensitivity: "public",
         state: "ready",
         statesAllowingAction: ["ready"],
@@ -525,19 +518,19 @@ export async function registerRegistryRoutes(
     const { requestId, asOf, correlationId } = request.context;
     const requestHash = hashRequest(request);
 
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, requestHash, async () => {
         // Serialize creation for this project. The unique leaf index also guards other writers.
-        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`anchor-batch:${tenantId}:${projectId}`}::TEXT, 0))`;
-        const batch = await buildAnchorBatch(tx, tenantId, projectId);
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`anchor-batch:${projectId}`}::TEXT, 0))`;
+        const batch = await buildAnchorBatch(tx, projectId);
         const batchRowId = randomUUID();
 
         await tx`
           INSERT INTO chain.anchor_batches (
-            id, tenant_id, project_id, batch_id, merkle_root, manifest_hash,
+            id, project_id, batch_id, merkle_root, manifest_hash,
             manifest_object_key, schema_version, record_count
           ) VALUES (
-            ${batchRowId}, ${tenantId}, ${projectId}, ${batch.batchId}, ${batch.root},
+            ${batchRowId}, ${projectId}, ${batch.batchId}, ${batch.root},
             ${batch.manifestHash}, ${`manifests/${batch.batchId}.json`}, '1',
             ${batch.recordCount}
           )
@@ -553,16 +546,15 @@ export async function registerRegistryRoutes(
         // The transaction is still created. The chain worker submits and confirms it.
         await tx`
           INSERT INTO chain.transactions (
-            id, tenant_id, batch_id, intent_key, chain_id, state
+            id, batch_id, intent_key, chain_id, state
           ) VALUES (
-            ${randomUUID()}, ${tenantId}, ${batchRowId},
+            ${randomUUID()}, ${batchRowId},
             ${`anchor:${batch.batchId}`}, ${config.chainId}, 'created'
           )
         `;
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           session,
           projectId,
           command: "anchor.batch.created",
@@ -574,7 +566,6 @@ export async function registerRegistryRoutes(
         });
 
         await enqueueEvent(tx, {
-          tenantId,
           eventType: "anchor.submitted",
           aggregateId: batchRowId,
           aggregateVersion: 1,
@@ -605,14 +596,14 @@ export async function registerRegistryRoutes(
    * "in progress/done"; the chain state is returned as is.
    */
   app.get("/api/v1/anchor-batches", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     const { requestId, asOf } = request.context;
 
     /**
      * Reads also check roles — 02 §2.1.
      *
-     * Previously it was "RLS scopes by tenant, so that is enough". That made a wallet bound
-     * to a tenant equal read permission, letting accounts without roles see batch state and
+     * Previously it was "RLS scopes the rows, so that is enough". That made any live account
+     * equal read permission, letting accounts without roles see batch state and
      * transaction hashes. Published roots are public, but **submission history and failure state
      * are operational information**.
      *
@@ -621,11 +612,11 @@ export async function registerRegistryRoutes(
     assertAuthorized(
       session,
       "anchor.read",
-      tenantResource(tenantId, { sensitivity: "public" }),
+      registryResource({ sensitivity: "public" }),
       sessionFacts(session),
     );
 
-    const rows = await withTenant(sql, { tenantId }, (tx) =>
+    const rows = await withActor(sql, actor, (tx) =>
       tx<
         {
           id: string;
@@ -750,12 +741,12 @@ export async function registerRegistryRoutes(
   app.post<{ Params: { batchId: string } }>(
     "/api/v1/anchor-batches/:batchId/resubmit",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const effectiveRole = assertAuthorized(
         session,
         "anchor.submit",
-        tenantResource(tenantId, {
+        registryResource({
           sensitivity: "public",
           state: "ready",
           statesAllowingAction: ["ready"],
@@ -766,8 +757,8 @@ export async function registerRegistryRoutes(
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const [transaction] = await tx<
             StuckTransaction[]
           >`
@@ -870,7 +861,6 @@ export async function registerRegistryRoutes(
 
             await recordAudit(tx, {
               effectiveRole,
-              tenantId,
               session,
               command: "anchor.batch.resubmit_requested",
               resourceType: "anchor_batch",
@@ -913,7 +903,6 @@ export async function registerRegistryRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "anchor.batch.resubmit_requested",
             resourceType: "anchor_batch",

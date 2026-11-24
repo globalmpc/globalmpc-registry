@@ -7,8 +7,8 @@ import type { RouteDefinition } from "./routes.js";
  * Suspending a person — account authentication plan journey 6, AUTH-06 (migration 0127).
  *
  * Two people with an admin role, neither of them the person. Approving a suspension ends every
- * session and revokes every second factor, recovery code and linked Google / Microsoft identity in
- * one transaction; signing in then answers exactly as for an unknown address or identity. Signed
+ * session and revokes every second factor, recovery code and linked Google identity in one
+ * transaction; signing in then answers exactly as for an unknown address or identity. Signed
  * history, role bindings and wallets are kept. Reinstating takes the same two people, keeps the
  * recovery separation of 0118 (it opens a 24-hour first-enrolment window, like an MFA reset) and
  * lets the person sign in by email code again.

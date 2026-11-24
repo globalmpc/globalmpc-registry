@@ -78,25 +78,25 @@ async function seedReviewedClaim(fx: TestFixture, receiptId: string): Promise<vo
     definition: { fields: [{ key: "number", label: "Number", type: "string", required: true }] } };
   const hash = `0x${"ab".repeat(32)}`;
   await fx.sql.begin(async tx => {
-    await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-      VALUES(${proposalId},${fx.tenantA},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic local CRE fixture',now()-interval '1 day',${fx.operatorSubjectA})`;
-    await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-      SELECT ${catalogId},tenant_id,item_key,1,'Synthetic CRE licence',payload->'definition',effective_from
+    await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+      VALUES(${proposalId},'claim_type',${claimType},1,${tx.json(payload)},'Synthetic local CRE fixture',now()-interval '1 day',${fx.operatorSubjectA})`;
+    await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+      SELECT ${catalogId},item_key,1,'Synthetic CRE licence',payload->'definition',effective_from
       FROM core.registry_proposals WHERE id=${proposalId}`;
     await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),
       decision_reason='Synthetic local fixture only',materialized_id=${catalogId},version=2 WHERE id=${proposalId}`;
-    await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,grade,
+    await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,grade,
       source_receipt_id,catalog_entry_id,catalog_version,structured_values,as_of)
-      VALUES(${claimId},${fx.tenantA},${fx.projectA},${claimType},'Synthetic licence','{}','verified',
+      VALUES(${claimId},${fx.projectA},${claimType},'Synthetic licence','{}','verified',
         ${receiptId},${catalogId},1,'{"number":"SYNTHETIC-1"}',current_date)`;
-    await tx`INSERT INTO core.verification_cases(id,tenant_id,project_id,schema_id,state)
-      VALUES(${caseId},${fx.tenantA},${fx.projectA},${fx.schemaA},'signed')`;
-    await tx`INSERT INTO core.assignments(id,tenant_id,case_id,subject_id,credential_id)
-      VALUES(${assignmentId},${fx.tenantA},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
-    await tx`INSERT INTO core.verification_attestations(id,tenant_id,case_id,assignment_id,credential_id,schema_id,
+    await tx`INSERT INTO core.verification_cases(id,project_id,schema_id,state)
+      VALUES(${caseId},${fx.projectA},${fx.schemaA},'signed')`;
+    await tx`INSERT INTO core.assignments(id,case_id,subject_id,credential_id)
+      VALUES(${assignmentId},${caseId},${fx.reviewerSubjectA},${fx.credentialA})`;
+    await tx`INSERT INTO core.verification_attestations(id,case_id,assignment_id,credential_id,schema_id,
       attestation_type,claim_scope,evidence_snapshot_hash,limitations,credential_status_snapshot,method_version,
       policy_version,payload_hash,signature,signer_wallet_address,signed_at,state)
-      VALUES(${attestationId},${fx.tenantA},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},
+      VALUES(${attestationId},${caseId},${assignmentId},${fx.credentialA},${fx.schemaA},
         'professional_signoff',${[claimId]}::uuid[],${hash},'Synthetic demonstration; no legal validity opinion',
         '{"status":"valid"}','1','1',${hash},${`0x${"12".repeat(65)}`},${fx.reviewerA.address},now()-interval '1 hour','signed')`;
   });

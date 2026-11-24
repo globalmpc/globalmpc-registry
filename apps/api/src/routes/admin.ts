@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   ROLE_MINIMUM_ASSURANCE,
   GRANTABLE_ROLES,
@@ -22,7 +22,7 @@ import {
   WEBHOOK_SECRET_FILE_PREFIX,
 } from "@mpc/config";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { recordAudit } from "../audit.js";
 import { revokeSubjectSessions } from "../plugins/session-token.js";
@@ -36,11 +36,10 @@ import {
 
 async function assertRoleGrantTarget(
   tx: postgres.TransactionSql,
-  tenantId: string,
   data: ReturnType<typeof createRoleGrantRequest.parse>,
 ): Promise<void> {
-  if (data.role === "project_member" && data.scopeKind === "tenant") {
-    throw unprocessable("ROLE_SCOPE_INVALID", "Project membership cannot grant tenant-wide project access");
+  if (data.role === "project_member" && data.scopeKind === "registry") {
+    throw unprocessable("ROLE_SCOPE_INVALID", "Project membership cannot grant Registry-wide project access");
   }
   if ((data.governanceScope === "project" && !data.projectId) ||
     (data.governanceScope === "protocol" && data.projectId) ||
@@ -48,11 +47,11 @@ async function assertRoleGrantTarget(
     throw unprocessable("ROLE_SCOPE_INVALID", "Voting namespace must match the project and role");
   }
   if (data.organizationId) {
-    const [organization] = await tx`SELECT id FROM core.organizations WHERE id=${data.organizationId} AND tenant_id=${tenantId}`;
+    const [organization] = await tx`SELECT id FROM core.organizations WHERE id=${data.organizationId}`;
     if (!organization) throw notFound("Organization not found");
   }
   const [subject] = await tx<{ id: string; kind: string }[]>`
-    SELECT id, kind FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${data.subjectId}
+    SELECT id, kind FROM core.subjects WHERE id = ${data.subjectId}
   `;
   if (!subject) throw notFound("Subject not found");
   if (SERVICE_ONLY_ROLES.includes(data.role) !== (subject.kind === "service")) {
@@ -83,11 +82,9 @@ async function assertRoleGrantTarget(
  * else's account (plan §5, acceptance 9). What the bind used to carry — the identity assurance
  * level and its basis — is set on the subject instead (`…/assurance`).
  *
- * **Tenant creation is not here.** A session is always bound to one tenant, and RLS enforces
- * it. A route that creates another tenant must cross that boundary, so it needs a SECURITY
- * DEFINER function, which creates an **HTTP-reachable tenant creation path**. The blast radius
- * of one hijacked operator session widens from one tenant to the whole platform. Tenant
- * creation is a once-per-deployment seed, so it stays in the `bootstrap` CLI. This decision is
+ * **The first administrator is not created here.** Granting the first Registry-wide role
+ * crosses every project boundary, so it needs the deployment owner and stays in the `bootstrap`
+ * CLI, a once-per-deployment step rather than an HTTP-reachable path. This decision is
  * reversible.
  */
 
@@ -127,7 +124,7 @@ interface GrantRow {
   subject_name: string;
   role: string;
   organization_id: string | null;
-  scope_kind: "tenant" | "organization" | "none" | null;
+  scope_kind: "registry" | "organization" | "none" | null;
   governance_scope: "protocol" | "project" | "none" | null;
   project_id: string | null;
   jurisdiction: string[] | null;
@@ -178,26 +175,25 @@ const ASSURANCE_LEVELS: readonly string[] = setSubjectAssuranceRequest.shape.ass
  */
 async function syncSubjectAssurance(
   tx: postgres.TransactionSql,
-  tenantId: string,
   subjectId: string,
 ): Promise<{ previous: string | null; current: string | null }> {
   const [row] = await tx<{ previous: string; current: string }[]>`
     WITH before AS (
       SELECT assurance_level FROM core.subjects
-      WHERE tenant_id = ${tenantId} AND id = ${subjectId}
+      WHERE id = ${subjectId}
       FOR UPDATE
     )
     UPDATE core.subjects s
     SET assurance_level = COALESCE(
           (
             SELECT max(w.assurance_level) FROM core.wallet_identities w
-            WHERE w.tenant_id = s.tenant_id AND w.subject_id = s.id AND w.disabled_at IS NULL
+            WHERE w.subject_id = s.id AND w.disabled_at IS NULL
           ),
           'wallet_only'
         ),
         version = s.version + 1
     FROM before
-    WHERE s.tenant_id = ${tenantId} AND s.id = ${subjectId}
+    WHERE s.id = ${subjectId}
     RETURNING before.assurance_level::text AS previous, s.assurance_level::text AS current
   `;
   return { previous: row?.previous ?? null, current: row?.current ?? null };
@@ -216,19 +212,17 @@ export async function registerAdminRoutes(
    */
   async function readSubjects(
     tx: postgres.Sql | postgres.TransactionSql,
-    tenantId: string,
     subjectId?: string,
   ): Promise<ReturnType<typeof shapeSubject>[]> {
     const subjects = subjectId
       ? await tx<SubjectRow[]>`
           SELECT id, display_name, kind, assurance_level, email IS NOT NULL AS has_email, suspended_at
           FROM core.subjects
-          WHERE tenant_id = ${tenantId} AND id = ${subjectId}
+          WHERE id = ${subjectId}
         `
       : await tx<SubjectRow[]>`
           SELECT id, display_name, kind, assurance_level, email IS NOT NULL AS has_email, suspended_at
-          FROM core.subjects
-          WHERE tenant_id = ${tenantId} ORDER BY display_name
+          FROM core.subjects ORDER BY display_name
         `;
     if (subjects.length === 0) return [];
 
@@ -237,17 +231,17 @@ export async function registerAdminRoutes(
       SELECT id, subject_id, wallet_address, chain_id, assurance_level, bound_via,
              bound_at, disabled_at, version
       FROM core.wallet_identities
-      WHERE tenant_id = ${tenantId} AND subject_id = ANY(${ids})
+      WHERE subject_id = ANY(${ids})
       ORDER BY created_at
     `;
     const roles = await tx<RoleRow[]>`
       SELECT id, subject_id, role, project_id, granted_at, revoked_at
       FROM core.role_bindings
-      WHERE tenant_id = ${tenantId} AND subject_id = ANY(${ids})
+      WHERE subject_id = ANY(${ids})
       ORDER BY granted_at
     `;
     // Provider names only (0124): the application role reads no identity row itself.
-    const providers = await tx<{ subject_id: string; provider: "google" | "microsoft" }[]>`
+    const providers = await tx<{ subject_id: string; provider: "google" }[]>`
       SELECT subject_id, provider FROM core.subject_sign_in_providers(${ids}::uuid[])
     `;
 
@@ -265,10 +259,10 @@ export async function registerAdminRoutes(
     subject: SubjectRow,
     wallets: readonly WalletRow[],
     roles: readonly RoleRow[],
-    providers: readonly ("google" | "microsoft")[],
+    providers: readonly ("google")[],
   ) {
     /**
-     * How the person can sign in (WP6): the address and live Google / Microsoft identities. A
+     * How the person can sign in (WP6): the address and live Google identities. A
      * wallet is a signing key and never a way in (D3; wallet sign-in removed in WP7).
      */
     const signInMethods = [...(subject.has_email ? (["email"] as const) : []), ...providers];
@@ -303,17 +297,17 @@ export async function registerAdminRoutes(
   }
 
   app.get("/api/v1/admin/subjects", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "admin.read",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
 
     const { requestId, asOf } = request.context;
-    return withTenant(sql, { tenantId }, async (tx) => ({
-      items: (await readSubjects(tx, tenantId)).map((subject) => ({
+    return withActor(sql, actor, async (tx) => ({
+      items: (await readSubjects(tx)).map((subject) => ({
         ...subject,
         requestId,
         asOf,
@@ -324,11 +318,11 @@ export async function registerAdminRoutes(
   });
 
   app.post("/api/v1/admin/subjects", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "admin.subject.manage",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
 
@@ -340,16 +334,15 @@ export async function registerAdminRoutes(
     }
 
     const { requestId, asOf, correlationId } = request.context;
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
         const id = randomUUID();
         await tx`
-          INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-          VALUES (${id}, ${tenantId}, ${parsed.data.kind}, ${parsed.data.displayName})
+          INSERT INTO core.subjects (id, kind, display_name)
+          VALUES (${id}, ${parsed.data.kind}, ${parsed.data.displayName})
         `;
 
         await recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: "admin.subject.registered",
@@ -360,7 +353,7 @@ export async function registerAdminRoutes(
           requestIp: request.clientIp,
         });
 
-        const [created] = await readSubjects(tx, tenantId, id);
+        const [created] = await readSubjects(tx, id);
         return { ...created!, requestId, asOf };
       }),
     );
@@ -376,11 +369,11 @@ export async function registerAdminRoutes(
   app.post<{ Params: { subjectId: string } }>(
     "/api/v1/admin/subjects/:subjectId/assurance",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
         "admin.subject.manage",
-        tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+        registryResource({ state: "active", statesAllowingAction: ["active"] }),
         sessionFacts(session),
       );
 
@@ -404,11 +397,11 @@ export async function registerAdminRoutes(
       }
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [before] = await tx<{ assurance_level: string; kind: string; version: number }[]>`
             SELECT assurance_level::text, kind, version FROM core.subjects
-            WHERE tenant_id = ${tenantId} AND id = ${request.params.subjectId}
+            WHERE id = ${request.params.subjectId}
             FOR NO KEY UPDATE
           `;
           if (!before) throw notFound("Subject not found");
@@ -420,11 +413,10 @@ export async function registerAdminRoutes(
           await tx`
             UPDATE core.subjects
             SET assurance_level = ${parsed.data.assuranceLevel}, version = version + 1
-            WHERE tenant_id = ${tenantId} AND id = ${request.params.subjectId}
+            WHERE id = ${request.params.subjectId}
           `;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: "admin.subject.assurance_set",
@@ -443,7 +435,7 @@ export async function registerAdminRoutes(
             },
           });
 
-          const [updated] = await readSubjects(tx, tenantId, request.params.subjectId);
+          const [updated] = await readSubjects(tx, request.params.subjectId);
           return { ...updated!, requestId, asOf };
         }),
       );
@@ -453,11 +445,11 @@ export async function registerAdminRoutes(
   app.post<{ Params: { walletId: string } }>(
     "/api/v1/admin/wallets/:walletId/disable",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
         "admin.wallet.manage",
-        tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+        registryResource({ state: "active", statesAllowingAction: ["active"] }),
         sessionFacts(session),
       );
 
@@ -477,8 +469,8 @@ export async function registerAdminRoutes(
       }
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           /**
            * Subject first, then its sessions — the order every account function keeps
            * (`core.mfa_lock_session`). Locking the wallet and the sessions before the subject
@@ -487,14 +479,14 @@ export async function registerAdminRoutes(
           await tx`
             SELECT s.id FROM core.subjects s
             JOIN core.wallet_identities w ON w.subject_id = s.id
-            WHERE w.tenant_id = ${tenantId} AND w.id = ${request.params.walletId}
+            WHERE w.id = ${request.params.walletId}
             FOR NO KEY UPDATE OF s
           `;
           const [wallet] = await tx<WalletRow[]>`
             SELECT id, subject_id, wallet_address, chain_id, assurance_level, bound_via,
                    bound_at, disabled_at, version
             FROM core.wallet_identities
-            WHERE tenant_id = ${tenantId} AND id = ${request.params.walletId}
+            WHERE id = ${request.params.walletId}
             FOR UPDATE
           `;
           if (!wallet) throw notFound("Wallet not found");
@@ -526,7 +518,7 @@ export async function registerAdminRoutes(
           await tx`
             UPDATE core.wallet_identities
             SET disabled_at = now(), version = version + 1
-            WHERE tenant_id = ${tenantId} AND id = ${wallet.id}
+            WHERE id = ${wallet.id}
           `;
 
           /**
@@ -535,9 +527,9 @@ export async function registerAdminRoutes(
            */
           await tx`
             INSERT INTO core.wallet_disable_events (
-              id, tenant_id, wallet_identity_id, reason_code, detail, disabled_by_subject_id
+              id, wallet_identity_id, reason_code, detail, disabled_by_subject_id
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${wallet.id}, ${parsed.data.reasonCode},
+              ${randomUUID()}, ${wallet.id}, ${parsed.data.reasonCode},
               ${parsed.data.detail}, ${session.subjectId}
             )
           `;
@@ -554,11 +546,10 @@ export async function registerAdminRoutes(
           // one never counted (0122), so disabling it leaves the subject's level alone.
           const assurance =
             wallet.subject_id && wallet.bound_via === "operator"
-              ? await syncSubjectAssurance(tx, tenantId, wallet.subject_id)
+              ? await syncSubjectAssurance(tx, wallet.subject_id)
               : null;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: "admin.wallet.disabled",
@@ -580,7 +571,7 @@ export async function registerAdminRoutes(
           });
 
           reply.header("etag", etagOf(wallet.version + 1));
-          const [updated] = await readSubjects(tx, tenantId, wallet.subject_id!);
+          const [updated] = await readSubjects(tx, wallet.subject_id!);
           return { ...updated!, requestId, asOf };
         }),
       );
@@ -588,20 +579,19 @@ export async function registerAdminRoutes(
   );
 
   app.get("/api/v1/admin/role-grants", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "admin.read",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
 
     const { requestId, asOf } = request.context;
-    const rows = await withTenant(sql, { tenantId }, (tx) => tx<GrantRow[]>`
+    const rows = await withActor(sql, actor, (tx) => tx<GrantRow[]>`
       SELECT g.*, s.display_name AS subject_name
       FROM core.role_grant_requests g
       JOIN core.subjects s ON s.id = g.subject_id
-      WHERE g.tenant_id = ${tenantId}
       ORDER BY g.requested_at DESC
     `);
 
@@ -609,11 +599,11 @@ export async function registerAdminRoutes(
   });
 
   app.post("/api/v1/admin/role-grants", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "admin.role.propose",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
 
@@ -633,18 +623,18 @@ export async function registerAdminRoutes(
     }
 
     const { requestId, asOf, correlationId } = request.context;
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
-        await assertRoleGrantTarget(tx, tenantId, parsed.data);
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+        await assertRoleGrantTarget(tx, parsed.data);
 
         const id = randomUUID();
         try {
           await tx`
             INSERT INTO core.role_grant_requests (
-              id, tenant_id, subject_id, organization_id, project_id, role, reason,
+              id, subject_id, organization_id, project_id, role, reason,
               requested_by_subject_id, jurisdiction, scope_kind, governance_scope
             ) VALUES (
-              ${id}, ${tenantId}, ${parsed.data.subjectId},
+              ${id}, ${parsed.data.subjectId},
               ${parsed.data.organizationId ?? null}, ${parsed.data.projectId ?? null},
               ${parsed.data.role}, ${parsed.data.reason}, ${session.subjectId},
               ${parsed.data.jurisdiction ?? null}, ${parsed.data.scopeKind ?? null}, ${parsed.data.governanceScope ?? null}
@@ -660,7 +650,6 @@ export async function registerAdminRoutes(
         }
 
         await recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: "admin.role_grant.proposed",
@@ -685,11 +674,11 @@ export async function registerAdminRoutes(
   app.post<{ Params: { grantId: string } }>(
     "/api/v1/admin/role-grants/:grantId/decision",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
         "admin.role.approve",
-        tenantResource(tenantId, { state: "pending", statesAllowingAction: ["pending"] }),
+        registryResource({ state: "pending", statesAllowingAction: ["pending"] }),
         sessionFacts(session),
       );
 
@@ -704,13 +693,13 @@ export async function registerAdminRoutes(
       }
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [grant] = await tx<(GrantRow & { organization_id: string | null })[]>`
             SELECT g.*, s.display_name AS subject_name
             FROM core.role_grant_requests g
             JOIN core.subjects s ON s.id = g.subject_id
-            WHERE g.tenant_id = ${tenantId} AND g.id = ${request.params.grantId}
+            WHERE g.id = ${request.params.grantId}
             FOR UPDATE OF g
           `;
           if (!grant) throw notFound("Proposal not found");
@@ -735,16 +724,16 @@ export async function registerAdminRoutes(
           if (parsed.data.decision === "approve" && SECOND_PERSON_ROLES.includes(grant.role)) {
             // Same subject-row lock as the bind route, so a concurrent bind is seen, not missed.
             await tx`
-              SELECT id FROM core.subjects WHERE tenant_id = ${tenantId} AND id = ${grant.subject_id}
+              SELECT id FROM core.subjects WHERE id = ${grant.subject_id}
               FOR NO KEY UPDATE
             `;
             const [uiBound] = await tx<{ id: string }[]>`
               SELECT w.id FROM core.wallet_identities w
-              WHERE w.tenant_id = ${tenantId} AND w.subject_id = ${grant.subject_id}
+              WHERE w.subject_id = ${grant.subject_id}
                 AND w.disabled_at IS NULL
                 AND EXISTS (
                   SELECT 1 FROM audit.events e
-                  WHERE e.tenant_id = ${tenantId} AND e.command = 'admin.wallet.bound'
+                  WHERE e.command = 'admin.wallet.bound'
                     AND e.resource_id = w.id
                 )
               LIMIT 1
@@ -768,9 +757,9 @@ export async function registerAdminRoutes(
             bindingId = randomUUID();
             await tx`
               INSERT INTO core.role_bindings (
-                id, tenant_id, subject_id, organization_id, project_id, role, jurisdiction, scope_kind, governance_scope
+                id, subject_id, organization_id, project_id, role, jurisdiction, scope_kind, governance_scope
               ) VALUES (
-                ${bindingId}, ${tenantId}, ${grant.subject_id}, ${grant.organization_id},
+                ${bindingId}, ${grant.subject_id}, ${grant.organization_id},
                 ${grant.project_id}, ${grant.role}, ${grant.jurisdiction}, ${grant.scope_kind}, ${grant.governance_scope}
               )
             `;
@@ -784,11 +773,10 @@ export async function registerAdminRoutes(
                 decision_reason = ${parsed.data.reason},
                 role_binding_id = ${bindingId},
                 version = version + 1
-            WHERE tenant_id = ${tenantId} AND id = ${grant.id}
+            WHERE id = ${grant.id}
           `;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: approved ? "admin.role_grant.approved" : "admin.role_grant.rejected",
@@ -859,7 +847,6 @@ export async function registerAdminRoutes(
    */
   async function readSinks(
     tx: postgres.Sql | postgres.TransactionSql,
-    tenantId: string,
     sinkId?: string,
   ): Promise<SinkRow[]> {
     return tx<SinkRow[]>`
@@ -879,32 +866,31 @@ export async function registerAdminRoutes(
         FROM core.notification_deliveries
         WHERE sink_id = s.id
       ) d ON true
-      WHERE s.tenant_id = ${tenantId}
-        AND (${sinkId ?? null}::uuid IS NULL OR s.id = ${sinkId ?? null})
+      WHERE (${sinkId ?? null}::uuid IS NULL OR s.id = ${sinkId ?? null})
       ORDER BY s.created_at
     `;
   }
 
   app.get("/api/v1/admin/notification-sinks", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "admin.notification.manage",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
 
     const { requestId, asOf } = request.context;
-    const rows = await withTenant(sql, { tenantId }, (tx) => readSinks(tx, tenantId));
+    const rows = await withActor(sql, actor, (tx) => readSinks(tx));
     return { items: rows.map((row) => toSink(row, requestId, asOf)), requestId, asOf };
   });
 
   app.post("/api/v1/admin/notification-sinks", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "admin.notification.manage",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
 
@@ -936,23 +922,22 @@ export async function registerAdminRoutes(
     }
 
     const { requestId, asOf, correlationId } = request.context;
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
         const id = randomUUID();
         try {
           await tx`
-            INSERT INTO core.notification_sinks (id, tenant_id, url, secret_reference)
-            VALUES (${id}, ${tenantId}, ${parsed.data.url}, ${parsed.data.secretReference})
+            INSERT INTO core.notification_sinks (id, url, secret_reference)
+            VALUES (${id}, ${parsed.data.url}, ${parsed.data.secretReference})
           `;
         } catch (caught) {
-          if (caught instanceof Error && caught.message.includes("notification_sinks_tenant_id_url_key")) {
+          if (caught instanceof Error && caught.message.includes("notification_sinks_url_key")) {
             throw conflict("SINK_ALREADY_REGISTERED", "This address is already registered");
           }
           throw caught;
         }
 
         await recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: "admin.notification_sink.registered",
@@ -963,7 +948,7 @@ export async function registerAdminRoutes(
           requestIp: request.clientIp,
         });
 
-        const [created] = await readSinks(tx, tenantId, id);
+        const [created] = await readSinks(tx, id);
         return toSink(created!, requestId, asOf);
       }),
     );
@@ -972,11 +957,11 @@ export async function registerAdminRoutes(
   app.post<{ Params: { sinkId: string } }>(
     "/api/v1/admin/notification-sinks/:sinkId/state",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
         "admin.notification.manage",
-        tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+        registryResource({ state: "active", statesAllowingAction: ["active"] }),
         sessionFacts(session),
       );
       const expected = requireIfMatch(request);
@@ -989,11 +974,11 @@ export async function registerAdminRoutes(
       }
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [current] = await tx<{ id: string; version: number }[]>`
             SELECT id, version FROM core.notification_sinks
-            WHERE tenant_id = ${tenantId} AND id = ${request.params.sinkId}
+            WHERE id = ${request.params.sinkId}
             FOR UPDATE
           `;
           if (!current) throw notFound("Alert sink not found");
@@ -1009,11 +994,10 @@ export async function registerAdminRoutes(
           await tx`
             UPDATE core.notification_sinks
             SET state = ${parsed.data.state}, version = version + 1
-            WHERE tenant_id = ${tenantId} AND id = ${current.id}
+            WHERE id = ${current.id}
           `;
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: `admin.notification_sink.${parsed.data.state}`,
@@ -1026,7 +1010,7 @@ export async function registerAdminRoutes(
           });
 
           reply.header("etag", etagOf(current.version + 1));
-          const [updated] = await readSinks(tx, tenantId, current.id);
+          const [updated] = await readSinks(tx, current.id);
           return toSink(updated!, requestId, asOf);
         }),
       );

@@ -170,14 +170,14 @@ describeDb("Governance spaces and execution", () => {
     it("cannot combine a jurisdiction-ineligible vote grant with a non-voting access grant", async () => {
       const voter=await addGovernanceAccount(fx,"project_member",{projectId:fx.projectA,jurisdiction:["AUS"]});
       const [subject]=await fx.sql`SELECT subject_id FROM core.wallet_identities WHERE wallet_address=${voter.address}`;
-      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role,governance_scope)
-        VALUES(gen_random_uuid(),${fx.tenantA},${subject!.subject_id},${fx.orgA},'project_member','none')`;
+      await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,role,governance_scope)
+        VALUES(gen_random_uuid(),${subject!.subject_id},${fx.orgA},'project_member','none')`;
       const auth=await signIn(app,voter), proposal=await openProjectVoting();
       const refused=await vote(auth,proposal.id);
       expect(refused.statusCode).toBe(403);
       expect(refused.json().details.reason).toBe("JURISDICTION_SCOPE_MISMATCH");
-      await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,project_id,role,jurisdiction)
-        VALUES(gen_random_uuid(),${fx.tenantA},${subject!.subject_id},${fx.orgA},${fx.projectA},'project_member',ARRAY['MNG'])`;
+      await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,project_id,role,jurisdiction)
+        VALUES(gen_random_uuid(),${subject!.subject_id},${fx.orgA},${fx.projectA},'project_member',ARRAY['MNG'])`;
       expect((await vote(auth,proposal.id)).statusCode).toBe(200);
     });
 
@@ -195,8 +195,8 @@ describeDb("Governance spaces and execution", () => {
 
       const other = await openProjectVoting({ projectId: fx.otherProjectA });
       const response = await vote(tokens["atVoter"]!, other.id);
-      expect(response.statusCode).toBe(403);
-      expect(response.json().code).toBe("GOVERNANCE_PROJECT_SCOPE_MISMATCH");
+      // The proposal belongs to a project outside the voter's binding: hidden, not found.
+      expect(response.statusCode).toBe(404);
     });
 
     it("a project voter binding without a project cannot vote", async () => {
@@ -466,10 +466,9 @@ describeDb("Governance spaces and execution", () => {
 
     it("names no person", async () => {
       const response = await centralization();
-      // Counts, not people: no wallet of a role holder and no tenant appears.
+      // Counts, not people: no wallet of a role holder appears.
       expect(response.body).not.toContain(fx.operatorA.address);
       expect(response.body).not.toContain(fx.voterA.address);
-      expect(response.body).not.toContain(fx.tenantA);
     });
   });
 });

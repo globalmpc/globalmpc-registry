@@ -562,7 +562,7 @@ describeDb("uploads", () => {
     expect(response.json().details.requiredRoles).toEqual(["scan_service"]);
   });
 
-  it("hides uploads from other tenants", async () => {
+  it("hides uploads from another company's administrator", async () => {
     await upload(stewardToken);
 
     const response = await app.inject({
@@ -571,8 +571,8 @@ describeDb("uploads", () => {
       headers: { authorization: `Bearer ${await signIn(app, fx.operatorB)}` },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.json().items).toEqual([]);
+    expect(response.statusCode).toBe(403);
+    expect(response.json().items).toBeUndefined();
   });
 
   it("keeps filenames out of the audit log", async () => {
@@ -590,7 +590,7 @@ describeDb("uploads", () => {
   /**
    * Storage tier gate — OD-17·OD-18 (2026-08-14 draft decision).
    *
-   * The draft storage path uses provider-managed keys, with neither per-tenant key separation
+   * The draft storage path uses provider-managed keys, with neither per-company key separation
    * nor a destruction procedure. Real contracts and personal data wait for the secured route.
    */
   describe("storage tier gate", () => {

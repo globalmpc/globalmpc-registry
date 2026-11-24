@@ -5,7 +5,7 @@ if [ "${DEPLOY_ENVIRONMENT:-}" != develop ] || [ "${CHAIN_ID:-}" != 5611 ]; then
   echo 'dev demo requires develop and chain 5611' >&2
   exit 1
 fi
-for v in DB_USER DB_PASSWORD DB_HOST DB_PORT DB_NAME DB_SSLMODE OBJECT_BUCKET OBJECT_REGION DEMO_TENANT_SLUG; do
+for v in DB_USER DB_PASSWORD DB_HOST DB_PORT DB_NAME DB_SSLMODE OBJECT_BUCKET OBJECT_REGION; do
   eval "test -n \"\${$v:-}\"" || { echo "dev demo: $v is empty" >&2; exit 1; }
 done
 # Encode generated credentials instead of interpolating them into a URL as raw characters.

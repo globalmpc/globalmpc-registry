@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { PROJECT_FACT_KEYS } from "@mpc/api-contract";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { idempotencyKey, setupFixture, signIn, testEnv, type TestFixture } from "./helpers/db.js";
@@ -23,10 +23,10 @@ describeDb("catalog keys cannot impersonate the legacy matrix", () => {
 
   beforeAll(async () => {
     fx = await setupFixture();
-    await fx.sql`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.reviewerSubjectA},${fx.reviewOrgA},'reviewer')`;
+    await fx.sql`INSERT INTO core.role_bindings(id,subject_id,organization_id,role)
+      VALUES(${randomUUID()},${fx.reviewerSubjectA},${fx.reviewOrgA},'reviewer')`;
     // Simulate rows approved/pending before the additive guard migration. Disable only the
-    // new guards under transaction locks; all approval, immutability and tenant rules stay on.
+    // new guards under transaction locks; all approval, immutability and RLS rules stay on.
     await fx.sql.begin(async (tx) => {
       await tx.unsafe("ALTER TABLE core.registry_proposals DISABLE TRIGGER catalog_proposal_reserved_key_guard");
       await tx.unsafe("ALTER TABLE core.claim_types DISABLE TRIGGER catalog_type_reserved_key_guard");
@@ -34,14 +34,14 @@ describeDb("catalog keys cannot impersonate the legacy matrix", () => {
       const approvedId = randomUUID();
       for (const [id, key] of [[approvedId, "rights"], [pendingId, "consent"]] as const) {
         const payload = { claimType: key, displayName: "Historical definition", description: null, definition };
-        await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-          VALUES(${id},${fx.tenantA},'claim_type',${key},1,${tx.json(payload)},'Historical proposal',now(),${fx.operatorSubjectA})`;
+        await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+          VALUES(${id},'claim_type',${key},1,${tx.json(payload)},'Historical proposal',now(),${fx.operatorSubjectA})`;
       }
-      await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-        SELECT ${catalogId},tenant_id,item_key,1,'Historical definition',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${approvedId}`;
+      await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+        SELECT ${catalogId},item_key,1,'Historical definition',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${approvedId}`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Historical approval',materialized_id=${catalogId},version=2 WHERE id=${approvedId}`;
-      await tx`INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,catalog_entry_id,catalog_version,structured_values)
-        VALUES(${historicalClaimId},${fx.tenantA},${fx.projectA},'rights','Historical claim','{}',${catalogId},1,'{}')`;
+      await tx`INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,catalog_entry_id,catalog_version,structured_values)
+        VALUES(${historicalClaimId},${fx.projectA},'rights','Historical claim','{}',${catalogId},1,'{}')`;
       await tx.unsafe("SET CONSTRAINTS ALL IMMEDIATE");
       await tx.unsafe("ALTER TABLE core.registry_proposals ENABLE TRIGGER catalog_proposal_reserved_key_guard");
       await tx.unsafe("ALTER TABLE core.claim_types ENABLE TRIGGER catalog_type_reserved_key_guard");
@@ -60,9 +60,9 @@ describeDb("catalog keys cannot impersonate the legacy matrix", () => {
       headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey() }, payload });
     expect(response.statusCode, response.body).toBe(422);
     expect(response.json().code).toBe("CLAIM_TYPE_RESERVED");
-    await expect(withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
-      INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-      VALUES(${randomUUID()},${fx.tenantA},'claim_type',${key},2,${tx.json({ claimType: key, displayName: "Collision", description: null, definition })},'Bypass',now(),${fx.operatorSubjectA})`
+    await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
+      INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+      VALUES(${randomUUID()},'claim_type',${key},2,${tx.json({ claimType: key, displayName: "Collision", description: null, definition })},'Bypass',now(),${fx.operatorSubjectA})`
     )).rejects.toThrow(/reserved/);
   });
 
@@ -74,7 +74,7 @@ describeDb("catalog keys cannot impersonate the legacy matrix", () => {
     expect(response.json().code).toBe("CLAIM_TYPE_RESERVED");
     const [pending] = await fx.sql`SELECT state,version FROM core.registry_proposals WHERE id=${pendingId}`;
     expect(pending).toMatchObject({ state: "pending", version: 1 });
-    await expect(withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
+    await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
       UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${fx.reviewerSubjectA},decided_at=now(),decision_reason='Bypass',materialized_id=${catalogId},version=2 WHERE id=${pendingId}`
     )).rejects.toThrow(/reserved/);
     const rejected = await app.inject({ method: "POST", url: `${base}/${pendingId}/decision`,
@@ -137,13 +137,13 @@ describeDb("catalog keys cannot impersonate the legacy matrix", () => {
       payload: { claimType: "rights", catalogEntryId: catalogId, structuredValues: {}, valueText: "Historical collision", sourceCoordinate: {} } });
     expect(response.statusCode, response.body).toBe(422);
     expect(response.json().code).toBe("CLAIM_TYPE_RESERVED");
-    await expect(withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
-      INSERT INTO core.claims(id,tenant_id,project_id,claim_type,value_text,source_coordinate,catalog_entry_id,catalog_version,structured_values)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.projectA},'rights','Bypass','{}',${catalogId},1,'{}')`
+    await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
+      INSERT INTO core.claims(id,project_id,claim_type,value_text,source_coordinate,catalog_entry_id,catalog_version,structured_values)
+      VALUES(${randomUUID()},${fx.projectA},'rights','Bypass','{}',${catalogId},1,'{}')`
     )).rejects.toThrow(/reserved/);
-    await expect(withTenant(fx.appSql, { tenantId: fx.tenantA }, (tx) => tx`
-      INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-      VALUES(${randomUUID()},${fx.tenantA},'consent',1,'Bypass',${tx.json(definition)},now())`
+    await expect(withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, (tx) => tx`
+      INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+      VALUES(${randomUUID()},'consent',1,'Bypass',${tx.json(definition)},now())`
     )).rejects.toThrow(/reserved/);
   });
 });

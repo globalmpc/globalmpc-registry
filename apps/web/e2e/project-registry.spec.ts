@@ -18,7 +18,7 @@ async function registerSynthetic(page: Page, projectKey: string): Promise<string
   await page.getByRole("textbox", { name: "Project key" }).fill(projectKey);
   await page.getByRole("textbox", { name: "Name" }).fill("Synthetic registry screens");
   await page.getByRole("checkbox", { name: "Synthetic test project" }).check();
-  // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+  // Company A's operator also may register for the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
   await page.getByRole("combobox", { name: "Owning organization" }).selectOption(
     "aaaaaaaa-0000-0000-0000-000000000001",
   );

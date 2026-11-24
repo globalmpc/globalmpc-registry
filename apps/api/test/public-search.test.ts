@@ -13,7 +13,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  *
  * A visitor's clue may be a BscScan transaction hash or a certificate root/leaf
  * rather than a registry key, and it must still reach the public record. That path must
- * not leak unpublished records or the tenant.
+ * not leak unpublished records or internal ids.
  */
 describeDb("public unified search", () => {
   let fx: TestFixture;
@@ -29,7 +29,7 @@ describeDb("public unified search", () => {
     operator = await signIn(app, fx.operatorA);
 
     const approver = await signIn(app, fx.disclosureApproverA);
-    const projectId = await insertProject(fx.sql, { tenantId: fx.tenantA, organizationId: fx.orgA }, publicKey);
+    const projectId = await insertProject(fx.sql, { organizationId: fx.orgA }, publicKey);
     const publish = () => publishProject(app, fx.sql, { drafter: operator, publisher: approver }, projectId);
     const published = await publish();
     expect(published.statusCode).toBe(200);
@@ -52,8 +52,8 @@ describeDb("public unified search", () => {
 
     // The worker submits on-chain. Here only a submission row is written to open the tx hash path.
     await fx.sql`
-      INSERT INTO chain.transactions (id, tenant_id, batch_id, intent_key, chain_id, tx_hash)
-      SELECT ${randomUUID()}, b.tenant_id, b.id, ${`search-${randomUUID()}`}, 31337, ${txHash}
+      INSERT INTO chain.transactions (id, batch_id, intent_key, chain_id, tx_hash)
+      SELECT ${randomUUID()}, b.id, ${`search-${randomUUID()}`}, 31337, ${txHash}
       FROM chain.anchor_batches b
       WHERE b.merkle_root = ${anchored.root}
     `;
@@ -116,9 +116,8 @@ describeDb("public unified search", () => {
     expect(matches).toEqual([]);
   });
 
-  it("does not expose the tenant", async () => {
+  it("does not expose internal ownership columns", async () => {
     const response = await search(anchored.root);
-    expect(response.body).not.toContain(fx.tenantA);
     expect(response.body).not.toContain(fx.orgA);
   });
 

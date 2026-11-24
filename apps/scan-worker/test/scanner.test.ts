@@ -3,8 +3,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { runMigrations } from "@mpc/db";
 import { MAX_SCAN_BYTES, parseClamResponse } from "../src/scanner.js";
-import { resolveScanTenant, scanBacklog, scanOnce, type ScanStore } from "../src/scan-worker.js";
+import { resolveScanSubject, scanBacklog, scanOnce, type ScanStore } from "../src/scan-worker.js";
 import type { ScanVerdict } from "../src/scanner.js";
+import { keccak256 } from "viem";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
@@ -69,8 +70,11 @@ describe("ClamAV response parsing", () => {
 describeDb("scan worker", () => {
   let sql: postgres.Sql;
   let scanSql: postgres.Sql;
+  /** The deployed login's attributes: `mpc_worker_login` is BYPASSRLS (`login-roles`). */
+  let bypassSql: postgres.Sql;
   const scanRole = `scan_rls_${randomUUID().replaceAll("-", "")}`;
-  let tenantId: string;
+  const bypassRole = `scan_bypass_${randomUUID().replaceAll("-", "")}`;
+  let subjectId: string;
   let projectId: string;
   let uploadId: string;
 
@@ -82,14 +86,29 @@ describeDb("scan worker", () => {
   /** Scanner double. A real daemon makes timeouts and connection failures hard to reproduce. */
   let verdict: ScanVerdict = { kind: "clean" };
   const scan = async () => verdict;
-  // The worker's own tenant is each case's fresh tenant.
+  // Each case's worker acts as a fresh scan service subject bound to that case's project, so
+  // uploads other cases (or other suites sharing the database) leave behind are out of its reach.
   const options = {
     maxAttempts: 3,
     leaseMs: 60_000,
-    get tenantId() {
-      return tenantId;
+    get subjectId() {
+      return subjectId;
     },
   };
+
+  /** A scan service subject, as `service-token ensure` creates one, optionally bound to a project. */
+  async function scanSubject(project: string | null, scopes = ["scan_result"]): Promise<{ id: string; token: string }> {
+    const id = randomUUID();
+    const token = `mpcsvc_${randomUUID().replaceAll("-", "")}`;
+    await sql`INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+      VALUES (${id}, 'service', 'scan-worker', 'high_assurance')`;
+    await sql`INSERT INTO core.role_bindings (id, subject_id, role, project_id)
+      VALUES (${randomUUID()}, ${id}, 'scan_service', ${project})`;
+    await sql`INSERT INTO core.service_tokens (id, subject_id, label, token_hash, scopes, expires_at)
+      VALUES (${randomUUID()}, ${id}, 'scan-worker', ${keccak256(new TextEncoder().encode(token))},
+              ${scopes}::text[], now() + interval '1 day')`;
+    return { id, token };
+  }
 
   /**
     * Report double.
@@ -131,11 +150,17 @@ describeDb("scan worker", () => {
     scanSql = postgres(process.env["DATABASE_URL"]!, {
       max: 2, onnotice: () => {}, prepare: false, connection: { role: scanRole },
     });
+    await sql.unsafe(`CREATE ROLE ${bypassRole} NOLOGIN NOSUPERUSER BYPASSRLS IN ROLE mpc_worker`);
+    bypassSql = postgres(process.env["DATABASE_URL"]!, {
+      max: 2, onnotice: () => {}, prepare: false, connection: { role: bypassRole },
+    });
   });
 
   afterAll(async () => {
     await scanSql?.end();
+    await bypassSql?.end();
     await sql.unsafe(`DROP ROLE IF EXISTS ${scanRole}`);
+    await sql.unsafe(`DROP ROLE IF EXISTS ${bypassRole}`);
     await sql.end();
   });
 
@@ -154,39 +179,33 @@ describeDb("scan worker", () => {
       WHERE state = 'quarantined'
     `;
 
-    tenantId = randomUUID();
     projectId = randomUUID();
     uploadId = randomUUID();
+    const orgId = randomUUID();
 
     await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenantId}, ${`scan-${tenantId.slice(0, 8)}`}, 'scan test')
-    `;
-    await sql`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${randomUUID()}, ${tenantId}, 'scan org', 'MNG')
-    `;
-    const [org] = await sql<{ id: string }[]>`
-      SELECT id FROM core.organizations WHERE tenant_id = ${tenantId} LIMIT 1
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${orgId}, 'scan org', 'MNG')
     `;
     await sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${projectId}, ${tenantId}, ${`SCAN-${projectId.slice(0, 6)}`}, 'scan project',
-        'MNG', ARRAY['copper'], ${org!.id}
+        ${projectId}, ${`SCAN-${projectId.slice(0, 6)}`}, 'scan project',
+        'MNG', ARRAY['copper'], ${orgId}
       )
     `;
+    subjectId = (await scanSubject(projectId)).id;
 
-    const key = `quarantine/${tenantId}/${uploadId}`;
+    const key = `quarantine/${uploadId}`;
     objects.set(key, new Uint8Array([1, 2, 3]));
 
     await sql`
       INSERT INTO core.object_uploads (
-        id, tenant_id, project_id, object_key, content_hash, byte_size,
+        id, project_id, object_key, content_hash, byte_size,
         content_type, sensitivity, state
       ) VALUES (
-        ${uploadId}, ${tenantId}, ${projectId}, ${key}, ${`0x${"11".repeat(32)}`},
+        ${uploadId}, ${projectId}, ${key}, ${`0x${"11".repeat(32)}`},
         3, 'application/pdf', 'restricted', 'quarantined'
       )
     `;
@@ -204,15 +223,15 @@ describeDb("scan worker", () => {
     return row!;
   }
 
-  it("processes its tenant with RLS enforced and releases pooled tenant context", async () => {
+  it("processes what its service subject reaches with RLS enforced and releases pooled actor context", async () => {
     const [role] = await scanSql<{ rolsuper: boolean; rolbypassrls: boolean }[]>`
       SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user`;
     expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
     expect(await scanSql`SELECT id FROM core.object_uploads WHERE id=${uploadId}`).toEqual([]);
-    expect(await scanBacklog(scanSql, options.maxAttempts, tenantId)).toEqual({ pending: 1, stuck: 0 });
+    expect(await scanBacklog(scanSql, options.maxAttempts, subjectId)).toEqual({ pending: 1, stuck: 0 });
     expect((await step()).verdict).toBe("clean");
     expect((await stateOf()).state).toBe("scanned_clean");
-    // Once the tenant transaction ends, every pooled connection must again see no rows.
+    // Once the actor transaction ends, every pooled connection must again see no rows.
     await Promise.all([1, 2].map(async () => {
       expect(await scanSql`SELECT id FROM core.object_uploads WHERE id=${uploadId}`).toEqual([]);
     }));
@@ -321,7 +340,7 @@ describeDb("scan worker", () => {
   it("another worker does not pick it up while the lease is valid", async () => {
     // A second worker reading the same file during a long scan is wasteful, and if the two results
     // disagree there is no telling which is right.
-    const leaseOnly = { tenantId, maxAttempts: 3, leaseMs: 60_000 };
+    const leaseOnly = { subjectId, maxAttempts: 3, leaseMs: 60_000 };
     const slowScan = () => new Promise<ScanVerdict>(() => {});
 
     void scanOnce(scanSql, store, slowScan, report, leaseOnly, log);
@@ -350,43 +369,43 @@ describeDb("scan worker", () => {
     await step();
     await step();
 
-    const backlog = await scanBacklog(scanSql, options.maxAttempts, tenantId);
-    // Only this worker's tenant is counted, so earlier cases' rows are not.
+    const backlog = await scanBacklog(scanSql, options.maxAttempts, subjectId);
+    // Only uploads this subject reaches are counted, so earlier cases' rows are not.
     expect(backlog).toEqual({ pending: 0, stuck: 1 });
   });
 
-  it("never leases, scans or counts another tenant's upload", async () => {
-    // The worker's token belongs to one tenant; the API answers 404 for any other tenant's
-    // upload, so leasing one would scan a file that can never be reported and burn its attempts.
-    const otherTenant = randomUUID();
-    await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${otherTenant}, ${`other-${otherTenant.slice(0, 8)}`}, 'other tenant')
-    `;
+  it.each([
+    ["with RLS enforced", () => scanSql, false],
+    ["as the deployed BYPASSRLS worker login", () => bypassSql, true],
+  ] as const)("never leases, scans or counts an upload of a project its subject does not reach, %s", async (_label, db, bypasses) => {
+    const [role] = await db()<{ rolbypassrls: boolean }[]>`SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user`;
+    expect(role!.rolbypassrls).toBe(bypasses);
+    // A scan subject bound to one project reaches no other: leasing another project's upload
+    // would scan a file the API refuses to take a report on and burn its attempts.
     const otherOrg = randomUUID();
     await sql`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${otherOrg}, ${otherTenant}, 'other org', 'MNG')
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${otherOrg}, 'other org', 'MNG')
     `;
     const otherProject = randomUUID();
     await sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${otherProject}, ${otherTenant}, ${`OTH-${otherProject.slice(0, 6)}`}, 'other project',
+        ${otherProject}, ${`OTH-${otherProject.slice(0, 6)}`}, 'other project',
         'MNG', ARRAY['copper'], ${otherOrg}
       )
     `;
     const otherUpload = randomUUID();
-    const otherKey = `quarantine/${otherTenant}/${otherUpload}`;
+    const otherKey = `quarantine/${otherUpload}`;
     objects.set(otherKey, new Uint8Array([4, 5, 6]));
-    // Older than this tenant's upload, so it would be first in line without the tenant filter.
+    // Older than this project's upload, so it would be first in line without the reach filter.
     await sql`
       INSERT INTO core.object_uploads (
-        id, tenant_id, project_id, object_key, content_hash, byte_size,
+        id, project_id, object_key, content_hash, byte_size,
         content_type, sensitivity, state, uploaded_at
       ) VALUES (
-        ${otherUpload}, ${otherTenant}, ${otherProject}, ${otherKey}, ${`0x${"22".repeat(32)}`},
+        ${otherUpload}, ${otherProject}, ${otherKey}, ${`0x${"22".repeat(32)}`},
         3, 'application/pdf', 'restricted', 'quarantined', now() - interval '1 day'
       )
     `;
@@ -397,35 +416,64 @@ describeDb("scan worker", () => {
     const keys: string[] = [];
     const watched: ScanStore = { async get(key) { keys.push(key); return objects.get(key) ?? null; } };
 
-    expect((await scanOnce(scanSql, watched, scan, report, options, log)).uploadId).toBe(uploadId);
-    expect((await scanOnce(scanSql, watched, scan, report, options, log)).handled).toBe(false);
-    expect(keys).toEqual([`quarantine/${tenantId}/${uploadId}`]);
+    expect((await scanOnce(db(), watched, scan, report, options, log)).uploadId).toBe(uploadId);
+    expect((await scanOnce(db(), watched, scan, report, options, log)).handled).toBe(false);
+    expect(keys).toEqual([`quarantine/${uploadId}`]);
     expect(reported.map((entry) => entry.uploadId)).toEqual([uploadId]);
     const [after] = await otherState();
     expect(after).toEqual(before);
     expect(after).toMatchObject({ state: "quarantined", scan_attempts: 0, scan_leased_until: null });
-    // Nor does it show up in this worker's backlog.
-    expect(await scanBacklog(scanSql, options.maxAttempts, tenantId)).toEqual({ pending: 0, stuck: 0 });
-    expect((await scanBacklog(scanSql, options.maxAttempts, otherTenant)).pending).toBe(1);
+    // Nor does it show up in this worker's backlog; a subject bound to that project sees it.
+    expect(await scanBacklog(db(), options.maxAttempts, subjectId)).toEqual({ pending: 0, stuck: 0 });
+    const otherSubject = (await scanSubject(otherProject)).id;
+    expect((await scanBacklog(db(), options.maxAttempts, otherSubject)).pending).toBe(1);
+    await sql`UPDATE core.object_uploads SET scan_attempts = 999 WHERE id = ${otherUpload}`;
   });
 
-  it("resolves its tenant from the slug its token was registered for", async () => {
-    expect(await resolveScanTenant(scanSql, `scan-${tenantId.slice(0, 8)}`)).toBe(tenantId);
-    expect(await resolveScanTenant(scanSql, "no-such-tenant")).toBeUndefined();
+  it("reaches every project's uploads as a Registry-wide scan subject, as deployed", async () => {
+    const registryWide = (await scanSubject(null)).id;
+    expect((await scanBacklog(scanSql, options.maxAttempts, registryWide)).pending).toBeGreaterThanOrEqual(1);
+    const [seen] = await scanSql.begin(async (tx) => {
+      await tx`SELECT set_config('app.actor_subject_id', ${registryWide}, true)`;
+      return tx`SELECT id FROM core.object_uploads WHERE id = ${uploadId}`;
+    });
+    expect(seen).toEqual({ id: uploadId });
   });
 
-  it("does all of this as the worker role, which reads a tenant's id and slug and nothing else", async () => {
+  it("leases nothing for a subject without a live binding, or without any subject", async () => {
+    const revoked = (await scanSubject(projectId)).id;
+    await sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${revoked}`;
+    const suspended = (await scanSubject(projectId)).id;
+    await sql`UPDATE core.subjects SET suspended_at = now() WHERE id = ${suspended}`;
+    for (const nobody of [revoked, suspended, randomUUID()]) {
+      expect(await scanBacklog(scanSql, options.maxAttempts, nobody)).toEqual({ pending: 0, stuck: 0 });
+      expect((await scanOnce(scanSql, store, scan, report, { ...options, subjectId: nobody }, log)).handled).toBe(false);
+    }
+    expect((await stateOf()).scan_attempts).toBe(0);
+  });
+
+  it("resolves its subject from a live scan_result token and from nothing else", async () => {
+    const live = await scanSubject(projectId);
+    expect(await resolveScanSubject(scanSql, live.token)).toBe(live.id);
+    expect(await resolveScanSubject(scanSql, `mpcsvc_${randomUUID().replaceAll("-", "")}`)).toBeUndefined();
+    const creOnly = await scanSubject(projectId, ["cre_report"]);
+    expect(await resolveScanSubject(scanSql, creOnly.token)).toBeUndefined();
+    const revoked = await scanSubject(projectId);
+    await sql`UPDATE core.service_tokens SET revoked_at = now() WHERE subject_id = ${revoked.id}`;
+    expect(await resolveScanSubject(scanSql, revoked.token)).toBeUndefined();
+  });
+
+  it("does all of this as the worker role, which resolves its own token and reads no token table", async () => {
     // One connection, so the role holds for every statement.
     const worker = postgres(process.env["DATABASE_URL"]!, { max: 1, onnotice: () => {}, prepare: false });
     try {
       await worker`SET ROLE mpc_worker`;
-      const resolved = await resolveScanTenant(worker, `scan-${tenantId.slice(0, 8)}`);
-      expect(resolved).toBe(tenantId);
-      expect((await scanOnce(worker, store, scan, report, { ...options, tenantId: resolved! }, log)).verdict).toBe("clean");
-      expect(await scanBacklog(worker, options.maxAttempts, tenantId)).toEqual({ pending: 0, stuck: 0 });
-      await expect(worker`SELECT display_name FROM core.tenants WHERE id = ${tenantId}`).rejects.toThrow(
-        /permission denied/,
-      );
+      const { id, token } = await scanSubject(projectId);
+      const resolved = await resolveScanSubject(worker, token);
+      expect(resolved).toBe(id);
+      expect((await scanOnce(worker, store, scan, report, { ...options, subjectId: resolved! }, log)).verdict).toBe("clean");
+      expect((await stateOf()).state).toBe("scanned_clean");
+      await expect(worker`SELECT token_hash FROM core.service_tokens LIMIT 1`).rejects.toThrow(/permission denied/);
     } finally {
       await worker.end();
     }
@@ -517,8 +565,8 @@ describeDb("scan worker", () => {
     await sql`UPDATE core.object_uploads SET scan_attempts=999 WHERE id=${uploadId}`;
     uploadId=randomUUID();
     await sql`INSERT INTO core.object_uploads
-      (id,tenant_id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state)
-      VALUES(${uploadId},${tenantId},${projectId},${`quarantine/${tenantId}/${uploadId}`},${`0x${"22".repeat(32)}`},
+      (id,project_id,object_key,content_hash,byte_size,content_type,sensitivity,state)
+      VALUES(${uploadId},${projectId},${`quarantine/${uploadId}`},${`0x${"22".repeat(32)}`},
         ${MAX_SCAN_BYTES},'application/pdf','restricted','quarantined')`;
     let started!: () => void;
     let finish!: (bytes: Uint8Array | null) => void;

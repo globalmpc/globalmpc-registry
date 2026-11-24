@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { bearer, idempotencyKey, issueTestSession, setupFixture, testEnv, type TestFixture } from "./helpers/db.js";
@@ -50,8 +50,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
   async function person(email = freshEmail(), ageHours = 72): Promise<string> {
     const id = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, email, created_at)
-      VALUES (${id}, ${fx.tenantA}, 'person', ${`Person ${id.slice(0, 6)}`}, ${email},
+      INSERT INTO core.subjects (id, kind, display_name, email, created_at)
+      VALUES (${id}, 'person', ${`Person ${id.slice(0, 6)}`}, ${email},
               now() - make_interval(hours => ${ageHours}))
     `;
     return id;
@@ -60,15 +60,15 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
   async function admin(role: "administrator" = "administrator") {
     const subjectId = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level, email, created_at)
-      VALUES (${subjectId}, ${fx.tenantA}, 'person', ${`Admin ${subjectId.slice(0, 4)}`}, 'high_assurance',
+      INSERT INTO core.subjects (id, kind, display_name, assurance_level, email, created_at)
+      VALUES (${subjectId}, 'person', ${`Admin ${subjectId.slice(0, 4)}`}, 'high_assurance',
               ${freshEmail("admin")}, now() - interval '72 hours')
     `;
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, ${role})
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, ${role})
     `;
-    const token = await issueTestSession(fx.appSql, fx.tenantA, subjectId, { firstFactor: "email_code", secondFactor: "passkey" });
+    const token = await issueTestSession(fx.appSql, subjectId, { firstFactor: "email_code", secondFactor: "passkey" });
     return { subjectId, token };
   }
 
@@ -101,15 +101,15 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
   }
 
   async function historicalReset(actor: { subjectId: string }, subjectId: string) {
-    const [row] = await withTenant(fx.sql, { tenantId: fx.tenantA }, tx => tx<{id: string; version: number}[]>`
-      INSERT INTO core.mfa_reset_requests(id, tenant_id, subject_id, reason, requested_by_subject_id)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, 'Historical reset', ${actor.subjectId})
+    const [row] = await withActor(fx.sql, { subjectId: fx.operatorSubjectA }, tx => tx<{id: string; version: number}[]>`
+      INSERT INTO core.mfa_reset_requests(id, subject_id, reason, requested_by_subject_id)
+      VALUES (${randomUUID()}, ${subjectId}, 'Historical reset', ${actor.subjectId})
       RETURNING id, version`);
     return row!;
   }
 
   async function decideHistorical(actor: { subjectId: string }, reset: {id: string; version: number}, approve = true) {
-    return withTenant(fx.sql, { tenantId: fx.tenantA }, async tx => {
+    return withActor(fx.sql, { subjectId: actor.subjectId }, async tx => {
       await tx`SELECT * FROM core.decide_mfa_reset(${reset.id}, ${actor.subjectId}, ${approve}, 'Historical decision', ${reset.version})`;
       const [row] = await tx<{id: string; state: string; version: number}[]>`
         SELECT id,state,version FROM core.mfa_reset_requests WHERE id=${reset.id}`;
@@ -152,8 +152,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
   const windowOpen = async (subjectId: string) =>
     (await fx.sql<{ open: boolean }[]>`SELECT core.mfa_reset_window_open(${subjectId}) AS open`)[0]!.open;
 
-  const asApp = <T>(work: (tx: Parameters<Parameters<typeof withTenant>[2]>[0]) => Promise<T>) =>
-    withTenant(fx.appSql, { tenantId: fx.tenantA }, work);
+  const asApp = <T>(work: (tx: Parameters<Parameters<typeof withActor>[2]>[0]) => Promise<T>) =>
+    withActor(fx.appSql, { subjectId: fx.operatorSubjectA }, work);
 
   describe("S-M1: the reviewer's chain", () => {
     it("fails at the email-change verify: the suspension closed the change, and the address stays", async () => {
@@ -251,8 +251,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       // Not at the database either, from any origin.
       const proposer = (await admin("administrator")).subjectId;
       await expect(asApp((tx) => tx`
-        INSERT INTO core.mfa_reset_requests (id, tenant_id, subject_id, reason, requested_by_subject_id)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${target}, 'x', ${proposer})
+        INSERT INTO core.mfa_reset_requests (id, subject_id, reason, requested_by_subject_id)
+        VALUES (${randomUUID()}, ${target}, 'x', ${proposer})
       `)).rejects.toThrow(/MFA_RESET_SUBJECT_SUSPENDED/);
       await expect(fx.sql`SELECT core.open_bootstrap_enrolment_window(${target})`).rejects.toThrow(
         /MFA_RESET_SUBJECT_SUSPENDED/,
@@ -331,32 +331,32 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       const suspension = (await proposeSuspension(proposer.token, await person())).json();
       const grantId = randomUUID();
       await fx.sql`
-        INSERT INTO core.role_grant_requests (id, tenant_id, subject_id, organization_id, role, reason, requested_by_subject_id)
-        VALUES (${grantId}, ${fx.tenantA}, ${other}, ${fx.orgA}, 'reviewer', 'needs access', ${proposer.subjectId})
+        INSERT INTO core.role_grant_requests (id, subject_id, organization_id, role, reason, requested_by_subject_id)
+        VALUES (${grantId}, ${other}, ${fx.orgA}, 'reviewer', 'needs access', ${proposer.subjectId})
       `;
       const bindingId = randomUUID();
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${bindingId}, ${fx.tenantA}, ${third}, ${fx.orgA}, 'reviewer')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${bindingId}, ${third}, ${fx.orgA}, 'reviewer')
       `;
       const revocationId = randomUUID();
       await fx.sql`
-        INSERT INTO core.role_revocation_requests (id, tenant_id, role_binding_id, reason_code, reason, requested_by_subject_id)
-        VALUES (${revocationId}, ${fx.tenantA}, ${bindingId}, 'offboarding', 'left', ${proposer.subjectId})
+        INSERT INTO core.role_revocation_requests (id, role_binding_id, reason_code, reason, requested_by_subject_id)
+        VALUES (${revocationId}, ${bindingId}, 'offboarding', 'left', ${proposer.subjectId})
       `;
       const proposalId = randomUUID();
       await fx.sql`
         INSERT INTO core.registry_proposals (
-          id, tenant_id, kind, item_key, item_version, payload, rationale, effective_from, proposed_by_subject_id
+          id, kind, item_key, item_version, payload, rationale, effective_from, proposed_by_subject_id
         ) VALUES (
-          ${proposalId}, ${fx.tenantA}, 'credential', ${`key-${proposalId.slice(0, 8)}`}, 1, '{}'::jsonb,
+          ${proposalId}, 'credential', ${`key-${proposalId.slice(0, 8)}`}, 1, '{}'::jsonb,
           'reviewed', now(), ${proposer.subjectId}
         )
       `;
       const elevationId = randomUUID();
       await fx.sql`
-        INSERT INTO core.break_glass_elevations (id, tenant_id, subject_id, purpose, target, expires_at)
-        VALUES (${elevationId}, ${fx.tenantA}, ${proposer.subjectId}, 'incident', 'credential', now() + interval '1 hour')
+        INSERT INTO core.break_glass_elevations (id, subject_id, purpose, target, expires_at)
+        VALUES (${elevationId}, ${proposer.subjectId}, 'incident', 'credential', now() + interval '1 hour')
       `;
 
       const { request } = await suspendedBy(proposer.subjectId);
@@ -488,19 +488,22 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       const suspension = (await proposeSuspension(proposer.token, await person())).json();
       const grantId = randomUUID();
       await fx.sql`
-        INSERT INTO core.role_grant_requests (id, tenant_id, subject_id, organization_id, role, reason, requested_by_subject_id)
-        VALUES (${grantId}, ${fx.tenantA}, ${target}, ${fx.orgA}, 'reviewer', 'needs access', ${proposer.subjectId})
+        INSERT INTO core.role_grant_requests (id, subject_id, organization_id, role, reason, requested_by_subject_id)
+        VALUES (${grantId}, ${target}, ${fx.orgA}, 'reviewer', 'needs access', ${proposer.subjectId})
       `;
       // Set directly: the admin has no session to act with, so this is the database's own line.
       await fx.sql`UPDATE core.subjects SET suspended_at = now() WHERE id = ${suspendedAdmin.subjectId}`;
       const as = suspendedAdmin.subjectId;
+      // The suspended admin acting directly at the database, with no session.
+      const asSuspended = <T>(work: (tx: Parameters<Parameters<typeof withActor>[2]>[0]) => Promise<T>) =>
+        withActor(fx.appSql, { subjectId: as }, work);
 
-      await expect(asApp((tx) => tx`SELECT * FROM core.decide_mfa_reset(${reset.id}, ${as}, true, 'x', ${reset.version})`))
+      await expect(asSuspended((tx) => tx`SELECT * FROM core.decide_mfa_reset(${reset.id}, ${as}, true, 'x', ${reset.version})`))
         .rejects.toThrow(/ACTOR_SUSPENDED/);
-      await expect(asApp((tx) => tx`
+      await expect(asSuspended((tx) => tx`
         SELECT * FROM core.decide_email_change(${change.id}, ${as}, false, 'x', ${change.version}, ${randomUUID()}, ${Buffer.alloc(32)}, '12345678')
       `)).rejects.toThrow(/ACTOR_SUSPENDED/);
-      await expect(asApp((tx) =>
+      await expect(asSuspended((tx) =>
         tx`SELECT * FROM core.decide_subject_suspension(${suspension.id}, ${as}, false, 'x', ${suspension.version})`,
       )).rejects.toThrow(/ACTOR_SUSPENDED/);
       await expect(asApp((tx) => tx`
@@ -511,14 +514,14 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       // And as proposer.
       const someone = await person();
       await expect(asApp((tx) => tx`
-        INSERT INTO core.mfa_reset_requests (id, tenant_id, subject_id, reason, requested_by_subject_id)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${someone}, 'x', ${as})
+        INSERT INTO core.mfa_reset_requests (id, subject_id, reason, requested_by_subject_id)
+        VALUES (${randomUUID()}, ${someone}, 'x', ${as})
       `)).rejects.toThrow(/ACTOR_SUSPENDED/);
-      await expect(asApp((tx) => tx`SELECT * FROM core.request_email_change(${randomUUID()}, ${target}, ${freshEmail()}, 'x', ${as})`))
+      await expect(asSuspended((tx) => tx`SELECT * FROM core.request_email_change(${randomUUID()}, ${target}, ${freshEmail()}, 'x', ${as})`))
         .rejects.toThrow(/ACTOR_SUSPENDED/);
       await expect(fx.sql`
-        INSERT INTO core.break_glass_elevations (id, tenant_id, subject_id, purpose, target, expires_at)
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${as}, 'incident', 'credential', now() + interval '1 hour')
+        INSERT INTO core.break_glass_elevations (id, subject_id, purpose, target, expires_at)
+        VALUES (${randomUUID()}, ${as}, 'incident', 'credential', now() + interval '1 hour')
       `).rejects.toThrow(/ACTOR_SUSPENDED/);
     });
 
@@ -526,8 +529,8 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       const proposer = await admin("administrator");
       const grantId = randomUUID();
       await fx.sql`
-        INSERT INTO core.role_grant_requests (id, tenant_id, subject_id, organization_id, role, reason, requested_by_subject_id)
-        VALUES (${grantId}, ${fx.tenantA}, ${await person()}, ${fx.orgA}, 'reviewer', 'needs access', ${proposer.subjectId})
+        INSERT INTO core.role_grant_requests (id, subject_id, organization_id, role, reason, requested_by_subject_id)
+        VALUES (${grantId}, ${await person()}, ${fx.orgA}, 'reviewer', 'needs access', ${proposer.subjectId})
       `;
       // The application role updates these tables, but not that column.
       await expect(asApp((tx) => tx`
@@ -542,9 +545,9 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
       // No row is born closed, whoever writes it.
       await expect(fx.sql`
         INSERT INTO core.role_grant_requests (
-          id, tenant_id, subject_id, organization_id, role, reason, requested_by_subject_id, state, decided_at, closed_reason
+          id, subject_id, organization_id, role, reason, requested_by_subject_id, state, decided_at, closed_reason
         ) VALUES (
-          ${randomUUID()}, ${fx.tenantA}, ${await person()}, ${fx.orgA}, 'reviewer', 'x', ${proposer.subjectId},
+          ${randomUUID()}, ${await person()}, ${fx.orgA}, 'reviewer', 'x', ${proposer.subjectId},
           'withdrawn', now(), 'proposer_suspended'
         )
       `).rejects.toThrow(/REQUEST_CLOSED_REASON_RESERVED/);
@@ -607,17 +610,17 @@ describeDb("suspension closes open recovery (0128)", { timeout: 30_000 }, () => 
         revocation: randomUUID(),
       };
       await fx.sql`
-        INSERT INTO core.role_grant_requests (id, tenant_id, subject_id, organization_id, role, reason, requested_by_subject_id)
-        VALUES (${proposedByAdmin.grant}, ${fx.tenantA}, ${await person()}, ${fx.orgA}, 'reviewer', 'needs access', ${suspendedAdmin.subjectId})
+        INSERT INTO core.role_grant_requests (id, subject_id, organization_id, role, reason, requested_by_subject_id)
+        VALUES (${proposedByAdmin.grant}, ${await person()}, ${fx.orgA}, 'reviewer', 'needs access', ${suspendedAdmin.subjectId})
       `;
       const bindingId = randomUUID();
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${bindingId}, ${fx.tenantA}, ${await person()}, ${fx.orgA}, 'reviewer')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${bindingId}, ${await person()}, ${fx.orgA}, 'reviewer')
       `;
       await fx.sql`
-        INSERT INTO core.role_revocation_requests (id, tenant_id, role_binding_id, reason_code, reason, requested_by_subject_id)
-        VALUES (${proposedByAdmin.revocation}, ${fx.tenantA}, ${bindingId}, 'offboarding', 'left', ${suspendedAdmin.subjectId})
+        INSERT INTO core.role_revocation_requests (id, role_binding_id, reason_code, reason, requested_by_subject_id)
+        VALUES (${proposedByAdmin.revocation}, ${bindingId}, 'offboarding', 'left', ${suspendedAdmin.subjectId})
       `;
       // Contrast: open requests nobody suspended keep `closedReason: null`.
       const untouchedReset = (await historicalReset(colleague, await person())).id as string;

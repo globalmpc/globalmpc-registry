@@ -126,7 +126,7 @@ describe("loadConfig", () => {
   });
 
   /**
-   * The E2E stand-in for Google and Microsoft (`OIDC_TEST_RELAY_URL`). Whoever sets it chooses
+   * The E2E stand-in for Google (`OIDC_TEST_RELAY_URL`). Whoever sets it chooses
    * which server the API trusts for ID tokens, so it exists only where nothing real signs in.
    */
   describe("OIDC_TEST_RELAY_URL", () => {
@@ -444,7 +444,7 @@ describe("R1: the dev auth switch is removed", () => {
    * from the one configured origin, so a missing or loose value would either break sign-in or
    * accept assertions made for another site.
    */
-  describe("Google and Microsoft sign-in (WP4)", () => {
+  describe("Google sign-in (WP4)", () => {
     const production = {
       ...VALID,
       NODE_ENV: "production",
@@ -454,20 +454,16 @@ describe("R1: the dev auth switch is removed", () => {
       ...WEBAUTHN_PRODUCTION,
     };
     const google = { GOOGLE_CLIENT_ID: "id.apps.example", GOOGLE_CLIENT_SECRET: "google-secret-value" };
-    const microsoft = { MICROSOFT_CLIENT_ID: "5b4f3a2c-0000-4000-8000-00000000c1d1", MICROSOFT_CLIENT_SECRET: "ms-secret-value" };
-    const TID = "11111111-1111-4111-8111-111111111111";
 
     it("is off unless a provider's id and secret are both set; the redirect base is the web origin", () => {
-      expect(loadConfig(VALID).oidc).toEqual({ redirectBase: "http://localhost:3000", google: null, microsoft: null });
-      const on = loadConfig({ ...production, ...google, ...microsoft }).oidc;
+      expect(loadConfig(VALID).oidc).toEqual({ redirectBase: "http://localhost:3000", google: null });
+      const on = loadConfig({ ...production, ...google }).oidc;
       expect(on.redirectBase).toBe("https://registry.example.com");
       expect(on.google).toEqual({ clientId: google.GOOGLE_CLIENT_ID, clientSecret: google.GOOGLE_CLIENT_SECRET });
-      expect(on.microsoft).toMatchObject({ clientId: microsoft.MICROSOFT_CLIENT_ID, allowedTenants: null });
     });
 
     it("refuses half a client in production, and leaves the provider off elsewhere", () => {
       expect(() => loadConfig({ ...production, GOOGLE_CLIENT_ID: "id-only" })).toThrow(/GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/);
-      expect(() => loadConfig({ ...production, MICROSOFT_CLIENT_SECRET: "secret-only" })).toThrow(/MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET/);
       expect(loadConfig({ ...VALID, GOOGLE_CLIENT_ID: "id-only" }).oidc.google).toBeNull();
     });
 
@@ -482,20 +478,20 @@ describe("R1: the dev auth switch is removed", () => {
       ).toThrow(/https/);
     });
 
-    it("reads the Microsoft allowlist as directory GUIDs, and refuses anything else", () => {
-      const config = loadConfig({ ...VALID, ...microsoft, MICROSOFT_ALLOWED_TENANTS: ` ${TID.toUpperCase()} , ` });
-      expect(config.oidc.microsoft?.allowedTenants).toEqual([TID]);
-      expect(() => loadConfig({ ...VALID, ...microsoft, MICROSOFT_ALLOWED_TENANTS: "contoso.onmicrosoft.com" })).toThrow(/GUID/);
-      expect(() => loadConfig({ ...VALID, ...microsoft, MICROSOFT_ALLOWED_TENANTS: "," })).toThrow(/GUID/);
+    it("refuses to start while a removed Microsoft setting is still set (0171)", () => {
+      for (const name of ["MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET", "MICROSOFT_ALLOWED_TENANTS"]) {
+        expect(() => loadConfig({ ...VALID, [name]: "11111111-1111-4111-8111-111111111111" }), name).toThrow(/Microsoft sign-in was removed/);
+        expect(() => loadConfig({ ...production, ...google, [name]: "x" }), name).toThrow(new RegExp(`unset ${name}`));
+        // Empty, as an unfilled compose or env file leaves it: nothing was meant.
+        expect(loadConfig({ ...VALID, [name]: "" }).oidc.google).toBeNull();
+      }
     });
 
     it("keeps the client secrets out of the audit trail and error messages", () => {
-      const config = loadConfig({ ...production, ...google, ...microsoft });
+      const config = loadConfig({ ...production, ...google });
       const audit = JSON.stringify(config.secretAudit);
       expect(audit).toContain("GOOGLE_CLIENT_SECRET");
-      expect(audit).toContain("MICROSOFT_CLIENT_SECRET");
       expect(audit).not.toContain(google.GOOGLE_CLIENT_SECRET);
-      expect(audit).not.toContain(microsoft.MICROSOFT_CLIENT_SECRET);
       try {
         loadConfig({ ...production, GOOGLE_CLIENT_SECRET: "leaky-secret-value" });
         expect.unreachable();

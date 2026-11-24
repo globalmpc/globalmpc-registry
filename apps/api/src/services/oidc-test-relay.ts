@@ -1,7 +1,7 @@
 import type { OidcFetch } from "./oidc.js";
 
 /**
- * E2E stand-in for Google and Microsoft — **test builds only** (`OIDC_TEST_RELAY_URL`; `loadConfig`
+ * E2E stand-in for Google — **test builds only** (`OIDC_TEST_RELAY_URL`; `loadConfig`
  * refuses it in production and on mainnet).
  *
  * The OIDC library keeps talking to the real issuer URLs, so discovery, issuer and audience checks
@@ -18,7 +18,6 @@ export const OIDC_RELAY_HOSTS: ReadonlySet<string> = new Set([
   "accounts.google.com",
   "oauth2.googleapis.com",
   "www.googleapis.com",
-  "login.microsoftonline.com",
 ]);
 
 /** `https://<provider host><path><query>` → `<relay>/<host><path><query>`. */

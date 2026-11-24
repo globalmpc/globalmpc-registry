@@ -15,7 +15,6 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 describeDb("outbox publishing with concurrent workers", () => {
   let sql: postgres.Sql;
   let url: string;
-  let tenant: string;
   const workers: postgres.Sql[] = [];
 
   beforeAll(async () => {
@@ -24,11 +23,6 @@ describeDb("outbox publishing with concurrent workers", () => {
     const isolated = new URL(process.env["DATABASE_URL"]!);
     isolated.pathname = `${isolated.pathname}_outbox_concurrency`;
     url = isolated.toString();
-    tenant = randomUUID();
-    await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenant}, ${`c-${tenant.slice(0, 8)}`}, 'concurrency test')
-    `;
   });
 
   beforeEach(async () => {
@@ -51,9 +45,9 @@ describeDb("outbox publishing with concurrent workers", () => {
     for (const id of ids) {
       await sql`
         INSERT INTO core.outbox (
-          id, tenant_id, event_type, aggregate_id, aggregate_version, payload, correlation_id
+          id, event_type, aggregate_id, aggregate_version, payload, correlation_id
         ) VALUES (
-          ${id}, ${tenant}, 'project.registered', ${randomUUID()}, 1, '{}'::jsonb, ${`c-${id}`}
+          ${id}, 'project.registered', ${randomUUID()}, 1, '{}'::jsonb, ${`c-${id}`}
         )
       `;
     }

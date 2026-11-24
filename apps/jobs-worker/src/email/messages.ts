@@ -52,12 +52,12 @@ interface LinkParams {
  * Rows queued before 0123 carry `{}` and render without the sentence.
  */
 interface NoticeParams {
-  readonly removedSignIns: readonly ("google" | "microsoft")[];
+  readonly removedSignIns: readonly "google"[];
 }
 
-const PROVIDER_NAMES = { google: "Google", microsoft: "Microsoft" } as const;
+const PROVIDER_NAMES = { google: "Google" } as const;
 
-/** "Google", "Google and Microsoft" — the names, never anything that identifies the account. */
+/** "Google" — the names, never anything that identifies the account. */
 function removedSignInsSentence(removed: NoticeParams["removedSignIns"]): string[] {
   if (removed.length === 0) return [];
   const names = removed.map((provider) => PROVIDER_NAMES[provider]).join(" and ");
@@ -169,7 +169,7 @@ const MESSAGES: Record<EmailLocale, {
       text: [
         `Two administrators reinstated your ${PRODUCT} account. You can sign in with your email again.`,
         "",
-        "For the next 24 hours, whoever signs in to the account can set up a new passkey or authenticator app. Google or Microsoft sign-in has to be linked again from your account settings.",
+        "For the next 24 hours, whoever signs in to the account can set up a new passkey or authenticator app. Google sign-in has to be linked again from your account settings.",
         "",
         "If you did not expect this, contact your administrator now.",
       ].join("\n"),
@@ -217,8 +217,8 @@ function noticeParams(params: unknown): NoticeParams {
   if (p.removedSignIns === undefined) return { removedSignIns: [] };
   if (
     !Array.isArray(p.removedSignIns) ||
-    p.removedSignIns.length > 2 ||
-    p.removedSignIns.some((entry) => entry !== "google" && entry !== "microsoft") ||
+    p.removedSignIns.length > 1 ||
+    p.removedSignIns.some((entry) => entry !== "google") ||
     new Set(p.removedSignIns).size !== p.removedSignIns.length
   ) {
     throw new EmailParamsError("notice parameters do not have the expected shape");

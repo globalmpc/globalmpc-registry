@@ -4,7 +4,7 @@ import { normalizeEmail, type OidcProvider } from "@mpc/api-contract";
 import type { OidcConfig } from "../config.js";
 
 /**
- * Google and Microsoft as OpenID Connect providers — WP4. No database here: who may start,
+ * Google as an OpenID Connect provider — WP4. No database here: who may start,
  * claim and complete a flow is the database's (migration 0121) and the route's (`routes/oidc.ts`).
  *
  * What this module guarantees about an identity it returns:
@@ -16,16 +16,11 @@ import type { OidcConfig } from "../config.js";
  *   (non-repudiation checks turned on: the library would otherwise trust TLS alone) — after a code exchange bound to this flow's
  *   PKCE verifier and redirect URI;
  * - Google: `iss` is exactly `https://accounts.google.com`; the key is `sub`;
- * - Microsoft (`organizations` endpoint — work and school directories only, plan D2): `iss` is
- *   exactly `https://login.microsoftonline.com/{tid}/v2.0` for the token's **own** `tid` (the
- *   library checks it against the templated issuer, and this module again); the key is
- *   `(tid, oid)`; a directory outside `MICROSOFT_ALLOWED_TENANTS` is refused;
  * - `verifiedEmail` is set only when the provider vouches for the address *now*: Google
  *   `email_verified` for a Gmail address, or for an address in the Workspace domain the token's
  *   `hd` names (for any other address a consumer Google account's `email_verified` dates from
- *   sign-up and outlives a change of hands — `emailCodeRequired` says so instead); Microsoft
- *   `xms_edov`. It is used for one thing: accepting an invitation
- *   sent to that address. It never finds an account.
+ *   sign-up and outlives a change of hands — `emailCodeRequired` says so instead). It is used
+ *   for one thing: accepting an invitation sent to that address. It never finds an account.
  *
  * Network: discovery and keys are fetched with a timeout and cached per provider; a failed
  * discovery is not cached, so the next request tries again. Tests pass their own `fetch` (an
@@ -34,10 +29,6 @@ import type { OidcConfig } from "../config.js";
  */
 
 export const GOOGLE_ISSUER = "https://accounts.google.com";
-/** Multi-tenant v2.0 endpoint for work and school accounts (no personal Microsoft accounts). */
-export const MICROSOFT_AUTHORITY = "https://login.microsoftonline.com/organizations/v2.0";
-/** The directory personal Microsoft accounts sign in from; never accepted. */
-export const MICROSOFT_CONSUMER_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
 
 /** HKDF `info` for the key that seals a flow's PKCE verifier and nonce (plan D10). */
 export const OIDC_TX_KEY_INFO = "mpc/oidc-tx/v1";
@@ -47,7 +38,6 @@ const DISCOVERY_TIMEOUT_SECONDS = 5;
 const EXCHANGE_TIMEOUT_SECONDS = 10;
 /** Discovery is refreshed this often; keys follow the library's own cache within it. */
 const METADATA_TTL_MS = 60 * 60 * 1000;
-const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SUBJECT_KEY = /^[!-~]{1,255}$/;
 
 /** What `openid-client` calls to reach a provider. Tests replace it; production uses `fetch`. */
@@ -57,9 +47,7 @@ export type OidcFailure =
   /** The provider could not be reached or answered with something other than a token. */
   | "provider_unavailable"
   /** The code exchange or the ID token failed validation. */
-  | "token_invalid"
-  /** A Microsoft directory outside the allowlist, or a personal account. */
-  | "tenant_not_allowed";
+  | "token_invalid";
 
 export class OidcError extends Error {
   constructor(
@@ -75,10 +63,8 @@ export interface VerifiedIdentity {
   readonly provider: OidcProvider;
   /** The token's `iss`, exactly. */
   readonly issuer: string;
-  /** Google `sub`, Microsoft `oid`. */
+  /** Google `sub`. */
   readonly subjectKey: string;
-  /** Microsoft `tid`; null for Google. */
-  readonly idpTenant: string | null;
   /** Address verified by the Google Workspace domain that manages it. */
   readonly workspaceEmail?: string | null;
   /** Normalised verified address for invitation acceptance. */
@@ -186,7 +172,7 @@ export class OidcProviders {
     if (cached && this.now() - cached.at < METADATA_TTL_MS) return cached.configuration;
 
     const settings = this.settings(provider);
-    const server = new URL(provider === "google" ? GOOGLE_ISSUER : MICROSOFT_AUTHORITY);
+    const server = new URL(GOOGLE_ISSUER);
     const configuration = client
       .discovery(server, settings.clientId, settings.clientSecret, undefined, {
         timeout: DISCOVERY_TIMEOUT_SECONDS,
@@ -281,7 +267,7 @@ export class OidcProviders {
       throw new OidcError("token_invalid", "ID_TOKEN_AZP_MISMATCH");
     }
 
-    return provider === "google" ? this.google(claims) : this.microsoft(claims);
+    return this.google(claims);
   }
 
   private google(claims: client.IDToken): VerifiedIdentity {
@@ -298,42 +284,10 @@ export class OidcProviders {
       displayName: stringClaim(claims, "name"),
       issuer: GOOGLE_ISSUER,
       subjectKey: claims.sub,
-      idpTenant: null,
       workspaceEmail: verified && hd !== null && hd === domain ? email : null,
       verifiedEmail: verified && managed ? email : null,
       reportedEmail: email,
       emailCodeRequired: verified && !managed,
-    };
-  }
-
-  private microsoft(claims: client.IDToken): VerifiedIdentity {
-    const tid = stringClaim(claims, "tid");
-    const oid = stringClaim(claims, "oid");
-    // The library already compared `iss` with the templated issuer filled in with this token's
-    // `tid`; checked again here so the rule does not rest on a library detail. A token whose
-    // `iss` names one directory and whose `tid` names another is someone else's directory.
-    if (
-      tid === null || !GUID.test(tid) || oid === null || !GUID.test(oid)
-      || claims.iss !== `https://login.microsoftonline.com/${tid}/v2.0`
-    ) {
-      throw new OidcError("token_invalid", "MICROSOFT_CLAIMS_INVALID");
-    }
-    const allowed = this.settings("microsoft") as NonNullable<OidcConfig["microsoft"]>;
-    if (tid === MICROSOFT_CONSUMER_TENANT || (allowed.allowedTenants !== null && !allowed.allowedTenants.includes(tid))) {
-      throw new OidcError("tenant_not_allowed", "MICROSOFT_TENANT_NOT_ALLOWED");
-    }
-    const email = emailOf(claims);
-    return {
-      provider: "microsoft",
-      displayName: null,
-      issuer: claims.iss,
-      subjectKey: oid,
-      idpTenant: tid,
-      // `email` in a Microsoft token is whatever the directory holds, which its admin can set to
-      // anything; `xms_edov` says the domain owner verified it (optional claim on the app).
-      verifiedEmail: email !== null && isTrue((claims as Record<string, unknown>)["xms_edov"]) ? email : null,
-      reportedEmail: email,
-      emailCodeRequired: false,
     };
   }
 }

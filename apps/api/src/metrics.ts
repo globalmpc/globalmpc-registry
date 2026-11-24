@@ -8,8 +8,8 @@
  * the collector. Paths are normalized to route templates
  * (`/api/v1/projects/:projectId`).
  *
- * **Tenant is not used as a label.** Metrics are usually scraped without auth, so the tenant
- * list would be exposed as is.
+ * **Organizations and projects are not used as labels.** Metrics are usually scraped without
+ * auth, so those lists would be exposed as is.
  */
 
 /**

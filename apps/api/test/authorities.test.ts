@@ -60,10 +60,10 @@ describeDb("Authority Registry", () => {
     // Dropping it leaves "why is this authority missing" unanswerable.
     await fx.sql`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove,
+        id, name, jurisdiction, proves, does_not_prove,
         recognized_scope, verification_method, public_disclosure_level, valid_from, state
       ) VALUES (
-        gen_random_uuid(), ${fx.tenantA}, 'Unconnected Registry', 'MNG',
+        gen_random_uuid(), 'Unconnected Registry', 'MNG',
         ARRAY['land_use'], ARRAY['economic_viability'],
         ARRAY['land'], 'manual_official_registry_confirmation', 'public', '2020-01-01', 'accepted'
       )
@@ -87,10 +87,10 @@ describeDb("Authority Registry", () => {
   it("a planned integration is not called", async () => {
     const [authority] = await fx.sql<{ id: string }[]>`
       INSERT INTO core.authorities (
-        id, tenant_id, name, jurisdiction, proves, does_not_prove,
+        id, name, jurisdiction, proves, does_not_prove,
         recognized_scope, verification_method, public_disclosure_level, valid_from, state
       ) VALUES (
-        gen_random_uuid(), ${fx.tenantA}, 'Planned Registry', 'MNG',
+        gen_random_uuid(), 'Planned Registry', 'MNG',
         ARRAY['tax_status'], ARRAY['economic_viability'],
         ARRAY['tax'], 'authenticated_api', 'public', '2020-01-01', 'accepted'
       )
@@ -98,10 +98,10 @@ describeDb("Authority Registry", () => {
     `;
     await fx.sql`
       INSERT INTO core.source_connections (
-        id, tenant_id, authority_id, connection_key, collection_method,
+        id, authority_id, connection_key, collection_method,
         access_basis, state
       ) VALUES (
-        gen_random_uuid(), ${fx.tenantA}, ${authority!.id}, ${`planned-${Date.now()}`},
+        gen_random_uuid(), ${authority!.id}, ${`planned-${Date.now()}`},
         'authenticated_api', 'Pending consultation', 'planned'
       )
     `;
@@ -170,13 +170,13 @@ describeDb("Authority Registry", () => {
     expect(active?.integrationStageSince).not.toBeNull();
   });
 
-  it("another tenant's authority is not visible", async () => {
-    const response = await app.inject({
+  it("is Registry reference data: another company's administrator sees the same authorities", async () => {
+    const read = async (account: typeof fx.operatorA) => (await app.inject({
       method: "GET",
       url: "/api/v1/authorities",
-      headers: { authorization: `Bearer ${await signIn(app, fx.operatorB)}` },
-    });
-    expect(response.json().items).toEqual([]);
+      headers: { authorization: `Bearer ${await signIn(app, account)}` },
+    })).json().items.map((item: { id: string }) => item.id).sort();
+    expect(await read(fx.operatorB)).toEqual(await read(fx.operatorA));
   });
 });
 
@@ -247,18 +247,18 @@ describeDb("Asset/Offering gate (OD-07)", () => {
     const projectId = randomUUID();
     await fx.sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${projectId}, ${fx.tenantA}, ${`OG-${projectId.slice(0, 8)}`}, 'Offering gate check',
+        ${projectId}, ${`OG-${projectId.slice(0, 8)}`}, 'Offering gate check',
         'MNG', ARRAY['copper'], ${fx.orgA}
       )
     `;
     for (const key of keys) {
       await fx.sql`
         INSERT INTO core.project_facts (
-          id, tenant_id, project_id, fact_key, status, evidence_ref, evidence_kind
+          id, project_id, fact_key, status, evidence_ref, evidence_kind
         )
-        VALUES (${randomUUID()}, ${fx.tenantA}, ${projectId}, ${key}, 'confirmed', ${randomUUID()}, 'upload')
+        VALUES (${randomUUID()}, ${projectId}, ${key}, 'confirmed', ${randomUUID()}, 'upload')
       `;
     }
     return projectId;

@@ -216,7 +216,8 @@ describeDb("document status", () => {
       const onOther = (
         await declare({ documentType: "Assay report", tier: "required" }, steward, fx.otherProjectA)
       ).json() as Requirement;
-      expect((await retire(onOther.id, { reason: "not ours" }, scopedSteward)).statusCode).toBe(403);
+      // The requirement's project is outside the scoped steward's reach: hidden, not found.
+      expect((await retire(onOther.id, { reason: "not ours" }, scopedSteward)).statusCode).toBe(404);
     });
 
     it("answers 404 for an unknown requirement and does not confirm unknown projects", async () => {
@@ -283,7 +284,7 @@ describeDb("document status", () => {
         });
 
       expect((await send(steward)).statusCode).toBe(200);
-      expect((await send(reader)).statusCode).toBe(403);
+      expect((await send(reader)).statusCode).toBe(404);
     });
   });
 
@@ -449,7 +450,7 @@ describeDb("document status", () => {
       // expired, every hundredth still pending; timestamps differ by a microsecond so a cursor
       // rounded to the millisecond would lose rows.
       const [subject] = await fx.sql<{ id: string }[]>`
-        SELECT id FROM core.subjects WHERE tenant_id = ${fx.tenantA} LIMIT 1
+        SELECT id FROM core.subjects LIMIT 1
       `;
       await fx.sql`
         WITH seed AS (
@@ -458,17 +459,17 @@ describeDb("document status", () => {
           FROM generate_series(1, ${TOTAL}) g
         ),
         artifacts AS (
-          INSERT INTO core.artifacts (id, tenant_id, project_id, kind, content_hash, sensitivity)
-          SELECT artifact_id, ${fx.tenantA}, ${fx.otherProjectA}, 'raw_source', hash, 'restricted'
+          INSERT INTO core.artifacts (id, project_id, kind, content_hash, sensitivity)
+          SELECT artifact_id, ${fx.otherProjectA}, 'raw_source', hash, 'restricted'
           FROM seed WHERE g % 100 <> 0
           RETURNING id
         )
         INSERT INTO core.object_uploads (
-          id, tenant_id, project_id, object_key, content_hash, byte_size, content_type,
+          id, project_id, object_key, content_hash, byte_size, content_type,
           original_filename, sensitivity, state, uploaded_by, uploaded_at, promoted_artifact_id,
           document_type, valid_until
         )
-        SELECT upload_id, ${fx.tenantA}, ${fx.otherProjectA}, 'bulk/' || upload_id, hash, 1024,
+        SELECT upload_id, ${fx.otherProjectA}, 'bulk/' || upload_id, hash, 1024,
                'application/pdf', 'bulk.pdf', 'restricted',
                (CASE WHEN g % 100 = 0 THEN 'quarantined' ELSE 'promoted' END)::core.upload_state,
                ${subject!.id}, now() - g * interval '1 microsecond',

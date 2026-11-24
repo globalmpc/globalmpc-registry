@@ -11,7 +11,6 @@ const C = AUTH_COPY.settings;
 const FACTOR: Readonly<Record<string, string>> = {
   email_code: "emailed code",
   google: "Google",
-  microsoft: "Microsoft",
   passkey: "passkey",
   totp: "authenticator app",
   recovery_code: "recovery code",

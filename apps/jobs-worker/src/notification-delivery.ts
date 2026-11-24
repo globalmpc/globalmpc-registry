@@ -16,10 +16,10 @@ import {
  *
  * In-app notifications are visible only when someone opens the app. When an urgent one — a public
  * record withdrawal — arrives late, citations continue in the meantime. This module pushes it to
- * the endpoint the tenant designated.
+ * the endpoint the Registry designated.
  *
  * **Why webhook, not email**: storing an email address means this system holds personal data,
- * the class uploads currently reject with 422 (OD-18). A receiving URL belongs to the tenant,
+ * the class uploads currently reject with 422 (OD-18). A receiving URL belongs to the Registry,
  * not to a person.
  *
  * **Signed.** Without a signature anyone who knows the URL can forge a notification, and a
@@ -29,7 +29,7 @@ import {
  * **The body carries what the in-app notification carries.** Summary and link only — no
  * projection, no evidence. The endpoint is a system we do not control.
  *
- * **The receiver is judged like a source endpoint.** The URL is set by a tenant operator
+ * **The receiver is judged like a source endpoint.** The URL is set by a Registry operator
  * and called from inside our network, so it is resolved right before sending, refused if any
  * address is private or reserved, and the connection is pinned to the checked addresses with no
  * redirects followed. What is stored about a failure is a category — the admin screen shows it,
@@ -39,7 +39,6 @@ import {
 export interface DeliverableNotification {
   readonly notification_id: string;
   readonly sink_id: string;
-  readonly tenant_id: string;
   readonly url: string;
   readonly secret_reference: string;
   readonly kind: string;
@@ -199,7 +198,7 @@ export async function deliverOnce(
 ): Promise<DeliveryResult> {
   return sql.begin(async (tx) => {
     const [row] = await tx<DeliverableNotification[]>`
-      SELECT d.notification_id, d.sink_id, d.tenant_id, d.attempts,
+      SELECT d.notification_id, d.sink_id, d.attempts,
              s.url, s.secret_reference,
              n.kind::text AS kind, n.summary, n.link, n.occurred_at
       FROM core.notification_deliveries d

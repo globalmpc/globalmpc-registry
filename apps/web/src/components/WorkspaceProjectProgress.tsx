@@ -8,7 +8,7 @@ import { type LedgerSummary } from "@/lib/evidence-ledger-api";
 import { ProgressRateLimited, projectProgressRequests } from "@/lib/project-progress-requests";
 import { ProjectProgress, ProjectStageRoadmap } from "./ProjectProgress";
 
-/** Parent keys by tenant/subject; project/token changes also discard in-flight state. */
+/** Parent keys by subject; project/token changes also discard in-flight state. */
 export function WorkspaceProjectProgress(props: {
   readonly token: string;
   readonly projectId: string;

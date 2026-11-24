@@ -39,16 +39,11 @@ export async function withMinimumDuration<T>(minimumMs: number, work: () => Prom
  * The actor of an audit row written before (or without) a session — a code being asked for or
  * checked. The subject is the account the code belongs to; no role decided it (`self_bound`).
  */
-function accountActor(
-  subjectId: string | null,
-  tenantId: string,
-  userAgentHash: string | null,
-): Session {
+function accountActor(subjectId: string | null, userAgentHash: string | null): Session {
   return {
     principal: "person",
     sessionId: "",
     subjectId,
-    tenantId,
     assuranceLevel: "wallet_only",
     firstFactor: null,
     secondFactor: null,
@@ -62,7 +57,6 @@ function accountActor(
 }
 
 export interface AccountAuditEntry {
-  readonly tenantId: string;
   readonly subjectId: string | null;
   readonly command: string;
   readonly resourceType: string;
@@ -71,8 +65,9 @@ export interface AccountAuditEntry {
 }
 
 /**
- * Writes an account audit row inside `tx`, setting the tenant for that transaction first: these
- * routes start without one, and `audit.events` is tenant-scoped (0078).
+ * Writes an account audit row inside `tx`, naming the account as the transaction's actor first:
+ * these routes start without a session, and `audit.events` accepts a row only from the actor it
+ * names (0169). A row without a subject (an invitation not yet accepted) is written with no actor.
  *
  * Addresses go into `detail` only as keyed hashes (`emailHash`), never in plain text.
  */
@@ -81,10 +76,9 @@ export async function recordAccountAudit(
   request: FastifyRequest,
   entry: AccountAuditEntry,
 ): Promise<void> {
-  await tx`SELECT set_config('app.current_tenant', ${entry.tenantId}, true)`;
+  await tx`SELECT set_config('app.actor_subject_id', ${entry.subjectId ?? ""}, true)`;
   await recordAudit(tx, {
-    tenantId: entry.tenantId,
-    session: accountActor(entry.subjectId, entry.tenantId, hashUserAgent(request.headers["user-agent"])),
+    session: accountActor(entry.subjectId, hashUserAgent(request.headers["user-agent"])),
     effectiveRole: ROLE_SELF_BOUND,
     command: entry.command,
     resourceType: entry.resourceType,

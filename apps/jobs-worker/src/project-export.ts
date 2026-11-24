@@ -35,7 +35,6 @@ export const EXPORT_FORMAT_VERSION = "1";
 
 export interface ExportJob {
   readonly id: string;
-  readonly tenant_id: string;
   readonly project_id: string;
   readonly requested_by_subject_id: string;
   /** The wallet a pre-0110 requester signed in with. Null for every job since: the requester is the subject. */
@@ -243,23 +242,22 @@ export function assembleExportPackage(
   return { pkg: { manifest, sections }, manifestHash: sha256Hex(manifest) };
 }
 
-/** Reads the records a package is built from. Every query is pinned to the job's tenant. */
+/** Reads the records a package is built from. Every query is pinned to the job's project. */
 export async function loadExportRecords(
   sql: postgres.Sql,
   job: ExportJob,
 ): Promise<ExportRecords> {
-  const tenant = job.tenant_id;
   const project = job.project_id;
 
   const [projectRow] = await sql<{ id: string; project_key: string }[]>`
-    SELECT id, project_key FROM core.projects WHERE tenant_id = ${tenant} AND id = ${project}
+    SELECT id, project_key FROM core.projects WHERE id = ${project}
   `;
   if (!projectRow) throw new Error("EXPORT_PROJECT_NOT_FOUND");
 
   const attestations = await sql<Row[]>`
     SELECT a.* FROM core.verification_attestations a
     JOIN core.verification_cases c ON c.id = a.case_id
-    WHERE a.tenant_id = ${tenant} AND c.tenant_id = ${tenant} AND c.project_id = ${project}
+    WHERE c.project_id = ${project}
     ORDER BY a.signed_at, a.id
   `;
 
@@ -269,16 +267,15 @@ export async function loadExportRecords(
     SELECT v.*, e.registry_type, e.public_key
     FROM core.registry_entry_versions v
     JOIN core.registry_entries e ON e.id = v.entry_id
-    WHERE v.tenant_id = ${tenant} AND e.tenant_id = ${tenant}
-      AND (
+    WHERE (
         e.subject_id = ${project}
         OR e.subject_id IN (
-          SELECT id FROM core.verification_cases WHERE tenant_id = ${tenant} AND project_id = ${project}
+          SELECT id FROM core.verification_cases WHERE project_id = ${project}
         )
         OR e.subject_id IN (
           SELECT a.id FROM core.verification_attestations a
           JOIN core.verification_cases c ON c.id = a.case_id
-          WHERE c.tenant_id = ${tenant} AND c.project_id = ${project}
+          WHERE c.project_id = ${project}
         )
       )
     ORDER BY e.id, v.version
@@ -286,13 +283,13 @@ export async function loadExportRecords(
 
   const sourceReceipts = await sql<Row[]>`
     SELECT * FROM core.source_receipts
-    WHERE tenant_id = ${tenant} AND project_id = ${project}
+    WHERE project_id = ${project}
     ORDER BY received_at, id
   `;
 
   const gateDecisions = await sql<Row[]>`
     SELECT * FROM core.gate_decisions
-    WHERE tenant_id = ${tenant} AND project_id = ${project}
+    WHERE project_id = ${project}
     ORDER BY signed_at, id
   `;
 
@@ -310,7 +307,7 @@ export async function loadExportRecords(
             SELECT state::text, tx_hash, block_number, chain_id FROM chain.transactions
             WHERE batch_id = b.id ORDER BY created_at DESC LIMIT 1
           ) t ON true
-          WHERE b.tenant_id = ${tenant} AND l.entry_version_id = ANY(${versionIds}::uuid[])
+          WHERE l.entry_version_id = ANY(${versionIds}::uuid[])
           ORDER BY l.entry_version_id, b.created_at
         `;
 
@@ -344,9 +341,10 @@ export async function buildProjectExport(
   now: () => Date = () => new Date(),
 ): Promise<"built" | "already_built" | "missing"> {
   const [job] = await sql<ExportJob[]>`
-    SELECT id, tenant_id, project_id, requested_by_subject_id, requested_by_wallet,
-           sensitivity_clearance, state, requested_at
-    FROM core.project_exports WHERE id = ${exportId}
+    SELECT job.id, job.project_id, job.requested_by_subject_id,
+           job.requested_by_wallet, job.sensitivity_clearance, job.state, job.requested_at
+    FROM core.project_export_jobs AS job
+    WHERE job.id = ${exportId}
   `;
   if (!job) return "missing";
   // At-least-once delivery can bring the same request twice. The first package stands.
@@ -356,7 +354,7 @@ export async function buildProjectExport(
   const { pkg, manifestHash } = assembleExportPackage(job, records, now());
 
   await sql`
-    UPDATE core.project_exports
+    UPDATE core.project_export_jobs
     SET state = 'succeeded', package = ${sql.json(pkg as never)},
         manifest_hash = ${manifestHash}, failure_reason = NULL, completed_at = now()
     WHERE id = ${job.id} AND state <> 'succeeded'
@@ -386,7 +384,7 @@ export function projectExportHandler(sql: postgres.Sql): OutboxHandler {
     },
     onDeadLetter: async (event) => {
       await sql`
-        UPDATE core.project_exports
+        UPDATE core.project_export_jobs
         SET state = 'failed', failure_reason = 'EXPORT_BUILD_FAILED', completed_at = now()
         WHERE id = ${exportIdOf(event)} AND state = 'queued'
       `;

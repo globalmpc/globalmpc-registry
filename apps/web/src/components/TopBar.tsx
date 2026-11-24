@@ -19,7 +19,6 @@ function closeMenu(event: MouseEvent<HTMLAnchorElement>): void {
 const FIRST_FACTOR_LABEL: Readonly<Record<string, string>> = {
   email_code: "email",
   google: "Google",
-  microsoft: "Microsoft",
 };
 
 export function TopBar() {

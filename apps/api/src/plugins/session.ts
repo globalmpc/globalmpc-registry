@@ -4,20 +4,21 @@ import {
   BREAK_GLASS_ROLE,
   deriveAuthenticationLevel,
   SERVICE_ONLY_ROLES,
-  isTenantWideBinding,
+  isRegistryWideBinding,
+  type BindingScopeKind,
   type AssuranceLevel,
   type AuthenticationLevel,
   type FirstFactor,
   type SecondFactor,
   type ServiceScope,
 } from "@mpc/api-contract";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import type { ResolvedServiceToken, ResolvedSessionRow } from "./session-token.js";
 
 type RoleBinding = {
   readonly role: string;
   readonly governanceScope?: "protocol" | "project" | "none";
-  readonly scopeKind?: "tenant" | "organization" | "none";
+  readonly scopeKind?: BindingScopeKind;
   readonly organizationId: string | null;
   readonly projectId: string | null;
   /**
@@ -39,11 +40,10 @@ export interface Session {
   /** The session id, or the service token id. Recorded in sign-in and sign-out audit rows. */
   readonly sessionId: string;
   /**
-   * Every session belongs to a subject in a tenant. Typed nullable because routes written for the
-   * former unbound wallet session still check it; the resolvers never return null here.
+   * Every session belongs to a subject. Typed nullable because routes written for the former
+   * unbound wallet session still check it; the resolvers never return null here.
    */
   readonly subjectId: string | null;
-  readonly tenantId: string | null;
   /** Identity assurance of the subject (admin-set). Not the authentication level. */
   readonly assuranceLevel: AssuranceLevel;
   /** Null for a service. */
@@ -76,7 +76,7 @@ export interface Session {
    */
   readonly organizationProjectIds?: Readonly<Record<string, readonly string[]>>;
   /**
-   * Project ID → host jurisdiction, for the tenant's projects.
+   * Project ID → host jurisdiction, for the projects the subject reaches.
    *
    * Loaded only when a binding is jurisdiction-scoped. If absent, a scoped binding reaches no
    * project (narrowed, not widened).
@@ -106,9 +106,8 @@ export async function resolveSession(sql: postgres.Sql, row: ResolvedSessionRow)
     googleRequiresMfa: false,
     aal,
     subjectId: row.subjectId,
-    tenantId: row.tenantId,
     assuranceLevel: row.assuranceLevel,
-    ...(await resolveAuthority(sql, row.tenantId, row.subjectId, role =>
+    ...(await resolveAuthority(sql, row.subjectId, role =>
       !row.recoveryLimited && !SERVICE_ONLY_ROLES.includes(role) ? true : null)),
   };
 }
@@ -127,7 +126,6 @@ export async function resolveServiceSession(
     principal: "service",
     sessionId: token.tokenId,
     subjectId: token.subjectId,
-    tenantId: token.tenantId,
     assuranceLevel: token.assuranceLevel,
     firstFactor: null,
     secondFactor: null,
@@ -136,7 +134,7 @@ export async function resolveServiceSession(
     serviceScopes: token.scopes,
     // Only service roles take effect through a token. A person role the subject holds (by
     // mistake or on purpose) stays narrowed, so a token never acts as a person.
-    ...(await resolveAuthority(sql, token.tenantId, token.subjectId, (role) =>
+    ...(await resolveAuthority(sql, token.subjectId, (role) =>
       SERVICE_ONLY_ROLES.includes(role) ? true : null,
     )),
   };
@@ -151,7 +149,6 @@ export async function resolveServiceSession(
  */
 async function resolveAuthority(
   sql: postgres.Sql,
-  tenantId: string,
   subjectId: string,
   meets: (role: string) => true | AuthenticationLevel | null,
 ): Promise<
@@ -163,7 +160,7 @@ async function resolveAuthority(
       organization_id: string | null;
       project_id: string | null;
       jurisdiction: string[] | null;
-      scope_kind: "tenant" | "organization" | "none";
+      scope_kind: BindingScopeKind;
       governance_scope: "protocol" | "project" | "none";
     }[]
   >`
@@ -182,8 +179,8 @@ async function resolveAuthority(
   // any elevation with it, and sessions without it skip the lookup. The elevation is itself a role
   // with its own minimum.
   let elevation: string | null = null;
-  if (bindings.some((row) => row.role === "administrator" && row.project_id === null && row.scope_kind === "tenant" && row.jurisdiction === null)) {
-    const candidate = await resolveBreakGlassElevation(sql, tenantId, subjectId);
+  if (bindings.some((row) => row.role === "administrator" && row.project_id === null && row.scope_kind === "registry" && row.jurisdiction === null)) {
+    const candidate = await resolveBreakGlassElevation(sql, subjectId);
     if (candidate !== null) {
       const verdict = meets(BREAK_GLASS_ROLE);
       if (verdict === true) elevation = candidate;
@@ -211,12 +208,12 @@ async function resolveAuthority(
     projectIds: bindings
       .map((row) => row.project_id)
       .filter((value): value is string => value !== null),
-    organizationProjectIds: await resolveOrganizationProjects(sql, tenantId, bindings),
+    organizationProjectIds: await resolveOrganizationProjects(sql, subjectId, bindings),
     ...(scoped
       ? {
           projectJurisdictions: await resolveProjectJurisdictions(
             sql,
-            tenantId,
+            subjectId,
             [...new Set(bindings.flatMap((row) => row.jurisdiction ?? []))],
           ),
         }
@@ -233,10 +230,9 @@ async function resolveAuthority(
  */
 async function resolveBreakGlassElevation(
   sql: postgres.Sql,
-  tenantId: string,
   subjectId: string,
 ): Promise<string | null> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, { subjectId }, (tx) =>
     tx<{ id: string }[]>`
       SELECT id FROM core.break_glass_elevations
       WHERE subject_id = ${subjectId}
@@ -252,16 +248,16 @@ async function resolveBreakGlassElevation(
   return row?.id ?? null;
 }
 
-/** Host jurisdiction of every project in the tenant. Read only for jurisdiction-scoped sessions. */
+/** Host jurisdiction of every project the subject reaches. Read only for jurisdiction-scoped sessions. */
 async function resolveProjectJurisdictions(
   sql: postgres.Sql,
-  tenantId: string,
+  subjectId: string,
   jurisdictions: readonly string[],
 ): Promise<Readonly<Record<string, string>>> {
   // Only projects inside the scoped bindings' jurisdictions. One outside them is absent, which
   // the decision reads as a mismatch, the same answer its host country would give. Unscoped
   // bindings do not read the jurisdiction at all.
-  const rows = await withTenant(sql, { tenantId }, (tx) =>
+  const rows = await withActor(sql, { subjectId }, (tx) =>
     tx<{ id: string; host_country_iso3: string }[]>`
       SELECT id, host_country_iso3 FROM core.projects
       WHERE host_country_iso3 = ANY(${jurisdictions as string[]}::text[])
@@ -274,12 +270,12 @@ async function resolveProjectJurisdictions(
  * Project list for organization-level bindings, narrowed to the owning organization.
  *
  * Sessions are re-resolved per request (server.ts), so a new project an organization creates
- * is reachable from the next request. The tenant is known by then, so it reads via RLS (`withTenant`).
+ * is reachable from the next request. It reads as the subject, under its own RLS reach (`withActor`).
  */
 async function resolveOrganizationProjects(
   sql: postgres.Sql,
-  tenantId: string,
-  bindings: readonly { role: string; organization_id: string | null; project_id: string | null; scope_kind?: "tenant" | "organization" | "none" }[],
+  subjectId: string,
+  bindings: readonly { role: string; organization_id: string | null; project_id: string | null; scope_kind?: BindingScopeKind }[],
 ): Promise<Readonly<Record<string, readonly string[]>>> {
   const organizations = [
     ...new Set(
@@ -288,14 +284,14 @@ async function resolveOrganizationProjects(
           (row) =>
             row.project_id === null &&
             row.organization_id !== null &&
-            !isTenantWideBinding({ role: row.role, scopeKind: row.scope_kind }) && row.scope_kind !== "none",
+            !isRegistryWideBinding({ role: row.role, scopeKind: row.scope_kind }) && row.scope_kind !== "none",
         )
         .map((row) => row.organization_id as string),
     ),
   ];
   if (organizations.length === 0) return {};
 
-  const rows = await withTenant(sql, { tenantId }, (tx) =>
+  const rows = await withActor(sql, { subjectId }, (tx) =>
     tx<{ id: string; owner_organization_id: string }[]>`
       SELECT id, owner_organization_id
       FROM core.projects

@@ -48,7 +48,6 @@ describeDb("service tokens", () => {
 
   it("creates a service subject with one service role, and refuses a person role", async () => {
     const { subjectId } = await createServiceSubject(fx.sql, {
-      tenantId: fx.tenantA,
       displayName: "CRE reporter",
       role: "cre_reporter",
     });
@@ -63,17 +62,16 @@ describeDb("service tokens", () => {
 
     for (const role of ["administrator", "reviewer", "public_reader"]) {
       await expect(
-        createServiceSubject(fx.sql, { tenantId: fx.tenantA, displayName: "x", role }),
+        createServiceSubject(fx.sql, { displayName: "x", role }),
       ).rejects.toBeInstanceOf(ServiceTokenError);
     }
     await expect(
-      createServiceSubject(fx.sql, { tenantId: fx.tenantA, displayName: "  ", role: "scan_service" }),
+      createServiceSubject(fx.sql, { displayName: "  ", role: "scan_service" }),
     ).rejects.toThrow(/display name/);
   });
 
   it("issues a token that resolves to its subject and scopes, storing only a hash", async () => {
     const issued = await issueServiceToken(fx.sql, {
-      tenantId: fx.tenantA,
       subjectId: fx.scanServiceSubjectA,
       scopes: ["scan_result"],
       label: "scan-worker.blue",
@@ -84,7 +82,6 @@ describeDb("service tokens", () => {
     const resolved = await resolve(issued.token);
     expect(resolved).toMatchObject({
       subjectId: fx.scanServiceSubjectA,
-      tenantId: fx.tenantA,
       scopes: ["scan_result"],
     });
 
@@ -103,7 +100,6 @@ describeDb("service tokens", () => {
 
   it("refuses unknown or empty scopes, a bad label, and a lifetime outside a minute to a year", async () => {
     const base = {
-      tenantId: fx.tenantA,
       subjectId: fx.scanServiceSubjectA,
       scopes: ["scan_result"],
       label: "scan-worker",
@@ -126,7 +122,6 @@ describeDb("service tokens", () => {
 
   it("rotation keeps the old token for the overlap only, and the successor carries its scopes", async () => {
     const first = await issueServiceToken(fx.sql, {
-      tenantId: fx.tenantA,
       subjectId: fx.scanServiceSubjectA,
       scopes: ["scan_result"],
       label: "rotating",
@@ -151,7 +146,6 @@ describeDb("service tokens", () => {
 
     // A rotation never extends a token: an overlap longer than what remains keeps the old expiry.
     const shortLived = await issueServiceToken(fx.sql, {
-      tenantId: fx.tenantA,
       subjectId: fx.scanServiceSubjectA,
       scopes: ["scan_result"],
       label: "short",
@@ -174,7 +168,6 @@ describeDb("service tokens", () => {
 
   it("revocation ends the token at once and cannot be repeated; a revoked token cannot be rotated", async () => {
     const issued = await issueServiceToken(fx.sql, {
-      tenantId: fx.tenantA,
       subjectId: fx.scanServiceSubjectA,
       scopes: ["scan_result"],
       label: "revoked",
@@ -192,8 +185,8 @@ describeDb("service tokens", () => {
     expect(await resolve("mpcsvc_not-a-real-token")).toBeNull();
   });
 
-  it("lists a tenant's tokens without their hashes", async () => {
-    const listed = await listServiceTokens(fx.sql, fx.tenantA);
+  it("lists the Registry's tokens without their hashes", async () => {
+    const listed = await listServiceTokens(fx.sql);
     expect(listed.length).toBeGreaterThan(0);
     for (const token of listed) {
       expect(Object.keys(token)).not.toContain("tokenHash");
@@ -201,6 +194,5 @@ describeDb("service tokens", () => {
     }
     expect(listed.some((token) => token.rotatedFrom !== null)).toBe(true);
     expect(listed.some((token) => token.revokedAt !== null)).toBe(true);
-    expect(await listServiceTokens(fx.sql, fx.tenantB)).toEqual([]);
   });
 });

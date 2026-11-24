@@ -60,7 +60,7 @@ that holds nothing else: `env:WEBHOOK_SECRET_<NAME>` (`NAME` is `[A-Z0-9_]`, 1�
 or `file:/run/secrets/webhook_<name>` (`name` is `[A-Za-z0-9_-]`, 1–64 characters, no
 subdirectories). The API refuses any other reference when a sink is registered, and the
 worker refuses it again before reading — so a sink cannot point the worker at its database
-URL or the signer key. Provision each tenant's signing secret under one of those names
+URL or the signer key. Provision each sink's signing secret under one of those names
 (for Docker secrets, name the secret `webhook_<name>`).
 
 ## Database roles for the operator CLIs
@@ -70,21 +70,23 @@ migration connection. Both check the connecting role before changing anything an
 is missing:
 
 - **bootstrap and service-token ensure** require ownership (or an inherited owner role) of
-  `core.tenants`, `core.subjects`, and `core.service_tokens`. Application/worker logins are
-  rejected. Resolve/create the tenant inside the transaction, then set `app.current_tenant`
-  before account/token access. FORCE RLS remains enabled; global UNIQUE constraints reject
-  hidden email/token collisions and roll back all new rows. BYPASSRLS is not required for
-  these deployment steps. Apply migration 0136 before running the updated CLI.
+  `core.role_bindings`, `core.subjects`, and `core.service_tokens`, and an owner that bypasses
+  row-level security (superuser or `BYPASSRLS`), as the migration owner already must (below).
+  Application/worker logins and a NOBYPASSRLS owner are refused before anything is written:
+  with no tenant, deciding the Registry's first holder of a role and the token's single service
+  subject means reading every row, which actor-based RLS hides from an owner with no actor.
+  Global UNIQUE constraints still reject email/token collisions and roll back all new rows.
 - **The role that runs the migrations owns the `SECURITY DEFINER` functions**, and it too needs
-  superuser or `BYPASSRLS`. Many of them read outside the caller's tenant by design — sign-in
-  before a tenant is known, an address or identity that must be free in every tenant, token and
+  superuser or `BYPASSRLS`. Many of them read outside the caller's reach by design — sign-in
+  before an actor is known, an address or identity that must be free across the Registry, token and
   state lookups (including session and service-token resolution and the role bindings read with
   them), purges and gauges, a wallet's disable history (the list is in
   `0131_cross_tenant_definers_fail_closed.sql`). They run with `row_security = off` (0130, 0131):
   under an owner that does not bypass RLS they fail with "query would be affected by row-level
   security policy" instead of seeing zero rows and answering "nothing there". Every authenticated
   request, sign-in, invitations, email changes, OIDC and wallet binding would all fail at the first
-  use. This remains a separate runtime requirement: making bootstrap tenant-scoped does not
+  use. Migration 0169 itself refuses an owner that bypasses neither
+  (`TENANT_REMOVAL_REQUIRES_BYPASSRLS`) before changing anything. A successful bootstrap does not
   establish that an Aurora deployment can sign in. Verify the effective function owners and
   actual sign-in/session resolution before release; Aurora's `rds_superuser` is not PostgreSQL
   superuser. This change does not grant any role BYPASSRLS or relax these fail-closed functions.
@@ -176,7 +178,7 @@ outer call also requires reconciliation: it does not prove the Safe's logical no
 For a rejected/replaced proposal, the migration operator must verify an on-chain successful
 replacement or cancellation for the **same Safe, original chain and exact Safe nonce**, using
 Safe-service details and receipt/log evidence. Record its actual outer transaction hash in
-`chain.safe_execution_history` with the original proposal/transaction/tenant/chain identity,
+`chain.safe_execution_history` with the original proposal/transaction/chain identity,
 `evidence_kind = 'nonce_replacement'`, and a nonempty `evidence_note` referencing that proof.
 The proposal remains rejected and immutable. The worker checks this hash's receipt, confirmation
 depth and configured finality before moving; absent, reverted or unfinalized evidence cannot
@@ -244,9 +246,11 @@ Each step needs the one before it; skipping one leaves nobody able to sign in.
    signs in by emailed code and enrols a passkey or authenticator app within the 24-hour window,
    then manages their signing wallet from Settings. Repeating explicit cutover with the same
    subject and email is a no-op; it does not reopen an expired window.
-6. **Optional: Google / Microsoft.** `GOOGLE_CLIENT_ID`/`_SECRET`, `MICROSOFT_CLIENT_ID`/`_SECRET`
-   and `MICROSOFT_ALLOWED_TENANTS`, with the redirect URI `<WEB_ORIGIN>/auth/oidc/{provider}/callback`
-   registered at the provider. Never set `OIDC_TEST_RELAY_URL` outside a test run: it sends every
+6. **Optional: Google.** `GOOGLE_CLIENT_ID`/`_SECRET`, with the redirect URI
+   `<WEB_ORIGIN>/auth/oidc/google/callback` registered at Google. Microsoft sign-in was removed
+   (0171): delete `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` and `MICROSOFT_ALLOWED_TENANTS`
+   from the environment — the CDK no longer forwards them, and an API started with one of them
+   set refuses to start. Never set `OIDC_TEST_RELAY_URL` outside a test run: it sends every
    provider request to a local mock; the API accepts only a loopback host for it and refuses it in production and on mainnet.
 7. **Remove** `LEGACY_WALLET_LOGIN`, `SIWE_DOMAIN` and `SIWE_URI` from the environment.
 8. **Check:** an invitation mail arrives, its code signs in, a second factor is enrolled, and the
@@ -393,13 +397,11 @@ operator action, and this code change does not set it in a deployed environment:
 # Personal data: a secret. With no value on the command line Pulumi prompts for it, so the address
 # stays out of shell history.
 pulumi config set --secret --path -s globalmpc-registry-private 'secrets.develop.BOOTSTRAP_EMAIL'
-pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_TENANT_SLUG' registry
-pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_TENANT_NAME' 'MPC Registry'
 pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_ORG_NAME' '<organization legal name>'
 pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_SUBJECT_NAME' 'First operator'
 # Optional, with the CLI's defaults: BOOTSTRAP_JURISDICTION (MNG), BOOTSTRAP_ROLE (administrator),
 # BOOTSTRAP_ASSURANCE (high_assurance).
-# Existing legacy operator only: verify the tenant and stable subject UUID before authorizing.
+# Existing legacy operator only: verify the stable subject UUID before authorizing.
 pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_SUBJECT_ID' '<existing-subject-uuid>'
 ```
 
@@ -409,12 +411,13 @@ pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_S
   to anyone who can describe it; a label such as "First operator" is enough, the person can be
   renamed later. No service task sees any of them. Like every secret here, the address is also
   in the synthesized template ([below](#service-tokens)). Synth refuses `BOOTSTRAP_EMAIL` without
-  the tenant slug and name, organization and subject name. `BOOTSTRAP_EMAIL` is optional, so it
+  the organization and subject name. `BOOTSTRAP_TENANT_SLUG` and `BOOTSTRAP_TENANT_NAME` no
+  longer exist; remove them from the stack configuration. `BOOTSTRAP_EMAIL` is optional, so it
   is not in `cdk_diff.secrets`.
 - **Logs.** The task never prints the address: it moves it into an unexported shell variable
   before migrating, hands it to the bootstrap step in its environment only, and the step prints
   ids and `emailBound`, never the address.
-- **Every deploy re-runs it.** Ordinary email bootstrap reuses the tenant, organization, person
+- **Every deploy re-runs it.** Ordinary email bootstrap reuses the organization, person
   and role binding. While the person holds no passkey or TOTP, it may reopen the 24-hour
   first-enrolment window (audited as `deploy_bound`); once they hold one, it opens nothing.
   Explicit legacy cutover (`BOOTSTRAP_SUBJECT_ID`) instead requires the existing identity and
@@ -430,35 +433,32 @@ pulumi config set --path -s globalmpc-registry-private 'vars.develop.BOOTSTRAP_S
 - **It creates only the first holder of the role.** A person is found by address, so a deploy
   still naming the operator's address after the two-person email change moved it would otherwise
   create a new person on the old address — with the role and an open enrolment window, for
-  whoever reads that mailbox. Bootstrap creates a new person only when nobody in the tenant has
+  whoever reads that mailbox. Bootstrap creates a new person only when nobody in the Registry has
   ever held `BOOTSTRAP_ROLE` (revoked bindings count), and never on an address a completed email
-  change in the tenant moved away from. Either stops the run and writes nothing. The fix is
+  change moved away from. Either stops the run and writes nothing. The fix is
   configuration: remove `BOOTSTRAP_EMAIL`, or set it to the operator's current address (a no-op
   on an unchanged operator). Later holders of the role are invited by an admin. A moved address is
-  refused whatever `BOOTSTRAP_ROLE` names, even a role the tenant never had — but only while the
+  refused whatever `BOOTSTRAP_ROLE` names, even a role nobody in the Registry ever had — but only while the
   previous address is kept: the auth purge forgets it 90 days after the change, and from then on
   only the role-history check remains (an address moved off the only holder of a role still
   refuses for that role; for a role nobody ever held, the old address would be a first holder).
-- **Failures stop the deploy.** A refusal above, an address already on a person in another
-  tenant, an unknown role, assurance below the role's minimum or missing input makes the task
+- **Failures stop the deploy.** A refusal above, an address already on another person, an
+  unknown role, assurance below the role's minimum or missing input makes the task
   exit non-zero, and the pipeline does not deploy the service stacks — as with a failed
   migration or `ensure`. Migrations that applied stay applied; fix the input and deploy again.
-- **The scan worker's tenant.** `SCAN_SERVICE_TENANT_SLUG` is not defaulted to
-  `BOOTSTRAP_TENANT_SLUG`: the scan worker reads it too, so it is set explicitly once and both
-  read the same value. Set both to the same slug on a new environment and one deploy creates the
-  tenant, then registers the token for it.
-- **The connecting role.** The task connects as the migration table owner. Bootstrap and
-  deploy-time token registration are tested under `NOSUPERUSER NOBYPASSRLS` with FORCE RLS.
-  This is a local PostgreSQL test, not proof of the deployed Aurora role configuration.
-  Existing cross-tenant authentication functions and worker roles have separate requirements
-  described above; successful bootstrap alone does not establish runtime readiness.
+- **The connecting role.** The task connects as the migration table owner, which must bypass
+  RLS. Bootstrap and deploy-time token registration are tested under `NOSUPERUSER BYPASSRLS`
+  (accepted) and `NOSUPERUSER NOBYPASSRLS` (refused before any write) with FORCE RLS. This is a
+  local PostgreSQL test, not proof of the deployed Aurora role configuration. The
+  authentication functions and worker roles have the separate requirements described above;
+  successful bootstrap alone does not establish runtime readiness.
 
 **Running it by hand** stays available — locally, under Compose, or when the deploy cannot:
 `pnpm --filter @mpc/api bootstrap` over the migration connection, with the same variables in the
 environment. It behaves exactly as the deploy step.
 
 **Explicit legacy operator cutover is an operator-trusted migration action.** For a pre-account
-person, set `BOOTSTRAP_SUBJECT_ID` to the exact UUID from the tenant's historical subject record,
+person, set `BOOTSTRAP_SUBJECT_ID` to the exact UUID from the historical subject record,
 along with `BOOTSTRAP_EMAIL` and the other inputs above. Verify the person and their mailbox
 outside this CLI before authorizing the run. The address or a wallet address never selects the
 historical identity implicitly; a disabled wallet does not change the UUID to select.
@@ -520,18 +520,18 @@ The scan worker and the CRE workflow authenticate with **service tokens**, not w
 `cre_report`), and reaches only the routes those scopes name; only service roles
 (`scan_service`, `cre_reporter`) are effective through it, and no person session makes those
 roles effective. Only the token's hash is stored; a token lives at most a year. Every change is
-audited as `deploy_bound`. `ensure` runs tenant-scoped over the migration table-owner connection.
-The other database commands retain their existing superuser/BYPASSRLS contract; `generate`
+audited as `deploy_bound`. `ensure` runs over the migration table-owner connection, which must
+bypass RLS. The other database commands retain their existing superuser/BYPASSRLS contract; `generate`
 requires no database connection:
 
 ```sh
 pnpm --filter @mpc/api service-token generate                 # a new token on stdout; no database
-SERVICE_TOKEN=… pnpm --filter @mpc/api service-token ensure <tenantSlug> <label> <role> <scope,...> [ttlDays=365] [overlapHours=24]
-pnpm --filter @mpc/api service-token create-subject <tenantSlug> <displayName> <role>
-pnpm --filter @mpc/api service-token issue <tenantSlug> <subjectId> <label> <scope,...> [ttlDays=90]
+SERVICE_TOKEN=… pnpm --filter @mpc/api service-token ensure <label> <role> <scope,...> [ttlDays=365] [overlapHours=24]
+pnpm --filter @mpc/api service-token create-subject <displayName> <role>
+pnpm --filter @mpc/api service-token issue <subjectId> <label> <scope,...> [ttlDays=90]
 pnpm --filter @mpc/api service-token rotate <tokenId> [overlapHours=24] [ttlDays=90]
 pnpm --filter @mpc/api service-token revoke <tokenId>
-pnpm --filter @mpc/api service-token list <tenantSlug>
+pnpm --filter @mpc/api service-token list
 ```
 
 ### Scan worker: generated ahead, registered by the deploy
@@ -549,16 +549,15 @@ Secrets Manager → task environment. Nobody copies a value after a deploy:
    ```
 
    (`pulumi config set --secret --path -s globalmpc-registry-private 'secrets.develop.SCAN_SERVICE_TOKEN' <value>`
-   is the same with the value as an argument.) Set `SCAN_SERVICE_TENANT_SLUG` — the tenant the
-   scan worker reports for, a plain variable — for the environment in the same stack, next to
-   the other plain variables. Apply the stack so GitHub has both. **One tenant per
-   deployment:** the token belongs to that tenant and the API refuses its report on any other
-   tenant's upload, so the scan worker leases only that tenant's uploads (it reads the tenant's
-   id by slug at start and exits if there is none). Another tenant's uploads stay quarantined,
-   untouched, until a deployment scans for it.
+   is the same with the value as an argument.) Apply the stack so GitHub has it. The token
+   belongs to the `scan-worker` service subject, whose Registry-wide `scan_service` binding
+   reaches every project's uploads; the worker resolves that subject from its token at start
+   (exiting if the token is not registered) and leases as it, so it sees exactly the uploads the
+   API will accept its reports for. `SCAN_SERVICE_TENANT_SLUG` no longer exists; remove it from
+   the stack configuration.
 2. **Deploy.** CDK refuses a value that is not a generated token (wrong prefix, length or
    alphabet), naming the variable and never the value. The migration task migrates and then,
-   only if every migration applied, runs `service-token ensure <SCAN_SERVICE_TENANT_SLUG>
+   only if every migration applied, runs `service-token ensure
    scan-worker scan_service scan_result`: it creates the `scan-worker` service subject on first
    use and registers the token's hash. The token reaches that step in its environment only — not
    the migration's, not a command line, never a log line. Only the migration task's execution
@@ -574,18 +573,16 @@ Secrets Manager → task environment. Nobody copies a value after a deploy:
    check keeps running. The first accepted report clears the status and the normal poll resumes.
    The API exports this as `mpc_worker_unauthorized{state="scan"}` (1 while refused), and
    `MpcScanWorkerUnauthorized` (`config/observability/alerts.yml`) pages after 10 minutes —
-   the liveness rules stay quiet for a worker that is alive, and a quiet tenant never reaches
-   `MpcUploadsStuckInQuarantine`. When it fires: `service-token list <tenantSlug>` to see whether
+   the liveness rules stay quiet for a worker that is alive, and a quiet Registry never reaches
+   `MpcUploadsStuckInQuarantine`. When it fires: `service-token list` to see whether
    the token was revoked, expired or replaced, then store a current value and redeploy.
    The deploy pipeline runs the migration task before the service stacks, as for every release,
    which keeps that window to a rotation's or a revocation's.
 
-Running `ensure` again with the same value changes nothing (the expiry is not extended). The
-tenant must exist. The migration task bootstraps before `ensure`, so on a brand-new environment
-with `BOOTSTRAP_TENANT_SLUG` equal to `SCAN_SERVICE_TENANT_SLUG` one deploy creates the tenant and
-registers the token ([First operator from the deploy](#first-operator-from-the-deploy)); without a
-bootstrap the task fails at `ensure` until the tenant exists — migrations have applied, deploy
-again after bootstrapping.
+Running `ensure` again with the same value changes nothing (the expiry is not extended). On a
+brand-new environment one deploy migrates, bootstraps the first operator
+([First operator from the deploy](#first-operator-from-the-deploy)) and registers the token; no
+tenant has to exist first.
 
 **Rotation** is a new value: generate and store it as in step 1, then deploy. `ensure` registers
 the new hash and brings every other live token of the service to end after the overlap
@@ -595,7 +592,7 @@ rotation replaced (a rolled-back or stale secret) fails the migration task — `
 token "was replaced by a later token of this service" — instead of deploying a worker whose token
 ends with the overlap; store the current value, or generate a new one.
 
-**Revocation** (a leaked value): `service-token list <tenantSlug>` for the id, `service-token
+**Revocation** (a leaked value): `service-token list` for the id, `service-token
 revoke <tokenId>` — the token gets `401` at once — then rotate as above. A deploy never
 re-registers a revoked or expired value: `ensure` refuses it and the migration task fails, so
 the stored value has to change. Revocation leaves no overlap; uploads wait unscanned until the
@@ -625,10 +622,8 @@ rescan affected uploads if needed.
   read that.
 
 Locally, Compose's `scan-token` service does the same: generates a value into the `scantoken`
-volume once, registers it for `SCAN_SERVICE_TENANT_SLUG` (unset: generated, not registered, and
-the scan worker exits at start — bootstrap a tenant, set it, run `docker compose run --rm
-scan-token` and start the worker again), and the scan worker reads `file:/run/scan-token/token`
-and scans that tenant's uploads. Deleting the volume rotates.
+volume once, registers it for the `scan-worker` service subject, and the scan worker reads
+`file:/run/scan-token/token` and scans the uploads that subject reaches. Deleting the volume rotates.
 The E2E seed runs `ensure` with a value derived from the run's throwaway demo keys.
 
 ### CRE workflow: issued with the CLI
@@ -638,8 +633,8 @@ AWS and outside the GitHub → CDK flow, so no deploy step here can see or regis
 on the operator path:
 
 ```sh
-pnpm --filter @mpc/api service-token create-subject <tenantSlug> "CRE workflow" cre_reporter
-pnpm --filter @mpc/api service-token issue <tenantSlug> <subjectId> cre-workflow cre_report
+pnpm --filter @mpc/api service-token create-subject "CRE workflow" cre_reporter
+pnpm --filter @mpc/api service-token issue <subjectId> cre-workflow cre_report
 ```
 
 `issue` and `rotate` print the token once, as the `token` field of one JSON line on stdout; put it
@@ -825,9 +820,9 @@ explorer and offers the chain to wallets that lack it.
   this does not recreate them or restore revoked wallet sessions. The operator binds a signing
   wallet on 5611 from Settings after signing in (the binding uses the
   API's `CHAIN_ID`). Remove `BOOTSTRAP_EMAIL` once they have enrolled a second factor.
-- **Scan service identity.** Generate `SCAN_SERVICE_TOKEN` and set `SCAN_SERVICE_TENANT_SLUG` in
-  the github-manager stack ([Service tokens](#service-tokens)); the deploy registers it. Without
-  them the worker and migration stacks do not deploy and uploads stay quarantined.
+- **Scan service identity.** Generate `SCAN_SERVICE_TOKEN` in the github-manager stack
+  ([Service tokens](#service-tokens)); the deploy registers it. Without it the worker and
+  migration stacks do not deploy and uploads stay quarantined.
 - **Sign-in.** By account only (email code, then a second factor). Remove `LEGACY_WALLET_LOGIN=1`
   before deploying WP7, or the API does not start; follow the [deploy checklist](#deploy-checklist-for-account-sign-in-wp7--in-this-order).
 - **Earlier anchors keep their chain and contract.** Public proofs and hash search report the
@@ -1094,20 +1089,20 @@ existing local stack, remove its old `outbox-worker` container so it does not ru
 Update external service-name references to `jobs-worker`. Local Compose remains a demo stack;
 production hostnames and credentials are supplied separately.
 
-### Tenant-scoped bootstrap authority (0136)
+### Bootstrap authority (0136, revised by 0169)
 
 | Case | Authority and scope | Outcome |
 | --- | --- | --- |
-| Initial operator / unchanged rerun | Migration table owner; selected tenant, live account state | Create first holder or preserve existing authority |
-| Same email in another tenant | Global unique email constraint; tenant-scoped lookup | Refuse and roll back the newly-created tenant |
-| Legacy subject ID | Exact subject in configured tenant; existing role and assurance | First email only; no role or assurance escalation |
-| Token registration / rerun | Migration table owner; selected tenant and service | Preserve revocation/expiry semantics; global token uniqueness rejects other tenants |
-| Enrolment window | Migration-only EXECUTE ACL, invoker privileges and scoped subject | Missing/wrong-tenant subject refuses before changing context |
-| Application/worker connection | No migration table ownership | Refused before bootstrap or ensure writes |
+| Initial operator / unchanged rerun | Migration table owner that bypasses RLS; live account state across the Registry | Create first holder or preserve existing authority |
+| Address already on another person | Global unique email constraint | Refuse and roll back every new row |
+| Legacy subject ID | Exact subject; existing role and assurance | First email only; no role or assurance escalation |
+| Token registration / rerun | Migration table owner that bypasses RLS; one service subject per label and role | Preserve revocation/expiry semantics; global token uniqueness rejects another service |
+| Enrolment window | Migration-only EXECUTE ACL, invoker privileges and scoped subject | Missing subject refuses before changing context |
+| Application/worker connection, or an owner that does not bypass RLS | No migration table ownership, or no way to see every row | Refused before bootstrap or ensure writes |
 
-0136 changes only the bootstrap enrolment function to invoker security with RLS on. Its
-migration-owner-only ACL is preserved. It does not disable RLS, change table ownership, grant
-new runtime privileges, or alter the other cross-tenant SECURITY DEFINER functions.
+0136 changed only the bootstrap enrolment function to invoker security with RLS on; its
+migration-owner-only ACL is preserved. 0169 removes the tenant the bootstrap used to resolve; it
+does not disable RLS, change table ownership or grant new runtime privileges.
 
 ### Telemetry export and shutdown boundaries
 
@@ -1125,19 +1120,20 @@ requested exit code. Workers that drain to natural completion flush at `beforeEx
 remains unchanged; collector failure does not prevent application exit. Independent human
 security review is still required before merge for changes to this export boundary.
 
-## Scan worker tenant-scoped database access
+## Scan worker actor-scoped database access
 
-The scan worker does not require BYPASSRLS. It resolves the configured
-`SCAN_SERVICE_TENANT_SLUG` to a tenant UUID, then runs queue leasing, failure/attempt
-updates and backlog reads inside transaction-local `withTenant` contexts. Explicit
-tenant predicates remain in those queries. Object reads, antivirus scans and API
-reports run after the lease transaction closes; the API still owns scan-result
-state transitions and service-token authorization.
+The scan worker does not require BYPASSRLS. It resolves its service token's subject at
+start, then runs queue leasing, failure/attempt updates and backlog reads inside
+transaction-local `withActor` contexts as that subject; its live `scan_service` binding
+decides which uploads it reaches. Each queue statement names that reach explicitly
+(`core.actor_project_ids()`) as well as relying on RLS, because the deployed worker login
+bypasses RLS for the jobs and anchor workers. Object reads, antivirus scans and API reports run after
+the lease transaction closes; the API still owns scan-result state transitions and
+service-token authorization.
 
-A NOBYPASSRLS login needs the existing scan privileges (including the worker role's
-id/slug tenant lookup, upload SELECT/UPDATE and heartbeat access). This change does
-not alter deployment role attributes or grants. Jobs/anchor worker cross-tenant
-requirements are separate; do not grant BYPASSRLS to an API login to recover scans.
+A NOBYPASSRLS login needs the existing scan privileges (token resolution, upload
+SELECT/UPDATE and heartbeat access). Jobs/anchor worker every-project requirements are
+separate; do not grant BYPASSRLS to an API login to recover scans.
 A successful local regression is not evidence that a previously failed shared-dev
 seed completed; deploy the worker fix and verify the retained demo scan on retry.
 

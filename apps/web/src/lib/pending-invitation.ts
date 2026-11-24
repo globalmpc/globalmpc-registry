@@ -1,7 +1,7 @@
 /**
  * The invitation token while its acceptance is under way in this tab.
  *
- * Accepting with Google or Microsoft leaves the page for the provider; if the provider cannot
+ * Accepting with Google leaves the page for the provider; if the provider cannot
  * vouch for the invited address (`OIDC_EMAIL_CODE_REQUIRED` and its siblings) the person falls
  * back to the emailed code, which needs the token again. It is kept in this tab's session storage
  * only — never a URL, never a cookie the server would see on every request — and cleared once the

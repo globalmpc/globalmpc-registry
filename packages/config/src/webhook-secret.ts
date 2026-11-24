@@ -3,7 +3,7 @@ import { resolveSecret } from "./secrets.js";
 /**
  * Webhook signing-secret references.
  *
- * A notification sink's `secretReference` is set by a tenant operator through the API and
+ * A notification sink's `secretReference` is set by an operator through the API and
  * resolved by the worker. Accepting any `env:`/`file:` value let that operator point the worker
  * at its own database URL, the anchor signer key, or any readable file. The value never left,
  * but whether it resolved did — the error text reached the admin screen.

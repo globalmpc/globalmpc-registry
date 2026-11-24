@@ -1,20 +1,20 @@
 import postgres from "postgres";
 import { listMigrations, runMigrations } from "@mpc/db";
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { bootstrapOperator, BootstrapError } from "../src/bootstrap.js";
 import { buildServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { hashToken } from "../src/plugins/session-token.js";
-import { bearer, issueTestSession, newAccount, setupFixture, testEnv, type TestFixture } from "./helpers/db.js";
+import { bearer, issueTestSession, newAccount, setupBareRegistry, testEnv, type BareRegistry } from "./helpers/db.js";
 
 const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
 
 /**
  * Production bootstrap.
  *
- * Migrations only create the schema. Without a tenant, organization, person and role on top,
+ * Migrations only create the schema. Without an organization, person and role on top,
  * nobody can do anything in a deployed system, and nobody can invite the first person.
  * `apps/web/e2e/seed.ts` drops the schema and plants keys from the repo, so it cannot be used in
  * deployment.
@@ -25,17 +25,19 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * its holder, by proof.
  */
 describeDb("production bootstrap", () => {
-  let fx: TestFixture;
+  // Bootstrap creates only the first holder of a role in the Registry, so every case starts from
+  // a Registry of its own with nothing in it.
+  let fx: BareRegistry;
   let app: FastifyInstance;
 
-  beforeAll(async () => {
-    fx = await setupFixture();
+  beforeEach(async () => {
+    fx = await setupBareRegistry();
     app = await buildServer(loadConfig(testEnv()), fx.appSql);
   });
 
-  afterAll(async () => {
-    await app.close();
-    await fx.close();
+  afterEach(async () => {
+    await app?.close();
+    await fx?.close();
   });
 
   const address = () => `First.Operator+${randomUUID().slice(0, 8)}@Example.COM`;
@@ -43,8 +45,6 @@ describeDb("production bootstrap", () => {
   function input(overrides: Record<string, unknown> = {}) {
     const suffix = randomUUID().slice(0, 8);
     return {
-      tenantSlug: `bs-${suffix}`,
-      tenantName: `Bootstrap ${suffix}`,
       organizationName: `Bootstrap Org ${suffix}`,
       jurisdiction: "MNG",
       subjectName: "First Operator",
@@ -64,11 +64,13 @@ describeDb("production bootstrap", () => {
       const migrations=listMigrations(), boundary=migrations.findIndex(m=>m.name==='0137_unified_roles.sql');
       await runMigrations(isolated,migrations.slice(0,boundary));
       const cases=[];
+      // The deployment's single tenant, as every pre-0169 Registry had.
+      const tenant=randomUUID();
+      await isolated`INSERT INTO core.tenants(id,slug,display_name) VALUES(${tenant},'registry','Historical tenant')`;
       for(const [legacy,role] of [["reviewer_legal","reviewer"],["mpc_operator","administrator"],["protocol_voter","project_member"]]) {
-        const tenant=randomUUID(),org=randomUUID(),subject=randomUUID(),email=`history-${subject}@example.test`;
-        const options=input({tenantSlug:tenant,organizationName:'Historical organization',email,role});
-        await isolated`INSERT INTO core.tenants(id,slug,display_name) VALUES(${tenant},${tenant},'Historical tenant')`;
-        await isolated`INSERT INTO core.organizations(id,tenant_id,legal_name,jurisdiction) VALUES(${org},${tenant},'Historical organization','MNG')`;
+        const org=randomUUID(),subject=randomUUID(),email=`history-${subject}@example.test`,name=`Historical organization ${legacy}`;
+        const options=input({organizationName:name,email,role});
+        await isolated`INSERT INTO core.organizations(id,tenant_id,legal_name,jurisdiction) VALUES(${org},${tenant},${name},'MNG')`;
         await isolated`INSERT INTO core.subjects(id,tenant_id,kind,display_name,email,assurance_level) VALUES(${subject},${tenant},'person','Historical holder',${email},'high_assurance')`;
         await isolated`INSERT INTO core.role_bindings(id,tenant_id,subject_id,organization_id,role,revoked_at) VALUES(${randomUUID()},${tenant},${subject},${org},${legacy!},now())`;
         cases.push(options);
@@ -120,27 +122,25 @@ describeDb("production bootstrap", () => {
     expect(first.json()).toMatchObject({ subjectId: result.subjectId, firstFactor: "email_code", aal: "aal1" });
 
     const body = first.json() as {
-      tenantId: string;
       subjectId: string;
       assuranceLevel: string;
       roleBindings: { role: string; organizationId: string | null }[];
     };
-    expect(body.tenantId).toBe(result.tenantId);
+    expect(body).not.toHaveProperty("tenantId");
     expect(body.subjectId).toBe(result.subjectId);
     expect(body.assuranceLevel).toBe("high_assurance");
     expect(body.roleBindings).toEqual([
-      { role: "administrator", organizationId: result.organizationId, projectId: null, scopeKind: "tenant", governanceScope: "none" },
+      { role: "administrator", organizationId: result.organizationId, projectId: null, scopeKind: "registry", governanceScope: "none" },
     ]);
   });
 
-  it("rerunning the same input keeps one tenant and one subject", async () => {
+  it("rerunning the same input keeps one organization and one subject", async () => {
     const args = input();
 
     const first = await bootstrapOperator(fx.sql, args);
     const second = await bootstrapOperator(fx.sql, args);
 
     expect(second.created).toBe(false);
-    expect(second.tenantId).toBe(first.tenantId);
     expect(second.organizationId).toBe(first.organizationId);
     expect(second.subjectId).toBe(first.subjectId);
 
@@ -167,7 +167,7 @@ describeDb("production bootstrap", () => {
       SELECT row_to_json(s) AS subject,
         (SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM core.role_bindings b WHERE b.subject_id = s.id) AS bindings,
         (SELECT count(*)::int FROM core.mfa_reset_requests WHERE subject_id = s.id) AS resets,
-        (SELECT count(*)::int FROM audit.events WHERE tenant_id = s.tenant_id) AS audits
+        (SELECT count(*)::int FROM audit.events) AS audits
       FROM core.subjects s WHERE s.id = ${first.subjectId}
     `;
     const before = await state();
@@ -192,8 +192,8 @@ describeDb("production bootstrap", () => {
       const account = newAccount();
       await fx.sql`UPDATE core.subjects SET email = NULL, created_at = now() - interval '48 hours' WHERE id = ${first.subjectId}`;
       await fx.sql`
-        INSERT INTO core.wallet_identities (id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at)
-        VALUES (${walletId}, ${first.tenantId}, ${first.subjectId}, ${account.address}, 31337, 'high_assurance', now())
+        INSERT INTO core.wallet_identities (id, subject_id, wallet_address, chain_id, assurance_level, bound_at)
+        VALUES (${walletId}, ${first.subjectId}, ${account.address}, 31337, 'high_assurance', now())
       `;
       return { args: { ...args, subjectId: first.subjectId }, first, walletId };
     }
@@ -202,7 +202,7 @@ describeDb("production bootstrap", () => {
       SELECT row_to_json(s) AS subject,
         (SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM core.role_bindings b WHERE b.subject_id = s.id) AS bindings,
         (SELECT jsonb_agg(to_jsonb(w) ORDER BY w.id) FROM core.wallet_identities w WHERE w.subject_id = s.id) AS wallets,
-        (SELECT count(*)::int FROM audit.events WHERE tenant_id = s.tenant_id) AS audits,
+        (SELECT count(*)::int FROM audit.events) AS audits,
         (SELECT count(*)::int FROM core.mfa_reset_requests WHERE subject_id = s.id) AS resets
       FROM core.subjects s WHERE s.id = ${subjectId}
     `;
@@ -212,9 +212,9 @@ describeDb("production bootstrap", () => {
       // The signing key/session may already be disabled; initialization must not revive them.
       const oldToken = randomUUID();
       const [wallet] = await fx.sql<{ wallet_address: string }[]>`SELECT wallet_address FROM core.wallet_identities WHERE id = ${walletId}`;
-      await fx.sql`INSERT INTO core.sessions (id, token_hash, tenant_id, subject_id, first_factor, wallet_address, chain_id, expires_at, revoked_at, revoked_reason) VALUES (${randomUUID()}, ${hashToken(oldToken)}, ${first.tenantId}, ${first.subjectId}, 'siwe_legacy', ${wallet!.wallet_address}, 31337, now() + interval '1 hour', now(), 'legacy_wallet_login_removed')`;
+      await fx.sql`INSERT INTO core.sessions (id, token_hash, subject_id, first_factor, wallet_address, chain_id, expires_at, revoked_at, revoked_reason) VALUES (${randomUUID()}, ${hashToken(oldToken)}, ${first.subjectId}, 'siwe_legacy', ${wallet!.wallet_address}, 31337, now() + interval '1 hour', now(), 'legacy_wallet_login_removed')`;
       const historicalSessions = await fx.sql`SELECT * FROM core.sessions WHERE subject_id = ${first.subjectId}`;
-      const [history] = await fx.sql`INSERT INTO audit.events (tenant_id, actor_subject_id, actor_wallet, effective_role, command, resource_type, resource_id, correlation_id) VALUES (${first.tenantId}, ${first.subjectId}, ${wallet!.wallet_address}, 'administrator', 'fixture.legacy_action', 'subject', ${first.subjectId}, ${randomUUID()}) RETURNING *`;
+      const [history] = await fx.sql`INSERT INTO audit.events (actor_subject_id, actor_wallet, effective_role, command, resource_type, resource_id, correlation_id) VALUES (${first.subjectId}, ${wallet!.wallet_address}, 'administrator', 'fixture.legacy_action', 'subject', ${first.subjectId}, ${randomUUID()}) RETURNING *`;
       await fx.sql`UPDATE core.wallet_identities SET disabled_at = now() WHERE id = ${walletId}`;
       const [before] = await snapshot(first.subjectId);
       const result = await bootstrapOperator(fx.sql, args);
@@ -240,16 +240,10 @@ describeDb("production bootstrap", () => {
       expect((await snapshot(first.subjectId))[0]).toEqual(enrolled);
     });
 
-    it.each(["missing_subject", "wrong_tenant", "missing_tenant", "service", "suspended", "weak", "revoked_role", "wrong_role", "wrong_organization", "no_legacy_wallet", "different_email", "occupied_email"])("refuses %s without mutations", async (condition) => {
+    it.each(["missing_subject", "service", "suspended", "weak", "revoked_role", "wrong_role", "wrong_organization", "no_legacy_wallet", "different_email", "occupied_email"])("refuses %s without mutations", async (condition) => {
       const { args, first, walletId } = await legacy();
       let attempt = { ...args };
       if (condition === "missing_subject") attempt.subjectId = randomUUID();
-      if (condition === "wrong_tenant") {
-        const otherArgs = input();
-        await bootstrapOperator(fx.sql, otherArgs);
-        attempt.tenantSlug = otherArgs.tenantSlug;
-      }
-      if (condition === "missing_tenant") attempt.tenantSlug = "does-not-exist";
       if (condition === "service") await fx.sql`UPDATE core.subjects SET kind = 'service' WHERE id = ${first.subjectId}`;
       if (condition === "suspended") await fx.sql`UPDATE core.subjects SET suspended_at = now() WHERE id = ${first.subjectId}`;
       if (condition === "weak") await fx.sql`UPDATE core.subjects SET assurance_level = 'wallet_only' WHERE id = ${first.subjectId}`;
@@ -259,8 +253,8 @@ describeDb("production bootstrap", () => {
       if (condition === "no_legacy_wallet") await fx.sql`UPDATE core.wallet_identities SET bound_via = 'proof' WHERE id = ${walletId}`;
       if (condition === "different_email") await fx.sql`UPDATE core.subjects SET email = ${address().toLowerCase()} WHERE id = ${first.subjectId}`;
       if (condition === "occupied_email") {
-        const other = await bootstrapOperator(fx.sql, input());
-        await fx.sql`UPDATE core.subjects SET email = ${args.email.toLowerCase()} WHERE id = ${other.subjectId}`;
+        const other = randomUUID();
+        await fx.sql`INSERT INTO core.subjects (id, kind, display_name, email) VALUES (${other}, 'person', 'Other person', ${args.email.toLowerCase()})`;
       }
       const [before] = await snapshot(first.subjectId);
       await expect(bootstrapOperator(fx.sql, attempt)).rejects.toThrow(BootstrapError);
@@ -270,22 +264,22 @@ describeDb("production bootstrap", () => {
     it.each(["session", "provider", "passkey", "totp", "recovery", "email_change"])("refuses retained %s account history even when revoked", async (history) => {
       const { args, first } = await legacy();
       if (history === "session") {
-        await issueTestSession(fx.appSql, first.tenantId, first.subjectId, { firstFactor: "email_code" });
+        await issueTestSession(fx.appSql, first.subjectId, { firstFactor: "email_code" });
         await fx.sql`UPDATE core.sessions SET revoked_at = now(), revoked_reason = 'logout' WHERE subject_id = ${first.subjectId}`;
       } else if (history === "provider") {
-        await issueTestSession(fx.appSql, first.tenantId, first.subjectId, { firstFactor: "google" });
+        await issueTestSession(fx.appSql, first.subjectId, { firstFactor: "google" });
         await fx.sql`DELETE FROM core.sessions WHERE subject_id = ${first.subjectId}`;
         await fx.sql`UPDATE core.external_identities SET revoked_at = now(), revoked_reason = 'unlinked_by_holder' WHERE subject_id = ${first.subjectId}`;
       } else if (history === "passkey") {
-        await fx.sql`INSERT INTO core.webauthn_credentials (id, tenant_id, subject_id, credential_id, public_key, aaguid, user_verified, device_type, backed_up, name, revoked_at, revoked_reason) VALUES (${randomUUID()}, ${first.tenantId}, ${first.subjectId}, ${randomUUID().replaceAll('-', '')}, ${Buffer.alloc(32)}, ${randomUUID()}, true, 'singleDevice', false, 'Old key', now(), 'holder_removed')`;
+        await fx.sql`INSERT INTO core.webauthn_credentials (id, subject_id, credential_id, public_key, aaguid, user_verified, device_type, backed_up, name, revoked_at, revoked_reason) VALUES (${randomUUID()}, ${first.subjectId}, ${randomUUID().replaceAll('-', '')}, ${Buffer.alloc(32)}, ${randomUUID()}, true, 'singleDevice', false, 'Old key', now(), 'holder_removed')`;
       } else if (history === "totp") {
-        await fx.sql`INSERT INTO core.totp_authenticators (id, tenant_id, subject_id, secret_ciphertext, secret_nonce, pending_expires_at, revoked_at, revoked_reason) VALUES (${randomUUID()}, ${first.tenantId}, ${first.subjectId}, ${Buffer.alloc(36)}, ${Buffer.alloc(12)}, now(), now(), 'holder_removed')`;
+        await fx.sql`INSERT INTO core.totp_authenticators (id, subject_id, secret_ciphertext, secret_nonce, pending_expires_at, revoked_at, revoked_reason) VALUES (${randomUUID()}, ${first.subjectId}, ${Buffer.alloc(36)}, ${Buffer.alloc(12)}, now(), now(), 'holder_removed')`;
       } else if (history === "recovery") {
-        await fx.sql`INSERT INTO core.recovery_codes (id, tenant_id, subject_id, set_id, code_hash, voided_at) VALUES (${randomUUID()}, ${first.tenantId}, ${first.subjectId}, ${randomUUID()}, ${'a'.repeat(64)}, now())`;
+        await fx.sql`INSERT INTO core.recovery_codes (id, subject_id, set_id, code_hash, voided_at) VALUES (${randomUUID()}, ${first.subjectId}, ${randomUUID()}, ${'a'.repeat(64)}, now())`;
       } else {
         const requester = randomUUID();
-        await fx.sql`INSERT INTO core.subjects (id, tenant_id, kind, display_name) VALUES (${requester}, ${first.tenantId}, 'person', 'Requester')`;
-        await fx.sql`INSERT INTO core.email_change_requests (id, tenant_id, subject_id, new_email, reason, requested_by_subject_id) VALUES (${randomUUID()}, ${first.tenantId}, ${first.subjectId}, ${address().toLowerCase()}, 'Old recovery', ${requester})`;
+        await fx.sql`INSERT INTO core.subjects (id, kind, display_name) VALUES (${requester}, 'person', 'Requester')`;
+        await fx.sql`INSERT INTO core.email_change_requests (id, subject_id, new_email, reason, requested_by_subject_id) VALUES (${randomUUID()}, ${first.subjectId}, ${address().toLowerCase()}, 'Old recovery', ${requester})`;
       }
       await fx.sql`UPDATE core.subjects SET email = NULL WHERE id = ${first.subjectId}`;
       const [before] = await snapshot(first.subjectId);
@@ -296,10 +290,10 @@ describeDb("production bootstrap", () => {
     it("refuses an address moved off another person", async () => {
       const { args, first } = await legacy();
       const ids = [randomUUID(), randomUUID(), randomUUID()];
-      await fx.sql`INSERT INTO core.subjects (id, tenant_id, kind, display_name) VALUES (${ids[0]!}, ${first.tenantId}, 'person', 'Previous holder'), (${ids[1]!}, ${first.tenantId}, 'person', 'Requester'), (${ids[2]!}, ${first.tenantId}, 'person', 'Approver')`;
+      await fx.sql`INSERT INTO core.subjects (id, kind, display_name) VALUES (${ids[0]!}, 'person', 'Previous holder'), (${ids[1]!}, 'person', 'Requester'), (${ids[2]!}, 'person', 'Approver')`;
       await fx.sql`
-        INSERT INTO core.email_change_requests (id, tenant_id, subject_id, new_email, reason, requested_by_subject_id, state, decided_by_subject_id, decided_at, decision_reason, completed_at, previous_email)
-        VALUES (${randomUUID()}, ${first.tenantId}, ${ids[0]!}, ${address().toLowerCase()}, 'Address changed', ${ids[1]!}, 'completed', ${ids[2]!}, now(), 'Confirmed', now(), ${args.email.toLowerCase()})
+        INSERT INTO core.email_change_requests (id, subject_id, new_email, reason, requested_by_subject_id, state, decided_by_subject_id, decided_at, decision_reason, completed_at, previous_email)
+        VALUES (${randomUUID()}, ${ids[0]!}, ${address().toLowerCase()}, 'Address changed', ${ids[1]!}, 'completed', ${ids[2]!}, now(), 'Confirmed', now(), ${args.email.toLowerCase()})
       `;
       const [before] = await snapshot(first.subjectId);
       await expect(bootstrapOperator(fx.sql, args)).rejects.toThrow(/moved off a person/);
@@ -340,13 +334,13 @@ describeDb("production bootstrap", () => {
       await bootstrapOperator(fx.sql, args);
       const requester = randomUUID();
       const decider = randomUUID();
-      await fx.sql`INSERT INTO core.subjects (id, tenant_id, kind, display_name) VALUES (${requester}, ${first.tenantId}, 'person', 'Requester'), (${decider}, ${first.tenantId}, 'person', 'Approver')`;
+      await fx.sql`INSERT INTO core.subjects (id, kind, display_name) VALUES (${requester}, 'person', 'Requester'), (${decider}, 'person', 'Approver')`;
       if (reason === "closed_reset") {
         await fx.sql`DELETE FROM core.mfa_reset_requests WHERE subject_id = ${first.subjectId}`;
-        await fx.sql`INSERT INTO core.mfa_reset_requests (id, tenant_id, subject_id, reason, requested_by_subject_id, state, decided_by_subject_id, decided_at, enrolment_window_until) VALUES (${randomUUID()}, ${first.tenantId}, ${first.subjectId}, 'Historical reset', ${requester}, 'approved', ${decider}, now(), now() + interval '24 hours')`;
+        await fx.sql`INSERT INTO core.mfa_reset_requests (id, subject_id, reason, requested_by_subject_id, state, decided_by_subject_id, decided_at, enrolment_window_until) VALUES (${randomUUID()}, ${first.subjectId}, 'Historical reset', ${requester}, 'approved', ${decider}, now(), now() + interval '24 hours')`;
         await fx.sql`UPDATE core.mfa_reset_requests SET closed_reason = 'approver_suspended' WHERE subject_id = ${first.subjectId}`;
       } else {
-        await fx.sql`INSERT INTO core.subject_suspensions (id, tenant_id, subject_id, action, reason, requested_by_subject_id, state, decided_by_subject_id, decided_at) VALUES (${randomUUID()}, ${first.tenantId}, ${first.subjectId}, 'suspend', 'Historical suspension', ${requester}, 'approved', ${decider}, now())`;
+        await fx.sql`INSERT INTO core.subject_suspensions (id, subject_id, action, reason, requested_by_subject_id, state, decided_by_subject_id, decided_at) VALUES (${randomUUID()}, ${first.subjectId}, 'suspend', 'Historical suspension', ${requester}, 'approved', ${decider}, now())`;
       }
       const [before] = await snapshot(first.subjectId);
       expect(await bootstrapOperator(fx.sql, args)).toMatchObject({ enrolmentWindowOpened: false, enrolmentWindowUntil: null });
@@ -392,15 +386,6 @@ describeDb("production bootstrap", () => {
       expect(await fx.sql`SELECT id FROM core.mfa_reset_requests WHERE subject_id = ${first.subjectId}`).toHaveLength(0);
     });
 
-    it("refuses an address already on a person in another tenant", async () => {
-      const email = address();
-      await bootstrapOperator(fx.sql, input({ email }));
-      const other = input({ email });
-      await expect(bootstrapOperator(fx.sql, other)).rejects.toThrow(/another tenant/);
-      // Stopped before creating the tenant.
-      expect(await fx.sql`SELECT 1 FROM core.tenants WHERE slug = ${other.tenantSlug}`).toHaveLength(0);
-    });
-
     it("needs an email, and does not echo a malformed address", async () => {
       for (const email of [undefined, null, "", "  "]) {
         await expect(bootstrapOperator(fx.sql, input({ email })), String(email)).rejects.toThrow(/email is required/);
@@ -440,8 +425,8 @@ describeDb("production bootstrap", () => {
 
       // An admin granting it again (through the API) is what brings it back; the next deploy is a no-op.
       await fx.sql`
-        INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${first.tenantId}, ${first.subjectId}, ${first.organizationId}, 'administrator')
+        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+        VALUES (${randomUUID()}, ${first.subjectId}, ${first.organizationId}, 'administrator')
       `;
       expect(await bootstrapOperator(fx.sql, args)).toMatchObject({ created: false, roleGranted: false });
     });
@@ -464,8 +449,8 @@ describeDb("production bootstrap", () => {
         await fx.sql`SELECT 1 FROM audit.events WHERE command = 'bootstrap.mfa_enrolment_window.opened' AND detail->>'subjectId' = ${first.subjectId}`,
       ).toHaveLength(0);
 
-      // Even with the role still bound, a suspended person gets no window.
-      const kept = input();
+      // Even with the role still bound, a suspended person gets no window (a role nobody held yet).
+      const kept = input({ role: "reviewer", subjectName: "Second holder" });
       const held = await bootstrapOperator(fx.sql, kept);
       await fx.sql`
         UPDATE core.subjects SET created_at = now() - interval '48 hours', suspended_at = now()
@@ -476,29 +461,29 @@ describeDb("production bootstrap", () => {
     });
 
     describe("creates only the first holder of the role", () => {
-      const tenantCounts = (tenantId: string) => fx.sql<{ subjects: number; bindings: number; resets: number; audits: number }[]>`
+      const registryCounts = () => fx.sql<{ subjects: number; bindings: number; resets: number; audits: number }[]>`
         SELECT
-          (SELECT count(*)::int FROM core.subjects WHERE tenant_id = ${tenantId}) AS subjects,
-          (SELECT count(*)::int FROM core.role_bindings WHERE tenant_id = ${tenantId}) AS bindings,
-          (SELECT count(*)::int FROM core.mfa_reset_requests WHERE tenant_id = ${tenantId}) AS resets,
-          (SELECT count(*)::int FROM audit.events WHERE tenant_id = ${tenantId}) AS audits
+          (SELECT count(*)::int FROM core.subjects) AS subjects,
+          (SELECT count(*)::int FROM core.role_bindings) AS bindings,
+          (SELECT count(*)::int FROM core.mfa_reset_requests) AS resets,
+          (SELECT count(*)::int FROM audit.events) AS audits
       `;
 
       /** The two-person email change, completed: the operator now signs in at `next`. */
-      async function moveAddress(first: { tenantId: string; subjectId: string }, previous: string, next: string) {
+      async function moveAddress(first: { subjectId: string }, previous: string, next: string) {
         const [a, b] = [randomUUID(), randomUUID()];
         await fx.sql`
-          INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level)
-          VALUES (${a}, ${first.tenantId}, 'person', 'Requester', 'wallet_only'),
-                 (${b}, ${first.tenantId}, 'person', 'Approver', 'wallet_only')
+          INSERT INTO core.subjects (id, kind, display_name, assurance_level)
+          VALUES (${a}, 'person', 'Requester', 'wallet_only'),
+                 (${b}, 'person', 'Approver', 'wallet_only')
         `;
         await fx.sql`UPDATE core.subjects SET email = ${next.toLowerCase()} WHERE id = ${first.subjectId}`;
         await fx.sql`
           INSERT INTO core.email_change_requests (
-            id, tenant_id, subject_id, new_email, reason, requested_by_subject_id, state,
+            id, subject_id, new_email, reason, requested_by_subject_id, state,
             decided_by_subject_id, decided_at, decision_reason, completed_at, previous_email
           ) VALUES (
-            ${randomUUID()}, ${first.tenantId}, ${first.subjectId}, ${next.toLowerCase()}, 'mailbox moved', ${a},
+            ${randomUUID()}, ${first.subjectId}, ${next.toLowerCase()}, 'mailbox moved', ${a},
             'completed', ${b}, now(), 'checked by phone', now(), ${previous.toLowerCase()}
           )
         `;
@@ -509,45 +494,45 @@ describeDb("production bootstrap", () => {
         const first = await bootstrapOperator(fx.sql, args);
         const next = address();
         await moveAddress(first, args.email, next);
-        const [before] = await tenantCounts(first.tenantId);
+        const [before] = await registryCounts();
 
         // The deploy still names the old address: nobody holds it now.
         await expect(bootstrapOperator(fx.sql, args)).rejects.toThrow(
-          /moved off a person in this tenant by a completed email change.*Remove BOOTSTRAP_EMAIL/,
+          /moved off a person by a completed email change.*Remove BOOTSTRAP_EMAIL/,
         );
         // Revoking the role does not reopen the door.
         await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${first.subjectId}`;
         await expect(bootstrapOperator(fx.sql, args)).rejects.toThrow(BootstrapError);
-        expect((await tenantCounts(first.tenantId))[0]).toEqual(before);
+        expect((await registryCounts())[0]).toEqual(before);
         expect(await fx.sql`SELECT 1 FROM core.subjects WHERE email = ${args.email.toLowerCase()}`).toHaveLength(0);
       });
 
-      it("refuses a moved address even for a role the tenant never had (within the 90 days it is kept)", async () => {
+      it("refuses a moved address even for a role the Registry never had (within the 90 days it is kept)", async () => {
         const args = input();
         const first = await bootstrapOperator(fx.sql, args);
         await moveAddress(first, args.email, address());
-        const [before] = await tenantCounts(first.tenantId);
+        const [before] = await registryCounts();
 
-        // Nobody in the tenant ever held reviewer, so only the moved-address rule refuses.
+        // Nobody in the Registry ever held reviewer, so only the moved-address rule refuses.
         await expect(
           bootstrapOperator(fx.sql, { ...args, role: "reviewer", subjectName: "Old Mailbox" }),
-        ).rejects.toThrow(/moved off a person in this tenant by a completed email change/);
-        expect((await tenantCounts(first.tenantId))[0]).toEqual(before);
+        ).rejects.toThrow(/moved off a person by a completed email change/);
+        expect((await registryCounts())[0]).toEqual(before);
         expect(await fx.sql`SELECT 1 FROM core.subjects WHERE email = ${args.email.toLowerCase()}`).toHaveLength(0);
       });
 
-      it("refuses a new address once anyone in the tenant held the role, revoked included, and writes nothing", async () => {
+      it("refuses a new address once anyone in the Registry held the role, revoked included, and writes nothing", async () => {
         const args = input();
         const first = await bootstrapOperator(fx.sql, args);
         const other = { ...args, email: address() };
-        const [before] = await tenantCounts(first.tenantId);
+        const [before] = await registryCounts();
 
         await expect(bootstrapOperator(fx.sql, other)).rejects.toThrow(
           /already has \(or had\) a administrator.*Remove BOOTSTRAP_EMAIL/,
         );
         await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${first.subjectId}`;
         await expect(bootstrapOperator(fx.sql, other)).rejects.toThrow(/already has \(or had\)/);
-        expect((await tenantCounts(first.tenantId))[0]).toEqual(before);
+        expect((await registryCounts())[0]).toEqual(before);
         expect(await fx.sql`SELECT 1 FROM core.subjects WHERE email = ${other.email.toLowerCase()}`).toHaveLength(0);
       });
 
@@ -557,14 +542,14 @@ describeDb("production bootstrap", () => {
         await moveAddress(first, args.email, address());
         const replacementId = randomUUID();
         await fx.sql`
-          INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level, email)
-          VALUES (${replacementId}, ${first.tenantId}, 'person', 'New mailbox holder', 'high_assurance', ${args.email.toLowerCase()})
+          INSERT INTO core.subjects (id, kind, display_name, assurance_level, email)
+          VALUES (${replacementId}, 'person', 'New mailbox holder', 'high_assurance', ${args.email.toLowerCase()})
         `;
-        const [before] = await tenantCounts(first.tenantId);
+        const [before] = await registryCounts();
         await expect(bootstrapOperator(fx.sql, { ...args, role })).rejects.toThrow(
-          /moved off a person in this tenant by a completed email change/,
+          /moved off a person by a completed email change/,
         );
-        expect((await tenantCounts(first.tenantId))[0]).toEqual(before);
+        expect((await registryCounts())[0]).toEqual(before);
         expect(await fx.sql`SELECT 1 FROM core.role_bindings WHERE subject_id = ${replacementId}`).toHaveLength(0);
       });
 
@@ -574,13 +559,13 @@ describeDb("production bootstrap", () => {
         const email = address().toLowerCase();
         const otherId = randomUUID();
         await fx.sql`
-          INSERT INTO core.subjects (id, tenant_id, kind, display_name, assurance_level, email)
-          VALUES (${otherId}, ${first.tenantId}, 'person', 'Existing account', 'high_assurance', ${email})
+          INSERT INTO core.subjects (id, kind, display_name, assurance_level, email)
+          VALUES (${otherId}, 'person', 'Existing account', 'high_assurance', ${email})
         `;
         if (revoked) await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${first.subjectId}`;
-        const [before] = await tenantCounts(first.tenantId);
+        const [before] = await registryCounts();
         await expect(bootstrapOperator(fx.sql, { ...args, email })).rejects.toThrow(/already has \(or had\) a administrator/);
-        expect((await tenantCounts(first.tenantId))[0]).toEqual(before);
+        expect((await registryCounts())[0]).toEqual(before);
         expect(await fx.sql`SELECT 1 FROM core.role_bindings WHERE subject_id = ${otherId}`).toHaveLength(0);
       });
 
@@ -591,7 +576,7 @@ describeDb("production bootstrap", () => {
         let pending!: Promise<PromiseSettledResult<Awaited<ReturnType<typeof bootstrapOperator>>>[]>;
         await fx.sql.begin(async (hold) => {
           // Both calls must reach a blocking boundary before either can commit a grant.
-          // Without tenant serialization, both read no holder and wait to insert here.
+          // Without Registry-wide serialization, both read no holder and wait to insert here.
           await hold`LOCK TABLE core.role_bindings IN SHARE MODE`;
           pending = Promise.allSettled([
             bootstrapOperator(fx.sql, { ...args, role, email: address() }),
@@ -614,7 +599,7 @@ describeDb("production bootstrap", () => {
         const rejected = attempts.find((result) => result.status === "rejected") as PromiseRejectedResult;
         expect(rejected.reason).toBeInstanceOf(BootstrapError);
         expect(rejected.reason.message).toMatch(/already has \(or had\)/);
-        expect(await fx.sql`SELECT 1 FROM core.role_bindings WHERE tenant_id = ${first.tenantId} AND role = ${role}`).toHaveLength(1);
+        expect(await fx.sql`SELECT 1 FROM core.role_bindings WHERE role = ${role}`).toHaveLength(1);
       });
 
       it("can create the first binding for an existing account when the role was never held", async () => {
@@ -651,20 +636,19 @@ describeDb("production bootstrap", () => {
       await fx.sql`UPDATE core.subjects SET created_at = now() - interval '48 hours' WHERE id = ${first.subjectId}`;
       await fx.sql`
         INSERT INTO core.totp_authenticators (
-          id, tenant_id, subject_id, secret_ciphertext, secret_nonce, pending_expires_at, confirmed_at
+          id, subject_id, secret_ciphertext, secret_nonce, pending_expires_at, confirmed_at
         ) VALUES (
-          ${randomUUID()}, ${first.tenantId}, ${first.subjectId}, ${Buffer.alloc(36)}, ${Buffer.alloc(12)},
+          ${randomUUID()}, ${first.subjectId}, ${Buffer.alloc(36)}, ${Buffer.alloc(12)},
           now() + interval '10 minutes', now()
         )
       `;
-      const counts = () => fx.sql<{ tenants: number; orgs: number; subjects: number; bindings: number; resets: number; audits: number }[]>`
+      const counts = () => fx.sql<{ orgs: number; subjects: number; bindings: number; resets: number; audits: number }[]>`
         SELECT
-          (SELECT count(*)::int FROM core.tenants WHERE slug = ${args.tenantSlug}) AS tenants,
-          (SELECT count(*)::int FROM core.organizations WHERE tenant_id = ${first.tenantId}) AS orgs,
-          (SELECT count(*)::int FROM core.subjects WHERE tenant_id = ${first.tenantId}) AS subjects,
-          (SELECT count(*)::int FROM core.role_bindings WHERE tenant_id = ${first.tenantId}) AS bindings,
+          (SELECT count(*)::int FROM core.organizations) AS orgs,
+          (SELECT count(*)::int FROM core.subjects) AS subjects,
+          (SELECT count(*)::int FROM core.role_bindings) AS bindings,
           (SELECT count(*)::int FROM core.mfa_reset_requests WHERE subject_id = ${first.subjectId}) AS resets,
-          (SELECT count(*)::int FROM audit.events WHERE tenant_id = ${first.tenantId}) AS audits
+          (SELECT count(*)::int FROM audit.events) AS audits
       `;
       const [before] = await counts();
       for (let run = 0; run < 3; run += 1) {
@@ -678,11 +662,11 @@ describeDb("production bootstrap", () => {
         });
       }
       expect((await counts())[0]).toEqual(before);
-      expect(before).toMatchObject({ tenants: 1, orgs: 1, subjects: 1, bindings: 1, resets: 0 });
+      expect(before).toMatchObject({ orgs: 1, subjects: 1, bindings: 1, resets: 0 });
     });
   });
 
-  it("adds a second role in the same tenant as a separate subject", async () => {
+  it("adds a second role in the same Registry as a separate subject", async () => {
     const args = input();
     const first = await bootstrapOperator(fx.sql, args);
 
@@ -693,11 +677,10 @@ describeDb("production bootstrap", () => {
       role: "reviewer",
     });
 
-    expect(second.tenantId).toBe(first.tenantId);
     expect(second.organizationId).toBe(first.organizationId);
     expect(second.subjectId).not.toBe(first.subjectId);
 
-    const token = await issueTestSession(fx.appSql, second.tenantId, second.subjectId, {
+    const token = await issueTestSession(fx.appSql, second.subjectId, {
       firstFactor: "email_code",
       secondFactor: "passkey",
     });

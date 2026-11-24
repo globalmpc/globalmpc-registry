@@ -112,20 +112,20 @@ export function ledgerRequirementEvidence(
 
 /** Only registered effective stage rules are evaluated. No rules means unknown, never a default stage. */
 export async function computeEvidenceLedger(
-  tx: postgres.TransactionSql, tenantId: string, projectId: string, evaluatedAt: Date,
+  tx: postgres.TransactionSql, projectId: string, evaluatedAt: Date,
 ): Promise<LedgerSnapshot | null> {
   const [project] = await tx<{ reference_status: string; host_country_iso3: string }[]>`
     SELECT reference_status, host_country_iso3 FROM core.projects
-    WHERE tenant_id = ${tenantId} AND id = ${projectId}
+    WHERE id = ${projectId}
   `;
   if (!project) return null;
   const catalog = await tx<{ id: string; claim_type: string; catalog_version: number; display_name: string }[]>`
     SELECT ct.id, ct.claim_type, ct.catalog_version, ct.display_name
-    FROM core.claim_types ct WHERE ct.tenant_id = ${tenantId} AND ct.effective_from <= ${evaluatedAt}
+    FROM core.claim_types ct WHERE ct.effective_from <= ${evaluatedAt}
       AND core.project_definition_applies(ct.project_id,${projectId})
       AND NOT core.is_reserved_catalog_key(ct.claim_type)
       AND (ct.catalog_version = (SELECT max(latest.catalog_version) FROM core.claim_types latest
-        WHERE latest.tenant_id=ct.tenant_id AND latest.claim_type=ct.claim_type AND latest.effective_from <= ${evaluatedAt}
+        WHERE latest.claim_type=ct.claim_type AND latest.effective_from <= ${evaluatedAt}
           AND core.project_definition_applies(latest.project_id,${projectId}))
       OR EXISTS (SELECT 1 FROM core.claims c WHERE c.project_id=${projectId} AND c.catalog_entry_id=ct.id AND c.superseded_by_claim_id IS NULL))
     ORDER BY ct.claim_type, ct.catalog_version
@@ -143,10 +143,10 @@ export async function computeEvidenceLedger(
        AND (cr.expires_at IS NULL OR cr.expires_at > ${evaluatedAt})
        AND sch.state IN ('active','approved')) AS valid
     FROM core.verification_attestations a
-    JOIN core.verification_cases vc ON vc.id = a.case_id AND vc.tenant_id = a.tenant_id
-    JOIN core.credentials cr ON cr.id = a.credential_id AND cr.tenant_id = a.tenant_id
-    JOIN core.attestation_schemas sch ON sch.id = a.schema_id AND sch.tenant_id = a.tenant_id
-    WHERE vc.project_id = ${projectId} AND a.tenant_id = ${tenantId}
+    JOIN core.verification_cases vc ON vc.id = a.case_id
+    JOIN core.credentials cr ON cr.id = a.credential_id
+    JOIN core.attestation_schemas sch ON sch.id = a.schema_id
+    WHERE vc.project_id = ${projectId}
       AND a.state <> 'draft'
       -- A review of filtered-out historical evidence cannot change this ledger's basis.
       -- Mixed scopes remain intact whenever they cover at least one retained claim.
@@ -155,7 +155,7 @@ export async function computeEvidenceLedger(
   `;
   const manual = await tx<{ id: string; fact_key: string; status: string; version: number }[]>`
     SELECT DISTINCT ON (fact_key) id, fact_key, status, version FROM core.project_fact_versions
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+    WHERE project_id = ${projectId}
       AND fact_key = ANY(${catalog.map((definition) => definition.claim_type)}::text[])
     ORDER BY fact_key, version DESC
   `;
@@ -168,22 +168,21 @@ export async function computeEvidenceLedger(
       grade: relevant.length > 0 ? weakestGrade(relevant.map((c) => c.grade)) : null,
       reviewScope: [...new Set(relevant.filter(c => attestations.some(a => a.valid && a.claim_scope.includes(c.id))).map(c => c.claim_type))].sort(),
       reviews:attestations.filter(a => a.valid && a.claim_scope.some(id => relevant.some(c=>c.id===id))).map(a=>({
-        reviewerHandle:keccak256(canonicalBytes({tenantId,subjectId:a.reviewer_subject_id ?? ''})),
+        reviewerHandle:keccak256(canonicalBytes({subjectId:a.reviewer_subject_id ?? ''})),
         credentialType:a.credential_type ?? 'unknown',attestationType:a.attestation_type,
         signedAt:a.signed_at!.toISOString(),limitations:a.limitations,
       })),
       claimIds: relevant.map((c) => c.id).sort(), ...result };
   });
   // A policy must be effective, time-valid, and approved through the registry. Bootstrap rules
-  // predate proposals and remain usable only when explicitly effective in their own tenant.
+  // predate proposals and remain usable only when explicitly effective.
   const policies = await tx<{ id: string; gate_id: string; definition: unknown; jurisdiction_profile: string }[]>`
     SELECT p.id,p.gate_id,p.definition,p.jurisdiction_profile
     FROM core.effective_stage_policy_sets(${projectId},${evaluatedAt}) p
-    WHERE p.tenant_id=${tenantId}
   `;
   const profile = await tx<{ state: string; environmental_requirement_basis: string | null; profile_version: number }[]>`
     SELECT state, environmental_requirement_basis, profile_version FROM core.jurisdiction_profiles
-    WHERE tenant_id = ${tenantId} AND jurisdiction = ${project.host_country_iso3} AND effective_from <= ${evaluatedAt}
+    WHERE jurisdiction = ${project.host_country_iso3} AND effective_from <= ${evaluatedAt}
     ORDER BY profile_version DESC LIMIT 1
   `;
   const input = {
@@ -263,15 +262,15 @@ export function evidenceLedgerSemantic(snapshot: LedgerSnapshot, approvedSnapsho
   });
   return JSON.parse(JSON.stringify({ ...semantic, stages }, (_key, value: unknown) => typeof value === "number" ? String(value) : value)) as CanonicalValue;
 }
-export async function persistEvidenceLedger(tx: postgres.TransactionSql, tenantId: string, snapshot: LedgerSnapshot): Promise<LedgerSnapshot & { id: string }> {
+export async function persistEvidenceLedger(tx: postgres.TransactionSql, snapshot: LedgerSnapshot): Promise<LedgerSnapshot & { id: string }> {
   const id = randomUUID();
   const stored = { ...snapshot, id };
-  await tx`INSERT INTO core.evidence_ledger_snapshots (id,tenant_id,project_id,evaluated_at,input_snapshot_hash,snapshot)
-    VALUES (${id},${tenantId},${snapshot.projectId},${snapshot.evaluatedAt},${snapshot.inputSnapshotHash},${tx.json(stored as never)})`;
+  await tx`INSERT INTO core.evidence_ledger_snapshots (id,project_id,evaluated_at,input_snapshot_hash,snapshot)
+    VALUES (${id},${snapshot.projectId},${snapshot.evaluatedAt},${snapshot.inputSnapshotHash},${tx.json(stored as never)})`;
   return stored;
 }
-export async function loadEvidenceLedgerSnapshot(tx: postgres.TransactionSql, tenantId: string, projectId: string, id: string): Promise<(LedgerSnapshot & {id:string}) | null> {
+export async function loadEvidenceLedgerSnapshot(tx: postgres.TransactionSql, projectId: string, id: string): Promise<(LedgerSnapshot & {id:string}) | null> {
   const [row] = await tx<{snapshot: LedgerSnapshot & {id:string}}[]>`SELECT snapshot FROM core.evidence_ledger_snapshots
-    WHERE tenant_id=${tenantId} AND project_id=${projectId} AND id=${id}`;
+    WHERE project_id=${projectId} AND id=${id}`;
   return row?.snapshot ?? null;
 }

@@ -314,7 +314,7 @@ export default function AdminPage() {
               <option value="">No organization</option>
               {organizations.map(org => <option key={org.id} value={org.id}>{org.legalName}</option>)}
             </select>
-            <p className="sub">Project members access only the selected organization's projects. Reviewers without an organization cover the tenant. Administrators manage the tenant.</p>
+            <p className="sub">Project members access only the selected organization's projects. Reviewers without an organization can review across the Registry. Administrators manage Registry access.</p>
           </div>
           <div className="field">
             <label htmlFor="grant-reason">Why</label>

@@ -12,7 +12,7 @@ import type postgres from "postgres";
  * settled `expired` with its address and code cleared, settled mail and email challenges older
  * than a day are deleted, and so are rate-limit events and test-sink rows past their day.
  *
- * And `core.purge_oidc_records` (0121): Google / Microsoft login transactions a day old that no
+ * And `core.purge_oidc_records` (0121): Google login transactions a day old that no
  * session names — finished, refused or abandoned, their secrets already gone at the claim.
  *
  * Wallet binding challenges (0122) need no pass of their own: each belongs to its session

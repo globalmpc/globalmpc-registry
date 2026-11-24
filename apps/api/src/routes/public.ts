@@ -23,14 +23,14 @@ import { etagOf } from "./shared.js";
  * Unauthenticated public routes — spec 07 §7.1, OD-02.
  *
  * This file is separate not because of length but because **the boundary differs**. Routes
- * here run with no session and no tenant, cannot satisfy RLS, and so all go through
+ * here run with no session and no actor, cannot satisfy RLS, and so all go through
  * `core.public_*` SECURITY DEFINER functions (0009 · 0027 · 0034). Mixed in with workspace
- * routes, "there is no tenant here" becomes a fact that must be re-checked every time.
+ * routes, "there is no actor here" becomes a fact that must be re-checked every time.
  *
  * Common rules:
  *
  * - Only published data goes out. `draft` never leaves through any path.
- * - tenant_id is not returned.
+ * - No internal ownership or reach column is returned.
  * - No field outside the public allowlist is included (05 §5.7).
  * - Lists use a keyset cursor. With OFFSET, pages drift when rows are added up front.
  */
@@ -176,10 +176,10 @@ export async function registerPublicRoutes(
   app.get<{ Params: { registryType: string; publicKey: string } }>(
     "/api/v1/public/registries/:registryType/:publicKey",
     async (request, reply) => {
-      // Public routes do not know the tenant — they are read by readers who are not signed in.
+      // Public routes have no actor — they are read by readers who are not signed in.
       // RLS policies cannot be satisfied, so only the public path is split out into a SECURITY
       // DEFINER function (0009_public_read.sql). That function returns only the public
-      // projection of published versions and does not return tenant_id.
+      // projection of published versions and nothing else.
       const { registryType, publicKey } = parseParams(publicRegistryEntryPathParams, request.params);
       const rows = await sql<
         {

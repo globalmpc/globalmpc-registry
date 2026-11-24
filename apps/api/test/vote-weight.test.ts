@@ -26,7 +26,6 @@ describe("snapshot block selection", () => {
 
 describeDb("weight resolution", () => {
   let sql: postgres.Sql;
-  let tenantId: string;
   let proposalId: string;
   const wallet = `0x${"1f".repeat(20)}`;
   const token = `0x${"2e".repeat(20)}`;
@@ -41,32 +40,26 @@ describeDb("weight resolution", () => {
   });
 
   beforeEach(async () => {
-    tenantId = randomUUID();
     proposalId = randomUUID();
 
-    await sql`
-      INSERT INTO core.tenants (id, slug, display_name)
-      VALUES (${tenantId}, ${`vw-${tenantId.slice(0, 8)}`}, 'vote weight')
-    `;
     const subjectId = randomUUID();
     await sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subjectId}, ${tenantId}, 'person', 'proposer')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subjectId}, 'person', 'proposer')
     `;
     await sql`
       INSERT INTO core.governance_proposals (
-        id, tenant_id, space, proposal_type, title, rationale, proposer_subject_id,
+        id, space, proposal_type, title, rationale, proposer_subject_id,
         quorum_numerator, quorum_denominator, threshold_numerator, threshold_denominator,
         conflict_disclosure, execution_mode
       ) VALUES (
-        ${proposalId}, ${tenantId}, 'protocol', 'fee_schedule', 'title', 'reason',
+        ${proposalId}, 'protocol', 'fee_schedule', 'title', 'reason',
         ${subjectId}, 1, 4, 1, 2, 'none known', 'record_only'
       )
     `;
   });
 
   const base = () => ({
-    tenantId,
     proposalId,
     walletAddress: wallet,
     snapshotBlock: 1000,

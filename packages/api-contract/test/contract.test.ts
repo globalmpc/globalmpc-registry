@@ -160,7 +160,6 @@ describe("authorization — the seven conditions of 02 §2.1", () => {
   const ACTOR: AuthorizationContext = {
     role: "reviewer",
     assuranceLevel: "high_assurance",
-    actorTenantId: "tenant-a",
     actorProjectIds: ["project-1"],
     sensitivityClearance: ["public", "restricted"],
     hasRequiredCredential: true,
@@ -169,7 +168,6 @@ describe("authorization — the seven conditions of 02 §2.1", () => {
   };
 
   const RESOURCE: ResourceContext = {
-    tenantId: "tenant-a",
     projectId: "project-1",
     sensitivity: "restricted",
     state: "assessed",
@@ -208,15 +206,6 @@ describe("authorization — the seven conditions of 02 §2.1", () => {
       expect(decision.reason).toBe("ASSURANCE_LEVEL_INSUFFICIENT");
       expect(decision.requiredAssurance).toBe("high_assurance");
     }
-  });
-
-  it("rejects cross-tenant access", () => {
-    const decision = authorize(ACTION_POLICIES["gate.decide"]!, ACTOR, {
-      ...RESOURCE,
-      tenantId: "tenant-b",
-    });
-    expect(decision.allow).toBe(false);
-    if (!decision.allow) expect(decision.reason).toBe("TENANT_SCOPE_MISMATCH");
   });
 
   it("rejects out-of-scope projects and returns an access request path", () => {

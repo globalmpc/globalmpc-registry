@@ -19,7 +19,7 @@ import { projectListItem } from "./project-registry.js";
  * list now states whether rows were left out, so a screen can say so instead of implying a
  * complete answer.
  *
- * `total` is sent only where counting is one indexed lookup per project. Tenant-wide lists
+ * `total` is sent only where counting is one indexed lookup per project. Registry-wide lists
  * (proposals, notifications, anchor batches) carry the flag without a count.
  */
 export const listWindow = {

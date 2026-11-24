@@ -17,7 +17,7 @@ import { ErrorLine, useAction } from "./useAction";
 const C = AUTH_COPY.settings;
 
 /**
- * Linked Google / Microsoft sign-ins (WP4). Linking needs a session past its second factor, and it
+ * Linked Google sign-ins (WP4). Linking needs a session past its second factor, and it
  * comes back to this same session through the callback page; unlinking ends the sessions that
  * identity signed in, possibly this one (`onSessionEnded`).
  */
@@ -52,7 +52,7 @@ export function IdentitiesSection({
     void load();
   }, [load]);
 
-  const linkable = (["google", "microsoft"] as const).filter(
+  const linkable = (["google"] as const).filter(
     (provider) => methods?.[provider] && !items.some((item) => item.provider === provider),
   );
 

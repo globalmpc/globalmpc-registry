@@ -31,7 +31,6 @@ import type postgres from "postgres";
 
 export interface OutboxRow {
   readonly id: string;
-  readonly tenant_id: string;
   readonly event_type: string;
   readonly schema_version: number;
   readonly aggregate_id: string;
@@ -111,7 +110,7 @@ export async function publishBatch(
   while (handled.length < limit) {
     const claimed = await sql.begin(async (tx) => {
       const [row] = await tx<OutboxRow[]>`
-        SELECT id, tenant_id, event_type, schema_version, aggregate_id, aggregate_version,
+        SELECT id, event_type, schema_version, aggregate_id, aggregate_version,
                project_id, payload, correlation_id, causation_id, occurred_at, attempts,
                skip_handlers
         FROM core.outbox

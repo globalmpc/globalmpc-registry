@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { newAccount, type TestAccount, type TestFixture, syncSubjectAssurance } from "./db.js";
 
 /**
- * Adds one tenant A account with a single role binding.
+ * Adds one company A account with a single role binding.
  *
  * Governance space tests need proposers, voters and recorders of **both** spaces, and a project
  * voter bound to one project. The shared fixture seeds only the protocol pair, so these are
@@ -14,7 +14,7 @@ export async function addGovernanceAccount(
   options: {
     readonly projectId?: string;
     readonly jurisdiction?: string[];
-    readonly scopeKind?: "tenant" | "organization" | "none";
+    readonly scopeKind?: "registry" | "organization" | "none";
     readonly governanceScope?: "protocol" | "project" | "none";
     readonly assurance?: "wallet_only" | "identity_bound" | "high_assurance";
   } = {},
@@ -22,22 +22,22 @@ export async function addGovernanceAccount(
   const account = newAccount();
   const subject = randomUUID();
   await fx.sql`
-    INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-    VALUES (${subject}, ${fx.tenantA}, 'person', ${role})
+    INSERT INTO core.subjects (id, kind, display_name)
+    VALUES (${subject}, 'person', ${role})
   `;
   await fx.sql`
     INSERT INTO core.wallet_identities (
-      id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+      id, subject_id, wallet_address, chain_id, assurance_level, bound_at
     ) VALUES (
-      ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337,
+      ${randomUUID()}, ${subject}, ${account.address}, 31337,
       ${options.assurance ?? "identity_bound"}, now()
     )
   `;
   await syncSubjectAssurance(fx.sql);
   await fx.sql`
-    INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, project_id, role, governance_scope, jurisdiction, scope_kind)
+    INSERT INTO core.role_bindings (id, subject_id, organization_id, project_id, role, governance_scope, jurisdiction, scope_kind)
     VALUES (
-      ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, ${options.projectId ?? null}, ${role}, ${options.governanceScope ?? null}, ${options.jurisdiction ?? null}, ${options.scopeKind ?? null}
+      ${randomUUID()}, ${subject}, ${fx.orgA}, ${options.projectId ?? null}, ${role}, ${options.governanceScope ?? null}, ${options.jurisdiction ?? null}, ${options.scopeKind ?? null}
     )
   `;
   return account;

@@ -14,14 +14,14 @@ import { useSession } from "@/lib/session";
 const C = AUTH_COPY.oidc;
 
 /**
- * The redirect URI registered with Google and Microsoft: `<WEB_ORIGIN>/auth/oidc/{provider}/callback`.
+ * The redirect URI registered with Google: `<WEB_ORIGIN>/auth/oidc/{provider}/callback`.
  *
  * It completes whichever flow this browser started — sign-in, invitation acceptance or linking —
  * because the web server knows which one from its cookie; the page only reports the outcome.
  */
 export default function OidcCallbackPage() {
   const params = useParams<{ provider: string }>();
-  const provider = params.provider === "microsoft" ? "microsoft" : params.provider === "google" ? "google" : null;
+  const provider = params.provider === "google" ? "google" : null;
   const router = useRouter();
   const { refresh } = useSession();
   const [error, setError] = useState<string | null>(null);

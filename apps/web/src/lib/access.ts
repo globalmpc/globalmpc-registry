@@ -17,7 +17,7 @@ import type { SessionInfo } from "./api";
 
 type Session = Pick<
   SessionInfo,
-  "authenticated" | "googleWorkspaceAccess" | "aal" | "recoveryLimited" | "roleBindings" | "narrowedRoles" | "assuranceLevel" | "actions" | "tenantId"
+  "authenticated" | "googleWorkspaceAccess" | "aal" | "recoveryLimited" | "roleBindings" | "narrowedRoles" | "assuranceLevel" | "actions" | "workspaceAvailable"
 >;
 
 /** Whether the session's effective roles allow this action (server-computed `actions`). */
@@ -76,12 +76,12 @@ export function assuranceNarrowedFor(
 }
 
 /**
- * Signed in, past the second factor, in a tenant — and holding no role at all (plan §4 journey 1:
+ * Signed in, past the second factor, with workspace access — and holding no role at all (plan §4 journey 1:
  * "access pending" until a two-person role grant lands). Roles held but narrowed by the sign-in
  * level are not pending: the person steps up instead.
  */
 export function accessPending(session: Session | null | undefined): boolean {
-  if (!session?.authenticated || !session.tenantId) return false;
+  if (!session?.authenticated || !session.workspaceAvailable) return false;
   if (session.recoveryLimited) return false;
   return (session.roleBindings?.length ?? 0) === 0 && (session.narrowedRoles?.length ?? 0) === 0;
 }
@@ -91,7 +91,7 @@ export function accessPending(session: Session | null | undefined): boolean {
  * The workspace would show only refusals, so the gate explains this instead.
  */
 export function rolesAllInactive(session: Session | null | undefined): boolean {
-  if (!session?.authenticated || !session.tenantId) return false;
+  if (!session?.authenticated || !session.workspaceAvailable) return false;
   if (session.recoveryLimited) return false;
   if ((session.narrowedRoles?.length ?? 0) > 0) return false;
   return (session.roleBindings?.length ?? 0) > 0 && effectiveRoles(session).length === 0;

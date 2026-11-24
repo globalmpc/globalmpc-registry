@@ -25,8 +25,8 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * Two things are tested.
  *
  * 1. A project-level binding does not work outside that project.
- * 2. A session without a role cannot read the workspace even inside the tenant —
- *    the RLS tenant boundary does not substitute for authorization.
+ * 2. A session without a role cannot read the workspace even inside the Registry —
+ *    actor-based RLS does not substitute for authorization.
  */
 describeDb("project scope and read authorization", () => {
   let fx: TestFixture;
@@ -38,44 +38,44 @@ describeDb("project scope and read authorization", () => {
     operator: string;
     sponsor: string;
   };
-  /** Another company in the same tenant and a project it owns. */
+  /** Another company and a project it owns. */
   let foreign: { organizationId: string; projectId: string };
 
   /**
-   * Creates a second organization inside tenant A.
+   * Creates a second organization.
    *
-   * Organization isolation is a different boundary from tenant isolation. Testing with another
-   * tenant lets RLS block first, so it cannot show whether the authorization code checks the
+   * Organization isolation is checked by the API as well as by RLS. Testing only an actor RLS
+   * hides the project from lets RLS block first, so it cannot show whether the authorization code checks the
    * organization.
    */
   async function seedForeignOrganization(): Promise<{ organizationId: string; projectId: string }> {
     const organizationId = randomUUID();
     const projectId = randomUUID();
     await fx.sql`
-      INSERT INTO core.organizations (id, tenant_id, legal_name, jurisdiction)
-      VALUES (${organizationId}, ${fx.tenantA}, 'Org C (other company)', 'MNG')
+      INSERT INTO core.organizations (id, legal_name, jurisdiction)
+      VALUES (${organizationId}, 'Org C (other company)', 'MNG')
     `;
     await fx.sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${projectId}, ${fx.tenantA}, ${`FOREIGN-${projectId.slice(0, 8)}`}, 'Other Company Project',
+        ${projectId}, ${`FOREIGN-${projectId.slice(0, 8)}`}, 'Other Company Project',
         'MNG', ARRAY['copper'], ${organizationId}
       )
     `;
     await fx.sql`
       INSERT INTO core.evidence_stale_signals (
-        id, tenant_id, project_id, target_type, target_id, reason
+        id, project_id, target_type, target_id, reason
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${projectId}, 'registry_entry_version', ${randomUUID()},
+        ${randomUUID()}, ${projectId}, 'registry_entry_version', ${randomUUID()},
         'foreign stale signal'
       )
     `;
     // A notification addressed to a role. The steward role name matches, but it belongs to
     // another company's project.
     await fx.sql`
-      INSERT INTO core.notifications (tenant_id, kind, audience_role, project_id, summary, link)
-      VALUES (${fx.tenantA}, 'evidence_stale', 'reviewer', ${projectId},
+      INSERT INTO core.notifications (kind, audience_role, project_id, summary, link)
+      VALUES ('evidence_stale', 'reviewer', ${projectId},
               'foreign notification', ${`/w/projects/${projectId}`})
     `;
     return { organizationId, projectId };
@@ -86,28 +86,28 @@ describeDb("project scope and read authorization", () => {
     const account = newAccount();
     const subject = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subject}, ${fx.tenantA}, 'person', 'Sponsor A')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subject}, 'person', 'Sponsor A')
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subject}, ${account.address}, 31337, 'identity_bound', now()
+        ${randomUUID()}, ${subject}, ${account.address}, 31337, 'identity_bound', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'project_member')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${subject}, ${fx.orgA}, 'project_member')
     `;
     // A pending role grant proposal. It must not appear in the work list of a steward without
     // decision authority (admin.role.approve).
     await fx.sql`
       INSERT INTO core.role_grant_requests (
-        id, tenant_id, subject_id, organization_id, role, reason, requested_by_subject_id
+        id, subject_id, organization_id, role, reason, requested_by_subject_id
       )
-      SELECT ${randomUUID()}, ${fx.tenantA}, ${subject}, ${fx.orgA}, 'reviewer',
+      SELECT ${randomUUID()}, ${subject}, ${fx.orgA}, 'reviewer',
              'scope test', w.subject_id
       FROM core.wallet_identities w
       WHERE w.wallet_address = ${fx.operatorA.address}
@@ -172,7 +172,7 @@ describeDb("project scope and read authorization", () => {
       expect(response.statusCode).toBe(200);
     });
 
-    it("does not let an organization-level binding reach another organization's project in the same tenant", async () => {
+    it("does not let an organization-level binding reach another organization's project", async () => {
       const response = await createClaim(tokens.steward, foreign.projectId);
 
       expect(response.statusCode).toBe(403);
@@ -181,7 +181,7 @@ describeDb("project scope and read authorization", () => {
       );
     });
 
-    it("lets tenant operator roles reach another organization's project", async () => {
+    it("lets Registry-wide operator roles reach another organization's project", async () => {
       const response = await app.inject({
         method: "GET",
         url: `/api/v1/projects/${foreign.projectId}`,
@@ -216,7 +216,7 @@ describeDb("project scope and read authorization", () => {
       expect(other.json().code).toBe("OWNER_ORGANIZATION_NOT_ALLOWED");
     });
 
-    it("lets a tenant operator register a project owned by another organization — onboarding", async () => {
+    it("lets a Registry-wide operator register a project owned by another organization — onboarding", async () => {
       const response = await createProject(tokens.operator, foreign.organizationId);
       expect(response.statusCode).toBe(200);
     });
@@ -276,7 +276,7 @@ describeDb("project scope and read authorization", () => {
 
     it("excludes out-of-scope project proposals from the governance list", async () => {
       /**
-       * Writes scope by the proposal's project; if the list returned the whole tenant, titles,
+       * Writes scope by the proposal's project; if the list returned the whole Registry, titles,
        * evidence and tallies would still leak even though they cannot be acted on.
        */
       const response = await app.inject({

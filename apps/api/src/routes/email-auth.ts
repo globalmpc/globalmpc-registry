@@ -40,7 +40,6 @@ export const START_MESSAGE =
 interface StartRow {
   status: "issued" | "rate_limited" | "invitation_invalid";
   retry_after_seconds: number;
-  tenant_id: string | null;
   subject_id: string | null;
   invitation_id: string | null;
   email_change_id: string | null;
@@ -68,9 +67,8 @@ export async function startCodeChallenge(
         ${keys.codeHmac(purpose, email, code)}, ${code}, ${emailKey}, ${keys.ipKey(request.clientIp)}
       )
     `;
-    if (started!.status === "issued" && started!.tenant_id !== null && started!.subject_id !== null) {
+    if (started!.status === "issued" && started!.subject_id !== null) {
       await recordAccountAudit(tx, request, {
-        tenantId: started!.tenant_id,
         subjectId: started!.subject_id,
         command: "auth.email_code.issued",
         resourceType: "email_challenge",
@@ -99,7 +97,6 @@ export async function registerEmailAuthRoutes(
   app.get("/api/v1/auth/methods", async (request) => ({
     emailCode: true as const,
     google: config.oidc.google !== null,
-    microsoft: config.oidc.microsoft !== null,
     emailCodeDigits: EMAIL_CODE_DIGITS,
     emailCodeTtlMinutes: EMAIL_CODE_TTL_MINUTES,
     requestId: request.context.requestId,
@@ -141,7 +138,6 @@ export async function registerEmailAuthRoutes(
           {
             status: string;
             retry_after_seconds: number;
-            tenant_id: string | null;
             subject_id: string | null;
             challenge_id: string | null;
             expires_at: Date | null;
@@ -153,11 +149,10 @@ export async function registerEmailAuthRoutes(
           )
         `;
         const result = checked!;
-        // Only an attempt against a real account's code is audited; a decoy has no tenant.
-        if (result.tenant_id !== null && result.subject_id !== null) {
+        // Only an attempt against a real account's code is audited; a decoy has no subject.
+        if (result.subject_id !== null) {
           const created = result.status === "session_created";
           await recordAccountAudit(tx, request, {
-            tenantId: result.tenant_id,
             subjectId: result.subject_id,
             command: created ? "auth.email_code.verified" : "auth.email_code.failed",
             resourceType: "email_challenge",
@@ -166,7 +161,6 @@ export async function registerEmailAuthRoutes(
           });
           if (created) {
             await recordAccountAudit(tx, request, {
-              tenantId: result.tenant_id,
               subjectId: result.subject_id,
               command: "auth.session.created",
               resourceType: "session",

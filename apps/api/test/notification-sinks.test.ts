@@ -155,9 +155,9 @@ describeDb("notification sinks", () => {
     const reason = `deliver-${randomUUID().slice(0, 8)}`;
     await fx.sql`
       INSERT INTO core.evidence_stale_signals (
-        id, tenant_id, project_id, target_type, target_id, reason
+        id, project_id, target_type, target_id, reason
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${fx.projectA}, 'registry_entry_version',
+        ${randomUUID()}, ${fx.projectA}, 'registry_entry_version',
         ${randomUUID()}, ${reason}
       )
     `;
@@ -187,9 +187,9 @@ describeDb("notification sinks", () => {
     const before = paused.json().delivery.pending;
     await fx.sql`
       INSERT INTO core.evidence_stale_signals (
-        id, tenant_id, project_id, target_type, target_id, reason
+        id, project_id, target_type, target_id, reason
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${fx.projectA}, 'registry_entry_version',
+        ${randomUUID()}, ${fx.projectA}, 'registry_entry_version',
         ${randomUUID()}, ${`paused-${randomUUID().slice(0, 6)}`}
       )
     `;
@@ -202,10 +202,13 @@ describeDb("notification sinks", () => {
     expect(after.state).toBe("paused");
   });
 
-  it("another tenant's sinks are not visible", async () => {
+  it("sinks are not visible to another company's organization-scoped administrator", async () => {
     const operatorB = await signIn(app, fx.operatorB);
     const mine = (await list(operatorToken)).json().items as { id: string }[];
-    const theirs = (await list(operatorB)).json().items as { id: string }[];
+    expect(mine.length).toBeGreaterThan(0);
+    const response = await list(operatorB);
+    expect(response.statusCode).toBe(403);
+    const theirs = (response.json().items ?? []) as { id: string }[];
 
     const mineIds = new Set(mine.map((item) => item.id));
     for (const item of theirs) expect(mineIds.has(item.id)).toBe(false);

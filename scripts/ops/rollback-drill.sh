@@ -11,7 +11,7 @@
 #   2. FROM_REF (the release rolled back to) runs its own migrate step on it — the same step its
 #      image runs before the API starts. It must succeed without changing anything.
 #   3. FROM_REF's API and worker test suites run against that database. They create their own
-#      tenants, so they exercise the old code paths on the new schema.
+#      fixtures, so they exercise the old code paths on the new schema.
 #
 # A failure in step 2 means the old image would not start. A failure in step 3 names the code
 # path that breaks after a rollback — the fix is either a compatible migration in TO_REF or a

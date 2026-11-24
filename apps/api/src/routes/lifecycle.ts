@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   OFFERING_GATE_ID,
   atLifecycleMachine,
@@ -75,14 +75,13 @@ interface TransitionRow {
  */
 async function readGuardFacts(
   tx: postgres.TransactionSql,
-  tenantId: string,
   projectId: string,
   from: AtLifecycleState,
 ): Promise<LifecycleGuardFacts> {
   const facts = await tx<{ fact_key: string; status: string; evidence_ref: string | null }[]>`
     SELECT fact_key, status, evidence_ref
     FROM core.project_facts
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+    WHERE project_id = ${projectId}
   `;
   const offeringGate = checkOfferingGate(
     facts.map((fact) => ({
@@ -96,7 +95,7 @@ async function readGuardFacts(
   // The latest decision, not any go ever — a later hold or stop withdraws an earlier go.
   const [latest] = await tx<{ decision: GateDecisionValue }[]>`
     SELECT decision FROM core.gate_decisions
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND gate_id = ${OFFERING_GATE_ID}
+    WHERE project_id = ${projectId} AND gate_id = ${OFFERING_GATE_ID}
     ORDER BY signed_at DESC, created_at DESC
     LIMIT 1
   `;
@@ -105,7 +104,7 @@ async function readGuardFacts(
   if (from === "suspended") {
     const [suspension] = await tx<{ at: Date | null }[]>`
       SELECT max(occurred_at) AS at FROM core.project_lifecycle_transitions
-      WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND to_state = 'suspended'
+      WHERE project_id = ${projectId} AND to_state = 'suspended'
     `;
     if (!suspension?.at) {
       reviewedSinceSuspension = null;
@@ -116,17 +115,17 @@ async function readGuardFacts(
       const [row] = await tx<{ reviewed: boolean }[]>`
         SELECT
           EXISTS (SELECT 1 FROM core.claims
-                  WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+                  WHERE project_id = ${projectId}
                     AND created_at > ${since})
           OR EXISTS (SELECT 1 FROM core.verification_case_transitions t
-                     JOIN core.verification_cases c ON c.tenant_id = t.tenant_id AND c.id = t.case_id
-                     WHERE t.tenant_id = ${tenantId} AND c.project_id = ${projectId}
+                     JOIN core.verification_cases c ON c.id = t.case_id
+                     WHERE c.project_id = ${projectId}
                        AND t.occurred_at > ${since})
           OR EXISTS (SELECT 1 FROM core.compliance_assessments
-                     WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+                     WHERE project_id = ${projectId}
                        AND generated_at > ${since})
           OR EXISTS (SELECT 1 FROM core.gate_decisions
-                     WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+                     WHERE project_id = ${projectId}
                        AND created_at > ${since})
           AS reviewed
       `;
@@ -143,20 +142,19 @@ export async function registerLifecycleRoutes(
 ): Promise<void> {
   async function readLifecycle(
     tx: postgres.Sql | postgres.TransactionSql,
-    tenantId: string,
     projectId: string,
   ) {
     const [project] = await tx<ProjectRow[]>`
       SELECT id, lifecycle_state, prior_lifecycle_state, suspended_by_subject_id, version
       FROM core.projects
-      WHERE tenant_id = ${tenantId} AND id = ${projectId}
+      WHERE id = ${projectId}
     `;
     if (!project) throw notFound("Project not found");
 
     const transitions = await tx<TransitionRow[]>`
       SELECT from_state, to_state, reason, actor_subject_id, occurred_at
       FROM core.project_lifecycle_transitions
-      WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+      WHERE project_id = ${projectId}
       ORDER BY occurred_at
     `;
 
@@ -179,19 +177,18 @@ export async function registerLifecycleRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/lifecycle",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
       assertAuthorized(
         session,
         "project.read",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf } = request.context;
-      return withTenant(sql, { tenantId }, async (tx) => {
+      return withActor(sql, actor, async (tx) => {
         const { project: _project, ...view } = await readLifecycle(
           tx,
-          tenantId,
           request.params.projectId,
         );
         return { ...view, requestId, asOf };
@@ -202,7 +199,7 @@ export async function registerLifecycleRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/lifecycle-transitions",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       // If-Match is checked before the body — if a request missing the header got a 400 for the
       // body, the client would keep fixing the body without getting anywhere.
       const expected = requireIfMatch(request);
@@ -221,17 +218,17 @@ export async function registerLifecycleRoutes(
       const effectiveRole = assertAuthorized(
         session,
         toState === "suspended" ? "project.lifecycle.suspend" : "project.lifecycle.advance",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [project] = await tx<ProjectRow[]>`
             SELECT id, lifecycle_state, prior_lifecycle_state, suspended_by_subject_id, version
             FROM core.projects
-            WHERE tenant_id = ${tenantId} AND id = ${request.params.projectId}
+            WHERE id = ${request.params.projectId}
             FOR UPDATE
           `;
           if (!project) throw notFound("Project not found");
@@ -246,7 +243,7 @@ export async function registerLifecycleRoutes(
               allowed: [...allowed],
             });
           }
-          await assertActionNotRestricted(tx, tenantId, project.id, `project.lifecycle.${toState}`, session.subjectId);
+          await assertActionNotRestricted(tx, project.id, `project.lifecycle.${toState}`, session.subjectId);
 
           /**
            * Reinstatement goes only to the state before suspension, or to closure (§4.3).
@@ -283,7 +280,7 @@ export async function registerLifecycleRoutes(
           const guard = checkLifecycleGuard(
             from,
             toState,
-            await readGuardFacts(tx, tenantId, project.id, from),
+            await readGuardFacts(tx, project.id, from),
           );
           if (!guard.allowed) {
             // Every unmet condition is listed with why and whose it is — a bare refusal leaves
@@ -310,21 +307,20 @@ export async function registerLifecycleRoutes(
                 suspended_by_subject_id = ${toState === "suspended" ? session.subjectId : null},
                 version = version + 1,
                 updated_at = now()
-            WHERE tenant_id = ${tenantId} AND id = ${project.id}
+            WHERE id = ${project.id}
             RETURNING id, lifecycle_state, prior_lifecycle_state, suspended_by_subject_id, version
           `;
 
           await tx`
             INSERT INTO core.project_lifecycle_transitions (
-              tenant_id, project_id, from_state, to_state, reason, actor_subject_id
+              project_id, from_state, to_state, reason, actor_subject_id
             ) VALUES (
-              ${tenantId}, ${project.id}, ${from}, ${toState},
+              ${project.id}, ${from}, ${toState},
               ${parsed.data.reason}, ${session.subjectId}
             )
           `;
 
           await recordAudit(tx, {
-            tenantId,
             projectId: project.id,
             session,
             effectiveRole,
@@ -339,7 +335,6 @@ export async function registerLifecycleRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "project.lifecycle.transitioned",
             aggregateId: project.id,
             aggregateVersion: updated!.version,
@@ -349,7 +344,7 @@ export async function registerLifecycleRoutes(
           });
 
           reply.header("etag", etagOf(updated!.version));
-          const { project: _project, ...view } = await readLifecycle(tx, tenantId, project.id);
+          const { project: _project, ...view } = await readLifecycle(tx, project.id);
           return { ...view, requestId, asOf };
         }),
       );

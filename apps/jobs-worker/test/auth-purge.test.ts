@@ -15,7 +15,6 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  */
 describeDb("auth record purge", () => {
   let sql: postgres.Sql;
-  const tenant = randomUUID();
   const subject = randomUUID();
   const identity = randomUUID();
 
@@ -30,11 +29,10 @@ describeDb("auth record purge", () => {
         core.auth_rate_events, core.email_test_sink, core.oidc_login_transactions, core.external_identities,
         core.wallet_binding_challenges CASCADE
     `;
-    await sql`INSERT INTO core.tenants (id, slug, display_name) VALUES (${tenant}, ${`t-${tenant.slice(0, 8)}`}, 'Purge tenant')`;
-    await sql`INSERT INTO core.subjects (id, tenant_id, kind, display_name) VALUES (${subject}, ${tenant}, 'person', 'Signer')`;
+    await sql`INSERT INTO core.subjects (id, kind, display_name) VALUES (${subject}, 'person', 'Signer')`;
     await sql`
-      INSERT INTO core.external_identities (id, tenant_id, subject_id, provider, issuer, subject_key, linked_via)
-      VALUES (${identity}, ${tenant}, ${subject}, 'google', 'https://accounts.google.com', ${`purge-${subject}`}, 'link')
+      INSERT INTO core.external_identities (id, subject_id, provider, issuer, subject_key, linked_via)
+      VALUES (${identity}, ${subject}, 'google', 'https://accounts.google.com', ${`purge-${subject}`}, 'link')
     `;
   });
 
@@ -53,11 +51,11 @@ describeDb("auth record purge", () => {
     const id = randomUUID();
     await tx`
       INSERT INTO core.oidc_login_transactions (
-        id, provider, purpose, state_hash, binding_hash, nonce_hash, redirect_uri, tenant_id, subject_id,
+        id, provider, purpose, state_hash, binding_hash, nonce_hash, redirect_uri, subject_id,
         identity_id, created_at, expires_at, claimed_at, completed_at, completed_txid, outcome
       ) VALUES (
         ${id}, 'google', 'sign_in', ${hash().slice(2)}, ${hash().slice(2)}, ${hash().slice(2)},
-        'http://localhost:3000/auth/oidc/google/callback', ${tenant}, ${subject}, ${identity},
+        'http://localhost:3000/auth/oidc/google/callback', ${subject}, ${identity},
         now() - ${createdAgo}::interval, now() - ${createdAgo}::interval + interval '10 minutes',
         now() - ${createdAgo}::interval, now() - ${createdAgo}::interval, pg_current_xact_id(), 'session'
       )
@@ -72,10 +70,10 @@ describeDb("auth record purge", () => {
       const transaction = await completedSignIn(tx, "2 days");
       await tx`
         INSERT INTO core.sessions (
-          id, token_hash, tenant_id, subject_id, first_factor, oidc_transaction_id, issued_at, expires_at,
+          id, token_hash, subject_id, first_factor, oidc_transaction_id, issued_at, expires_at,
           revoked_at, revoked_reason
         ) VALUES (
-          ${id}, ${hash()}, ${tenant}, ${subject}, 'google', ${transaction},
+          ${id}, ${hash()}, ${subject}, 'google', ${transaction},
           now() - interval '2 days',
           ${how === "expired" ? tx`now() - ${endedAgo}::interval` : tx`now() + interval '1 hour'`},
           ${how === "revoked" ? tx`now() - ${endedAgo}::interval` : null},
@@ -110,12 +108,12 @@ describeDb("auth record purge", () => {
     const code = randomUUID();
     const proof = randomUUID();
     await sql`
-      INSERT INTO core.recovery_codes (id, tenant_id, subject_id, set_id, code_hash, consumed_at, consumed_by_session_id)
-      VALUES (${code}, ${tenant}, ${subject}, ${randomUUID()}, ${"c".repeat(64)}, now() - interval '2 days', ${id})
+      INSERT INTO core.recovery_codes (id, subject_id, set_id, code_hash, consumed_at, consumed_by_session_id)
+      VALUES (${code}, ${subject}, ${randomUUID()}, ${"c".repeat(64)}, now() - interval '2 days', ${id})
     `;
     await sql`
-      INSERT INTO core.session_factor_proofs (id, tenant_id, subject_id, session_id, factor, recovery_code_id)
-      VALUES (${proof}, ${tenant}, ${subject}, ${id}, 'recovery_code', ${code})
+      INSERT INTO core.session_factor_proofs (id, subject_id, session_id, factor, recovery_code_id)
+      VALUES (${proof}, ${subject}, ${id}, 'recovery_code', ${code})
     `;
     await sql`
       UPDATE core.sessions SET second_factor = 'recovery_code', second_factor_at = issued_at,
@@ -123,8 +121,8 @@ describeDb("auth record purge", () => {
       WHERE id = ${id}
     `;
     await sql`
-      INSERT INTO core.webauthn_challenges (id, tenant_id, subject_id, session_id, purpose, challenge, created_at, expires_at)
-      VALUES (${randomUUID()}, ${tenant}, ${subject}, ${id}, 'authentication', ${"A".repeat(43)},
+      INSERT INTO core.webauthn_challenges (id, subject_id, session_id, purpose, challenge, created_at, expires_at)
+      VALUES (${randomUUID()}, ${subject}, ${id}, 'authentication', ${"A".repeat(43)},
               now() - interval '2 days', now() - interval '2 days' + interval '5 minutes')
     `;
 
@@ -150,15 +148,15 @@ describeDb("auth record purge", () => {
     const wallet = randomUUID();
     const address = `0x${randomUUID().replace(/-/g, "").slice(0, 20)}${"0".repeat(20)}`;
     await sql`
-      INSERT INTO core.wallet_identities (id, tenant_id, subject_id, wallet_address, chain_id, bound_at, bound_via)
-      VALUES (${wallet}, ${tenant}, ${subject}, ${address}, 31337, now() - interval '2 days', 'proof')
+      INSERT INTO core.wallet_identities (id, subject_id, wallet_address, chain_id, bound_at, bound_via)
+      VALUES (${wallet}, ${subject}, ${address}, 31337, now() - interval '2 days', 'proof')
     `;
     const challenge = (session: string, spent: boolean) => sql`
       INSERT INTO core.wallet_binding_challenges (
-        id, tenant_id, subject_id, session_id, wallet_address, chain_id, nonce, issued_at, expires_at,
+        id, subject_id, session_id, wallet_address, chain_id, nonce, issued_at, expires_at,
         consumed_at, wallet_identity_id
       ) VALUES (
-        ${randomUUID()}, ${tenant}, ${subject}, ${session}, ${address}, 31337, ${hash()},
+        ${randomUUID()}, ${subject}, ${session}, ${address}, 31337, ${hash()},
         now() - interval '2 days', now() - interval '2 days' + interval '5 minutes',
         ${spent ? sql`now() - interval '2 days'` : null}, ${spent ? wallet : null}
       )

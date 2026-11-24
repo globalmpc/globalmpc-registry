@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { createClaimDerivationRequest } from "@mpc/api-contract";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import { assertAuthorized, projectResource, sessionFacts } from "../plugins/authorize.js";
@@ -44,17 +44,17 @@ interface ClaimRow {
   version: number;
 }
 
-async function readClaim(tx: postgres.TransactionSql, tenantId: string, claimId: string) {
+async function readClaim(tx: postgres.TransactionSql, claimId: string) {
   const [claim] = await tx<ClaimRow[]>`
     SELECT catalog_entry_id, catalog_version, structured_values, document_upload_ids, id, project_id, claim_type, value_text, unit, as_of, source_coordinate,
            source_receipt_id, evidence_tier, verification_state, grade, excluded_by_rule,
            stale_since, version
-    FROM core.claims WHERE tenant_id = ${tenantId} AND id = ${claimId}
+    FROM core.claims WHERE id = ${claimId}
   `;
   return claim;
 }
 
-async function readDerivation(tx: postgres.TransactionSql, tenantId: string, claimId: string) {
+async function readDerivation(tx: postgres.TransactionSql, claimId: string) {
   const [row] = await tx<
     {
       claim_id: string;
@@ -67,7 +67,7 @@ async function readDerivation(tx: postgres.TransactionSql, tenantId: string, cla
     }[]
   >`
     SELECT claim_id, formula, input_claim_ids, unit, as_of, author_subject_id, recorded_at
-    FROM core.claim_derivations WHERE tenant_id = ${tenantId} AND claim_id = ${claimId}
+    FROM core.claim_derivations WHERE claim_id = ${claimId}
   `;
   if (!row) return null;
   return {
@@ -86,19 +86,19 @@ export async function registerClaimDetailRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   app.get<{ Params: { claimId: string } }>("/api/v1/claims/:claimId", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     const { claimId } = request.params;
     const { requestId, asOf } = request.context;
 
-    return withTenant(sql, { tenantId }, async (tx) => {
-      const claim = await readClaim(tx, tenantId, claimId);
+    return withActor(sql, actor, async (tx) => {
+      const claim = await readClaim(tx, claimId);
       if (!claim) throw notFound("Claim not found");
       // Project scope is known only after the lookup; a denial and a miss are both answered
       // without the claim's content.
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, claim.project_id),
+        projectResource(claim.project_id),
         sessionFacts(session),
       );
 
@@ -117,28 +117,28 @@ export async function registerClaimDetailRoutes(
         SELECT id, attestation_type, state, limitations, signed_at, valid_until,
                credential_status_snapshot, supersedes_id
         FROM core.verification_attestations
-        WHERE tenant_id = ${tenantId} AND ${claimId}::uuid = ANY(claim_scope)
+        WHERE ${claimId}::uuid = ANY(claim_scope)
         ORDER BY signed_at DESC
       `;
       const conflicts = await tx<
         { id: string; conflict_type: string; resolved_at: Date | null; created_at: Date }[]
       >`
         SELECT id, conflict_type, resolved_at, created_at FROM core.claim_conflicts
-        WHERE tenant_id = ${tenantId} AND claim_id = ${claimId}
+        WHERE claim_id = ${claimId}
         ORDER BY created_at DESC
       `;
       const edges = await tx<
         { relation_type: string; from_id: string; to_id: string; created_at: Date }[]
       >`
         SELECT relation_type, from_id, to_id, created_at FROM core.lineage_edges
-        WHERE tenant_id = ${tenantId} AND (from_id = ${claimId} OR to_id = ${claimId})
+        WHERE (from_id = ${claimId} OR to_id = ${claimId})
         ORDER BY created_at
       `;
       const history = await tx<
         { command: string; before_version: number | null; after_version: number | null; occurred_at: Date }[]
       >`
         SELECT command, before_version, after_version, occurred_at FROM audit.events
-        WHERE tenant_id = ${tenantId} AND resource_type = 'claim' AND resource_id = ${claimId}
+        WHERE resource_type = 'claim' AND resource_id = ${claimId}
         ORDER BY occurred_at, id
       `;
       const publishedIn = edges
@@ -162,7 +162,7 @@ export async function registerClaimDetailRoutes(
               LEFT JOIN chain.anchor_batch_leaves l ON l.entry_version_id = v.id
               LEFT JOIN chain.anchor_batches b ON b.id = l.batch_id
               LEFT JOIN chain.transactions t ON t.batch_id = b.id AND t.replaced_by_id IS NULL
-              WHERE v.tenant_id = ${tenantId} AND v.id = ANY(${publishedIn}::uuid[])
+              WHERE v.id = ANY(${publishedIn}::uuid[])
             `;
 
       return {
@@ -204,7 +204,7 @@ export async function registerClaimDetailRoutes(
         conflictingClaimIds: edges
           .filter((edge) => edge.relation_type === "contradicts")
           .map((edge) => (edge.from_id === claimId ? edge.to_id : edge.from_id)),
-        derivation: await readDerivation(tx, tenantId, claimId),
+        derivation: await readDerivation(tx, claimId),
         lineage: edges
           .filter((edge) => edge.relation_type !== "contradicts")
           .map((edge) => ({
@@ -244,7 +244,7 @@ export async function registerClaimDetailRoutes(
   app.post<{ Params: { claimId: string } }>(
     "/api/v1/claims/:claimId/derivations",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const parsed = createClaimDerivationRequest.safeParse(request.body);
       if (!parsed.success) {
         throw badRequest("REQUEST_INVALID", "Request format is invalid", {
@@ -255,19 +255,19 @@ export async function registerClaimDetailRoutes(
       const { claimId } = request.params;
       const { requestId, asOf, correlationId } = request.context;
 
-      return withTenant(sql, { tenantId }, async (tx) => {
+      return withActor(sql, actor, async (tx) => {
         // Authorized before the idempotency lookup, so a replayed key never answers someone
         // without claim.curate.
-        const claim = await readClaim(tx, tenantId, claimId);
+        const claim = await readClaim(tx, claimId);
         if (!claim) throw notFound("Claim not found");
         const effectiveRole = assertAuthorized(
           session,
           "claim.curate",
-          projectResource(tenantId, claim.project_id),
+          projectResource(claim.project_id),
           sessionFacts(session),
         );
 
-        return withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+        return withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
 
           const inputs = [...new Set(data.inputClaimIds)];
           if (inputs.includes(claimId)) {
@@ -275,7 +275,7 @@ export async function registerClaimDetailRoutes(
           }
           const found = await tx<{ id: string }[]>`
             SELECT id FROM core.claims
-            WHERE tenant_id = ${tenantId} AND project_id = ${claim.project_id}
+            WHERE project_id = ${claim.project_id}
               AND id = ANY(${inputs}::uuid[])
           `;
           if (found.length !== inputs.length) {
@@ -284,28 +284,27 @@ export async function registerClaimDetailRoutes(
               missing: inputs.filter((id) => !known.has(id)),
             });
           }
-          if (await readDerivation(tx, tenantId, claimId)) {
+          if (await readDerivation(tx, claimId)) {
             throw conflict("DERIVATION_EXISTS", "This claim already has a recorded derivation");
           }
 
           await tx`
             INSERT INTO core.claim_derivations (
-              id, tenant_id, claim_id, formula, input_claim_ids, unit, as_of, author_subject_id
+              id, claim_id, formula, input_claim_ids, unit, as_of, author_subject_id
             ) VALUES (
-              ${randomUUID()}, ${tenantId}, ${claimId}, ${data.formula}, ${inputs}::uuid[],
+              ${randomUUID()}, ${claimId}, ${data.formula}, ${inputs}::uuid[],
               ${data.unit}, ${data.asOf}, ${session.subjectId}
             )
           `;
           for (const input of inputs) {
             await tx`
-              INSERT INTO core.lineage_edges (id, tenant_id, from_id, to_id, relation_type)
-              VALUES (${randomUUID()}, ${tenantId}, ${claimId}, ${input}, 'derived_from')
+              INSERT INTO core.lineage_edges (id, from_id, to_id, relation_type)
+              VALUES (${randomUUID()}, ${claimId}, ${input}, 'derived_from')
               ON CONFLICT (from_id, to_id, relation_type) DO NOTHING
             `;
           }
 
           await recordAudit(tx, {
-            tenantId,
             projectId: claim.project_id,
             session,
             effectiveRole,
@@ -319,7 +318,6 @@ export async function registerClaimDetailRoutes(
             detail: { inputClaimIds: inputs },
           });
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "claim.derivation.recorded",
             aggregateId: claimId,
             aggregateVersion: claim.version,
@@ -328,7 +326,7 @@ export async function registerClaimDetailRoutes(
             correlationId,
           });
 
-          return { ...(await readDerivation(tx, tenantId, claimId))!, requestId, responseAsOf: asOf };
+          return { ...(await readDerivation(tx, claimId))!, requestId, responseAsOf: asOf };
         });
       });
     },

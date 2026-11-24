@@ -18,8 +18,8 @@ const tokenHash = () => `0x${randomBytes(32).toString("hex")}`;
  * Expected, from the contracts rather than the implementation:
  * - F1: an identity revoked by an address change or an unlink signs nobody in, even
  *   when the sign-in started before the revocation committed and waited for it; a sign-in that
- *   committed first is ended by the revocation. Linking races an address change the same way. A Google /
- *   Microsoft session does not resolve once its identity is revoked.
+ *   committed first is ended by the revocation. Linking races an address change the same way. A Google
+ *   session does not resolve once its identity is revoked.
  * - F3: a suspension and an email-change decision or an email-change completion
  *   of the same person never deadlock (40P01): both lock the person first, so one waits and then
  *   finds the other's result.
@@ -37,7 +37,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
   beforeAll(async () => {
     fx = await setupFixture();
     const connect = (name: string) => {
-      const url = new URL(DATABASE_URL!);
+      const url = new URL(process.env["DATABASE_URL"]!);
       url.username = "mpc_app_login";
       url.password = "app";
       return postgres(url.toString(), { onnotice: () => {}, max: 1, connection: { application_name: name } });
@@ -79,13 +79,15 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     hold: (tx: postgres.TransactionSql) => Promise<unknown>,
     racerName: string,
     racer: () => Promise<T>,
+    /** The holder's actor: a session's own subject for the session-keyed functions. */
+    actor: string = fx.operatorSubjectA,
   ): Promise<{ result: T; blocked: boolean }> {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let held!: () => void;
     const holding = new Promise<void>((resolve) => (held = resolve));
     const committed = holder.begin(async (tx) => {
-      await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+      await tx`SELECT set_config('app.actor_subject_id', ${actor}, true)`;
       await hold(tx);
       held();
       await gate;
@@ -101,8 +103,8 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
   async function person(email: string | null = `p-${randomUUID().slice(0, 8)}@example.com`) {
     const id = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name, email, created_at)
-      VALUES (${id}, ${fx.tenantA}, 'person', 'Race person', ${email}, now() - interval '10 days')
+      INSERT INTO core.subjects (id, kind, display_name, email, created_at)
+      VALUES (${id}, 'person', 'Race person', ${email}, now() - interval '10 days')
     `;
     return id;
   }
@@ -111,8 +113,8 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     const id = randomUUID();
     const key = `race-${randomUUID()}`;
     await fx.sql`
-      INSERT INTO core.external_identities (id, tenant_id, subject_id, provider, issuer, subject_key, linked_via)
-      VALUES (${id}, ${fx.tenantA}, ${subjectId}, 'google', ${GOOGLE}, ${key}, 'link')
+      INSERT INTO core.external_identities (id, subject_id, provider, issuer, subject_key, linked_via)
+      VALUES (${id}, ${subjectId}, 'google', ${GOOGLE}, ${key}, 'link')
     `;
     return { id, key };
   }
@@ -122,8 +124,10 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     const id = randomUUID();
     const state = randomUUID();
     const binding = randomUUID();
+    // A link starts from the caller's own session: the caller acts as its subject.
+    const [owner] = sessionId ? await fx.sql<{ subject_id: string }[]>`SELECT subject_id FROM core.sessions WHERE id = ${sessionId}` : [];
     await one.begin(async (tx) => {
-      if (sessionId) await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+      if (owner) await tx`SELECT set_config('app.actor_subject_id', ${owner.subject_id}, true)`;
       const [started] = await tx<{ status: string }[]>`
         SELECT status FROM core.start_oidc_transaction(
           ${id}, 'google', ${purpose}, ${sha(state)}, ${sha(binding)}, ${sha(randomUUID())}, ${randomBytes(48)},
@@ -149,18 +153,18 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     const newEmail = `moved-${randomUUID().slice(0, 8)}@example.com`;
     await fx.sql`
       INSERT INTO core.email_change_requests (
-        id, tenant_id, subject_id, new_email, reason, requested_by_subject_id,
+        id, subject_id, new_email, reason, requested_by_subject_id,
         state, decided_by_subject_id, decided_at, decision_reason
       ) VALUES (
-        ${change}, ${fx.tenantA}, ${subjectId}, ${newEmail}, 'r', ${await person()},
+        ${change}, ${subjectId}, ${newEmail}, 'r', ${await person()},
         'approved', ${await person()}, now(), 'ok'
       )
     `;
     const code = randomBytes(32);
     const ownerCode = randomUUID();
     await fx.sql`
-      INSERT INTO core.email_challenges (id, purpose, email, tenant_id, subject_id, email_change_id, code_hmac, created_at, expires_at, owner_proof_digest)
-      VALUES (${randomUUID()}, 'email_change', ${newEmail}, ${fx.tenantA}, ${subjectId}, ${change}, ${code},
+      INSERT INTO core.email_challenges (id, purpose, email, subject_id, email_change_id, code_hmac, created_at, expires_at, owner_proof_digest)
+      VALUES (${randomUUID()}, 'email_change', ${newEmail}, ${subjectId}, ${change}, ${code},
               now() - interval '1 second', now() - interval '1 second' + interval '10 minutes',
               (SELECT sha256(convert_to(email || ':' || ${ownerCode}, 'UTF8')) FROM core.subjects WHERE id=${subjectId}))
     `;
@@ -193,7 +197,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
         async (tx) => expect(await signIn(tx, transaction, identity.key, sessionId)).toBe("session_created"),
         names.two,
         () => outcome(two.begin(async (tx) => {
-          await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+          await tx`SELECT set_config('app.actor_subject_id', ${fx.operatorSubjectA}, true)`;
           expect(await completeEmailChange(tx, newEmail, code, ownerCode)).toBe("completed");
         })),
       );
@@ -224,7 +228,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       const subject = await person();
       const identity = await googleIdentity(subject);
       const holder = await sessionIdOf(
-        await issueTestSession(fx.appSql, fx.tenantA, subject, { firstFactor: "email_code", secondFactor: "totp" }),
+        await issueTestSession(fx.appSql, subject, { firstFactor: "email_code", secondFactor: "totp" }),
       );
       const transaction = await claimed("sign_in");
       const sessionId = randomUUID();
@@ -234,6 +238,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
         (tx) => tx`SELECT * FROM core.unlink_external_identity(${holder}, ${identity.id})`,
         names.one,
         () => signIn(one, transaction, identity.key, sessionId),
+        subject,
       );
       expect(blocked).toBe(true);
       expect(result).toBe("not_found");
@@ -243,7 +248,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     it("a link waiting on an address change finds its session ended and links nothing", async () => {
       const subject = await person();
       const holder = await sessionIdOf(
-        await issueTestSession(fx.appSql, fx.tenantA, subject, { firstFactor: "email_code", secondFactor: "totp" }),
+        await issueTestSession(fx.appSql, subject, { firstFactor: "email_code", secondFactor: "totp" }),
       );
       const { newEmail, code, ownerCode } = await approvedEmailChange(subject);
       const transaction = await claimed("link", holder);
@@ -251,9 +256,9 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
 
       const { result, blocked } = await race(two, async (tx) => expect(await completeEmailChange(tx, newEmail, code, ownerCode)).toBe("completed"), names.one, () =>
         outcome(one.begin(async (tx) => {
-          await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+          await tx`SELECT set_config('app.actor_subject_id', ${subject}, true)`;
           await tx`
-            SELECT * FROM core.complete_oidc_link(${transaction}, ${holder}, ${GOOGLE}, ${key}, NULL, NULL, ${randomUUID()}, (SELECT email FROM core.subjects WHERE id=${subject}))
+            SELECT * FROM core.complete_oidc_link(${transaction}, ${holder}, ${GOOGLE}, ${key}, NULL, ${randomUUID()}, (SELECT email FROM core.subjects WHERE id=${subject}))
           `;
         })),
       );
@@ -265,7 +270,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     it("a link that committed first is revoked by the address change that waited for it", async () => {
       const subject = await person();
       const holder = await sessionIdOf(
-        await issueTestSession(fx.appSql, fx.tenantA, subject, { firstFactor: "email_code", secondFactor: "totp" }),
+        await issueTestSession(fx.appSql, subject, { firstFactor: "email_code", secondFactor: "totp" }),
       );
       const { newEmail, code, ownerCode } = await approvedEmailChange(subject);
       const transaction = await claimed("link", holder);
@@ -275,15 +280,16 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
         one,
         async (tx) => {
           const [linked] = await tx<{ status: string }[]>`
-            SELECT status FROM core.complete_oidc_link(${transaction}, ${holder}, ${GOOGLE}, ${key}, NULL, NULL, ${randomUUID()}, (SELECT email FROM core.subjects WHERE id=${subject}))
+            SELECT status FROM core.complete_oidc_link(${transaction}, ${holder}, ${GOOGLE}, ${key}, NULL, ${randomUUID()}, (SELECT email FROM core.subjects WHERE id=${subject}))
           `;
           expect(linked!.status).toBe("linked");
         },
         names.two,
         () => outcome(two.begin(async (tx) => {
-          await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+          await tx`SELECT set_config('app.actor_subject_id', ${fx.operatorSubjectA}, true)`;
           expect(await completeEmailChange(tx, newEmail, code, ownerCode)).toBe("completed");
         })),
+        subject,
       );
       expect(blocked).toBe(true);
       expect(result).toBe("ok");
@@ -293,7 +299,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
 
     it("a Google session does not resolve once its identity is revoked, however that happened", async () => {
       const subject = await person();
-      const token = await issueTestSession(fx.appSql, fx.tenantA, subject, { firstFactor: "google" });
+      const token = await issueTestSession(fx.appSql, subject, { firstFactor: "google" });
       const resolve = () => fx.appSql`SELECT session_id FROM core.resolve_session(${hashToken(token)})`;
       expect(await resolve()).toHaveLength(1);
       // Revoked straight at the table: no function ended the session; the resolver still refuses it.
@@ -336,12 +342,13 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     async function suspensionRequest(subject: string) {
       const id = randomUUID();
       await fx.sql`
-        INSERT INTO core.subject_suspensions (id, tenant_id, subject_id, action, reason, requested_by_subject_id)
-        VALUES (${id}, ${fx.tenantA}, ${subject}, 'suspend', 'r', ${await person()})
+        INSERT INTO core.subject_suspensions (id, subject_id, action, reason, requested_by_subject_id)
+        VALUES (${id}, ${subject}, 'suspend', 'r', ${await person()})
       `;
       const decider = await person();
       return () => outcome(two.begin(async (tx) => {
-        await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+        // The decision is made by the decider, the authenticated actor.
+        await tx`SELECT set_config('app.actor_subject_id', ${decider}, true)`;
         await tx`SELECT * FROM core.decide_subject_suspension(${id}, ${decider}, true, 'ok', 1)`;
       }));
     }
@@ -350,15 +357,15 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       const subject = await person();
       const change = randomUUID();
       await fx.sql`
-        INSERT INTO core.email_change_requests (id, tenant_id, subject_id, new_email, reason, requested_by_subject_id)
-        VALUES (${change}, ${fx.tenantA}, ${subject}, ${`moved-${change.slice(0, 8)}@example.com`}, 'r', ${await person()})
+        INSERT INTO core.email_change_requests (id, subject_id, new_email, reason, requested_by_subject_id)
+        VALUES (${change}, ${subject}, ${`moved-${change.slice(0, 8)}@example.com`}, 'r', ${await person()})
       `;
       const decider = await person();
       const suspend = await suspensionRequest(subject);
       let status = "";
       const outcomes = await queuedBehindSubject(subject, suspend, () =>
         outcome(one.begin(async (tx) => {
-          await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+          await tx`SELECT set_config('app.actor_subject_id', ${decider}, true)`;
           const [decided] = await tx<{ status: string }[]>`
             SELECT status FROM core.decide_email_change(
               ${change}, ${decider}, true, 'ok', 1, ${randomUUID()}, ${randomBytes(32)}, '12345678'
@@ -393,39 +400,43 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
     async function suspensionOf(subject: string) {
       const id = randomUUID();
       await fx.sql`
-        INSERT INTO core.subject_suspensions (id, tenant_id, subject_id, action, reason, requested_by_subject_id)
-        VALUES (${id}, ${fx.tenantA}, ${subject}, 'suspend', 'r', ${await person()})
+        INSERT INTO core.subject_suspensions (id, subject_id, action, reason, requested_by_subject_id)
+        VALUES (${id}, ${subject}, 'suspend', 'r', ${await person()})
       `;
       const decider = await person();
-      return (tx: postgres.TransactionSql) =>
-        tx`SELECT * FROM core.decide_subject_suspension(${id}, ${decider}, true, 'ok', 1)`;
+      return async (tx: postgres.TransactionSql) => {
+        await tx`SELECT set_config('app.actor_subject_id', ${decider}, true)`;
+        return tx`SELECT * FROM core.decide_subject_suspension(${id}, ${decider}, true, 'ok', 1)`;
+      };
     }
 
     it.each(["approval", "suspension"])("serializes a wallet approval when %s commits first", async first => {
       const approver = await person();
       await fx.sql`UPDATE core.subjects SET assurance_level='high_assurance' WHERE id=${approver}`;
-      await fx.sql`INSERT INTO core.role_bindings (id,tenant_id,subject_id,organization_id,role)
-        VALUES (${randomUUID()},${fx.tenantA},${approver},${fx.orgA},'administrator')`;
-      const session = await sessionIdOf(await issueTestSession(fx.appSql, fx.tenantA, approver, { firstFactor: "email_code" }));
+      await fx.sql`INSERT INTO core.role_bindings (id,subject_id,organization_id,role)
+        VALUES (${randomUUID()},${approver},${fx.orgA},'administrator')`;
+      const session = await sessionIdOf(await issueTestSession(fx.appSql, approver, { firstFactor: "email_code" }));
       const owner = await person();
-      const ownerSession = await sessionIdOf(await issueTestSession(fx.appSql, fx.tenantA, owner, { firstFactor: "email_code" }));
+      const ownerSession = await sessionIdOf(await issueTestSession(fx.appSql, owner, { firstFactor: "email_code" }));
       const wallet = randomUUID();
       const address = "0x" + randomBytes(20).toString("hex");
-      await fx.sql`INSERT INTO core.wallet_identities(id,tenant_id,subject_id,wallet_address,chain_id,assurance_level,bound_at)
-        VALUES (${wallet},${fx.tenantA},${owner},${address},97,'high_assurance',now())`;
+      await fx.sql`INSERT INTO core.wallet_identities(id,subject_id,wallet_address,chain_id,assurance_level,bound_at)
+        VALUES (${wallet},${owner},${address},97,'high_assurance',now())`;
       const id = randomUUID();
-      await fx.sql`INSERT INTO core.wallet_recoveries(id,tenant_id,subject_id,session_id,previous_wallet_id,previous_version,
+      await fx.sql`INSERT INTO core.wallet_recoveries(id,subject_id,session_id,previous_wallet_id,previous_version,
         chain_id,wallet_address,email,proof_digest,confirmed_at)
-        SELECT ${id},tenant_id,id,${ownerSession},${wallet},1,97,${"0x"+randomBytes(20).toString("hex")},email,${randomBytes(32)},now()
+        SELECT ${id},id,${ownerSession},${wallet},1,97,${"0x"+randomBytes(20).toString("hex")},email,${randomBytes(32)},now()
         FROM core.subjects WHERE id=${owner}`;
       const approve = async (tx: postgres.TransactionSql) => {
+        // The approver acts with their own session.
+        await tx`SELECT set_config('app.actor_subject_id', ${approver}, true)`;
         const [row] = await tx`SELECT core.approve_wallet_recovery(${session},${id}) AS approved`;
         expect(row!.approved).toBe(true);
       };
       const suspend = await suspensionOf(approver);
       const [hold, next] = first === "approval" ? [approve, suspend] : [suspend, approve];
       const {blocked, result} = await race(one, hold, names.two, () => outcome(two.begin(async tx => {
-        await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+        await tx`SELECT set_config('app.actor_subject_id', ${fx.operatorSubjectA}, true)`;
         await next(tx);
       })));
       expect(blocked).toBe(true);
@@ -453,7 +464,7 @@ describeDb("account state races (0132)", { timeout: 60_000 }, () => {
       let locked!: () => void;
       const lockedP = new Promise<void>((resolve) => (locked = resolve));
       const changing = outcome(two.begin(async (tx) => {
-        await tx`SELECT set_config('app.current_tenant', ${fx.tenantA}, true)`;
+        await tx`SELECT set_config('app.actor_subject_id', ${fx.operatorSubjectA}, true)`;
         await tx`SELECT 1 FROM core.subjects WHERE id = ${subject} FOR UPDATE`;
         locked();
         await gate;

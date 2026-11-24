@@ -6,11 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
  */
 const s = vi.hoisted(() => ({
   privileges: { rolsuper: true, rolbypassrls: false } as { rolsuper: boolean; rolbypassrls: boolean },
-  tenants: [{ id: "tenant-1" }] as { id: string }[],
   sql: Object.assign(
-    vi.fn(async (strings: TemplateStringsArray) =>
-      strings.join("?").includes("core.tenants") ? s.tenants : [s.privileges],
-    ),
+    vi.fn(async () => [s.privileges]),
     { end: vi.fn() },
   ),
   createServiceSubject: vi.fn(),
@@ -44,7 +41,6 @@ const STORED = `mpcsvc_${"S".repeat(43)}`;
 beforeEach(() => {
   vi.resetModules();
   s.privileges = { rolsuper: true, rolbypassrls: false };
-  s.tenants = [{ id: "tenant-1" }];
   for (const f of [
     s.sql.end,
     s.createServiceSubject,
@@ -109,23 +105,22 @@ it("prints usage and exits for a missing or unknown command, before connecting",
 
 it("requires the migration connection", async () => {
   vi.stubEnv("DATABASE_URL", "");
-  await expect(run("list", "tenant")).rejects.toThrow("exit:1");
+  await expect(run("list")).rejects.toThrow("exit:1");
   expect(stderr()).toContain("DATABASE_URL");
 });
 
 it("refuses a role that cannot bypass row-level security", async () => {
   s.privileges = { rolsuper: false, rolbypassrls: false };
-  await run("list", "tenant");
+  await run("list");
   expect(process.exitCode).toBe(1);
   expect(stderr()).toContain("BYPASSRLS");
   expect(s.listServiceTokens).not.toHaveBeenCalled();
   expect(s.sql.end).toHaveBeenCalledOnce();
 });
 
-it("creates a service subject in the named tenant", async () => {
-  await run("create-subject", "tenant", "Scan worker", "scan_service");
+it("creates a service subject", async () => {
+  await run("create-subject", "Scan worker", "scan_service");
   expect(s.createServiceSubject).toHaveBeenCalledWith(s.sql, {
-    tenantId: "tenant-1",
     displayName: "Scan worker",
     role: "scan_service",
   });
@@ -133,9 +128,8 @@ it("creates a service subject in the named tenant", async () => {
 });
 
 it("issues with comma-separated scopes and a 90-day default lifetime, printing the token once", async () => {
-  await run("issue", "tenant", "subject-1", "scan-worker", "scan_result, cre_report,");
+  await run("issue", "subject-1", "scan-worker", "scan_result, cre_report,");
   expect(s.issueServiceToken).toHaveBeenCalledWith(s.sql, {
-    tenantId: "tenant-1",
     subjectId: "subject-1",
     label: "scan-worker",
     scopes: ["scan_result", "cre_report"],
@@ -145,27 +139,18 @@ it("issues with comma-separated scopes and a 90-day default lifetime, printing t
 });
 
 it("issues with an explicit lifetime and refuses one that is not a whole number", async () => {
-  await run("issue", "tenant", "subject-1", "scan-worker", "scan_result", "30");
+  await run("issue", "subject-1", "scan-worker", "scan_result", "30");
   expect(s.issueServiceToken).toHaveBeenCalledWith(s.sql, expect.objectContaining({ ttlSeconds: 30 * DAY }));
 
   vi.resetModules();
-  await run("issue", "tenant", "subject-1", "scan-worker", "scan_result", "1.5");
+  await run("issue", "subject-1", "scan-worker", "scan_result", "1.5");
   expect(process.exitCode).toBe(1);
   expect(stderr()).toContain("ttlDays must be a whole number");
 });
 
-it("refuses issue without its arguments and an unknown tenant", async () => {
-  await run("issue", "tenant", "subject-1");
+it("refuses issue without its arguments", async () => {
+  await run("issue", "subject-1");
   expect(stderr()).toContain("subjectId, label and scopes are required");
-
-  vi.resetModules();
-  s.tenants = [];
-  await run("issue", "missing", "subject-1", "scan-worker", "scan_result");
-  expect(stderr()).toContain("no tenant missing");
-
-  vi.resetModules();
-  await run("list");
-  expect(stderr()).toContain("tenant slug is required");
   expect(s.issueServiceToken).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(1);
 });
@@ -202,8 +187,8 @@ it("revokes and lists", async () => {
   expect(stderr()).toContain("tokenId is required");
 
   vi.resetModules();
-  await run("list", "tenant");
-  expect(s.listServiceTokens).toHaveBeenCalledWith(s.sql, "tenant-1");
+  await run("list");
+  expect(s.listServiceTokens).toHaveBeenCalledWith(s.sql);
   expect(stdout()).toContain('{"id":"token-2"}');
 });
 
@@ -226,9 +211,8 @@ it("generate prints a new token and nothing else, without connecting", async () 
 
 it("ensure registers the token from SERVICE_TOKEN with a one-year default, never printing it", async () => {
   vi.stubEnv("SERVICE_TOKEN", STORED);
-  await run("ensure", "tenant", "scan-worker", "scan_service", "scan_result");
+  await run("ensure", "scan-worker", "scan_service", "scan_result");
   expect(s.ensureServiceToken).toHaveBeenCalledWith(s.sql, {
-    tenantId: "tenant-1",
     label: "scan-worker",
     role: "scan_service",
     scopes: ["scan_result"],
@@ -244,22 +228,23 @@ it("ensure registers the token from SERVICE_TOKEN with a one-year default, never
 });
 
 it("ensure refuses without SERVICE_TOKEN, before connecting", async () => {
-  await expect(run("ensure", "tenant", "scan-worker", "scan_service", "scan_result")).rejects.toThrow("exit:1");
+  await expect(run("ensure", "scan-worker", "scan_service", "scan_result")).rejects.toThrow("exit:1");
   expect(stderr()).toContain("SERVICE_TOKEN is required");
   expect(s.ensureServiceToken).not.toHaveBeenCalled();
 });
 
-it("ensure fails on an unknown tenant and warns when the stored value is due for renewal", async () => {
+it("ensure refuses a role that cannot bypass row-level security, and warns when the stored value is due for renewal", async () => {
   vi.stubEnv("SERVICE_TOKEN", STORED);
-  s.tenants = [];
-  await run("ensure", "missing", "scan-worker", "scan_service", "scan_result");
+  s.privileges = { rolsuper: false, rolbypassrls: false };
+  await run("ensure", "scan-worker", "scan_service", "scan_result");
   expect(process.exitCode).toBe(1);
-  expect(stderr()).toContain("no tenant missing");
+  expect(stderr()).toContain("BYPASSRLS");
+  expect(s.ensureServiceToken).not.toHaveBeenCalled();
 
   vi.resetModules();
   process.exitCode = 0;
   vi.stubEnv("SERVICE_TOKEN", STORED);
-  s.tenants = [{ id: "tenant-1" }];
+  s.privileges = { rolsuper: true, rolbypassrls: false };
   s.ensureServiceToken.mockResolvedValue({
     outcome: "unchanged",
     subjectId: "subject-1",
@@ -269,7 +254,7 @@ it("ensure fails on an unknown tenant and warns when the stored value is due for
     retired: [],
     renewalDue: true,
   });
-  await run("ensure", "tenant", "scan-worker", "scan_service", "scan_result", "30", "2");
+  await run("ensure", "scan-worker", "scan_service", "scan_result", "30", "2");
   expect(s.ensureServiceToken).toHaveBeenLastCalledWith(
     s.sql,
     expect.objectContaining({ ttlSeconds: 30 * DAY, overlapSeconds: 2 * 60 * 60 }),

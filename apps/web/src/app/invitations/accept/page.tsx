@@ -26,7 +26,7 @@ const C = AUTH_COPY.invitation;
  * The link is `/invitations/accept#token=…`. **The token is in the fragment**, which the browser
  * never puts in a request line, a `Referer` or a server log; this page reads it, removes it from
  * the address bar, and sends it only in request bodies. Then: a code mailed to the invited address
- * (or Google / Microsoft where the provider vouches for that address), a display name, a
+ * (or Google where it vouches for that address), a display name, a
  * first-factor session, and the second-factor enrolment on `/auth/mfa`.
  */
 export default function AcceptInvitationPage() {
@@ -121,7 +121,7 @@ export default function AcceptInvitationPage() {
             >
               {C.sendCode}
             </button>
-            {methods && (methods.google || methods.microsoft) ? (
+            {methods?.google ? (
               <div style={{ marginTop: 12 }}>
                 <p className="meta">{AUTH_COPY.signIn.or}</p>
                 <ProviderButtons

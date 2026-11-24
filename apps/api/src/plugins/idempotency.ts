@@ -1,7 +1,8 @@
+import type { ActorContext } from "@mpc/db";
 import { createHash } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { conflict } from "../errors.js";
 
 /**
@@ -11,10 +12,10 @@ import { conflict } from "../errors.js";
  * request with the same key is rejected. A client reusing a key while changing the payload is
  * a bug, and silently executing it causes duplicate side effects.
  *
- * **What "the same request" covers.** Keys are stored per tenant, so the hash carries the rest:
+ * **What "the same request" covers.** Keys are stored Registry-wide, so the hash carries the rest:
  * the method, the path with its parameters filled in, and the acting subject, besides the
  * payload. Hashing the body alone let the same key and body sent to another resource, or by
- * another person in the tenant, replay a response that was never theirs. The query string is
+ * another person, replay a response that was never theirs. The query string is
  * left out — mutations do not read it.
  *
  * `payload` defaults to the body. Routes whose body is a stream pass what identifies it.
@@ -42,16 +43,15 @@ export function hashRequest(request: FastifyRequest, payload: unknown = request.
  */
 export async function reserveIdempotency<T>(
   tx: postgres.TransactionSql,
-  tenantId: string,
   key: string,
   requestHash: string,
 ): Promise<{ readonly replay: T } | { readonly replay: null }> {
   // Decide races with INSERT. Reading first and inserting when absent lets two concurrent
   // requests both pass.
   const inserted = await tx`
-    INSERT INTO core.idempotency_keys (key, tenant_id, request_hash)
-    VALUES (${key}, ${tenantId}, ${requestHash})
-    ON CONFLICT (key, tenant_id) DO NOTHING
+    INSERT INTO core.idempotency_keys (key, request_hash)
+    VALUES (${key}, ${requestHash})
+    ON CONFLICT (key) DO NOTHING
     RETURNING key
   `;
 
@@ -60,7 +60,7 @@ export async function reserveIdempotency<T>(
   const [previous] = await tx<{ request_hash: string; response_snapshot: T | null }[]>`
     SELECT request_hash, response_snapshot
     FROM core.idempotency_keys
-    WHERE key = ${key} AND tenant_id = ${tenantId}
+    WHERE key = ${key}
   `;
 
   if (!previous) throw conflict("IDEMPOTENCY_IN_FLIGHT", "The same request is in progress");
@@ -83,15 +83,15 @@ export async function reserveIdempotency<T>(
  */
 export async function releaseIdempotency(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   key: string,
 ): Promise<void> {
-  // Runs on the failure path, outside the failed transaction, so it sets the tenant itself —
+  // Runs on the failure path, outside the failed transaction, so it sets the actor itself —
   // without it RLS sees no rows and the key silently stays in flight.
-  await withTenant(sql, { tenantId }, async (tx) => {
+  await withActor(sql, actor, async (tx) => {
     await tx`
       DELETE FROM core.idempotency_keys
-      WHERE key = ${key} AND tenant_id = ${tenantId} AND response_snapshot IS NULL
+      WHERE key = ${key} AND response_snapshot IS NULL
     `;
   });
 }
@@ -104,12 +104,12 @@ export async function releaseIdempotency(
  */
 export async function releaseIdempotencyAfterFailure(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   key: string,
   log: { error: (detail: Record<string, unknown>, message: string) => void },
 ): Promise<void> {
   try {
-    await releaseIdempotency(sql, tenantId, key);
+    await releaseIdempotency(sql, actor, key);
   } catch (releaseError) {
     log.error({ err: releaseError }, "idempotency release failed after an earlier error");
   }
@@ -118,20 +118,18 @@ export async function releaseIdempotencyAfterFailure(
 /** Settles the reservation with a result. Later calls with the same key get this response. */
 export async function completeIdempotency<T>(
   tx: postgres.TransactionSql,
-  tenantId: string,
   key: string,
   result: T,
 ): Promise<void> {
   await tx`
     UPDATE core.idempotency_keys
     SET response_snapshot = ${tx.json(result as never)}, response_status = 200
-    WHERE key = ${key} AND tenant_id = ${tenantId}
+    WHERE key = ${key}
   `;
 }
 
 export async function withIdempotency<T>(
   tx: postgres.TransactionSql,
-  tenantId: string,
   key: string,
   requestHash: string,
   work: () => Promise<T>,
@@ -141,7 +139,7 @@ export async function withIdempotency<T>(
   >`
     SELECT request_hash, response_snapshot
     FROM core.idempotency_keys
-    WHERE key = ${key} AND tenant_id = ${tenantId}
+    WHERE key = ${key}
   `;
 
   const previous = existing[0];
@@ -156,8 +154,8 @@ export async function withIdempotency<T>(
   }
 
   await tx`
-    INSERT INTO core.idempotency_keys (key, tenant_id, request_hash)
-    VALUES (${key}, ${tenantId}, ${requestHash})
+    INSERT INTO core.idempotency_keys (key, request_hash)
+    VALUES (${key}, ${requestHash})
   `;
 
   const result = await work();
@@ -165,7 +163,7 @@ export async function withIdempotency<T>(
   await tx`
     UPDATE core.idempotency_keys
     SET response_snapshot = ${tx.json(result as never)}, response_status = 200
-    WHERE key = ${key} AND tenant_id = ${tenantId}
+    WHERE key = ${key}
   `;
 
   return result;

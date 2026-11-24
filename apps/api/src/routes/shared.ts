@@ -8,49 +8,52 @@ import {
 } from "../errors.js";
 import type { Session } from "../plugins/session.js";
 
+import type { ActorContext } from "@mpc/db";
+
 /**
  * Common preconditions for mutation routes.
  *
- * Session, tenant, and Idempotency-Key are checked in one place. Repeated per route, missing
+ * Session, actor, and Idempotency-Key are checked in one place. Repeated per route, missing
  * it in any one route makes that route alone silently lose idempotency.
  */
-/** A tenant-bound session. Routes receiving this type do not re-check whether tenantId is null. */
-export type EnrolledSession = Session & { readonly tenantId: string };
+/** A session with a subject. Routes receiving this type do not re-check whether subjectId is null. */
+export type EnrolledSession = Session & { readonly subjectId: string };
 
 export interface MutationContext {
   readonly session: EnrolledSession;
-  readonly tenantId: string;
+  /** The database context of the caller: row-level security admits only what its roles reach. */
+  readonly actor: ActorContext;
   readonly idempotencyKey: string;
 }
 
 /**
  * Common preconditions for read routes.
  *
- * Unlike mutations, no Idempotency-Key is required. Session and tenant checks live in one
+ * Unlike mutations, no Idempotency-Key is required. Session and actor checks live in one
  * place so routes do not handle them differently.
  */
 export interface ReadContext {
   readonly session: EnrolledSession;
-  readonly tenantId: string;
+  readonly actor: ActorContext;
 }
 
 /**
- * A signed-in session bound to a workspace (tenant).
+ * A signed-in session of a subject.
  *
- * Every session belongs to a subject in a tenant: the unbound wallet session (SIWE, answered
- * here with 403 `WALLET_NOT_ENROLLED`) is gone with wallet sign-in (WP7). A session without a
- * tenant would be a resolver defect, so it is refused as unauthenticated.
+ * Every session belongs to a subject: the unbound wallet session (SIWE, answered here with 403
+ * `WALLET_NOT_ENROLLED`) is gone with wallet sign-in (WP7). A session without a subject would be
+ * a resolver defect, so it is refused as unauthenticated.
  */
 export function requireEnrolledSession(request: FastifyRequest): ReadContext {
   const session = request.session;
   if (!session) {
     throw unauthorized("UNAUTHENTICATED", "Authentication required");
   }
-  if (session.tenantId === null) {
+  if (session.subjectId === null) {
     throw unauthorized("UNAUTHENTICATED", "Authentication required");
   }
-  const tenantId = session.tenantId;
-  return { session: { ...session, tenantId }, tenantId };
+  const subjectId = session.subjectId;
+  return { session: { ...session, subjectId }, actor: { subjectId } };
 }
 
 export function requireReadContext(request: FastifyRequest): ReadContext {
@@ -58,7 +61,7 @@ export function requireReadContext(request: FastifyRequest): ReadContext {
 }
 
 export function requireMutationContext(request: FastifyRequest): MutationContext {
-  const { session, tenantId } = requireEnrolledSession(request);
+  const { session, actor } = requireEnrolledSession(request);
 
   const key = request.headers["idempotency-key"];
   if (typeof key !== "string" || key.length < 16) {
@@ -68,7 +71,7 @@ export function requireMutationContext(request: FastifyRequest): MutationContext
     );
   }
 
-  return { session, tenantId, idempotencyKey: key };
+  return { session, actor, idempotencyKey: key };
 }
 
 /**

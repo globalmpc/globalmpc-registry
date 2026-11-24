@@ -17,7 +17,7 @@ const describeDb = process.env["DATABASE_URL"] ? describe : describe.skip;
  * `jurisdiction[]` ABAC condition — 02 §2.5.
  *
  * The fixture's projects are hosted in MNG. A KAZ project is added here so that a scoped binding
- * has something inside and something outside its jurisdiction in the same tenant.
+ * has something inside and something outside its jurisdiction in the Registry.
  */
 describeDb("jurisdiction-scoped role bindings", () => {
   let fx: TestFixture;
@@ -32,9 +32,9 @@ describeDb("jurisdiction-scoped role bindings", () => {
     kazProject = randomUUID();
     await fx.sql`
       INSERT INTO core.projects (
-        id, tenant_id, project_key, name, host_country_iso3, minerals, owner_organization_id
+        id, project_key, name, host_country_iso3, minerals, owner_organization_id
       ) VALUES (
-        ${kazProject}, ${fx.tenantA}, ${`KAZ-${kazProject.slice(0, 8)}`}, 'KAZ Project',
+        ${kazProject}, ${`KAZ-${kazProject.slice(0, 8)}`}, 'KAZ Project',
         'KAZ', ARRAY['copper'], ${fx.orgA}
       )
     `;
@@ -45,25 +45,25 @@ describeDb("jurisdiction-scoped role bindings", () => {
     await fx.close();
   });
 
-  /** A tenant-wide reviewer whose binding carries `jurisdiction` (null = unscoped). */
+  /** A Registry-wide reviewer whose binding carries `jurisdiction` (null = unscoped). */
   async function reviewer(jurisdiction: string[] | null): Promise<{ token: string; subjectId: string }> {
     const account = newAccount();
     const subjectId = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${subjectId}, ${fx.tenantA}, 'person', 'Scoped reviewer')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${subjectId}, 'person', 'Scoped reviewer')
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${account.address}, 31337, 'high_assurance', now()
+        ${randomUUID()}, ${subjectId}, ${account.address}, 31337, 'high_assurance', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role, jurisdiction)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${subjectId}, ${fx.orgA}, 'reviewer', ${jurisdiction})
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role, jurisdiction)
+      VALUES (${randomUUID()}, ${subjectId}, ${fx.orgA}, 'reviewer', ${jurisdiction})
     `;
     return { token: await signIn(app, account), subjectId };
   }
@@ -124,21 +124,21 @@ describeDb("jurisdiction-scoped role bindings", () => {
     const approver = newAccount();
     const approverSubject = randomUUID();
     await fx.sql`
-      INSERT INTO core.subjects (id, tenant_id, kind, display_name)
-      VALUES (${approverSubject}, ${fx.tenantA}, 'person', 'Security approver')
+      INSERT INTO core.subjects (id, kind, display_name)
+      VALUES (${approverSubject}, 'person', 'Security approver')
     `;
     await fx.sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at
       ) VALUES (
-        ${randomUUID()}, ${fx.tenantA}, ${approverSubject}, ${approver.address}, 31337,
+        ${randomUUID()}, ${approverSubject}, ${approver.address}, 31337,
         'high_assurance', now()
       )
     `;
     await syncSubjectAssurance(fx.sql);
     await fx.sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (${randomUUID()}, ${fx.tenantA}, ${approverSubject}, ${fx.orgA}, 'administrator')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (${randomUUID()}, ${approverSubject}, ${fx.orgA}, 'administrator')
     `;
     const approverToken = await signIn(app, approver);
 

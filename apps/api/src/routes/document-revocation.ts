@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { revokeDocumentRequest } from "@mpc/api-contract";
 import { badRequest, conflict, notFound } from "../errors.js";
 import {
@@ -42,7 +42,7 @@ import { toUploadView, uploadProjectId, type UploadRow } from "./uploads.js";
  *   an id that does not exist, so a revoke attempt does not confirm that a document exists.
  */
 
-/** Same answer for "no such id", "another tenant" and "a project you cannot read". */
+/** Same answer for "no such id", "another company's project" and "a project you cannot read". */
 const NOT_FOUND_MESSAGE = "Upload not found";
 
 /**
@@ -61,7 +61,7 @@ export async function registerDocumentRevocationRoutes(
   sql: postgres.Sql,
 ): Promise<void> {
   app.post<{ Params: { uploadId: string } }>("/api/v1/uploads/:uploadId/revoke", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const expectedVersion = requireIfMatch(request);
 
     const parsed = revokeDocumentRequest.safeParse(request.body);
@@ -74,21 +74,21 @@ export async function registerDocumentRevocationRoutes(
 
     // Authorization runs outside the transaction: an idempotent replay returns the stored
     // response as is, so inside it a replay of someone else's key would skip the check.
-    const projectId = await uploadProjectId(sql, tenantId, request.params.uploadId);
+    const projectId = await uploadProjectId(sql, actor, request.params.uploadId);
     if (!canSeeProject(session, projectId)) throw notFound(NOT_FOUND_MESSAGE);
 
     const effectiveRole = assertAuthorized(
       session,
       "source.upload",
-      projectResource(tenantId, projectId),
+      projectResource(projectId),
       sessionFacts(session),
     );
     const subjectId = requireSubject(session);
     const { requestId, asOf, correlationId } = request.context;
     const requestHash = hashRequest(request);
 
-    return withTenant(sql, { tenantId }, (tx) =>
-      withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+    return withActor(sql, actor, (tx) =>
+      withIdempotency(tx, idempotencyKey, requestHash, async () => {
         // Locked so a concurrent revocation or replacement naming this document waits for it.
         // `assertReplaceable` takes the same row lock before marking a new version.
         const [row] = await tx<UploadRow[]>`
@@ -132,7 +132,6 @@ export async function registerDocumentRevocationRoutes(
 
         await recordAudit(tx, {
           effectiveRole,
-          tenantId,
           projectId: row.project_id,
           session,
           command: "upload.revoked",
@@ -152,7 +151,6 @@ export async function registerDocumentRevocationRoutes(
         // 07 §7.4 `evidence.version.revoked`. The reason stays in the audit log; the event
         // carries identifiers only.
         await enqueueEvent(tx, {
-          tenantId,
           eventType: "evidence.version.revoked",
           aggregateId: row.id,
           aggregateVersion: row.version + 1,

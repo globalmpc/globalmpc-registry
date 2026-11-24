@@ -16,16 +16,15 @@ describeDb("authorized catalog manual confirmations", () => {
   let scoped: string;
   let claimType: string;
   let futureType: string;
-  let otherType: string;
 
-  async function catalog(tenantId: string, subjectId: string, approverId: string, future = false, key = `confirmation_${randomUUID().replaceAll("-", "")}`) {
+  async function catalog(subjectId: string, approverId: string, future = false, key = `confirmation_${randomUUID().replaceAll("-", "")}`) {
     const proposal = randomUUID(), id = randomUUID();
     const payload = { claimType: key, displayName: "Synthetic confirmation", description: null, definition: { fields: [] } };
     await fx.sql.begin(async (tx) => {
-      await tx`INSERT INTO core.registry_proposals(id,tenant_id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
-        VALUES(${proposal},${tenantId},'claim_type',${key},1,${tx.json(payload)},'Synthetic test',now() + ${future ? "1 day" : "-1 day"}::interval,${subjectId})`;
-      await tx`INSERT INTO core.claim_types(id,tenant_id,claim_type,catalog_version,display_name,definition,effective_from)
-        SELECT ${id},tenant_id,item_key,1,'Synthetic confirmation',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
+      await tx`INSERT INTO core.registry_proposals(id,kind,item_key,item_version,payload,rationale,effective_from,proposed_by_subject_id)
+        VALUES(${proposal},'claim_type',${key},1,${tx.json(payload)},'Synthetic test',now() + ${future ? "1 day" : "-1 day"}::interval,${subjectId})`;
+      await tx`INSERT INTO core.claim_types(id,claim_type,catalog_version,display_name,definition,effective_from)
+        SELECT ${id},item_key,1,'Synthetic confirmation',payload->'definition',effective_from FROM core.registry_proposals WHERE id=${proposal}`;
       await tx`UPDATE core.registry_proposals SET state='approved',decided_by_subject_id=${approverId},decided_at=now(),decision_reason='Synthetic only',materialized_id=${id},version=2 WHERE id=${proposal}`;
     });
     return key;
@@ -38,12 +37,8 @@ describeDb("authorized catalog manual confirmations", () => {
     operator = await signIn(app, fx.operatorA);
     other = await signIn(app, fx.operatorB);
     scoped = await signIn(app, fx.scopedStewardA);
-    claimType = await catalog(fx.tenantA, fx.operatorSubjectA, fx.reviewerSubjectA);
-    futureType = await catalog(fx.tenantA, fx.operatorSubjectA, fx.reviewerSubjectA, true);
-    const [subjectB] = await fx.sql<{ id: string }[]>`SELECT id FROM core.subjects WHERE tenant_id=${fx.tenantB} LIMIT 1`;
-    const approverB = randomUUID();
-    await fx.sql`INSERT INTO core.subjects(id,tenant_id,kind,display_name) VALUES(${approverB},${fx.tenantB},'person','Synthetic B approver')`;
-    otherType = await catalog(fx.tenantB, subjectB!.id, approverB);
+    claimType = await catalog(fx.operatorSubjectA, fx.reviewerSubjectA);
+    futureType = await catalog(fx.operatorSubjectA, fx.reviewerSubjectA, true);
   });
   afterAll(async () => { await app.close(); await fx.close(); });
 
@@ -78,9 +73,9 @@ describeDb("authorized catalog manual confirmations", () => {
 
   it("never overwrites a legacy gate fact even when the catalog uses its key", async () => {
     const gateKey = "issuer_identified";
-    await catalog(fx.tenantA, fx.operatorSubjectA, fx.reviewerSubjectA, false, gateKey);
-    await fx.sql`INSERT INTO core.project_facts(id,tenant_id,project_id,fact_key,status)
-      VALUES(${randomUUID()},${fx.tenantA},${fx.projectA},${gateKey},'pending')`;
+    await catalog(fx.operatorSubjectA, fx.reviewerSubjectA, false, gateKey);
+    await fx.sql`INSERT INTO core.project_facts(id,project_id,fact_key,status)
+      VALUES(${randomUUID()},${fx.projectA},${gateKey},'pending')`;
     const before = await fx.sql`SELECT * FROM core.project_facts WHERE project_id=${fx.projectA} AND fact_key=${gateKey}`;
     const response = await record(gateKey, "not_applicable");
     expect(response.statusCode, response.body).toBe(200);
@@ -92,17 +87,17 @@ describeDb("authorized catalog manual confirmations", () => {
     expect(await fx.sql`SELECT * FROM core.project_facts WHERE project_id=${fx.projectA} AND fact_key=${gateKey}`).toEqual(before);
   });
 
-  it("rejects unknown, future-effective and other-tenant catalog keys without writing", async () => {
-    for (const key of ["not_a_catalog_key", futureType, otherType]) {
+  it("rejects unknown and future-effective catalog keys without writing", async () => {
+    for (const key of ["not_a_catalog_key", futureType]) {
       const response = await record(key);
       expect(response.statusCode, response.body).toBe(400);
       expect(response.json().code).toBe("FACT_KEY_UNKNOWN");
     }
-    const rows = await fx.sql`SELECT fact_key FROM core.project_fact_versions WHERE project_id=${fx.projectA} AND fact_key=ANY(${[futureType, otherType, "not_a_catalog_key"]}::text[])`;
+    const rows = await fx.sql`SELECT fact_key FROM core.project_fact_versions WHERE project_id=${fx.projectA} AND fact_key=ANY(${[futureType, "not_a_catalog_key"]}::text[])`;
     expect(rows).toHaveLength(0);
   });
 
-  it("retains role, project scope, tenant and evidence authorization", async () => {
+  it("retains role, project scope, reach and evidence authorization", async () => {
     expect((await record(claimType, "pending", 0, operator)).statusCode).toBe(403);
     expect([403, 404]).toContain((await record(claimType, "pending", 0, other)).statusCode);
     expect([403, 404]).toContain((await record(claimType, "pending", 0, scoped, fx.otherProjectA)).statusCode);

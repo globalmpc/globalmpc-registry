@@ -1,8 +1,9 @@
+import type { ActorContext } from "@mpc/db";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type postgres from "postgres";
 import { z } from "zod";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import {
   checkChannelReady,
   detectSchemaDrift,
@@ -317,10 +318,10 @@ function toClaimView(row: ClaimRow, requestId: string, asOf: string) {
  */
 async function claimProjectId(
   sql: postgres.Sql,
-  tenantId: string,
+  actor: ActorContext,
   claimId: string,
 ): Promise<string> {
-  const [row] = await withTenant(sql, { tenantId }, (tx) =>
+  const [row] = await withActor(sql, actor, (tx) =>
     tx<{ project_id: string }[]>`SELECT project_id FROM core.claims WHERE id = ${claimId}`,
   );
   if (!row) throw notFound("Claim not found");
@@ -626,16 +627,16 @@ export async function registerEvidenceRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/source-receipts",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
 
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
-      const { rows, total } = await withTenant(sql, { tenantId }, async (tx) => {
+      const { rows, total } = await withActor(sql, actor, async (tx) => {
         const page = await tx<ReceiptRow[]>`
           SELECT * FROM core.source_receipts
           WHERE project_id = ${request.params.projectId}
@@ -665,7 +666,7 @@ export async function registerEvidenceRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/source-receipts",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       /**
        * Freshness is the server's to compute — REQ-DAPP-049.
@@ -694,19 +695,19 @@ export async function registerEvidenceRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "source.upload",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const id = randomUUID();
           const data = parsed.data;
 
-          // The receipt is bound to a real connection of this tenant and to that connection's
+          // The receipt is bound to a real connection of the Registry and to that connection's
           // authority. Naming another authority would attribute the answer to someone else.
           const [connection] = await tx<
             {
@@ -796,14 +797,14 @@ export async function registerEvidenceRoutes(
 
           const [receipt] = await tx<ReceiptRow[]>`
             INSERT INTO core.source_receipts (
-              id, tenant_id, project_id, connection_id, authority_id, collection_method,
+              id, project_id, connection_id, authority_id, collection_method,
               result, query_basis, endpoint_or_document_ref, authentication_method,
               raw_hash, source_schema_version, adapter_version, normalization_version,
               terms_license, commercial_reuse, disclosure_permission,
               received_at, as_of, effective_at, freshness_status, correlation_id, limitations,
               channel_evidence, first_confirmed_by
             ) VALUES (
-              ${id}, ${tenantId}, ${request.params.projectId}, ${data.connectionId},
+              ${id}, ${request.params.projectId}, ${data.connectionId},
               ${data.authorityId}, ${data.collectionMethod}, ${data.result},
               ${tx.json(data.queryBasis)}, ${data.endpointOrDocumentRef},
               ${data.authenticationMethod}, ${rawHash},
@@ -821,7 +822,6 @@ export async function registerEvidenceRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: request.params.projectId,
             session,
             command: "source_receipt.received",
@@ -834,7 +834,6 @@ export async function registerEvidenceRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "source_receipt.received",
             aggregateId: id,
             aggregateVersion: 1,
@@ -854,16 +853,16 @@ export async function registerEvidenceRoutes(
   app.get<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/claims",
     async (request) => {
-      const { session, tenantId } = requireReadContext(request);
+      const { session, actor } = requireReadContext(request);
 
       assertAuthorized(
         session,
         "evidence.read",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
-      const { rows, total } = await withTenant(sql, { tenantId }, async (tx) => {
+      const { rows, total } = await withActor(sql, actor, async (tx) => {
         const page = await tx<ClaimRow[]>`
           SELECT * FROM core.claims
           WHERE project_id = ${request.params.projectId}
@@ -893,7 +892,7 @@ export async function registerEvidenceRoutes(
   app.post<{ Params: { projectId: string } }>(
     "/api/v1/projects/:projectId/claims",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
 
       const parsed = createClaimSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -905,15 +904,15 @@ export async function registerEvidenceRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "claim.curate",
-        projectResource(tenantId, request.params.projectId),
+        projectResource(request.params.projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           const id = randomUUID();
           const data = parsed.data;
 
@@ -941,11 +940,11 @@ export async function registerEvidenceRoutes(
           // `submitted_by` is what lets 02 §2.4 rule 1 tell whether a reviewer judges their own evidence.
           const [claim] = await tx<ClaimRow[]>`
             INSERT INTO core.claims (
-              id, tenant_id, project_id, claim_type, value_text, unit, as_of,
+              id, project_id, claim_type, value_text, unit, as_of,
               source_coordinate, evidence_tier, verification_state, grade,
               source_receipt_id, submitted_by, catalog_entry_id, catalog_version, structured_values, document_upload_ids
             ) VALUES (
-              ${id}, ${tenantId}, ${request.params.projectId}, ${data.claimType},
+              ${id}, ${request.params.projectId}, ${data.claimType},
               ${data.valueText}, ${data.unit}, ${data.asOf},
               ${tx.json(data.sourceCoordinate)}, ${data.evidenceTier},
               'unreviewed', ${grade}, ${data.sourceReceiptId}, ${session.subjectId ?? null},
@@ -956,7 +955,6 @@ export async function registerEvidenceRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId: request.params.projectId,
             session,
             command: "claim.created",
@@ -969,7 +967,6 @@ export async function registerEvidenceRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "provenance.grade.changed",
             aggregateId: id,
             aggregateVersion: 1,
@@ -987,7 +984,7 @@ export async function registerEvidenceRoutes(
   app.post<{ Params: { claimId: string } }>(
     "/api/v1/claims/:claimId/conflicts",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       // Recording a conflict recomputes the grade and bumps the claim's version.
       // If two people write to the same claim at once, one judgment is overwritten without a trace.
       const expectedVersion = requireIfMatch(request);
@@ -1002,15 +999,15 @@ export async function registerEvidenceRoutes(
       const effectiveRole = assertAuthorized(
         session,
         "claim.curate",
-        projectResource(tenantId, await claimProjectId(sql, tenantId, request.params.claimId)),
+        projectResource(await claimProjectId(sql, actor, request.params.claimId)),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, requestHash, async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, requestHash, async () => {
           // Lock the row, then check the version. Without the lock, another transaction can slip
           // in between the check and the update and void the check.
           const [current] = await tx<{ version: number }[]>`
@@ -1022,8 +1019,8 @@ export async function registerEvidenceRoutes(
           assertVersionMatches(expectedVersion, current.version, "claim");
 
           await tx`
-            INSERT INTO core.claim_conflicts (id, tenant_id, claim_id, conflict_type)
-            VALUES (${randomUUID()}, ${tenantId}, ${request.params.claimId}, ${parsed.data.conflictType})
+            INSERT INTO core.claim_conflicts (id, claim_id, conflict_type)
+            VALUES (${randomUUID()}, ${request.params.claimId}, ${parsed.data.conflictType})
           `;
 
           // A conflict can lower the grade. Recompute immediately —
@@ -1036,7 +1033,6 @@ export async function registerEvidenceRoutes(
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             session,
             command: "claim.conflict.recorded",
             resourceType: "claim",
@@ -1047,7 +1043,6 @@ export async function registerEvidenceRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "provenance.grade.changed",
             aggregateId: request.params.claimId,
             aggregateVersion: claim!.version,
@@ -1072,7 +1067,7 @@ export async function registerEvidenceRoutes(
   app.post<{ Params: { claimId: string } }>(
     "/api/v1/claims/:claimId/versions",
     async (request) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expectedVersion = requireIfMatch(request);
 
       const parsed = correctClaimRequest.safeParse(request.body);
@@ -1086,18 +1081,18 @@ export async function registerEvidenceRoutes(
         throw badRequest("REQUEST_INVALID", "A numeric claim requires a unit");
       }
 
-      const projectId = await claimProjectId(sql, tenantId, request.params.claimId);
+      const projectId = await claimProjectId(sql, actor, request.params.claimId);
       const effectiveRole = assertAuthorized(
         session,
         "claim.curate",
-        projectResource(tenantId, projectId),
+        projectResource(projectId),
         sessionFacts(session),
       );
 
       const { requestId, asOf, correlationId } = request.context;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [previous] = await tx<(ClaimRow & { superseded_by_claim_id: string | null })[]>`
             SELECT * FROM core.claims WHERE id = ${request.params.claimId} FOR UPDATE
           `;
@@ -1132,12 +1127,12 @@ export async function registerEvidenceRoutes(
           await setProvenanceCause(tx, `claim_corrected:${previous.id}`, session.subjectId ?? null);
           const [claim] = await tx<ClaimRow[]>`
             INSERT INTO core.claims (
-              id, tenant_id, project_id, claim_type, value_text, unit, as_of,
+              id, project_id, claim_type, value_text, unit, as_of,
               source_coordinate, evidence_tier, verification_state, grade,
               source_receipt_id, submitted_by, supersedes_claim_id, correction_reason,
               catalog_entry_id, catalog_version, structured_values, document_upload_ids
             ) VALUES (
-              ${id}, ${tenantId}, ${projectId}, ${previous.claim_type},
+              ${id}, ${projectId}, ${previous.claim_type},
               ${data.valueText}, ${data.unit}, ${data.asOf},
               ${tx.json(data.sourceCoordinate)}, ${data.evidenceTier},
               'unreviewed', ${grade}, ${data.sourceReceiptId}, ${session.subjectId ?? null},
@@ -1159,13 +1154,12 @@ export async function registerEvidenceRoutes(
           `;
 
           await tx`
-            INSERT INTO core.lineage_edges (id, tenant_id, from_id, to_id, relation_type)
-            VALUES (${randomUUID()}, ${tenantId}, ${id}, ${previous.id}, 'supersedes')
+            INSERT INTO core.lineage_edges (id, from_id, to_id, relation_type)
+            VALUES (${randomUUID()}, ${id}, ${previous.id}, 'supersedes')
           `;
 
           await recordAudit(tx, {
             effectiveRole,
-            tenantId,
             projectId,
             session,
             command: "claim.corrected",
@@ -1180,7 +1174,6 @@ export async function registerEvidenceRoutes(
           });
 
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "evidence.version.superseded",
             aggregateId: previous.id,
             aggregateVersion: previous.version + 1,
@@ -1189,7 +1182,6 @@ export async function registerEvidenceRoutes(
             correlationId,
           });
           await enqueueEvent(tx, {
-            tenantId,
             eventType: "provenance.grade.changed",
             aggregateId: id,
             aggregateVersion: 1,

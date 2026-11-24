@@ -19,7 +19,7 @@ import { addVirtualAuthenticator, closeMailbox, database, invitationLink, mailed
  * specs that sign with them.
  */
 
-const TENANT_A_ORG = "aaaaaaaa-0000-0000-0000-000000000001";
+const COMPANY_A_ORG = "aaaaaaaa-0000-0000-0000-000000000001";
 
 test.describe.configure({ mode: "serial", timeout: 120_000 });
 test.afterAll(closeMailbox);
@@ -33,8 +33,8 @@ async function invite(page: Page, email: string): Promise<void> {
   // The seeded organisation loads asynchronously; its initial text input is
   // replaced by a select. Wait for the ready control instead of racing that swap.
   const organisation = panel.getByRole("combobox", { name: "Organisation", exact: true });
-  await organisation.selectOption(TENANT_A_ORG);
-  await expect(organisation).toHaveValue(TENANT_A_ORG);
+  await organisation.selectOption(COMPANY_A_ORG);
+  await expect(organisation).toHaveValue(COMPANY_A_ORG);
   await panel.getByLabel("Invitation role", { exact: true }).selectOption("");
   await panel.getByRole("button", { name: "Send invitation" }).click();
   await expect(panel.getByTestId("invitation-list")).toContainText(email);
@@ -150,19 +150,18 @@ test("replacing an operator-verified wallet marks the reviewer role inactive unt
     // writes them (an admin bind no longer exists; the two-person grant is covered elsewhere).
     const session = (await (await me.request.get("/api/v1/auth/session")).json()) as {
       subjectId: string;
-      tenantId: string;
     };
     const old = privateKeyToAccount(generatePrivateKey());
     const sql = database();
     await sql`
-      INSERT INTO core.role_bindings (id, tenant_id, subject_id, organization_id, role)
-      VALUES (gen_random_uuid(), ${session.tenantId}, ${session.subjectId}, ${TENANT_A_ORG}, 'reviewer')
+      INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
+      VALUES (gen_random_uuid(), ${session.subjectId}, ${COMPANY_A_ORG}, 'reviewer')
     `;
     await sql`
       INSERT INTO core.wallet_identities (
-        id, tenant_id, subject_id, wallet_address, chain_id, assurance_level, bound_at, bound_via
+        id, subject_id, wallet_address, chain_id, assurance_level, bound_at, bound_via
       ) VALUES (
-        gen_random_uuid(), ${session.tenantId}, ${session.subjectId}, ${old.address.toLowerCase()}, 31337,
+        gen_random_uuid(), ${session.subjectId}, ${old.address.toLowerCase()}, 31337,
         'high_assurance', now(), 'operator'
       )
     `;

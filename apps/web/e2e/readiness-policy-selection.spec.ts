@@ -9,14 +9,14 @@ const projectId = randomUUID();
 
 test.beforeAll(async () => {
   const sql = database();
-  await sql`INSERT INTO core.projects(id,tenant_id,project_key,name,host_country_iso3,minerals,owner_organization_id)
-    VALUES (${projectId},'e0000000-0000-4000-8000-00000000000a',${`POLICY-${projectId}`},'Policy selection regression','MNG',ARRAY['copper'],'aaaaaaaa-0000-0000-0000-000000000001')`;
+  await sql`INSERT INTO core.projects(id,project_key,name,host_country_iso3,minerals,owner_organization_id)
+    VALUES (${projectId},${`POLICY-${projectId}`},'Policy selection regression','MNG',ARRAY['copper'],'aaaaaaaa-0000-0000-0000-000000000001')`;
   const [source] =
     await sql`SELECT * FROM core.compliance_policy_sets WHERE id='dddddddd-0000-0000-0000-000000000001'`;
   if (!source) throw new Error("Readiness seed policy is missing");
   await sql`INSERT INTO core.compliance_policy_sets
-    (id,tenant_id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
-    VALUES (${policyId},${source.tenant_id},${ruleSetId},${source.rule_set_version},${source.gate_id},${source.jurisdiction_profile},
+    (id,rule_set_id,rule_set_version,gate_id,jurisdiction_profile,effective_from,definition,state)
+    VALUES (${policyId},${ruleSetId},${source.rule_set_version},${source.gate_id},${source.jurisdiction_profile},
       '2000-01-01',${sql.json({ ...source.definition, ruleSetId, effectiveFrom: "2000-01-01T00:00:00Z" })},'effective')`;
 });
 test.afterAll(closeMailbox);

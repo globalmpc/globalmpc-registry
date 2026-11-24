@@ -45,7 +45,6 @@ export interface EvidenceRef {
  */
 export async function assertEvidenceUsable(
   tx: Tx,
-  tenantId: string,
   projectId: string,
   evidence: EvidenceRef,
   status: ConfirmationStatus,
@@ -61,7 +60,7 @@ export async function assertEvidenceUsable(
   if (evidence.kind === "upload") {
     const [row] = await tx<{ state: string }[]>`
       SELECT state FROM core.object_uploads
-      WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND id = ${evidence.id}
+      WHERE project_id = ${projectId} AND id = ${evidence.id}
     `;
     if (!row) throw notInProject(evidence);
     if (row.state === "rejected" || row.state === "scanned_infected") throw refuse(`upload is ${row.state}`);
@@ -72,7 +71,7 @@ export async function assertEvidenceUsable(
   if (evidence.kind === "source_receipt") {
     const [row] = await tx<{ result: SourceResult }[]>`
       SELECT result FROM core.source_receipts
-      WHERE tenant_id = ${tenantId} AND project_id = ${projectId} AND id = ${evidence.id}
+      WHERE project_id = ${projectId} AND id = ${evidence.id}
     `;
     if (!row) throw notInProject(evidence);
     if (confirming && !SOURCE_RESULT_BEHAVIOUR[row.result].permitsCanonicalAcceptance) {
@@ -83,8 +82,8 @@ export async function assertEvidenceUsable(
 
   const [row] = await tx<{ state: string }[]>`
     SELECT a.state FROM core.verification_attestations a
-    JOIN core.verification_cases c ON c.id = a.case_id AND c.tenant_id = a.tenant_id
-    WHERE a.tenant_id = ${tenantId} AND c.project_id = ${projectId} AND a.id = ${evidence.id}
+    JOIN core.verification_cases c ON c.id = a.case_id
+    WHERE c.project_id = ${projectId} AND a.id = ${evidence.id}
   `;
   if (!row) throw notInProject(evidence);
   if (row.state === "revoked" || row.state === "superseded") throw refuse(`attestation is ${row.state}`);
@@ -94,7 +93,7 @@ export async function assertEvidenceUsable(
 }
 
 function notInProject(evidence: EvidenceRef) {
-  // Another tenant's or another project's id reads the same as a missing one.
+  // An out-of-reach project's id reads the same as a missing one.
   return unprocessable("EVIDENCE_NOT_IN_PROJECT", "No such evidence in this project", { evidence });
 }
 
@@ -140,12 +139,12 @@ function toVersionView(row: VersionRow) {
  * The current value is the latest version, not `project_facts`: rows written before versioning
  * existed have no history, and they are shown as unrecorded rather than trusted.
  */
-export async function readFacts(tx: Tx, tenantId: string, projectId: string) {
+export async function readFacts(tx: Tx, projectId: string) {
   const rows = await tx<VersionRow[]>`
     SELECT fact_key AS key, version, status, evidence_kind, evidence_ref, as_of, reason,
            recorded_by_subject_id, recorded_at
     FROM core.project_fact_versions
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+    WHERE project_id = ${projectId}
     ORDER BY fact_key, version DESC
   `;
 
@@ -154,12 +153,12 @@ export async function readFacts(tx: Tx, tenantId: string, projectId: string) {
   // `pending` beside a gate that counts them.
   const unversioned = await tx<{ fact_key: string; status: VersionRow["status"] }[]>`
     SELECT fact_key, status FROM core.project_facts
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+    WHERE project_id = ${projectId}
   `;
 
   const catalog = await tx<{ claim_type: string }[]>`
     SELECT DISTINCT claim_type FROM core.claim_types
-    WHERE tenant_id = ${tenantId} AND core.project_definition_applies(project_id,${projectId}) AND effective_from <= now()
+    WHERE core.project_definition_applies(project_id,${projectId}) AND effective_from <= now()
       AND NOT core.is_reserved_catalog_key(claim_type)
     ORDER BY claim_type
   `;
@@ -206,12 +205,12 @@ interface PartyRow {
   version: number;
 }
 
-export async function readParties(tx: Tx, tenantId: string, projectId: string, partyId?: string) {
+export async function readParties(tx: Tx, projectId: string, partyId?: string) {
   const parties = await tx<PartyRow[]>`
     SELECT id, project_id, party_role, legal_name, organization_id, jurisdiction, status,
            evidence_kind, evidence_ref, as_of, submitted_by_subject_id, submitted_at, version
     FROM core.project_parties
-    WHERE tenant_id = ${tenantId} AND project_id = ${projectId}
+    WHERE project_id = ${projectId}
       AND ${partyId === undefined ? tx`TRUE` : tx`id = ${partyId}`}
     ORDER BY party_role, submitted_at
   `;
@@ -223,7 +222,7 @@ export async function readParties(tx: Tx, tenantId: string, projectId: string, p
           SELECT party_id::text AS key, version, status, evidence_kind, evidence_ref, as_of,
                  reason, recorded_by_subject_id, recorded_at
           FROM core.project_party_versions
-          WHERE tenant_id = ${tenantId} AND party_id = ANY(${ids}::uuid[])
+          WHERE party_id = ANY(${ids}::uuid[])
           ORDER BY version DESC
         `;
 
@@ -244,7 +243,7 @@ export async function readParties(tx: Tx, tenantId: string, projectId: string, p
   }));
 }
 
-export async function readRegistrationRequests(tx: Tx, tenantId: string, projectId: string) {
+export async function readRegistrationRequests(tx: Tx, projectId: string) {
   const rows = await tx<
     {
       id: string;
@@ -260,11 +259,11 @@ export async function readRegistrationRequests(tx: Tx, tenantId: string, project
              SELECT 1
              FROM core.registry_entries e
              JOIN core.registry_entry_versions v ON v.entry_id = e.id
-             WHERE e.tenant_id = r.tenant_id AND e.registry_type = 'project'
+             WHERE e.registry_type = 'project'
                AND e.subject_id = r.project_id AND v.published_at > r.requested_at
            ) AS answered
     FROM core.project_registration_requests r
-    WHERE r.tenant_id = ${tenantId} AND r.project_id = ${projectId}
+    WHERE r.project_id = ${projectId}
     ORDER BY r.requested_at DESC
   `;
   return rows.map((row) => ({
@@ -277,7 +276,7 @@ export async function readRegistrationRequests(tx: Tx, tenantId: string, project
   }));
 }
 
-export async function readStakeholderEvents(tx: Tx, tenantId: string, projectId: string) {
+export async function readStakeholderEvents(tx: Tx, projectId: string) {
   const rows = await tx<
     {
       id: string;
@@ -299,7 +298,7 @@ export async function readStakeholderEvents(tx: Tx, tenantId: string, projectId:
            e.recorded_by_subject_id, e.recorded_at
     FROM core.project_stakeholder_events e
     LEFT JOIN core.project_stakeholder_events s ON s.supersedes_id = e.id
-    WHERE e.tenant_id = ${tenantId} AND e.project_id = ${projectId}
+    WHERE e.project_id = ${projectId}
     ORDER BY e.occurred_on DESC, e.recorded_at DESC
   `;
   return rows.map((row) => ({
@@ -355,7 +354,6 @@ interface ProjectBaseRow {
  */
 export async function listProjectItems(
   tx: Tx,
-  tenantId: string,
   visible: ProjectScope,
   filters: ProjectListFilters,
   subjectId: string | null,
@@ -378,15 +376,14 @@ export async function listProjectItems(
            COALESCE(
              (SELECT v.status::text FROM core.registry_entries e
               JOIN core.registry_entry_versions v ON v.entry_id = e.id
-              WHERE e.tenant_id = p.tenant_id AND e.registry_type = 'project' AND e.subject_id = p.id
+              WHERE e.registry_type = 'project' AND e.subject_id = p.id
               ORDER BY v.created_at DESC, v.version DESC LIMIT 1),
              'none'
            ) AS project_registry_status,
            p.version, p.updated_at
     FROM core.projects p
-    JOIN core.organizations o ON o.id = p.owner_organization_id AND o.tenant_id = p.tenant_id
-    WHERE p.tenant_id = ${tenantId}
-      AND ${visible === "all" ? tx`TRUE` : tx`p.id = ANY(${visible as string[]}::uuid[])`}
+    JOIN core.organizations o ON o.id = p.owner_organization_id
+    WHERE ${visible === "all" ? tx`TRUE` : tx`p.id = ANY(${visible as string[]}::uuid[])`}
       AND ${onlyProjectId === undefined ? tx`TRUE` : tx`p.id = ${onlyProjectId}`}
       AND ${filters.stage === undefined ? tx`TRUE` : tx`p.lifecycle_state = ${filters.stage}`}
       AND ${
@@ -416,17 +413,17 @@ export async function listProjectItems(
 
   const grades = await tx<{ project_id: string; grade: Grade }[]>`
     SELECT project_id, grade FROM core.claims
-    WHERE tenant_id = ${tenantId} AND project_id = ANY(${ids}::uuid[]) AND NOT excluded_by_rule
+    WHERE project_id = ANY(${ids}::uuid[]) AND NOT excluded_by_rule
   `;
   const assessments = await tx<{ project_id: string; status: ReadinessStatus }[]>`
     SELECT DISTINCT ON (project_id, gate_id) project_id, status
     FROM core.compliance_assessments
-    WHERE tenant_id = ${tenantId} AND project_id = ANY(${ids}::uuid[])
+    WHERE project_id = ANY(${ids}::uuid[])
     ORDER BY project_id, gate_id, generated_at DESC
   `;
   const stale = await tx<{ project_id: string; open: number }[]>`
     SELECT project_id, count(*)::int AS open FROM core.evidence_stale_signals
-    WHERE tenant_id = ${tenantId} AND project_id = ANY(${ids}::uuid[]) AND resolution = 'open'
+    WHERE project_id = ANY(${ids}::uuid[]) AND resolution = 'open'
     GROUP BY project_id
   `;
 

@@ -36,10 +36,10 @@ export async function readConnectingRole(
 }
 
 /**
- * Why the role cannot work across tenants, or null if it can.
+ * Why the role cannot work across every project, or null if it can.
  *
- * Every tenant table forces row-level security, owner included. A role that cannot bypass it
- * fails on the first insert, or worse, passes a cross-tenant uniqueness check by seeing nothing.
+ * Every Registry table forces row-level security, owner included. A role that cannot bypass it
+ * fails on the first insert, or worse, passes a Registry-wide uniqueness check by seeing nothing.
  */
 export function rlsBypassProblem(
   role: Pick<ConnectingRole, "rolsuper" | "rolbypassrls"> | undefined,

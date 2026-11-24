@@ -4,7 +4,7 @@ import {
   ACTION_POLICIES,
   BREAK_GLASS_ACTIONS,
   BREAK_GLASS_ROLE,
-  TENANT_WIDE_ROLES,
+  REGISTRY_WIDE_ROLES,
   authorize,
   type AuthorizationContext,
   type ResourceContext,
@@ -21,7 +21,6 @@ import { NINE_STRUCTURES, schemaFields, type StructureLink } from "../src/struct
 const ACTOR: AuthorizationContext = {
   role: "reviewer",
   assuranceLevel: "high_assurance",
-  actorTenantId: "tenant-a",
   actorProjectIds: "all",
   sensitivityClearance: ["public", "restricted"],
   hasRequiredCredential: true,
@@ -30,7 +29,6 @@ const ACTOR: AuthorizationContext = {
 };
 
 const RESOURCE: ResourceContext = {
-  tenantId: "tenant-a",
   projectId: "project-1",
   sensitivity: "restricted",
   state: "active",
@@ -63,16 +61,16 @@ describe("jurisdiction[] condition (02 §2.5)", () => {
 
   it("fails closed when the resource's jurisdiction is unknown", () => {
     const unknown = authorize(POLICY, { ...ACTOR, jurisdictionScope: ["MNG"] }, RESOURCE);
-    const tenantLevel = authorize(
+    const registryLevel = authorize(
       POLICY,
       { ...ACTOR, jurisdictionScope: ["MNG"] },
       { ...RESOURCE, projectId: null, jurisdiction: null },
     );
     expect(unknown).toMatchObject({ allow: false, reason: "JURISDICTION_SCOPE_MISMATCH" });
-    expect(tenantLevel).toMatchObject({ allow: false, reason: "JURISDICTION_SCOPE_MISMATCH" });
+    expect(registryLevel).toMatchObject({ allow: false, reason: "JURISDICTION_SCOPE_MISMATCH" });
   });
 
-  it("lets a scoped binding read a tenant list only when the list is filtered by scope", () => {
+  it("lets a scoped binding read a Registry list only when the list is filtered by scope", () => {
     const list = authorize(
       POLICY,
       { ...ACTOR, jurisdictionScope: ["MNG"] },
@@ -115,7 +113,7 @@ describe("break-glass role (02 §2.6)", () => {
   it("cannot be granted as a standing role and reaches no project", () => {
     // The role grant route refuses roles missing from this table.
     expect(ROLE_MINIMUM_ASSURANCE[BREAK_GLASS_ROLE]).toBeUndefined();
-    expect(TENANT_WIDE_ROLES).not.toContain(BREAK_GLASS_ROLE);
+    expect(REGISTRY_WIDE_ROLES).not.toContain(BREAK_GLASS_ROLE);
   });
 
   it("elevation is managed by security operators only", () => {

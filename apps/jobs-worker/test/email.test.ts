@@ -131,10 +131,12 @@ describe("mail wording", () => {
 
   it("recovery notices name the removed linked sign-ins by provider only (0123)", () => {
     for (const template of NOTICES as (typeof EMAIL_TEMPLATES)[number][]) {
-      const both = renderEmail(template, { removedSignIns: ["google", "microsoft"] }).text;
-      expect(both).toContain("The Google and Microsoft sign-in linked to the account was removed");
-      expect(both).toMatch(/link it again/);
-      expect(renderEmail(template, { removedSignIns: ["microsoft"] }).text).toContain("The Microsoft sign-in");
+      const google = renderEmail(template, { removedSignIns: ["google"] }).text;
+      expect(google).toContain("The Google sign-in linked to the account was removed");
+      expect(google).toMatch(/link it again/);
+      // Microsoft sign-in was removed (0171, which also dropped the name from queued notices).
+      expect(() => renderEmail(template, { removedSignIns: ["microsoft"] })).toThrow();
+      expect(() => renderEmail(template, { removedSignIns: ["google", "microsoft"] })).toThrow();
       // Nothing was linked, or the row predates 0123: no sentence.
       expect(renderEmail(template, { removedSignIns: [] }).text).not.toMatch(/sign-in linked/);
       expect(renderEmail(template, {}).text).not.toMatch(/sign-in linked/);

@@ -8,12 +8,12 @@ import {
   invitationAcceptVerifyRequest,
   normalizeEmail,
 } from "@mpc/api-contract";
-import { withTenant } from "@mpc/db";
+import { withActor } from "@mpc/db";
 import { createAccountCrypto, generateEmailCode, generateInvitationToken } from "../account-crypto.js";
 import { recordAudit } from "../audit.js";
 import type { AppConfig } from "../config.js";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertAuthorized, sessionFacts, tenantResource } from "../plugins/authorize.js";
+import { assertAuthorized, sessionFacts, registryResource } from "../plugins/authorize.js";
 import { hashRequest, withIdempotency } from "../plugins/idempotency.js";
 import { hashToken, newSessionToken, SESSION_TTL_SECONDS } from "../plugins/session-token.js";
 import {
@@ -37,7 +37,7 @@ import {
  * Administrators may authorize a role that takes effect upon verified acceptance.
  *
  * An address that already belongs to a subject, or has an open invitation or email change, in
- * any tenant, cannot be invited. Every such refusal gives the one code
+ * the Registry, cannot be invited. Every such refusal gives the one code
  * `INVITATION_EMAIL_UNAVAILABLE` (D6: the admin learns that the address is in use, not where),
  * and is audited with a keyed hash of the address.
  *
@@ -102,17 +102,16 @@ export async function registerInvitationRoutes(
   // --- Admin --------------------------------------------------------------
 
   app.get("/api/v1/admin/invitations", async (request) => {
-    const { session, tenantId } = requireReadContext(request);
+    const { session, actor } = requireReadContext(request);
     assertAuthorized(
       session,
       "admin.read",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
     const { requestId, asOf } = request.context;
-    const rows = await withTenant(sql, { tenantId }, (tx) => tx<InvitationRow[]>`
+    const rows = await withActor(sql, actor, (tx) => tx<InvitationRow[]>`
       SELECT ${INVITATION_COLUMNS(tx)} FROM core.invitations
-      WHERE tenant_id = ${tenantId}
       ORDER BY created_at DESC
       LIMIT 500
     `);
@@ -120,11 +119,11 @@ export async function registerInvitationRoutes(
   });
 
   app.post("/api/v1/admin/invitations", async (request) => {
-    const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+    const { session, actor, idempotencyKey } = requireMutationContext(request);
     const effectiveRole = assertAuthorized(
       session,
       "admin.invitation.manage",
-      tenantResource(tenantId, { state: "active", statesAllowingAction: ["active"] }),
+      registryResource({ state: "active", statesAllowingAction: ["active"] }),
       sessionFacts(session),
     );
 
@@ -141,8 +140,8 @@ export async function registerInvitationRoutes(
     const link = `${config.webOrigin}/invitations/accept#token=${token}`;
 
     try {
-      return await withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return await withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const { organizationId, access } = parsed.data;
           const create = access ? tx`core.create_role_invitation(
             ${id}, ${organizationId}, ${email}, ${session.sessionId}, ${hashToken(token)}, ${link},
@@ -157,7 +156,6 @@ export async function registerInvitationRoutes(
           if (created!.status === "unavailable") throw new EmailUnavailable();
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: "admin.invitation.created",
@@ -178,9 +176,8 @@ export async function registerInvitationRoutes(
     } catch (caught) {
       if (!(caught instanceof EmailUnavailable)) throw caught;
       // The refusal is recorded in its own transaction: the one that tried has rolled back.
-      await withTenant(sql, { tenantId }, (tx) =>
+      await withActor(sql, actor, (tx) =>
         recordAudit(tx, {
-          tenantId,
           session,
           effectiveRole,
           command: "admin.invitation.refused",
@@ -197,18 +194,18 @@ export async function registerInvitationRoutes(
   app.post<{ Params: { invitationId: string } }>(
     "/api/v1/admin/invitations/:invitationId/revoke",
     async (request, reply) => {
-      const { session, tenantId, idempotencyKey } = requireMutationContext(request);
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
       const effectiveRole = assertAuthorized(
         session,
         "admin.invitation.manage",
-        tenantResource(tenantId, { state: "pending", statesAllowingAction: ["pending"] }),
+        registryResource({ state: "pending", statesAllowingAction: ["pending"] }),
         sessionFacts(session),
       );
       const expected = requireIfMatch(request);
       const { requestId, asOf, correlationId } = request.context;
 
-      return withTenant(sql, { tenantId }, (tx) =>
-        withIdempotency(tx, tenantId, idempotencyKey, hashRequest(request), async () => {
+      return withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const [revoked] = await tx<{ status: string; version: number | null }[]>`
             SELECT * FROM core.revoke_invitation(${request.params.invitationId}, ${session.subjectId}, ${expected})
           `;
@@ -223,7 +220,6 @@ export async function registerInvitationRoutes(
           }
 
           await recordAudit(tx, {
-            tenantId,
             session,
             effectiveRole,
             command: "admin.invitation.revoked",
@@ -257,16 +253,15 @@ export async function registerInvitationRoutes(
     const row = await withMinimumDuration(CODE_ROUTE_MIN_DURATION_MS, () =>
       sql.begin(async (tx) => {
         const [started] = await tx<
-          { status: string; retry_after_seconds: number; tenant_id: string | null; invitation_id: string | null }[]
+          { status: string; retry_after_seconds: number; invitation_id: string | null }[]
         >`
           SELECT * FROM core.start_email_challenge(
             'invitation'::core.email_challenge_purpose, NULL, ${tokenHash}, ${challengeId},
             ${keys.codeHmac("invitation", tokenHash, code)}, ${code}, NULL, ${keys.ipKey(request.clientIp)}
           )
         `;
-        if (started!.status === "issued" && started!.tenant_id !== null) {
+        if (started!.status === "issued" && started!.invitation_id !== null) {
           await recordAccountAudit(tx, request, {
-            tenantId: started!.tenant_id,
             subjectId: null,
             command: "auth.email_code.issued",
             resourceType: "email_challenge",
@@ -302,7 +297,6 @@ export async function registerInvitationRoutes(
           {
             status: string;
             retry_after_seconds: number;
-            tenant_id: string | null;
             subject_id: string | null;
             organization_id: string | null;
             invitation_id: string | null;
@@ -317,11 +311,10 @@ export async function registerInvitationRoutes(
           )
         `;
         const result = accepted!;
-        if (result.tenant_id === null) return result;
+        if (result.invitation_id === null) return result;
 
         if (result.status !== "session_created") {
           await recordAccountAudit(tx, request, {
-            tenantId: result.tenant_id,
             subjectId: null,
             command: "auth.email_code.failed",
             resourceType: "email_challenge",
@@ -331,7 +324,7 @@ export async function registerInvitationRoutes(
           return result;
         }
 
-        await tx`SELECT set_config('app.current_tenant', ${result.tenant_id}, true)`;
+        await tx`SELECT set_config('app.actor_subject_id', ${result.subject_id}, true)`;
         const emailHash = await tx<{ email: string }[]>`
           SELECT email FROM core.invitations WHERE id = ${result.invitation_id}
         `.then(([invitation]) => keys.emailKey(invitation!.email));
@@ -356,7 +349,6 @@ export async function registerInvitationRoutes(
           },
         ]) {
           await recordAccountAudit(tx, request, {
-            tenantId: result.tenant_id,
             subjectId: result.subject_id,
             ...entry,
           });

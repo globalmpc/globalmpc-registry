@@ -3,7 +3,7 @@
  *
  * **Why per attempt:** the seed runs once per Playwright invocation (CI even shares one seed
  * across shards), but a failed test is retried against the same DB. A catalog key is a
- * tenant-wide registry item, so a retry reusing the first attempt's key either hits
+ * Registry-wide item, so a retry reusing the first attempt's key either hits
  * `REGISTRY_PROPOSAL_PENDING` (the first attempt stopped before approval) or approves catalog
  * version 2 (it stopped after), and the retry fails for a reason that has nothing to do with
  * the original failure. A fresh key per attempt keeps every attempt on catalog version 1.

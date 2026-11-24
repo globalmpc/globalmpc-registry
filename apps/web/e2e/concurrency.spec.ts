@@ -23,7 +23,7 @@ test.describe("concurrent edits", () => {
     await operatorPage.getByRole("textbox", { name: "Project key" }).fill(projectKey);
     await operatorPage.getByRole("textbox", { name: "Name" }).fill("For the concurrent edit check");
     await operatorPage.getByRole("textbox", { name: "Minerals (comma separated)" }).fill("copper");
-    // Tenant A also has the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
+    // Company A's operator also may register for the reviewer's own firm (02 §2.4 rule 2), so the owner is chosen.
     await operatorPage.getByRole("combobox", { name: "Owning organization" }).selectOption(
       "aaaaaaaa-0000-0000-0000-000000000001",
     );

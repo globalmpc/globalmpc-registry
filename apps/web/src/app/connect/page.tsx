@@ -19,7 +19,7 @@ const C = AUTH_COPY.signIn;
  * While `/` was the sign-in screen, there was no public entry point explaining the product.
  * Sign-in is one branch of the public surface, not its entrance.
  *
- * Account sign-in (WP6): an emailed code, or Google / Microsoft where configured, then the second
+ * Account sign-in (WP6): an emailed code, or Google where configured, then the second
  * factor on `/auth/mfa`. No wallet is needed to sign in, and none can be used to: a wallet is a
  * signing key, asked for only when something is signed (WP7 removed the transitional wallet
  * sign-in).
@@ -166,7 +166,7 @@ function SignInOptions({ methods, methodsFailed, emailSelected, loadMethods, onS
 }) {
   return (
     <>
-      {methods && (methods.google || methods.microsoft) ? (
+      {methods?.google ? (
         <>
           <ProviderButtons methods={methods} start={{ purpose: "sign_in" }} />
           {!methods.google ? <p className="meta">{C.or}</p> : null}
