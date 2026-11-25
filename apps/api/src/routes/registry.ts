@@ -8,6 +8,7 @@ import { withActor } from "@mpc/db";
 import { hashProjection, verifyMerkleProof, type Hex } from "@mpc/canonical";
 import { checkPublishable, isPublicField, sameChainEnvironment } from "@mpc/domain";
 import {
+  administratorDraftEligibility,
   createProjectAnchorBatchRequest,
   PROOF_DOES_NOT_PROVE,
   PROOF_PROVES,
@@ -16,7 +17,7 @@ import {
   publishRegistryDraftRequest,
 } from "@mpc/api-contract";
 import type { AppConfig } from "../config.js";
-import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
+import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { capRows } from "../list-window.js";
 import {
   assertAuthorized,
@@ -47,7 +48,7 @@ import {
 import {
   type DraftRow,
   lockDraft,
-  draftProjectId,
+  draftPublicationTarget,
   parseBody,
   registerRegistryDraftRoutes,
   safeguardsOf,
@@ -59,9 +60,8 @@ import {
  *
  * What this route guarantees:
  *
- * - Publication takes two steps and two people. A draft (`registry-drafts.ts`) records what
- *   would be published; a Disclosure Approver who did not draft it publishes (DB
- *   `registry_draft_two_person`).
+ * - Publication takes two steps. A reviewer can publish another person’s draft. A scoped
+ *   administrator can publish their own project draft without personal identifiers.
  * - What the server can know is not taken from the client: the evidence snapshot hash, the
  *   commercial-reuse status of the sources, the subject's identity and lifecycle.
  * - Publication is rejected if any field is outside the allowlist (AC-22).
@@ -131,22 +131,19 @@ export async function registerRegistryRoutes(
       // The approver states which revision of the draft they read.
       const expectedDraftVersion = requireIfMatch(request);
 
-      const projectId = await authorizedProjectLookup(session, "registry.publish",
-        () => draftProjectId(sql, actor, request.params.draftId), id => id);
-      const effectiveRole = assertAuthorized(
-        session,
-        "registry.publish",
-        projectResource(projectId, {
-          sensitivity: "public",
-          state: "pending",
-          statesAllowingAction: ["pending"],
-          // Publication requires independence from whoever drafted it (02 §2.8).
-          separationSensitive: true,
-        }),
-        sessionFacts(session),
-      );
-      const body = parseBody(publishRegistryDraftRequest, request.body);
+      const target = await authorizedProjectLookup(session, "registry.publish",
+        () => draftPublicationTarget(sql, actor, request.params.draftId), (value) => value.projectId);
       const publisher = subjectOf(session);
+      const ownDraft = target.proposer === publisher;
+      const resource = projectResource(target.projectId, {
+        sensitivity: "public",
+        state: "pending",
+        statesAllowingAction: ["pending"],
+        separationSensitive: true,
+      });
+      const publisherRole = ownDraft ? "administrator" : "reviewer";
+      const effectiveRole = assertAuthorized(session, "registry.publish", resource, sessionFacts(session), [publisherRole]);
+      const body = parseBody(publishRegistryDraftRequest, request.body);
 
       const { requestId, asOf, correlationId } = request.context;
       const requestHash = hashRequest(request);
@@ -164,17 +161,17 @@ export async function registerRegistryRoutes(
             });
           }
 
-          /**
-           * Two-person rule — 02 §2.8.
-           *
-           * The DB CHECK blocks the same thing, but filtering here first says why. A constraint
-           * violation message does not tell the user what to do next.
-           */
-          if (draft.proposed_by_subject_id === publisher) {
+          const publicationDraft = {
+            administratorPublicationPrepared: draft.administrator_publication_prepared,
+            registryType: draft.registry_type,
+            containsPersonLevelIdentifier: draft.contains_person_level_identifier,
+            proposedAt: draft.proposed_at.toISOString(),
+            projection: draft.projection,
+          };
+          if (ownDraft && administratorDraftEligibility(publicationDraft) !== "eligible") {
             throw unprocessable(
               "REGISTRY_DRAFT_SELF_PUBLICATION",
-              "The person who drafted this cannot publish it",
-              { hint: "Another Disclosure Approver publishes" },
+              "This draft must be published by a different reviewer",
             );
           }
 
@@ -210,6 +207,14 @@ export async function registerRegistryRoutes(
             "registry.publish",
             session.subjectId,
           );
+          if (ownDraft && (subject.projectVersion === undefined || administratorDraftEligibility(publicationDraft, {
+            version: subject.projectVersion, publicationStatus: subject.publishedStatus,
+          }) === "stale")) {
+            throw conflict(
+              "REGISTRY_DRAFT_STALE",
+              "The project changed since this draft was made. Discard it and draft again",
+            );
+          }
           assertDraftStillPublishable(draft, subject, body.personIdentifierPublicationApproved);
           await assertEvidenceLedgerProjection(
             tx, draft.registry_type, subject.projectId, draft.projection, new Date(),
@@ -224,7 +229,9 @@ export async function registerRegistryRoutes(
            * gets to claim.**
            */
           const reviewBundle = await freezeReviewBundle(tx, subject.projectId, draft.registry_type, draft.subject_id, draft.projection);
-          const publishedProjection = { ...draft.projection, status: subject.publishedStatus, reviewCommitment: reviewBundle.commitment };
+          const publishedProjection = {
+            ...draft.projection, status: subject.publishedStatus, reviewCommitment: reviewBundle.commitment,
+          };
           const projectionCheck = publicProjection.safeParse(publishedProjection);
           if (!projectionCheck.success) {
             throw unprocessable(
@@ -300,13 +307,28 @@ export async function registerRegistryRoutes(
             `;
           }
 
-          await tx`
-            UPDATE core.registry_publication_drafts
-            SET state = 'published', decided_by_subject_id = ${publisher}, decided_at = now(),
-                person_identifier_publication_approved = ${body.personIdentifierPublicationApproved},
-                entry_version_id = ${versionId}, version = version + 1
-            WHERE id = ${draft.id}
-          `;
+          if (ownDraft) {
+            await tx`SELECT set_config('app.registry_publication_session_id', ${session.sessionId}, true)`;
+          }
+
+          try {
+            await tx`
+              UPDATE core.registry_publication_drafts
+              SET state = 'published', decided_by_subject_id = ${publisher}, decided_at = now(),
+                  person_identifier_publication_approved = ${body.personIdentifierPublicationApproved},
+                  entry_version_id = ${versionId}, version = version + 1
+              WHERE id = ${draft.id}
+            `;
+          } catch (error) {
+            const failure = error as { code?: string; constraint_name?: string } | null;
+            if (failure?.code === "23514" && failure.constraint_name === "registry_draft_two_person") {
+              throw forbidden(
+                "ADMINISTRATOR_PUBLICATION_NOT_ALLOWED",
+                "This session can no longer publish the draft. Refresh and check your access",
+              );
+            }
+            throw error;
+          }
 
           /**
            * 04 §4.3 — `draft→registered`.
@@ -375,6 +397,7 @@ export async function registerRegistryRoutes(
               publicKey: draft.public_key,
               draftId: draft.id,
               draftedBySubjectId: draft.proposed_by_subject_id,
+              selfPublished: ownDraft,
               personIdentifierPublicationApproved: body.personIdentifierPublicationApproved,
             },
           });
@@ -383,7 +406,7 @@ export async function registerRegistryRoutes(
             eventType: "registry.version.published",
             aggregateId: versionId,
             aggregateVersion: nextVersion,
-            payload: { registryType: draft.registry_type, contentHash },
+            payload: { registryType: draft.registry_type, contentHash, selfPublished: ownDraft },
             correlationId,
           });
 
@@ -1005,7 +1028,7 @@ function assertDraftStillPublishable(
   const publishCheck = checkPublishable({
     fields: Object.keys(draft.projection),
     sensitivity: "public",
-    // Given by this request: a Disclosure Approver who is not the drafter.
+    // The caller either holds independent reviewer authority or passed the restricted project projection check.
     disclosureApproved: true,
     containsPersonLevelIdentifier: draft.contains_person_level_identifier,
     personIdentifierSafeguards: safeguardsOf(

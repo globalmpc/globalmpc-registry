@@ -94,6 +94,8 @@ const SAME_TENANT = [
   "core.disable_own_wallet(uuid,uuid,text,text)",
   "core.revoke_subject_identities(uuid,text)",
   "core.subject_sign_in_providers(uuid[])",
+  // The publication trigger asks only whether the current actor’s exact session is live.
+  "core.registry_publication_session_live(uuid)",
   "core.list_own_sessions(uuid)",
   "core.revoke_own_session(uuid,uuid)",
   "core.subject_suspension_proposal_guard()",

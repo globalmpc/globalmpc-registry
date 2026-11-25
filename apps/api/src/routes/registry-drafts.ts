@@ -10,6 +10,7 @@ import {
   createRegistryDraftRequest,
   publicProjection,
   registryDraftListQuery,
+  administratorProjectProjection,
   rejectRegistryDraftRequest,
 } from "@mpc/api-contract";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
@@ -38,20 +39,21 @@ import {
  * The first of two steps. A draft is checked against everything the server knows — the
  * allowlist, the subject's identity and lifecycle, the evidence snapshot, the source terms —
  * and recorded. It is not public, not anchorable, and not a registry version. Publication
- * (`registry.ts`) is done by a different person.
+ * (`registry.ts`) applies an independent reviewer or the restricted administrator path.
  */
 
 /** Immutable draft subject resolves scope before an idempotency response can be replayed. */
-export async function draftProjectId(sql: postgres.Sql, actor: ActorContext, draftId: string): Promise<string> {
-  const [row] = await withActor(sql, actor, tx => tx<{project_id: string | null}[]>`
-    SELECT CASE WHEN d.registry_type='project' THEN d.subject_id ELSE vc.project_id END AS project_id
+export async function draftPublicationTarget(sql: postgres.Sql, actor: ActorContext, draftId: string) {
+  type Target = { project_id: string | null; proposed_by_subject_id: string };
+  const [row] = await withActor(sql, actor, tx => tx<Target[]>`
+    SELECT CASE WHEN d.registry_type='project' THEN d.subject_id ELSE vc.project_id END AS project_id, d.proposed_by_subject_id
     FROM core.registry_publication_drafts d
     LEFT JOIN core.verification_attestations a ON d.registry_type='verification' AND a.id=d.subject_id
     LEFT JOIN core.verification_cases vc ON vc.id=a.case_id
     WHERE d.id=${draftId}
   `);
   if (!row?.project_id) throw notFound("Draft not found");
-  return row.project_id;
+  return { projectId: row.project_id, proposer: row.proposed_by_subject_id };
 }
 
 export interface DraftRow {
@@ -65,6 +67,7 @@ export interface DraftRow {
   published_as_commercial_basis: boolean;
   policy_version: string;
   schema_version: string;
+  administrator_publication_prepared: boolean;
   contains_person_level_identifier: boolean;
   lawful_basis: string | null;
   purpose: string | null;
@@ -121,6 +124,7 @@ export function toDraft(row: DraftRow) {
     publishedAsCommercialBasis: row.published_as_commercial_basis,
     policyVersion: row.policy_version,
     schemaVersion: row.schema_version,
+    administratorPublicationPrepared: row.administrator_publication_prepared,
     containsPersonLevelIdentifier: row.contains_person_level_identifier,
     personIdentifierRecord: row.contains_person_level_identifier
       ? {
@@ -290,6 +294,25 @@ export async function registerRegistryDraftRoutes(
           throw conflict("REGISTRY_KEY_TAKEN", "This public key belongs to another subject");
         }
 
+        const proposedAt = new Date(asOf);
+        let projection = data.projection;
+        if (data.prepareAdministratorPublication) {
+          if (registryType !== "project" || data.containsPersonLevelIdentifier || subject.projectVersion === undefined) {
+            throw unprocessable("ADMINISTRATOR_PROJECTION_INELIGIBLE", "This draft requires independent publication");
+          }
+          const prepared = administratorProjectProjection.safeParse({
+            ...projection,
+            status: subject.publishedStatus,
+            version: String(subject.projectVersion),
+            asOf: proposedAt.toISOString(),
+            sourceAge: null,
+            staleStatus: "unknown",
+          });
+          if (!prepared.success) {
+            throw unprocessable("ADMINISTRATOR_PROJECTION_INELIGIBLE", "This projection requires independent publication");
+          }
+          projection = prepared.data;
+        }
         const id = randomUUID();
         try {
           await tx`
@@ -298,15 +321,15 @@ export async function registerRegistryDraftRoutes(
               source_snapshot_hash, commercial_reuse, published_as_commercial_basis,
               policy_version, schema_version, contains_person_level_identifier,
               lawful_basis, purpose, retention, irreversibility_acknowledged_at,
-              proposed_by_subject_id
+              proposed_by_subject_id, proposed_at, administrator_publication_prepared
             ) VALUES (
               ${id}, ${registryType}, ${data.subjectId}, ${data.publicKey},
-              ${tx.json(data.projection as never)}, ${subject.sourceSnapshotHash},
+              ${tx.json(projection as never)}, ${subject.sourceSnapshotHash},
               ${subject.commercialReuse}, ${data.publishedAsCommercialBasis},
               ${data.policyVersion}, ${data.schemaVersion}, ${data.containsPersonLevelIdentifier},
               ${record?.lawfulBasis ?? null}, ${record?.purpose ?? null},
               ${record?.retention ?? null}, ${record ? new Date() : null},
-              ${proposer}
+              ${proposer}, ${proposedAt}, ${data.prepareAdministratorPublication}
             )
           `;
         } catch (caught) {
@@ -381,20 +404,16 @@ export async function registerRegistryDraftRoutes(
     async (request, reply) => {
       const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
-      const projectId = await authorizedProjectLookup(session, "registry.publish",
-        () => draftProjectId(sql, actor, request.params.draftId), id => id);
-      const effectiveRole = assertAuthorized(
-        session,
-        "registry.publish",
-        projectResource(projectId, {
-          sensitivity: "public",
-          state: "pending",
-          statesAllowingAction: ["pending"],
-        }),
-        sessionFacts(session),
-      );
-      const body = parseBody(rejectRegistryDraftRequest, request.body);
+      const target = await authorizedProjectLookup(session, "registry.draft.reject",
+        () => draftPublicationTarget(sql, actor, request.params.draftId), (value) => value.projectId);
       const decider = subjectOf(session);
+      const resource = projectResource(target.projectId, {
+        sensitivity: "public", state: "pending", statesAllowingAction: ["pending"],
+      });
+      // Prefer administrator authority on an own draft, but allow an in-scope reviewer to reject it.
+      const eligibleRoles = target.proposer === decider ? ["administrator", "reviewer"] : ["reviewer"];
+      const effectiveRole = assertAuthorized(session, "registry.draft.reject", resource, sessionFacts(session), eligibleRoles);
+      const body = parseBody(rejectRegistryDraftRequest, request.body);
       const { requestId, asOf, correlationId } = request.context;
 
       return withActor(sql, actor, (tx) =>
@@ -408,7 +427,6 @@ export async function registerRegistryDraftRoutes(
             });
           }
 
-          // Turning a draft down publishes nothing, so it needs no second person.
           await tx`
             UPDATE core.registry_publication_drafts
             SET state = 'rejected', decided_by_subject_id = ${decider}, decided_at = now(),
@@ -447,7 +465,7 @@ function assertDraftPublishable(
     fields: Object.keys(data.projection),
     // The projection carries only allowlisted fields, and its identity fields are
     // checked against the record below. Per-field sensitivity of free-text fields such as
-    // `claimSummary` is not derived yet; the approver reads them before publishing.
+    // `claimSummary` requires independent review at publication.
     sensitivity: "public",
     disclosureApproved: true,
     containsPersonLevelIdentifier: data.containsPersonLevelIdentifier,

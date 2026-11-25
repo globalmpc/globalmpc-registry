@@ -815,7 +815,7 @@ export const ROUTES: readonly RouteDefinition[] = [
   {
     method: "post",
     path: "/api/v1/registry-entries/drafts/{draftId}/publish",
-    summary: "Publish a draft — by a Disclosure Approver who did not draft it",
+    summary: "Publish a draft as an independent reviewer or the administrator who drafted an eligible project record",
     operationId: "publishRegistryVersion",
     public: false,
     mutation: true,
@@ -834,7 +834,7 @@ export const ROUTES: readonly RouteDefinition[] = [
     public: false,
     mutation: true,
     requiresIfMatch: true,
-    action: "registry.publish",
+    action: "registry.draft.reject",
     implemented: true,
     requestSchema: rejectRegistryDraftRequest,
     responseSchema: registryPublicationDraft,

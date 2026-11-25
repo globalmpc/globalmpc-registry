@@ -554,12 +554,11 @@ const ROLE_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
     allowedRoles: ["reviewer"],
   },
   /**
-   * Registry publication — two steps, two people (02 §2.8, 07 §7.2).
+   * Registry publication has separate draft and publish steps (02 §2.8, 07 §7.2).
    *
    * Drafting checks and records a projection; nothing is public yet. Publishing makes it
-   * public and anchorable, so it is the step that needs the Disclosure Approver. The DB rejects
-   * publication by the person who drafted (`registry_draft_two_person`), whatever roles they
-   * hold.
+   * public and anchorable. The DB rejects
+   * self-publication except for eligible project drafts published by their administrator drafter.
    */
   "registry.draft": {
     action: "registry.draft",
@@ -567,8 +566,12 @@ const ROLE_ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = {
   },
   "registry.publish": {
     action: "registry.publish",
-    secondPerson: "drafter ≠ publisher (registry_draft_two_person, 0056)",
-    allowedRoles: DISCLOSURE_APPROVER_ROLES,
+    secondPerson: "drafter ≠ publisher unless a scoped administrator publishes their own eligible project draft",
+    allowedRoles: ["reviewer", "administrator"],
+  },
+  "registry.draft.reject": {
+    action: "registry.draft.reject",
+    allowedRoles: [...DISCLOSURE_APPROVER_ROLES, "administrator"],
   },
   "registry.revoke": {
     action: "registry.revoke",
@@ -825,7 +828,7 @@ export const ACTION_POLICIES: Readonly<Record<string, ActionPolicy>> = Object.fr
     ...policy,
     ...((/^(admin\.|review_registry\.|credential\.status\.|connection\.|break_glass\.)/.test(action) && action !== "break_glass.quarantine") || ["document.rule.manage", "authority.register", "authority.review", "audit.read", "audit.export", "anchor.read", "anchor.submit"].includes(action)
       ? { requiresRegistryScope: true } : {}),
-    ...(["registry.draft", "registry.publish", "registry.revoke", "anchor.batch.create"].includes(action)
+    ...(["registry.draft", "registry.draft.reject", "registry.publish", "registry.revoke", "anchor.batch.create"].includes(action)
       ? { requiresResourceScope: true } : {}),
   }]),
 );
