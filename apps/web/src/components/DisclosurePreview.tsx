@@ -37,7 +37,7 @@ export function DisclosurePreview({
           {display(projection.hostCountry)}
         </p>
         <p className="meta">
-          Source as of {display(projection.asOf)} · Project version{" "}
+          Record as of {display(projection.asOf)} · Project version{" "}
           {display(projection.version)}
         </p>
       </header>

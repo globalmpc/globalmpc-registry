@@ -268,26 +268,22 @@ test.describe("golden path", () => {
     await expect(recorded).toContainText("Re-assess once the jurisdiction profile");
     await expect(recorded).toContainText("not a legal approval");
 
-    // --- 7. Draft (administrator) → publish (reviewer) → anchor --
-    // 02 §2.8: the person who drafts a public projection does not publish it.
+    // --- 7. One administrator drafts, publishes, and queues the anchor --
     await connectAs(page, "Operator A");
     await page.goto(`/w/projects/${projectId}/publication`);
     await page.getByTestId("draft").click();
-    await expect(page.getByTestId("pending-draft")).toContainText("waiting for a Disclosure Approver");
-    await page.getByTestId("irreversibility-ack").check();
-    await expect(page.getByTestId("publish")).toBeDisabled();
-
+    await expect(page.getByTestId("pending-draft")).toBeVisible();
+    await expect(page.getByText(/Waiting for an independent reviewer/)).toBeVisible();
     await connectAs(page, "Publisher A");
     await page.goto(`/w/projects/${projectId}/publication`);
-    await expect(page.getByTestId("pending-draft")).toBeVisible();
-    // The publish button cannot be pressed without acknowledging irreversibility.
+    await page.getByRole("button", { name: "Approve this draft for public disclosure" }).click();
+    await expect(page.getByRole("button", { name: "Approve this draft for public disclosure" })).toHaveCount(0);
+    await connectAs(page, "Operator A");
+    await page.goto(`/w/projects/${projectId}/publication`);
+    await expect(page.getByTestId("pending-draft")).toContainText("Ready to publish");
     await expect(page.getByTestId("publish")).toBeDisabled();
     await page.getByTestId("irreversibility-ack").check();
     await page.getByTestId("publish").click();
-    await expect(page.getByTestId("published-result")).toContainText(projectKey);
-
-    await connectAs(page, "Operator A");
-    await page.goto(`/w/projects/${projectId}/publication`);
     await expect(page.getByTestId("published-result")).toContainText(projectKey);
     await page.getByTestId("anchor").click();
     // A created batch is not yet on chain.
