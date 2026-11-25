@@ -56,7 +56,7 @@ describeDb("additive development fixtures", () => {
     const restrictedSql = postgres(process.env["DATABASE_URL"]!, { connection: { role: restricted }, onnotice: () => {} });
     try {
       const before = await fx.sql`SELECT count(*)::int AS n FROM core.projects`;
-      await expect(seedDevDemo(restrictedSql, store, options)).rejects.toThrow(/bypasses row-level security/);
+      await expect(seedDevDemo(restrictedSql, store, options)).rejects.toThrow(/row-level security does not apply to/);
       expect(await fx.sql`SELECT count(*)::int AS n FROM core.projects`).toEqual(before);
     } finally {
       await restrictedSql.end();

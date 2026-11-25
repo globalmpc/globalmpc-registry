@@ -9,10 +9,11 @@ const describeDb = url ? describe : describe.skip;
 /**
  * 0169 on a populated database.
  *
- * A managed migration owner that owns every object but is neither superuser nor BYPASSRLS is
+ * A managed migration owner that owns every object but that row-level security still filters is
  * refused before anything changes: the actor helpers and the role-scope rename need to see every
- * row, as the definer functions it owns already do (0131). An owner that bypasses migrates, and
- * every row survives with its scope renamed.
+ * row, as the definer functions it owns already do (0131). The check is by behaviour, not role
+ * attribute: an owner with neither superuser nor BYPASSRLS that RLS does not apply to (a managed
+ * master role, or tables without FORCE) migrates, and every row survives with its scope renamed.
  */
 describeDb("0169: tenant removal on a populated database", () => {
   const stamp = `${process.pid}_${Date.now()}`;
@@ -76,21 +77,37 @@ describeDb("0169: tenant removal on a populated database", () => {
     }
   });
 
-  it("refuses an owner that is neither superuser nor BYPASSRLS, before changing anything", async () => {
+  it("refuses an owner that row-level security still filters, before changing anything", async () => {
     const [role] = await sql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = ${owner}`;
     expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
     await sql.unsafe(`SET ROLE ${owner}`);
     try {
-      await expect(runMigrations(sql, listMigrations())).rejects.toThrow(/TENANT_REMOVAL_REQUIRES_BYPASSRLS/);
+      await expect(runMigrations(sql, listMigrations())).rejects.toThrow(
+        /TENANT_REMOVAL_REQUIRES_BYPASSRLS: row-level security still applies to m0169_owner_\S+ \(superuser f, bypassrls f, member of mpc_app, mpc_worker\) on \d+ table\(s\): (audit|chain|core)\./,
+      );
     } finally {
       await sql.unsafe("RESET ROLE");
     }
     expect(await sql`SELECT name FROM core.schema_migrations WHERE name >= '0169'`).toHaveLength(0);
     expect(await sql`SELECT scope_kind FROM core.role_bindings WHERE id = ${registryBinding}`).toEqual([{ scope_kind: "tenant" }]);
-  });
+  }, 120_000);
 
-  it("migrates under an owner that bypasses, renaming every tenant-wide scope and keeping every row", async () => {
-    await runMigrations(sql, listMigrations());
+  it("migrates under an owner without superuser or BYPASSRLS that RLS does not apply to", async () => {
+    // What the develop Aurora `postgres` shows: neither attribute, yet its definers read with
+    // row_security off. Here the owner is exempt because its tables are not FORCE.
+    const forced = await sql<{ name: string }[]>`
+      SELECT c.oid::regclass::text AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname IN ('core', 'chain', 'audit') AND c.relkind IN ('r', 'p') AND c.relforcerowsecurity`;
+    expect(forced.length).toBeGreaterThan(0);
+    for (const t of forced) await sql.unsafe(`ALTER TABLE ${t.name} NO FORCE ROW LEVEL SECURITY`);
+    const [role] = await sql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = ${owner}`;
+    expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+    await sql.unsafe(`SET ROLE ${owner}`);
+    try {
+      await runMigrations(sql, listMigrations());
+    } finally {
+      await sql.unsafe("RESET ROLE");
+    }
     const rows = await sql<{ id: string; scope_kind: string }[]>`
       SELECT id, scope_kind FROM core.role_bindings WHERE subject_id = ${person} ORDER BY id`;
     expect(Object.fromEntries(rows.map((row) => [row.id, row.scope_kind]))).toEqual({
@@ -99,5 +116,5 @@ describeDb("0169: tenant removal on a populated database", () => {
     expect(await sql`SELECT id FROM core.projects WHERE id = ${project} AND owner_organization_id = ${org}`).toHaveLength(1);
     expect(await sql`SELECT id FROM core.subjects WHERE id = ${person}`).toHaveLength(1);
     expect(await sql`SELECT to_regclass('core.tenants') AS t`).toEqual([{ t: null }]);
-  });
+  }, 120_000);
 });

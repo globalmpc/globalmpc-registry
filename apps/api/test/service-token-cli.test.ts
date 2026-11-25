@@ -19,6 +19,12 @@ const s = vi.hoisted(() => ({
   generateServiceTokenValue: vi.fn(),
 }));
 vi.mock("postgres", () => ({ default: () => s.sql }));
+// The behavioural probe itself runs against Postgres in packages/db/test/rls-exemption.test.ts.
+vi.mock("@mpc/db", () => ({
+  rlsExemptionProblem: async () => s.privileges.rolsuper || s.privileges.rolbypassrls
+    ? null
+    : "Row-level security still applies to the connecting role (it is neither exempt nor superuser or BYPASSRLS)",
+}));
 vi.mock("@mpc/config", () => ({ resolveSecret: (_name: string, value: string) => value }));
 vi.mock("../src/service-tokens.js", () => ({
   // The CLI explains only its own refusals, so the class identity is what matters here.

@@ -426,6 +426,45 @@ describeDb("Google sign-in (WP4)", { timeout: 30_000 }, () => {
       expect(row!.secret_ciphertext.toString("utf8")).not.toContain(url.searchParams.get("nonce")!);
     });
 
+    it("returns Google to the configured alias and rejects other browser origins", async () => {
+      const canonical = "https://registry.example.test";
+      const alias = "https://demo.example.test";
+      const multiHost = await buildServer(loadConfig({
+        ...oidcEnv(),
+        WEB_ORIGIN: canonical,
+        WEB_ORIGINS: `${canonical},${alias}`,
+      }), fx.appSql, { oidcFetch: idp.fetch });
+      try {
+        const send = (step: "start" | "callback", origin: string, payload: object) => multiHost.inject({
+          method: "POST",
+          url: `/api/v1/auth/oidc/google/${step}`,
+          headers: { origin },
+          payload: payload as never,
+          remoteAddress: freshIp(),
+        });
+        const unknown = await send("start", "https://unknown.example.test", { purpose: "sign_in" });
+        expect(unknown.json().code).toBe("OIDC_STATE_INVALID");
+
+        for (const callbackOrigin of [canonical, alias]) {
+          const response = await send("start", alias, { purpose: "sign_in" });
+          expect(response.statusCode, response.body).toBe(200);
+          const started = response.json<Started>();
+          expect(new URL(started.authorizationUrl).searchParams.get("redirect_uri")).toBe(
+            `${alias}/auth/oidc/google/callback`,
+          );
+          const { code, state } = idp.authorize(started.authorizationUrl, { claims: { sub } });
+          const finished = await send("callback", callbackOrigin, { code, state, browserBinding: started.browserBinding });
+          if (callbackOrigin === alias) {
+            expect(finished.statusCode, finished.body).toBe(200);
+          } else {
+            expect(finished.json().code).toBe("OIDC_STATE_INVALID");
+          }
+        }
+      } finally {
+        await multiHost.close();
+      }
+    });
+
     it("refuses an unknown state, and a state used once (replay)", async () => {
       const started = await startSignIn("google");
       const { code, state } = idp.authorize(started.authorizationUrl, { claims: { sub } });

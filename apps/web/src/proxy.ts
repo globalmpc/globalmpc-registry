@@ -4,6 +4,7 @@ import {
   cookieMode,
   cookieOptions,
   crossSiteRefusal,
+  expectedOrigin,
   pathRefusal,
   decodeOidcBinding,
   encodeOidcBinding,
@@ -107,7 +108,8 @@ export async function proxy(request: NextRequest): Promise<Response> {
   const ownBearer = request.headers.has("authorization");
   const ridesOnCookie = !ownBearer && Boolean(cookieToken);
   const oidc = oidcRoute(pathname);
-  const signInRoute = SESSION_ISSUING_ROUTES.has(pathname) || oidc !== null;
+  const issuesSession = SESSION_ISSUING_ROUTES.has(pathname);
+  const signInRoute = issuesSession || oidc !== null;
 
   const refusal = crossSiteRefusal(request, ridesOnCookie || signInRoute);
   if (refusal) {
@@ -119,26 +121,53 @@ export async function proxy(request: NextRequest): Promise<Response> {
   const headers = edgeRequestHeaders(request, process.env.EDGE_PROXY_SECRET);
   // The API reads no cookie. Forwarding them would only copy the session token into its logs.
   headers.delete("cookie");
+  if (oidc && process.env.WEB_ORIGINS) {
+    const origin = expectedOrigin(request);
+    if (origin) headers.set("origin", origin);
+  }
   if (ridesOnCookie) headers.set("authorization", `Bearer ${cookieToken}`);
 
   if (request.method.toUpperCase() === "POST") {
-    if (SESSION_ISSUING_ROUTES.has(pathname)) {
-      return issueSession(mode, await forward(apiOrigin, pathname, headers, await request.text()));
-    }
-    if (oidc && oidc.step !== "callback") {
-      return startOidc(request, apiOrigin, mode, headers, { provider: oidc.provider, step: oidc.step });
-    }
-    if (oidc) return completeOidc(request, apiOrigin, mode, headers, oidc.provider);
-    if (pathname === "/api/v1/auth/logout") return logout(apiOrigin, mode, headers);
-    const ending = sessionEndingRoute(pathname);
-    // Only a request that rode on the cookie can have ended the cookie's session; a client with
-    // its own bearer ended that bearer's, and the cookie (if any) is left alone.
-    if (ending && ridesOnCookie) {
-      return endingSession(mode, ending, await forward(apiOrigin, pathname, headers, await request.text()));
-    }
+    const response = await handleSessionPost(request, apiOrigin, mode, headers, {
+      issuesSession,
+      oidc,
+      ridesOnCookie,
+    });
+    if (response) return response;
   }
 
   return NextResponse.rewrite(new URL(`${pathname}${search}`, apiOrigin), { request: { headers } });
+}
+
+/** Handle POST routes whose upstream response can issue or clear a browser cookie. */
+async function handleSessionPost(
+  request: NextRequest,
+  apiOrigin: string,
+  mode: CookieMode,
+  headers: Headers,
+  route: {
+    readonly issuesSession: boolean;
+    readonly oidc: ReturnType<typeof oidcRoute>;
+    readonly ridesOnCookie: boolean;
+  },
+): Promise<Response | null> {
+  const { pathname } = request.nextUrl;
+  if (route.issuesSession) {
+    return issueSession(mode, await forward(apiOrigin, pathname, headers, await request.text()));
+  }
+
+  const { oidc } = route;
+  if (oidc) {
+    if (oidc.step === "callback") return completeOidc(request, apiOrigin, mode, headers, oidc.provider);
+    return startOidc(request, apiOrigin, mode, headers, { provider: oidc.provider, step: oidc.step });
+  }
+
+  if (pathname === "/api/v1/auth/logout") return logout(apiOrigin, mode, headers);
+
+  // An explicit bearer acts on its own session, so it cannot clear the browser's cookie here.
+  const ending = route.ridesOnCookie ? sessionEndingRoute(pathname) : null;
+  if (!ending) return null;
+  return endingSession(mode, ending, await forward(apiOrigin, pathname, headers, await request.text()));
 }
 
 interface Upstream {

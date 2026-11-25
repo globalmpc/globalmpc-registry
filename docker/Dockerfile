@@ -17,13 +17,18 @@
 #
 # Alpine (musl) keeps the base small. The lockfile already carries the `*-musl` optional
 # binaries (Next SWC, sharp, rollup, esbuild); a new native dependency must ship one too.
-FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS deps
+FROM node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS deps
 
 WORKDIR /repo
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 # The pnpm version is pinned by packageManager in package.json. If corepack fetched the latest,
 # behavior would differ from local and show up only in this image.
-RUN corepack enable pnpm && corepack prepare pnpm@10.33.0 --activate
+# Node 25+ images no longer ship corepack. Install it from the registry tarball checked against
+# its published sha512 (npm dist.integrity), without running package scripts.
+RUN wget -q -O /tmp/corepack.tgz https://registry.npmjs.org/corepack/-/corepack-0.36.0.tgz \
+    && echo "4a2889b01859a9d0623c74c497a393dec012ad1aca21c61340cb15197c7a104fe033c5853306237885fc4edf11894e08bf627a2db4fc2a919f08eb01a51581ff  /tmp/corepack.tgz" | sha512sum -c - \
+    && npm install -g --ignore-scripts /tmp/corepack.tgz && rm /tmp/corepack.tgz \
+    && corepack enable pnpm && corepack prepare pnpm@10.33.0 --activate
 
 # Copy the whole source tree, then install.
 #
@@ -55,7 +60,7 @@ FROM deps AS web-build
 RUN pnpm --filter @mpc/web build
 
 # Keep the LGTM SDK pinned and isolated from pnpm workspace dependencies.
-FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS otel
+FROM node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS otel
 WORKDIR /opt/otel
 COPY etc/otel/package.json etc/otel/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
@@ -64,7 +69,7 @@ RUN chmod -R a+rX,go-w /opt/otel && chmod 755 /opt/otel/otel-wrapper.sh \
  && node --check runtime.cjs && node --check otel-console-bridge.cjs && node --check register.mjs && sh -n otel-wrapper.sh
 
 # --- Runtime --------------------------------------------------------------------
-FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS runtime
+FROM node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS runtime
 
 WORKDIR /repo
 ENV NODE_ENV=production

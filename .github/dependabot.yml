@@ -8,6 +8,10 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # Node's types follow the runtime's major (docker/ images, CI), not the newest release.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   # This npm runtime is installed independently from the pnpm workspace.
   - package-ecosystem: npm
