@@ -79,7 +79,11 @@ BNB Smart Chain is set as the target network in these files:
 
 `scan_service` and `cre_reporter` are service-only identities. Anonymous public
 reading needs no grant; temporary break-glass access is separate. Role membership
-never replaces credentials, review assignment, project scope or person separation.
+does not replace credentials, review assignment or project scope. An administrator may
+publish their own project draft prepared for administrator publication when it contains no
+personal identifiers, has independent approval for the exact draft, and passes the existing publication checks. This applies to both
+Registry-wide administrators and administrators whose grant covers the project. Other
+publication decisions require an independent reviewer.
 Migration137 preserves live project reach and historical audit/signature data;
 unapproved requests for old roles are withdrawn and must be proposed again.
 An invited person signs in with a supported provider or a verified email code.

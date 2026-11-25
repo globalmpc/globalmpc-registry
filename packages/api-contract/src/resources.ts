@@ -1203,6 +1203,44 @@ export const publicProjection = z
   })
   .strict();
 
+/** Self-publication uses checked project identity, generated evidence, and fixed disclosure copy. */
+export const PROJECT_PUBLICATION_LIMITATIONS = [
+  "This record is the result of checking submitted material; it is not a judgement on commercial viability or completeness of rights",
+  "It does not include site due diligence",
+] as const;
+
+export const PROJECT_PUBLICATION_DISCLAIMERS = ["DISC-VERIFICATION-SCOPE", "DISC-NO-GUARANTEE"] as const;
+
+export const administratorProjectProjection = publicProjection.pick({
+  stableId: true, projectKey: true, projectName: true, hostCountry: true, mineral: true,
+  status: true, version: true, asOf: true, sourceAge: true, staleStatus: true,
+  limitations: true, legalEffect: true, disclaimerCodes: true, evidenceLedger: true,
+}).extend({
+  version: z.string().regex(/^\d+$/),
+  sourceAge: z.null(),
+  staleStatus: z.literal("unknown"),
+  limitations: z.tuple([z.literal(PROJECT_PUBLICATION_LIMITATIONS[0]), z.literal(PROJECT_PUBLICATION_LIMITATIONS[1])]),
+  disclaimerCodes: z.tuple([z.literal(PROJECT_PUBLICATION_DISCLAIMERS[0]), z.literal(PROJECT_PUBLICATION_DISCLAIMERS[1])]),
+}).strict();
+
+export function administratorDraftEligibility(
+  draft: {
+    readonly administratorPublicationPrepared: boolean;
+    readonly registryType: string;
+    readonly containsPersonLevelIdentifier: boolean;
+    readonly proposedAt: string;
+    readonly projection: Readonly<Record<string, unknown>>;
+  },
+  project?: { readonly version: number; readonly publicationStatus: string },
+): "eligible" | "ineligible" | "stale" {
+  if (!draft.administratorPublicationPrepared || draft.registryType !== "project"
+    || draft.containsPersonLevelIdentifier || draft.projection["asOf"] !== draft.proposedAt
+    || !administratorProjectProjection.safeParse(draft.projection).success) return "ineligible";
+  if (project && (draft.projection["version"] !== String(project.version)
+    || draft.projection["status"] !== project.publicationStatus)) return "stale";
+  return "eligible";
+}
+
 /**
  * Inclusion proof — AC-23.
  *
@@ -2025,6 +2063,7 @@ export const createRegistryDraftRequest = z
     sourceSnapshotHash: hex32.optional(),
     policyVersion: z.string().min(1).max(100),
     schemaVersion: z.string().min(1).max(100),
+    prepareAdministratorPublication: z.boolean().default(false),
     containsPersonLevelIdentifier: z.boolean().default(false),
     personIdentifierRecord: personIdentifierRecord.optional(),
     /** Whether this publication is meant as grounds for a commercial offering (AC-13). */
@@ -2040,6 +2079,8 @@ export const publishRegistryDraftRequest = z
     personIdentifierPublicationApproved: z.boolean().default(false),
   })
   .strict();
+
+export const approveRegistryDraftDisclosureRequest = z.object({ disclosureReviewed: z.literal(true) }).strict();
 
 export const rejectRegistryDraftRequest = z.object({ reason: nonBlank(1000) }).strict();
 
@@ -2059,6 +2100,8 @@ export const registryPublicationDraft = z.object({
   publishedAsCommercialBasis: z.boolean(),
   policyVersion: z.string(),
   schemaVersion: z.string(),
+  administratorPublicationPrepared: z.boolean(),
+  disclosureApproved: z.boolean(),
   containsPersonLevelIdentifier: z.boolean(),
   personIdentifierRecord: z
     .object({

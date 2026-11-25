@@ -10,6 +10,8 @@ import {
   createRegistryDraftRequest,
   publicProjection,
   registryDraftListQuery,
+  administratorProjectProjection,
+  approveRegistryDraftDisclosureRequest,
   rejectRegistryDraftRequest,
 } from "@mpc/api-contract";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
@@ -38,20 +40,21 @@ import {
  * The first of two steps. A draft is checked against everything the server knows — the
  * allowlist, the subject's identity and lifecycle, the evidence snapshot, the source terms —
  * and recorded. It is not public, not anchorable, and not a registry version. Publication
- * (`registry.ts`) is done by a different person.
+ * (`registry.ts`) applies an independent reviewer or the restricted administrator path.
  */
 
 /** Immutable draft subject resolves scope before an idempotency response can be replayed. */
-export async function draftProjectId(sql: postgres.Sql, actor: ActorContext, draftId: string): Promise<string> {
-  const [row] = await withActor(sql, actor, tx => tx<{project_id: string | null}[]>`
-    SELECT CASE WHEN d.registry_type='project' THEN d.subject_id ELSE vc.project_id END AS project_id
+export async function draftPublicationTarget(sql: postgres.Sql, actor: ActorContext, draftId: string) {
+  type Target = { project_id: string | null; proposed_by_subject_id: string };
+  const [row] = await withActor(sql, actor, tx => tx<Target[]>`
+    SELECT CASE WHEN d.registry_type='project' THEN d.subject_id ELSE vc.project_id END AS project_id, d.proposed_by_subject_id
     FROM core.registry_publication_drafts d
     LEFT JOIN core.verification_attestations a ON d.registry_type='verification' AND a.id=d.subject_id
     LEFT JOIN core.verification_cases vc ON vc.id=a.case_id
     WHERE d.id=${draftId}
   `);
   if (!row?.project_id) throw notFound("Draft not found");
-  return row.project_id;
+  return { projectId: row.project_id, proposer: row.proposed_by_subject_id };
 }
 
 export interface DraftRow {
@@ -65,6 +68,8 @@ export interface DraftRow {
   published_as_commercial_basis: boolean;
   policy_version: string;
   schema_version: string;
+  administrator_publication_prepared: boolean;
+  disclosure_approved_by_subject_id: string | null;
   contains_person_level_identifier: boolean;
   lawful_basis: string | null;
   purpose: string | null;
@@ -121,6 +126,8 @@ export function toDraft(row: DraftRow) {
     publishedAsCommercialBasis: row.published_as_commercial_basis,
     policyVersion: row.policy_version,
     schemaVersion: row.schema_version,
+    administratorPublicationPrepared: row.administrator_publication_prepared,
+    disclosureApproved: row.disclosure_approved_by_subject_id !== null,
     containsPersonLevelIdentifier: row.contains_person_level_identifier,
     personIdentifierRecord: row.contains_person_level_identifier
       ? {
@@ -221,7 +228,7 @@ export async function registerRegistryDraftRoutes(
     const { requestId, asOf, correlationId } = request.context;
     const requestHash = hashRequest(request);
 
-    return withActor(sql, actor, (tx) =>
+    const response = await withActor(sql, actor, (tx) =>
       withIdempotency(tx, idempotencyKey, requestHash, async () => {
         const subject = await resolvePublicationSubject(
           tx,
@@ -252,33 +259,7 @@ export async function registerRegistryDraftRoutes(
           tx, registryType, subject.projectId, data.projection, new Date(asOf),
         );
 
-        if (subject.publicKey !== null && data.publicKey !== subject.publicKey) {
-          throw unprocessable(
-            "REGISTRY_PUBLIC_KEY_MISMATCH",
-            "A Project Registry entry is published under the project's key",
-            { expected: subject.publicKey },
-          );
-        }
-
-        if (
-          data.sourceSnapshotHash !== undefined &&
-          data.sourceSnapshotHash !== subject.sourceSnapshotHash
-        ) {
-          throw unprocessable(
-            "REGISTRY_SNAPSHOT_MISMATCH",
-            "The evidence changed since this snapshot was taken, or it is not this subject's",
-            { expected: subject.sourceSnapshotHash },
-          );
-        }
-
-        const mismatched = projectionMismatches(data.projection, subject);
-        if (mismatched.length > 0) {
-          throw unprocessable(
-            "PUBLICATION_PROJECTION_MISMATCH",
-            "The projection states values that differ from the record it describes",
-            { offendingFields: mismatched },
-          );
-        }
+        assertDraftMatchesSubject(data, subject);
 
         // A key already published for another subject is not reused. Appending a version to
         // it would publish one subject's facts under another's key.
@@ -290,6 +271,9 @@ export async function registerRegistryDraftRoutes(
           throw conflict("REGISTRY_KEY_TAKEN", "This public key belongs to another subject");
         }
 
+        const proposedAt = new Date(asOf);
+        const projection = prepareDraftProjection(data, subject, proposedAt);
+
         const id = randomUUID();
         try {
           await tx`
@@ -298,15 +282,15 @@ export async function registerRegistryDraftRoutes(
               source_snapshot_hash, commercial_reuse, published_as_commercial_basis,
               policy_version, schema_version, contains_person_level_identifier,
               lawful_basis, purpose, retention, irreversibility_acknowledged_at,
-              proposed_by_subject_id
+              proposed_by_subject_id, proposed_at, administrator_publication_prepared
             ) VALUES (
               ${id}, ${registryType}, ${data.subjectId}, ${data.publicKey},
-              ${tx.json(data.projection as never)}, ${subject.sourceSnapshotHash},
+              ${tx.json(projection as never)}, ${subject.sourceSnapshotHash},
               ${subject.commercialReuse}, ${data.publishedAsCommercialBasis},
               ${data.policyVersion}, ${data.schemaVersion}, ${data.containsPersonLevelIdentifier},
               ${record?.lawfulBasis ?? null}, ${record?.purpose ?? null},
               ${record?.retention ?? null}, ${record ? new Date() : null},
-              ${proposer}
+              ${proposer}, ${proposedAt}, ${data.prepareAdministratorPublication}
             )
           `;
         } catch (caught) {
@@ -343,22 +327,20 @@ export async function registerRegistryDraftRoutes(
         return { ...toDraft(row!), requestId, asOf };
       }),
     );
+    return normalizeDraftResponse(response);
   });
 
   app.get("/api/v1/registry-entries/drafts", async (request) => {
     const { session, actor } = requireReadContext(request);
-    assertAuthorized(
-      session,
-      "registry.read",
-      registryResource({ sensitivity: "public" }),
-      sessionFacts(session),
-    );
+    const scope = visibleProjectScope(session, "registry.read");
+    if (scope !== "all" && scope.length === 0) {
+      assertAuthorized(session, "registry.read", registryResource({ sensitivity: "public", filteredByProjectScope: true }), sessionFacts(session));
+    }
     const query = registryDraftListQuery.safeParse(request.query);
     if (!query.success) {
       throw badRequest("REQUEST_INVALID", "Query is invalid", { issues: query.error.issues });
     }
     const { subjectId, state } = query.data;
-    const scope = visibleProjectScope(session, "registry.read");
     const { requestId, asOf } = request.context;
 
     const rows = await withActor(sql, actor, (tx) =>
@@ -376,28 +358,26 @@ export async function registerRegistryDraftRoutes(
     return { items: rows.map(toDraft), requestId, asOf };
   });
 
+  registerDraftDisclosureApproval(app, sql);
+
   app.post<{ Params: { draftId: string } }>(
     "/api/v1/registry-entries/drafts/:draftId/reject",
     async (request, reply) => {
       const { session, actor, idempotencyKey } = requireMutationContext(request);
       const expected = requireIfMatch(request);
-      const projectId = await authorizedProjectLookup(session, "registry.publish",
-        () => draftProjectId(sql, actor, request.params.draftId), id => id);
-      const effectiveRole = assertAuthorized(
-        session,
-        "registry.publish",
-        projectResource(projectId, {
-          sensitivity: "public",
-          state: "pending",
-          statesAllowingAction: ["pending"],
-        }),
-        sessionFacts(session),
-      );
-      const body = parseBody(rejectRegistryDraftRequest, request.body);
+      const target = await authorizedProjectLookup(session, "registry.draft.reject",
+        () => draftPublicationTarget(sql, actor, request.params.draftId), (value) => value.projectId);
       const decider = subjectOf(session);
+      const resource = projectResource(target.projectId, {
+        sensitivity: "public", state: "pending", statesAllowingAction: ["pending"],
+      });
+      // Prefer administrator authority on an own draft, but allow an in-scope reviewer to reject it.
+      const eligibleRoles = target.proposer === decider ? ["administrator", "reviewer"] : ["reviewer"];
+      const effectiveRole = assertAuthorized(session, "registry.draft.reject", resource, sessionFacts(session), eligibleRoles);
+      const body = parseBody(rejectRegistryDraftRequest, request.body);
       const { requestId, asOf, correlationId } = request.context;
 
-      return withActor(sql, actor, (tx) =>
+      const response = await withActor(sql, actor, (tx) =>
         withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
           const draft = await lockDraft(tx, request.params.draftId);
           if (!draft) throw notFound("Draft not found");
@@ -408,7 +388,6 @@ export async function registerRegistryDraftRoutes(
             });
           }
 
-          // Turning a draft down publishes nothing, so it needs no second person.
           await tx`
             UPDATE core.registry_publication_drafts
             SET state = 'rejected', decided_by_subject_id = ${decider}, decided_at = now(),
@@ -434,8 +413,125 @@ export async function registerRegistryDraftRoutes(
           return { ...toDraft(row!), requestId, asOf };
         }),
       );
+      return normalizeDraftResponse(response);
     },
   );
+}
+
+function registerDraftDisclosureApproval(app: FastifyInstance, sql: postgres.Sql): void {
+  app.post<{ Params: { draftId: string } }>(
+    "/api/v1/registry-entries/drafts/:draftId/approve-disclosure",
+    async (request, reply) => {
+      const { session, actor, idempotencyKey } = requireMutationContext(request);
+      const expected = requireIfMatch(request);
+      const target = await authorizedProjectLookup(session, "registry.draft.approve",
+        () => draftPublicationTarget(sql, actor, request.params.draftId), (value) => value.projectId);
+      const reviewer = subjectOf(session);
+      const effectiveRole = assertAuthorized(session, "registry.draft.approve", projectResource(target.projectId, {
+        sensitivity: "public", separationSensitive: true,
+      }), sessionFacts(session));
+      if (reviewer === target.proposer) {
+        throw unprocessable("REGISTRY_DRAFT_SELF_APPROVAL", "A different reviewer must approve disclosure");
+      }
+      parseBody(approveRegistryDraftDisclosureRequest, request.body);
+      const { asOf, requestId, correlationId } = request.context;
+      const response = await withActor(sql, actor, (tx) =>
+        withIdempotency(tx, idempotencyKey, hashRequest(request), async () => {
+          const draft = await lockDraft(tx, request.params.draftId);
+          if (!draft) throw notFound("Draft not found");
+          assertVersionMatches(expected, draft.version, "registry_publication_draft");
+          if (draft.state !== "pending" || !draft.administrator_publication_prepared
+            || draft.registry_type !== "project" || draft.disclosure_approved_by_subject_id !== null) {
+            throw unprocessable("REGISTRY_DRAFT_DISCLOSURE_NOT_PENDING", "This draft is not awaiting disclosure approval");
+          }
+          await tx`SELECT set_config('app.registry_publication_session_id', ${session.sessionId}, true)`;
+          const [approved] = await tx<DraftRow[]>`
+            UPDATE core.registry_publication_drafts
+            SET disclosure_approved_by_subject_id = ${reviewer},
+                version = version + 1
+            WHERE id = ${draft.id}
+            RETURNING *
+          `.catch((error: unknown) => {
+            if ((error as { constraint_name?: string } | null)?.constraint_name === "registry_draft_disclosure_approval_authority") {
+              throw forbidden("REGISTRY_DISCLOSURE_APPROVAL_DENIED", "This session can no longer approve disclosure");
+            }
+            throw error;
+          });
+          await recordAudit(tx, {
+            effectiveRole, session, projectId: target.projectId, command: "registry.version.draft_disclosure_approved",
+            resourceType: "registry_publication_draft", resourceId: draft.id,
+            beforeVersion: draft.version, afterVersion: approved!.version, correlationId, requestIp: request.clientIp,
+          });
+          return { ...toDraft(approved!), requestId, asOf };
+        }),
+      );
+      reply.header("etag", etagOf(response.version));
+      return response;
+    },
+  );
+}
+
+/** Completed idempotency snapshots from before migration 0172 omit this field. */
+function normalizeDraftResponse<T extends { administratorPublicationPrepared?: boolean }>(response: T & { disclosureApproved?: boolean }) {
+  return { ...response, administratorPublicationPrepared: response.administratorPublicationPrepared ?? false,
+    disclosureApproved: response.disclosureApproved ?? false };
+}
+
+function assertDraftMatchesSubject(
+  data: z.infer<typeof createRegistryDraftRequest>,
+  subject: PublicationSubject,
+): void {
+  if (subject.publicKey !== null && data.publicKey !== subject.publicKey) {
+    throw unprocessable(
+      "REGISTRY_PUBLIC_KEY_MISMATCH",
+      "A Project Registry entry is published under the project's key",
+      { expected: subject.publicKey },
+    );
+  }
+
+  if (
+    data.sourceSnapshotHash !== undefined &&
+    data.sourceSnapshotHash !== subject.sourceSnapshotHash
+  ) {
+    throw unprocessable(
+      "REGISTRY_SNAPSHOT_MISMATCH",
+      "The evidence changed since this snapshot was taken, or it is not this subject's",
+      { expected: subject.sourceSnapshotHash },
+    );
+  }
+
+  const mismatched = projectionMismatches(data.projection, subject);
+  if (mismatched.length > 0) {
+    throw unprocessable(
+      "PUBLICATION_PROJECTION_MISMATCH",
+      "The projection states values that differ from the record it describes",
+      { offendingFields: mismatched },
+    );
+  }
+}
+
+function prepareDraftProjection(
+  data: z.infer<typeof createRegistryDraftRequest>,
+  subject: PublicationSubject,
+  proposedAt: Date,
+): Record<string, unknown> {
+  if (!data.prepareAdministratorPublication) return data.projection;
+
+  if (data.registryType !== "project" || data.containsPersonLevelIdentifier || subject.projectVersion === undefined) {
+    throw unprocessable("ADMINISTRATOR_PROJECTION_INELIGIBLE", "This draft requires independent publication");
+  }
+  const prepared = administratorProjectProjection.safeParse({
+    ...data.projection,
+    status: subject.publishedStatus,
+    version: String(subject.projectVersion),
+    asOf: proposedAt.toISOString(),
+    sourceAge: null,
+    staleStatus: "unknown",
+  });
+  if (!prepared.success) {
+    throw unprocessable("ADMINISTRATOR_PROJECTION_INELIGIBLE", "This projection requires independent publication");
+  }
+  return prepared.data;
 }
 
 function assertDraftPublishable(
@@ -447,7 +543,7 @@ function assertDraftPublishable(
     fields: Object.keys(data.projection),
     // The projection carries only allowlisted fields, and its identity fields are
     // checked against the record below. Per-field sensitivity of free-text fields such as
-    // `claimSummary` is not derived yet; the approver reads them before publishing.
+    // `claimSummary` requires independent review at publication.
     sensitivity: "public",
     disclosureApproved: true,
     containsPersonLevelIdentifier: data.containsPersonLevelIdentifier,
