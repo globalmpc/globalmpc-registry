@@ -262,7 +262,7 @@ describe("publication separation of duties", () => {
       )?.body,
     ).toMatchObject({ projection: { legalEffect: "none", stableId: "p1", evidenceLedger: { snapshotId: "snapshot-1" } } });
   });
-  it("forbids publishing one's own draft, and shows published state on reload", async () => {
+  it("requires a different reviewer for an ineligible own draft and shows published state on reload", async () => {
     const routes = publicationRoutes();
     routes["GET /api/v1/registry-entries/drafts?subjectId=p1"] = () => ({
       items: [
@@ -277,7 +277,7 @@ describe("publication separation of duties", () => {
     });
     mockHttp(routes);
     await mount(Publication);
-    await screen.findByText(/You drafted this/);
+    await screen.findByText(/This draft needs a different reviewer/);
     fireEvent.click(screen.getByTestId("irreversibility-ack"));
     expect((screen.getByTestId("publish") as HTMLButtonElement).disabled).toBe(
       true,
@@ -298,6 +298,24 @@ describe("publication separation of duties", () => {
     expect(
       (await screen.findByTestId("published-result")).textContent,
     ).toContain("already-public");
+  });
+  it("discards an own pending draft and re-enables drafting", async () => {
+    auth.session.roleBindings = [{ role: "administrator" }];
+    let pending = true;
+    const calls = mockHttp({
+      ...publicationRoutes(),
+      "GET /api/v1/registry-entries/drafts?subjectId=p1": () => ({
+        items: pending ? [{ id: "d1", state: "pending", proposedBySubjectId: "reviewer", version: 2, projection: { projectName: "Copper" } }] : [],
+      }),
+      "POST /api/v1/registry-entries/drafts/d1/reject": () => {
+        pending = false;
+        return { id: "d1", state: "rejected" };
+      },
+    });
+    await mount(Publication);
+    fireEvent.click(await screen.findByRole("button", { name: "Discard draft" }));
+    await waitFor(() => expect((screen.getByTestId("draft") as HTMLButtonElement).disabled).toBe(false));
+    expect(calls.find((call) => call.url.endsWith("/reject"))?.headers.get("if-match")).toBe('"2"');
   });
   it("shows missing roles and recoverable operation errors", async () => {
     auth.session.roleBindings = [];

@@ -1,3 +1,6 @@
+import type postgres from "postgres";
+import { hashToken } from "../src/plugins/session-token.js";
+import { administratorProjectProjection, PROJECT_PUBLICATION_DISCLAIMERS, PROJECT_PUBLICATION_LIMITATIONS } from "@mpc/api-contract";
 import { withActor } from "@mpc/db";
 import { addGovernanceAccount } from "./helpers/governance-accounts.js";
 import { randomUUID } from "node:crypto";
@@ -510,49 +513,264 @@ describeDb("Registry publication and public lookup", () => {
       }
     });
 
-    it("the drafting role cannot publish", async () => {
-      const drafted = await draft(tokens.operatorA);
-      const response = await publishDraft(app, tokens.operatorA, drafted.json());
-      expect(response.statusCode).toBe(403);
-      expect(response.json().details.requiredRoles).toContain("reviewer");
+    const administratorCopy = {
+      limitations: PROJECT_PUBLICATION_LIMITATIONS,
+      disclaimerCodes: PROJECT_PUBLICATION_DISCLAIMERS,
+    };
+
+    async function withPublishingSession<T>(
+      token: string,
+      subjectId: string,
+      work: (tx: postgres.TransactionSql) => Promise<T>,
+    ): Promise<T> {
+      const [session] = await fx.sql<{ id: string }[]>`
+        SELECT id FROM core.sessions WHERE token_hash = ${hashToken(token)}
+      `;
+      expect(session?.id).toBeTruthy();
+      return withActor(fx.appSql, { subjectId }, async (tx) => {
+        await tx`SELECT set_config('app.registry_publication_session_id', ${session!.id}, true)`;
+        return work(tx);
+      });
+    }
+
+    it("attributes an own draft discard to the administrator grant when both roles apply", async () => {
+      const projectId = await projectWithKey(`ADMIN-DISCARD-ROLE-${randomUUID()}`);
+      const account = await addGovernanceAccount(fx, "reviewer", { projectId, assurance: "high_assurance" });
+      const [holder] = await fx.sql<{ subject_id: string }[]>`SELECT subject_id
+        FROM core.wallet_identities WHERE wallet_address = ${account.address}`;
+      await fx.sql`INSERT INTO core.role_bindings(id, subject_id, organization_id, project_id, role)
+        VALUES (${randomUUID()}, ${holder!.subject_id}, ${fx.orgA}, ${projectId}, 'administrator')`;
+      const token = await signIn(app, account);
+      const prepared = await draft(token, { subjectId: projectId });
+      expect(prepared.statusCode, prepared.body).toBe(200);
+      const own = prepared.json();
+      const response = await app.inject({
+        method: "POST", url: `/api/v1/registry-entries/drafts/${own.id}/reject`,
+        headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey(), "if-match": `"${own.version}"` },
+        payload: { reason: "Discard own draft" },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      const [event] = await fx.sql`SELECT effective_role FROM audit.events
+        WHERE command = 'registry.version.draft_rejected' AND resource_id = ${own.id}`;
+      expect(event?.effective_role).toBe("administrator");
     });
 
-    it("a person holding both roles cannot publish their own draft", async () => {
-      const [approver] = await fx.sql<{ subject_id: string }[]>`
-        SELECT subject_id FROM core.wallet_identities
-        WHERE wallet_address = ${fx.disclosureApproverA.address}
-      `;
-      await fx.sql`
-        INSERT INTO core.role_bindings (id, subject_id, organization_id, role)
-        VALUES (${randomUUID()}, ${approver!.subject_id}, ${fx.orgA}, 'administrator')
-      `;
-      try {
-        const both = await signIn(app, fx.disclosureApproverA);
-        const drafted = await draft(both);
-        expect(drafted.statusCode).toBe(200);
+    it("an administrator can discard a stale own draft and replace it", async () => {
+      const projectId = await projectWithKey(`ADMIN-STALE-${randomUUID()}`);
+      const prepared = await draft(tokens.operatorA, {
+        subjectId: projectId, prepareAdministratorPublication: true, projection: await projectProjection(fx.sql, projectId, administratorCopy),
+      });
+      expect(prepared.statusCode, prepared.body).toBe(200);
+      const original = prepared.json();
+      await fx.sql`UPDATE core.projects SET version = version + 1 WHERE id = ${projectId}`;
+      const stale = await publishDraft(app, tokens.operatorA, original);
+      expect(stale.statusCode, stale.body).toBe(409);
+      expect(stale.json().code).toBe("REGISTRY_DRAFT_STALE");
 
-        const response = await publishDraft(app, both, drafted.json());
-        expect(response.statusCode).toBe(422);
+      const discard = async (token: string) => app.inject({
+        method: "POST", url: `/api/v1/registry-entries/drafts/${original.id}/reject`,
+        headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey(), "if-match": `"${original.version}"` },
+        payload: { reason: "Replace stale draft" },
+      });
+      const otherAdmin = await signIn(app, await addGovernanceAccount(fx, "administrator", {
+        projectId, assurance: "high_assurance",
+      }));
+      expect((await discard(otherAdmin)).statusCode).toBe(403);
+      expect((await discard(tokens.operatorA)).json()).toMatchObject({ state: "rejected" });
+      const replacement = await draft(tokens.operatorA, {
+        subjectId: projectId, prepareAdministratorPublication: true, projection: await projectProjection(fx.sql, projectId, administratorCopy),
+      });
+      expect(replacement.statusCode, replacement.body).toBe(200);
+      const published = await publishDraft(app, tokens.operatorA, replacement.json());
+      expect(published.statusCode, published.body).toBe(200);
+    });
+
+    it.each(["identifier", "free text", "verification"] as const)(
+      "requires independent review for own %s drafts", async (kind) => {
+        const projectId = await projectWithKey(`ADMIN-REVIEW-${randomUUID()}`);
+        const attestationId = kind === "verification" ? await seedAttestation(projectId, "signed") : null;
+        const prepared = attestationId
+          ? await draftRegistryEntry(app, tokens.operatorA, {
+              registryType: "verification", subjectId: attestationId, publicKey: `VER-${randomUUID()}`,
+              projection: validProjection({ stableId: attestationId, status: "signed" }),
+              policyVersion: "mn-core-1.0.0", schemaVersion: "verification-registry-1",
+            })
+          : await draft(tokens.operatorA, {
+              subjectId: projectId,
+              projection: await projectProjection(fx.sql, projectId, {
+                ...administratorCopy,
+                ...(kind === "free text" ? { claimSummary: [{ summary: "Requires review" }] } : {}),
+              }),
+              ...(kind === "identifier" ? {
+                containsPersonLevelIdentifier: true,
+                personIdentifierRecord: {
+                  lawfulBasis: "Legal obligation", purpose: "Disclosure", retention: "Seven years",
+                  irreversibilityAcknowledged: true,
+                },
+              } : {}),
+            });
+        expect(prepared.statusCode, prepared.body).toBe(200);
+        const response = await publishDraft(app, tokens.operatorA, prepared.json(), {
+          personIdentifierPublicationApproved: true,
+        });
+        expect(response.statusCode, response.body).toBe(422);
         expect(response.json().code).toBe("REGISTRY_DRAFT_SELF_PUBLICATION");
-      } finally {
-        await fx.sql`
-          UPDATE core.role_bindings SET revoked_at = now()
-          WHERE subject_id = ${approver!.subject_id} AND role = 'administrator'
-        `;
+        if (kind !== "verification") {
+          const version = await publish(tokens.operatorA);
+          expect(version.statusCode, version.body).toBe(200);
+          await expect(withPublishingSession(tokens.operatorA, fx.operatorSubjectA, (tx) => tx`
+            UPDATE core.registry_publication_drafts
+            SET state = 'published', decided_by_subject_id = proposed_by_subject_id,
+                decided_at = now(), entry_version_id = ${version.json().id},
+                person_identifier_publication_approved = ${kind === "identifier"}
+            WHERE id = ${prepared.json().id}
+          `)).rejects.toMatchObject({ code: "23514", constraint_name: "registry_draft_two_person" });
+        }
+      },
+    );
+
+    it.each(["revoked", "suspended", "lower identity assurance", "foreign organization", "foreign jurisdiction"] as const)(
+      "refuses self-publication after the administrator becomes %s", async (change) => {
+        const projectId = await projectWithKey(`ADMIN-SCOPE-${randomUUID()}`);
+        const wallet = await addGovernanceAccount(fx, "administrator", {
+          scopeKind: "organization", jurisdiction: ["MNG"], assurance: "high_assurance",
+        });
+        const token = await signIn(app, wallet);
+        const prepared = await draft(token, {
+          subjectId: projectId, prepareAdministratorPublication: true, projection: await projectProjection(fx.sql, projectId, administratorCopy),
+        });
+        expect(prepared.statusCode, prepared.body).toBe(200);
+        const pending = prepared.json();
+        const subjectId = pending.proposedBySubjectId as string;
+        const other = await publish(tokens.operatorA);
+        expect(other.statusCode, other.body).toBe(200);
+
+        switch (change) {
+          case "revoked":
+            await fx.sql`UPDATE core.role_bindings SET revoked_at = now() WHERE subject_id = ${subjectId}`;
+            break;
+          case "suspended":
+            await fx.sql`UPDATE core.subjects SET suspended_at = now() WHERE id = ${subjectId}`;
+            break;
+          case "lower identity assurance":
+            await fx.sql`UPDATE core.subjects SET assurance_level = 'identity_bound' WHERE id = ${subjectId}`;
+            break;
+          case "foreign organization":
+            await fx.sql`UPDATE core.projects SET owner_organization_id = ${fx.orgB} WHERE id = ${projectId}`;
+            break;
+          case "foreign jurisdiction":
+            await fx.sql`UPDATE core.projects SET host_country_iso3 = 'KOR' WHERE id = ${projectId}`;
+            break;
+        }
+
+        const response = await publishDraft(app, token, pending);
+        expect(response.statusCode, response.body).toBe(change === "suspended" ? 401 : 403);
+        if (change !== "suspended") {
+          await expect(withPublishingSession(token, subjectId, (tx) => tx`
+            UPDATE core.registry_publication_drafts
+            SET state = 'published', decided_by_subject_id = proposed_by_subject_id,
+                decided_at = now(), entry_version_id = ${other.json().id}
+            WHERE id = ${pending.id}
+          `)).rejects.toMatchObject({ code: "23514", constraint_name: "registry_draft_two_person" });
+        }
+      },
+    );
+
+    it("keeps the database projection allowlist and fixed copy aligned with the contract", async () => {
+      const [guard] = await fx.sql<{ source: string }[]>`
+        SELECT pg_get_functiondef('core.guard_registry_draft_self_publication()'::regprocedure) AS source
+      `;
+      const guardSource = guard!.source;
+      const keys = /NEW\.projection - ARRAY\[([^\]]+)\]/.exec(guardSource)?.[1];
+      expect(Array.from(keys?.matchAll(/'([^']+)'/g) ?? [], (match) => match[1]).sort())
+        .toEqual(Object.keys(administratorProjectProjection.shape).sort());
+      for (const [field, expected] of [
+        ["limitations", PROJECT_PUBLICATION_LIMITATIONS],
+        ["disclaimerCodes", PROJECT_PUBLICATION_DISCLAIMERS],
+      ] as const) {
+        const literal = new RegExp(`NEW\\.projection->'${field}' = '([^']+)'`).exec(guardSource)?.[1];
+        expect(JSON.parse(literal ?? "null")).toEqual(expected);
       }
     });
 
-    it("the database refuses publication by the drafter", async () => {
+    it("preserves submitted metadata when a draft is prepared for independent review", async () => {
+      const projectId = await projectWithKey(`REVIEWER-PROJECTION-${randomUUID()}`);
+      const projection = await projectProjection(fx.sql, projectId, administratorCopy);
+      const prepared = await draft(tokens.operatorA, { subjectId: projectId, projection });
+      expect(prepared.statusCode, prepared.body).toBe(200);
+      expect(prepared.json()).toMatchObject({ administratorPublicationPrepared: false, projection });
+      const publication = await publishDraft(app, tokens.disclosureApproverA, prepared.json());
+      expect(publication.statusCode, publication.body).toBe(200);
+      const [entry] = await fx.sql`SELECT public_projection FROM core.registry_entry_versions WHERE id = ${publication.json().id}`;
+      expect(entry?.public_projection).toMatchObject({ asOf: projection.asOf, sourceAge: "12", staleStatus: "fresh" });
+    });
+
+    it("a project-scoped administrator can draft, publish and create an anchor batch", async () => {
+      const [runtime] = await fx.appSql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
+      expect(runtime).toEqual({ rolsuper: false, rolbypassrls: false });
+      const projectId = await projectWithKey(`ADMIN-PUBLISH-${randomUUID()}`);
+      const admin = await signIn(app, await addGovernanceAccount(fx, "administrator", {
+        projectId, assurance: "high_assurance",
+      }));
+      const prepared = await draft(admin, {
+        subjectId: projectId, prepareAdministratorPublication: true, projection: await projectProjection(fx.sql, projectId, {
+          ...administratorCopy, version: "999", sourceAge: "0", asOf: "2099-01-01T00:00:00.000Z",
+        }),
+      });
+      expect(prepared.statusCode, prepared.body).toBe(200);
+      const draftRow = prepared.json();
+      const published = await publishDraft(app, admin, draftRow);
+      expect(published.statusCode, published.body).toBe(200);
+      const [entry] = await fx.sql`SELECT public_projection FROM core.registry_entry_versions WHERE id = ${published.json().id}`;
+      expect(draftRow.projection).toMatchObject({
+        version: "1", sourceAge: null, staleStatus: "unknown", asOf: draftRow.proposedAt,
+      });
+      expect(entry?.public_projection).toMatchObject(draftRow.projection);
+      expect(new Date(draftRow.proposedAt).getTime()).toBeLessThanOrEqual(Date.now());
+      const [audit] = await fx.sql`SELECT detail FROM audit.events
+        WHERE resource_id = ${published.json().id} AND command = 'registry.version.published'`;
+      expect(audit?.detail).toMatchObject({ selfPublished: true });
+      const [decision] = await fx.sql`SELECT proposed_by_subject_id, decided_by_subject_id
+        FROM core.registry_publication_drafts WHERE id = ${draftRow.id}`;
+      expect(decision?.decided_by_subject_id).toBe(decision?.proposed_by_subject_id);
+      const batch = await app.inject({
+        method: "POST", url: "/api/v1/anchor-batches",
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": idempotencyKey() },
+        payload: { projectId },
+      });
+      expect(batch.statusCode, batch.body).toBe(200);
+      expect(batch.json()).toMatchObject({ recordCount: 1, confirmationState: "created" });
+    });
+
+    it("an administrator cannot publish a draft by another person without reviewer authority", async () => {
+      const projectId = await projectWithKey(`ADMIN-OTHER-${randomUUID()}`);
+      const prepared = await draft(tokens.operatorA, { subjectId: projectId });
+      expect(prepared.statusCode, prepared.body).toBe(200);
+      const otherAdmin = await signIn(app, await addGovernanceAccount(fx, "administrator", {
+        projectId, assurance: "high_assurance",
+      }));
+      const target = prepared.json();
+      for (const version of [target.version, target.version + 1]) {
+        const response = await publishDraft(app, otherAdmin, { id: target.id, version });
+        expect(response.statusCode).toBe(403);
+        expect(response.json().details.requiredRoles).toEqual(["reviewer"]);
+      }
+    });
+
+    it.each(["origin", "replica"] as const)("the database rejects unauthenticated self-publication in %s mode", async (mode) => {
       const drafted = (await draft(tokens.operatorA)).json();
       const published = (await publish(tokens.operatorA)).json();
       await expect(
-        fx.sql`
+        fx.sql.begin(async (tx) => {
+          await tx`SELECT set_config('session_replication_role', ${mode}, true)`;
+          return tx`
           UPDATE core.registry_publication_drafts
           SET state = 'published', decided_by_subject_id = proposed_by_subject_id,
               decided_at = now(), entry_version_id = ${published.id}
           WHERE id = ${drafted.id}
-        `,
-      ).rejects.toThrow(/registry_draft_two_person/);
+          `;
+        }),
+      ).rejects.toMatchObject({ code: "23514", constraint_name: "registry_draft_two_person" });
     });
 
     it("a draft cannot be edited after it is made", async () => {

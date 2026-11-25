@@ -265,13 +265,20 @@ export function assertAuthorized(
   action: string,
   resource: ResourceContext,
   facts: ActorFacts,
+  roles?: readonly string[],
 ): string {
-  const policy = ACTION_POLICIES[action];
-  if (!policy) {
+  const actionPolicy = ACTION_POLICIES[action];
+  if (!actionPolicy) {
     throw badRequest("ACTION_UNKNOWN", `Unknown action: ${action}`);
   }
 
-  const candidates = session.roleBindings.length > 0 ? session.roleBindings : [PUBLIC_READER];
+  const policy = roles === undefined ? actionPolicy : {
+    ...actionPolicy,
+    allowedRoles: roles.filter((role) => actionPolicy.allowedRoles.includes(role)),
+  };
+  const bindings = roles === undefined ? session.roleBindings
+    : policy.allowedRoles.flatMap((role) => session.roleBindings.filter((binding) => binding.role === role));
+  const candidates = bindings.length > 0 ? bindings : [PUBLIC_READER];
 
   let lastDenial: ReturnType<typeof authorize> | null = null;
   const located = withResourceJurisdiction(session, resource);
