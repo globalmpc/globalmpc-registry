@@ -277,6 +277,21 @@ suspension decided in that window so it can be decided again. `pnpm check:migrat
 covers exactly this path (forward on a populated copy of the previous schema, the pre-upgrade copy
 unchanged, forward again); it does not, and cannot, run the old image against the new schema.
 
+### Coordinated Registry disclosure cutover (0173)
+
+Migration 0173 enforces independent disclosure approval for administrator publication at
+the database as soon as it applies. Older API images cannot record that approval. Quiesce
+publication traffic before migration, take a pre-migration backup, deploy the matching API
+and web together, and then verify with a reviewer approval followed by an administrator
+publication before reopening publication traffic. Keep the database guard active during
+cutover.
+
+After migration, an image-only rollback needs an image that supports disclosure approval.
+If reverting to an older image is necessary, use the coordinated database restore procedure
+above, with publication and anchor processing paused. First reconcile any publications or
+external anchor transactions made after the backup. An on-chain anchor cannot be undone
+by restoring PostgreSQL. Prefer rolling forward once this release has processed records.
+
 **Deploy the jobs worker with the API, or right after it and the migration.** The worker renders
 the outbox mail the database writes, and 0127 adds two templates (`account_suspended_notice`,
 `account_reinstated_notice`). A worker older than this release settles such a row as `failed`

@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { administratorDraftEligibility, PROJECT_PUBLICATION_DISCLAIMERS, PROJECT_PUBLICATION_LIMITATIONS } from "@mpc/api-contract";
 import { use, useCallback, useEffect, useState } from "react";
 import {
+  ApiError,
   apiFetch,
+  approveRegistryDraftDisclosure,
   createAnchorBatch,
+  discardRegistryDraft,
   draftRegistryEntry,
   getProject,
   listRegistryDrafts,
@@ -25,13 +29,13 @@ import { BlackoutNotice } from "@/components/BlackoutNotice";
 /**
  * Public publication and anchor — spec 02 §2.8, 05 §5.6·§5.7·§5.9, 07 §7.2, 08 §8.11.
  *
- * Three steps, and the first two are done by **different people**.
+ * An administrator can draft, publish their eligible project draft, and create an anchor batch.
  *
  * 1. **Draft** (`administrator`) — only allowlisted fields go out. The server checks the
  *    projection against the project and records the evidence snapshot and source terms it
  *    derived itself. Nothing is public yet. The screen deliberately does not pre-filter —
  *    pre-filtering would obscure where the real control lives.
- * 2. **Publish** (`reviewer`, not the drafter) — makes the draft public. The server
+ * 2. **Publish** — makes the draft public. The server
  *    re-checks it against the record as it is now.
  * 3. **anchor batch** — bundles published versions into a Merkle tree. At this point
  *    nothing is on chain yet. `confirmationState` says exactly that.
@@ -48,18 +52,28 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
   const [batch, setBatch] = useState<AnchorBatch | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const [acknowledged, setAcknowledged] = useState(false);
+  const [acknowledgedDraft, setAcknowledgedDraft] = useState<string | null>(null);
+  const [prepareAdministratorPublication, setPrepareAdministratorPublication] = useState(true);
 
-  const loadDrafts = useCallback(async () => {
+  const loadPublication = useCallback(async () => {
     if (!token) return;
-    setDrafts((await listRegistryDrafts(token, id)).items);
+    const results = await Promise.allSettled([
+      getProject(token, id).then(setProject),
+      listRegistryDrafts(token, id).then((response) => setDrafts(response.items)),
+    ]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
   }, [token, id]);
 
   useEffect(() => {
-    if (!token) return;
-    getProject(token, id).then(setProject).catch(setError);
-    loadDrafts().catch(setError);
-  }, [token, id, loadDrafts]);
+    void loadPublication().catch(setError);
+  }, [loadPublication]);
+
+  const awaitingDisclosure = drafts.some((draft) => draft.state === "pending"
+    && draft.proposedBySubjectId === session?.subjectId
+    && draft.administratorPublicationPrepared && !draft.disclosureApproved);
+
+  useDisclosureApprovalRefresh(token, id, !busy && awaitingDisclosure, setDrafts);
 
   async function run(step: () => Promise<void>) {
     setBusy(true);
@@ -68,6 +82,9 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
       await step();
     } catch (caught) {
       setError(caught);
+      if (caught instanceof ApiError && caught.status === 412) {
+        await loadPublication().catch(setError);
+      }
     } finally {
       setBusy(false);
     }
@@ -81,20 +98,19 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
     );
   }
 
-  const roles = session?.roleBindings?.map((binding) => binding.role) ?? [];
-  const canDraft = roles.includes("administrator");
-  const canPublish = roles.includes("reviewer");
-  const pending = drafts.find((draft) => draft.state === "pending") ?? null;
-  const lastPublished = drafts.find((draft) => draft.state === "published") ?? null;
-  const exportVersionId=published?.id ?? lastPublished?.entryVersionId;
-  const ownDraft = pending !== null && pending.proposedBySubjectId === session?.subjectId;
+  const { canDraft, canReviewPublish, pending, lastPublished, pendingRevision, ownDraft,
+    administratorEligibility, canPublish, canApproveDisclosure } = publicationControls(
+    drafts, project, session,
+  );
+  const exportVersionId = published?.id ?? lastPublished?.entryVersionId;
+  const acknowledged = pendingRevision !== null && acknowledgedDraft === pendingRevision;
+  const previewProjection = pending?.projection ?? (project ? buildProjection(project, prepareAdministratorPublication) : null);
 
   const renderNotice = () => {
-    return !canDraft && !canPublish ? (
+    return !canDraft && !canReviewPublish ? (
       <div className="notice" style={{ color: "var(--alert)" }}>
         <div className="title">This account cannot draft or publish</div>
-        Drafting requires <span className="mono">administrator</span>. Publishing requires{" "}
-        <span className="mono">reviewer</span>, held by someone other than the drafter.
+        An administrator can publish their eligible project draft after independent disclosure approval. A reviewer can also publish a draft prepared by another person.
       </div>
     ) : null;
   };
@@ -103,13 +119,13 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
     return (
       <div className="panel">
         <h2>1. What will be public</h2>
-        {pending ? <DisclosurePreview projection={pending.projection} /> : project ? <DisclosurePreview projection={buildProjection(project)} /> : null}
+        {previewProjection ? <DisclosurePreview projection={previewProjection} /> : null}
         {!pending && token ? <WorkspaceEvidenceLedger mayManagePolicies={session?.actions?.includes("registry.read") ?? false} token={token} projectId={id} /> : null}
         <p className="sub" style={{ marginTop: 0 }}>
           Only the fields below and the approved evidence assessment go out. Source documents,
           coordinates, person-level identifiers, and internal notes leave under no approval.
         </p>
-        {project ? (
+        {previewProjection ? (
           <details className="disclosure-fields"><summary>Inspect exact disclosure fields</summary><div className="table-scroll">
             <table>
               <thead>
@@ -119,7 +135,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
                 </tr>
               </thead>
               <tbody>
-                {Object.entries(pending?.projection ?? buildProjection(project)).map(
+                {Object.entries(previewProjection).map(
                   ([field, value]) => (
                     <tr key={field}>
                       <td className="mono">{field}</td>
@@ -147,6 +163,13 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
           The server checks these fields against the project and records the evidence snapshot and
           source terms itself. A draft is not public.
         </p>
+        {canDraft && !pending ? (
+          <label>
+            <input type="checkbox" checked={prepareAdministratorPublication} disabled={busy}
+              onChange={(event) => setPrepareAdministratorPublication(event.target.checked)} />
+            Prepare for administrator publication
+          </label>
+        ) : null}
         <button
           className="primary"
           data-testid="draft"
@@ -161,23 +184,38 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
                   registryType: "project",
                   subjectId: project.id,
                   publicKey: project.projectKey,
-                  projection: { ...buildProjection(project), evidenceLedger: assessment.publicProjection },
+                  prepareAdministratorPublication,
+                  projection: { ...buildProjection(project, prepareAdministratorPublication), evidenceLedger: assessment.publicProjection },
                   policyVersion: "1.0.0",
                   schemaVersion: "1",
                 },
                 newIdempotencyKey(),
               );
-              await loadDrafts();
+              await loadPublication();
             })
           }
         >
           Create a draft
         </button>
 
+        {pending && ownDraft && canDraft ? (
+          <button
+            disabled={busy}
+            onClick={() => void run(async () => {
+              const discarded = await discardRegistryDraft(token, pending, newIdempotencyKey());
+              setDrafts((current) => current.map((draft) => draft.id === discarded.id ? discarded : draft));
+              setAcknowledgedDraft(null);
+              await loadPublication();
+            })}
+          >
+            Discard draft
+          </button>
+        ) : null}
+
         {pending ? (
           <dl className="dl" data-testid="pending-draft" style={{ marginTop: 14 }}>
             <dt>State</dt>
-            <dd className="mono">waiting for a Disclosure Approver</dd>
+            <dd className="mono">{canPublish ? "Ready to publish" : "Waiting for an eligible publisher"}</dd>
             <dt>Evidence snapshot</dt>
             <dd className="mono" style={{ wordBreak: "break-all" }}>
               {pending.sourceSnapshotHash}
@@ -196,17 +234,34 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
         <h2>3. Publish</h2>
         {/* Next to the action it may block (11 §11.12). The server enforces it either way. */}
         <BlackoutNotice token={token} projectId={id} />
-        {ownDraft ? (
+        {ownDraft && !canPublish ? (
           <p className="sub" style={{ marginTop: 0 }}>
-            You drafted this. Another Disclosure Approver publishes it.
+            {administratorEligibility === "stale"
+              ? "The project changed. Discard this draft and create a new one."
+              : administratorEligibility === "eligible"
+                ? "Waiting for an independent reviewer to approve this draft for public disclosure."
+                : "This draft needs a different reviewer to publish it."}
           </p>
+        ) : null}
+        {canApproveDisclosure && pending ? (
+          <button
+            disabled={busy}
+            onClick={() => void run(async () => {
+              const approved = await approveRegistryDraftDisclosure(token, pending, newIdempotencyKey());
+              setDrafts((current) => current.map((draft) => draft.id === approved.id ? approved : draft));
+              await loadPublication();
+            })}
+          >
+            Approve this draft for public disclosure
+          </button>
         ) : null}
         <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 12 }}>
           <input
             type="checkbox"
             data-testid="irreversibility-ack"
             checked={acknowledged}
-            onChange={(event) => setAcknowledged(event.target.checked)}
+            disabled={!pending || busy}
+            onChange={(event) => setAcknowledgedDraft(event.target.checked ? pendingRevision : null)}
           />
           {/* Saying it is irreversible after publishing is too late. */}
           <span>
@@ -218,12 +273,14 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
         <button
           className="primary"
           data-testid="publish"
-          disabled={busy || !pending || !canPublish || ownDraft || !acknowledged}
+          disabled={busy || !pending || !canPublish || !acknowledged}
           onClick={() =>
             void run(async () => {
               if (!pending) return;
-              setPublished(await publishRegistryDraft(token, pending, newIdempotencyKey()));
-              await loadDrafts();
+              const result = await publishRegistryDraft(token, pending, newIdempotencyKey());
+              setPublished(result);
+              setDrafts((current) => current.filter((draft) => draft.id !== pending.id));
+              await loadPublication();
             })
           }
         >
@@ -326,7 +383,7 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
           <h1>Publish</h1>
           <Link href={`/w/projects/${id}/cre`}>Continue to CRE →</Link>
           <p className="sub">
-            Only fields on the allowlist are published. One person drafts, another publishes.
+            Only fields on the allowlist are published. An independent reviewer must approve what will be public before an administrator publishes their own draft.
             What is published cannot be taken back.
           </p>
         </div>
@@ -354,23 +411,78 @@ export default function PublicationPage({ params }: { params: Promise<{ id: stri
  * Leaves out fields outside the allowlist. Filtering here is a convenience; the real control is
  * the server's `checkPublishable` and `.strict()` schema — bypassing the screen is still blocked.
  */
-function buildProjection(project: ProjectSummary): Record<string, unknown> {
+function publicationControls(
+  drafts: readonly RegistryDraft[],
+  project: ProjectSummary | null,
+  session: ReturnType<typeof useSession>["session"],
+) {
+  const roles = session?.roleBindings?.map((binding) => binding.role) ?? [];
+  const canDraft = roles.includes("administrator");
+  const canReviewPublish = roles.includes("reviewer");
+  const pending = drafts.find((draft) => draft.state === "pending") ?? null;
+  const lastPublished = drafts.find((draft) => draft.state === "published") ?? null;
+  const pendingRevision = pending ? `${pending.id}:${pending.version}` : null;
+  const ownDraft = pending !== null && pending.proposedBySubjectId === session?.subjectId;
+  const administratorEligibility = pending && project
+    ? administratorDraftEligibility(pending, { version: project.version, publicationStatus: publicationStatus(project) })
+    : "ineligible";
+  const canPublish = ownDraft
+    ? canDraft && administratorEligibility === "eligible" && pending.disclosureApproved
+    : canReviewPublish;
+  const canApproveDisclosure = canReviewPublish && !ownDraft && pending?.administratorPublicationPrepared
+    && !pending.disclosureApproved && administratorEligibility === "eligible";
+
+  return { canDraft, canReviewPublish, pending, lastPublished, pendingRevision, ownDraft,
+    administratorEligibility, canPublish, canApproveDisclosure };
+}
+
+/** Refresh approvals recorded in another session while the administrator is waiting. */
+function useDisclosureApprovalRefresh(
+  token: string | null,
+  id: string,
+  enabled: boolean,
+  onDrafts: (drafts: RegistryDraft[]) => void,
+) {
+  useEffect(() => {
+    if (!token || !enabled) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const refreshDrafts = async () => {
+      try {
+        const response = await listRegistryDrafts(token, id);
+        if (active) onDrafts(response.items);
+      } catch {
+        // An automatic read failure leaves the last known draft visible and retries.
+      }
+      if (active) timer = setTimeout(refreshDrafts, 5_000);
+    };
+
+    timer = setTimeout(refreshDrafts, 5_000);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [token, id, enabled, onDrafts]);
+}
+
+function publicationStatus(project: ProjectSummary): string {
+  return project.lifecycleState === "draft" ? "registered" : project.lifecycleState;
+}
+
+function buildProjection(project: ProjectSummary, prepareAdministratorPublication: boolean): Record<string, unknown> {
   return {
     stableId: project.id,
     projectKey: project.projectKey,
     projectName: project.name,
     hostCountry: project.hostCountryIso3,
     mineral: project.minerals,
-    status: project.lifecycleState,
+    status: prepareAdministratorPublication ? publicationStatus(project) : project.lifecycleState,
     version: String(project.version),
     asOf: project.asOf,
     sourceAge: null,
-    staleStatus: "fresh",
-    limitations: [
-      "This record is the result of checking submitted material; it is not a judgement on commercial viability or completeness of rights",
-      "It does not include site due diligence",
-    ],
+    staleStatus: prepareAdministratorPublication ? "unknown" : "fresh",
+    limitations: PROJECT_PUBLICATION_LIMITATIONS,
     legalEffect: "none",
-    disclaimerCodes: ["DISC-VERIFICATION-SCOPE", "DISC-NO-GUARANTEE"],
+    disclaimerCodes: PROJECT_PUBLICATION_DISCLAIMERS,
   };
 }
