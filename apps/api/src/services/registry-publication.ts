@@ -97,6 +97,7 @@ export type CommercialReuse = "confirmed" | "unconfirmed" | "prohibited";
 export interface PublicationSubject {
   /** The project the entry belongs to. A verification entry belongs to its case's project. */
   readonly projectId: string;
+  readonly projectVersion?: number;
   /** Required public key, when the registry fixes one. */
   readonly publicKey: string | null;
   readonly sourceSnapshotHash: Hex;
@@ -145,9 +146,10 @@ async function resolveProject(
       host_country_iso3: string;
       minerals: string[];
       lifecycle_state: string;
+      version: number;
     }[]
   >`
-    SELECT id, project_key, name, host_country_iso3, minerals, lifecycle_state
+    SELECT id, project_key, name, host_country_iso3, minerals, lifecycle_state, version
     FROM core.projects
     WHERE id = ${projectId}
   `;
@@ -187,6 +189,7 @@ async function resolveProject(
 
   return {
     projectId: project.id,
+    projectVersion: project.version,
     publicKey: project.project_key,
     sourceSnapshotHash,
     commercialReuse: weakestCommercialReuse(receipts.map((receipt) => receipt.commercial_reuse)),

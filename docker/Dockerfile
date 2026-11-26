@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.6@sha256:ac85f380a63b13dfcefa89046420e1781752bab202122f8f50032edf31be0021
+
 # MPC dApp — API and web image; workers use docker/Dockerfile.workers
 #
 # **The build context is the repository root.**
@@ -21,14 +23,12 @@ FROM node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43dd
 
 WORKDIR /repo
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
-# The pnpm version is pinned by packageManager in package.json. If corepack fetched the latest,
-# behavior would differ from local and show up only in this image.
-# Node 25+ images no longer ship corepack. Install it from the registry tarball checked against
-# its published sha512 (npm dist.integrity), without running package scripts.
-RUN wget -q -O /tmp/corepack.tgz https://registry.npmjs.org/corepack/-/corepack-0.36.0.tgz \
-    && echo "4a2889b01859a9d0623c74c497a393dec012ad1aca21c61340cb15197c7a104fe033c5853306237885fc4edf11894e08bf627a2db4fc2a919f08eb01a51581ff  /tmp/corepack.tgz" | sha512sum -c - \
-    && npm install -g --ignore-scripts /tmp/corepack.tgz && rm /tmp/corepack.tgz \
-    && corepack enable pnpm && corepack prepare pnpm@10.33.0 --activate
+# Keep the bundled pnpm version aligned with packageManager in package.json.
+ADD --checksum=sha256:bfcc1bcbad279b13a516c446a75b3c58b6904b45d57a1951411015e50b751a80 https://registry.npmjs.org/pnpm/-/pnpm-10.33.0.tgz /tmp/pnpm.tgz
+RUN mkdir -p /opt/pnpm \
+    && tar -xzf /tmp/pnpm.tgz -C /opt/pnpm --strip-components=1 \
+    && ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
+    && rm /tmp/pnpm.tgz
 
 # Copy the whole source tree, then install.
 #

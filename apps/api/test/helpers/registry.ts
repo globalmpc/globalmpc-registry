@@ -59,11 +59,12 @@ export function draftRegistryEntry(
   app: FastifyInstance,
   token: string,
   payload: Record<string, unknown>,
+  key = idempotencyKey(),
 ): Promise<LightMyRequestResponse> {
   return app.inject({
     method: "POST",
     url: "/api/v1/registry-entries",
-    headers: { authorization: `Bearer ${token}`, "idempotency-key": idempotencyKey() },
+    headers: { authorization: `Bearer ${token}`, "idempotency-key": key },
     payload,
   });
 }
