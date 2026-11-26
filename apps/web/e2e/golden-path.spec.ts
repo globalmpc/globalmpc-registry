@@ -268,23 +268,28 @@ test.describe("golden path", () => {
     await expect(recorded).toContainText("Re-assess once the jurisdiction profile");
     await expect(recorded).toContainText("not a legal approval");
 
-    // --- 7. One administrator drafts, publishes, and queues the anchor --
+    // --- 7. Reviewer publishes the full assessment, administrator queues the anchor --
     await connectAs(page, "Operator A");
     await page.goto(`/w/projects/${projectId}/publication`);
+    await page.getByLabel("Prepare for administrator publication").uncheck();
     await page.getByTestId("draft").click();
     await expect(page.getByTestId("pending-draft")).toBeVisible();
-    await expect(page.getByText(/Waiting for an independent reviewer/)).toBeVisible();
     await connectAs(page, "Publisher A");
-    await page.goto(`/w/projects/${projectId}/publication`);
-    await page.getByRole("button", { name: "Approve this draft for public disclosure" }).click();
-    await expect(page.getByRole("button", { name: "Approve this draft for public disclosure" })).toHaveCount(0);
-    await connectAs(page, "Operator A");
     await page.goto(`/w/projects/${projectId}/publication`);
     await expect(page.getByTestId("pending-draft")).toContainText("Ready to publish");
     await expect(page.getByTestId("publish")).toBeDisabled();
-    await page.getByTestId("irreversibility-ack").check();
+    const confirmation = page.getByTestId("irreversibility-ack");
+    const separation = await confirmation.evaluate((checkbox) => {
+      const text = checkbox.parentElement!.querySelector("span")!;
+      return text.getBoundingClientRect().left - checkbox.getBoundingClientRect().right;
+    });
+    expect(separation).toBeGreaterThan(0);
+    expect(separation).toBeLessThanOrEqual(12);
+    await confirmation.check();
     await page.getByTestId("publish").click();
     await expect(page.getByTestId("published-result")).toContainText(projectKey);
+    await connectAs(page, "Operator A");
+    await page.goto(`/w/projects/${projectId}/publication`);
     await page.getByTestId("anchor").click();
     // A created batch is not yet on chain.
     await expect(page.getByTestId("anchor-result")).toContainText("created");

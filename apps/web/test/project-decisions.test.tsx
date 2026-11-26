@@ -239,7 +239,8 @@ describe("publication separation of duties", () => {
   it("drafts, acknowledges publication and creates a pre-submission batch", async () => {
     const calls = mockHttp(publicationRoutes());
     await mount(Publication);
-    await screen.findByRole("heading", { name: "Copper" });
+    await screen.findByRole("heading", { name: "Publish" });
+    fireEvent.click(screen.getByLabelText("Prepare for administrator publication"));
     fireEvent.click(screen.getByTestId("draft"));
     await screen.findByTestId("pending-draft");
     expect((screen.getByTestId("publish") as HTMLButtonElement).disabled).toBe(
@@ -263,34 +264,33 @@ describe("publication separation of duties", () => {
       )?.body,
     ).toMatchObject({ projection: { legalEffect: "none", stableId: "p1", evidenceLedger: { snapshotId: "snapshot-1" } } });
   });
-  it("loads an approval from another session while the administrator waits", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      auth.session.roleBindings = [{ role: "administrator" }];
-      const proposedAt = "2026-10-23T00:00:00.000Z";
-      let approved = false;
-      const routes = publicationRoutes();
-      routes["GET /api/v1/registry-entries/drafts?subjectId=p1"] = () => ({
-        items: [{
-          id: "d1", version: approved ? 2 : 1, state: "pending", proposedBySubjectId: "reviewer",
-          administratorPublicationPrepared: true, disclosureApproved: approved, registryType: "project",
-          containsPersonLevelIdentifier: false, proposedAt,
-          projection: {
-            stableId: "p1", version: "2", status: "registered", asOf: proposedAt,
-            sourceAge: null, staleStatus: "unknown", legalEffect: "none",
-            limitations: PROJECT_PUBLICATION_LIMITATIONS, disclaimerCodes: PROJECT_PUBLICATION_DISCLAIMERS,
-          },
-        }],
-      });
-      mockHttp(routes);
-      await mount(Publication);
-      expect(screen.getByText(/Waiting for an independent reviewer/)).toBeTruthy();
-      approved = true;
-      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-      expect(screen.getByTestId("pending-draft").textContent).toContain("Ready to publish");
-    } finally {
-      vi.useRealTimers();
-    }
+  it("lets the administrator publish an eligible own draft without a reviewer", async () => {
+    auth.session.roleBindings = [{ role: "administrator" }];
+    const projectId = "da4c3bfa-83c8-451b-974d-8bf888a7776e";
+    const proposedAt = "2026-10-23T00:00:00.000Z";
+    const routes = publicationRoutes();
+    routes["GET /api/v1/projects/p1"] = { ...project, id: projectId };
+    routes["GET /api/v1/registry-entries/drafts?subjectId=p1"] = () => ({
+      items: [{
+        id: "d1", version: 1, state: "pending", proposedBySubjectId: auth.session.subjectId,
+        publicKey: `PRJ-${projectId}`, administratorPublicationPrepared: true, disclosureApproved: false, registryType: "project",
+        containsPersonLevelIdentifier: false, proposedAt,
+        projection: {
+          stableId: projectId, hostCountry: "MNG", version: "2", status: "registered", asOf: proposedAt,
+          sourceAge: null, staleStatus: "unknown", legalEffect: "none",
+          limitations: PROJECT_PUBLICATION_LIMITATIONS, disclaimerCodes: PROJECT_PUBLICATION_DISCLAIMERS,
+        },
+      }],
+    });
+    mockHttp(routes);
+    await mount(Publication);
+    expect((await screen.findByTestId("pending-draft")).textContent).toContain("Ready to publish");
+    const publish = screen.getByTestId("publish") as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+    fireEvent.click(screen.getByTestId("irreversibility-ack"));
+    expect(publish.disabled).toBe(false);
+    fireEvent.click(publish);
+    await screen.findByTestId("published-result");
   });
 
   it("requires a new acknowledgement for the next draft on the same page", async () => {
@@ -314,7 +314,7 @@ describe("publication separation of duties", () => {
     };
     mockHttp(routes);
     await mount(Publication);
-    await screen.findByRole("heading", { name: "Copper" });
+    await screen.findByRole("heading", { name: "Publish" });
     fireEvent.click(screen.getByTestId("draft"));
     await screen.findByTestId("pending-draft");
     fireEvent.click(screen.getByTestId("irreversibility-ack"));
@@ -342,7 +342,7 @@ describe("publication separation of duties", () => {
     });
     mockHttp(routes);
     await mount(Publication);
-    await screen.findByText(/This draft needs a different reviewer/);
+    await screen.findByText(/A reviewer can publish this draft/);
     fireEvent.click(screen.getByTestId("irreversibility-ack"));
     expect((screen.getByTestId("publish") as HTMLButtonElement).disabled).toBe(
       true,
@@ -394,7 +394,7 @@ describe("publication separation of duties", () => {
       "POST /api/v1/registry-entries": failure(),
     });
     await mount(Publication);
-    await screen.findByRole("heading", { name: "Copper" });
+    await screen.findByRole("heading", { name: "Publish" });
     fireEvent.click(screen.getByTestId("draft"));
     await screen.findByRole("alert");
     await waitFor(() =>

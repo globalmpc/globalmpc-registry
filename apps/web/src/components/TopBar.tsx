@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { activateNavigationMenu, NAVIGATION_MENUS } from "@/lib/navigation-menus";
-import { useEffect, type MouseEvent } from "react";
+import { useEffect, useRef, type MouseEvent } from "react";
 import { isAccountSession, useSession } from "@/lib/session";
 import { COPY, PUBLIC_NAV } from "@/lib/copy";
 import { visibleNav } from "@/lib/nav";
@@ -23,7 +23,23 @@ const FIRST_FACTOR_LABEL: Readonly<Record<string, string>> = {
 
 export function TopBar() {
   const { session, signOut } = useSession();
-  const inWorkspace = usePathname().startsWith("/w/");
+  const pathname = usePathname();
+  const inWorkspace = pathname.startsWith("/w/");
+  const publicProject = /^\/explorer\/projects\/[^/]+\/?$/.test(pathname);
+  const header = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const bar = header.current;
+    if (!bar || typeof ResizeObserver === "undefined") return;
+    const root = document.documentElement;
+    const measure = () => root.style.setProperty("--topbar-height", `${bar.offsetHeight}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--topbar-height");
+    };
+  }, []);
   useEffect(() => {
     function dismiss(event: PointerEvent | KeyboardEvent) {
       if (event instanceof KeyboardEvent && event.key !== "Escape") return;
@@ -81,7 +97,7 @@ export function TopBar() {
 
 
   return (
-    <header className="topbar" onClick={activateNavigationMenu}>
+    <header ref={header} className="topbar" onClick={activateNavigationMenu}>
       <div className="row topbar-start" style={{ gap: 20 }}>
         {/* Compact lockup (@mpc/design logo.md, "Compact lockup — headers and footers"): the mark
             file as-is at 28px, beside "MPC" in the display face (600, 16px), 8px apart. The 120px
@@ -127,6 +143,9 @@ export function TopBar() {
       </div>
 
       <div className="row topbar-end">
+        {publicProject && authenticated && roles.length > 0 ? (
+          <span className="meta topbar-active-roles">Active roles · {roles.join(", ")}</span>
+        ) : null}
         {authenticated && session ? (
           <details className="nav-public nav-account">
             <summary>Account</summary>

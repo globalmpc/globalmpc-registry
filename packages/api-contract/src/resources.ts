@@ -1223,6 +1223,22 @@ export const administratorProjectProjection = publicProjection.pick({
   disclaimerCodes: z.tuple([z.literal(PROJECT_PUBLICATION_DISCLAIMERS[0]), z.literal(PROJECT_PUBLICATION_DISCLAIMERS[1])]),
 }).strict();
 
+export const ADMINISTRATOR_PUBLICATION_POLICY = "1.0.0";
+export const ADMINISTRATOR_PUBLICATION_SCHEMA = "1";
+
+export function administratorPublicKey(projectId: string): string {
+  return `PRJ-${projectId}`;
+}
+
+export const administratorSoloProjectProjection = administratorProjectProjection.pick({
+  stableId: true, hostCountry: true, status: true, version: true, asOf: true,
+  sourceAge: true, staleStatus: true, limitations: true, legalEffect: true, disclaimerCodes: true,
+}).extend({
+  stableId: z.string().guid(),
+  hostCountry: z.string().regex(/^[A-Z]{3}$/),
+  legalEffect: z.literal("none"),
+}).strict();
+
 export function administratorDraftEligibility(
   draft: {
     readonly administratorPublicationPrepared: boolean;
@@ -1235,7 +1251,7 @@ export function administratorDraftEligibility(
 ): "eligible" | "ineligible" | "stale" {
   if (!draft.administratorPublicationPrepared || draft.registryType !== "project"
     || draft.containsPersonLevelIdentifier || draft.projection["asOf"] !== draft.proposedAt
-    || !administratorProjectProjection.safeParse(draft.projection).success) return "ineligible";
+    || !administratorSoloProjectProjection.safeParse(draft.projection).success) return "ineligible";
   if (project && (draft.projection["version"] !== String(project.version)
     || draft.projection["status"] !== project.publicationStatus)) return "stale";
   return "eligible";

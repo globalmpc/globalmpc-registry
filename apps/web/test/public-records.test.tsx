@@ -220,6 +220,51 @@ it("resolves a shareable project URL and displays lookup errors", async () => {
   );
   await screen.findByRole("alert");
 });
+it("summarizes published project facts and signed evidence review presence", async () => {
+  const evidenceLedger = {
+    items: [{
+      claimType: "license",
+      displayName: "Mining license",
+      status: "reviewed",
+      reasons: [],
+      limitations: [],
+      reviews: [{
+        reviewerHandle: "published-reviewer",
+        credentialType: "professional",
+        attestationType: "document review",
+        signedAt: "2026-01-01T00:00:00Z",
+        limitations: "Document scope only",
+      }],
+    }],
+    evaluatedAt: "2026-01-02T00:00:00Z",
+    stages: [],
+    limitations: [],
+  };
+  mockHttp({
+    "GET /api/v1/public/registries/project/MPC-1": {
+      ...entry,
+      projectName: "Copper Hills",
+      hostCountry: "MNG",
+      mineral: ["Copper"],
+      revokedAt: "2026-01-03T00:00:00Z",
+      evidenceLedger,
+    },
+    "GET /api/v1/public/registries/project/MPC-2": { ...entry, evidenceLedger: undefined },
+    "GET /api/v1/public/proofs/v1": () => { throw new Error("No proof"); },
+  });
+  const view = await act(async () =>
+    render(<PublicProject params={Promise.resolve({ publicKey: "MPC-1" })} />),
+  );
+  const summary = await screen.findByRole("complementary", { name: "Project summary" });
+  for (const text of ["Copper Hills", "MNG", "Copper", "revoked", "Included in this version"]) {
+    expect(summary.textContent).toContain(text);
+  }
+  await act(async () => view.rerender(<PublicProject params={Promise.resolve({ publicKey: "MPC-2" })} />));
+  const nextSummary = await screen.findByRole("complementary", { name: "Project summary" });
+  expect(nextSummary.textContent).toContain("None listed in this version");
+  expect(nextSummary.textContent).not.toContain("Copper Hills");
+});
+
 it("searches by hash, links each registry correctly and blocks wallet-address lookups", async () => {
   window.history.replaceState({}, "", "/explorer/search?q=hash1");
   mockHttp({

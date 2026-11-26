@@ -10,6 +10,7 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WorkspaceGate } from "../src/components/WorkspaceGate";
 import { TopBar } from "../src/components/TopBar";
+import { PageFrame } from "../src/components/PageFrame";
 import { Address } from "../src/components/Address";
 import Connect from "../src/app/connect/page";
 import { PublicFooter } from "../src/components/PublicFooter";
@@ -72,6 +73,41 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+it("shows active roles on a public project only for a signed-in session", () => {
+  s.path = "/explorer/projects/MPC-1";
+  s.session.roleBindings = [{ role: "administrator" }];
+  const view = render(<TopBar />);
+  expect(screen.getByText("Active roles · administrator")).toBeTruthy();
+
+  s.session.authenticated = false;
+  view.rerender(<TopBar />);
+  expect(screen.queryByText("Active roles · administrator")).toBeNull();
+  expect(screen.getByRole("link", { name: "Sign in →" })).toBeTruthy();
+});
+
+it("animates path changes without remounting content and respects reduced motion", () => {
+  const motion = vi.fn().mockReturnValue({ matches: true });
+  vi.stubGlobal("matchMedia", motion);
+  const view = render(<PageFrame><input aria-label="Draft" defaultValue="Original" /></PageFrame>);
+  const main = screen.getByRole("main");
+  const animate = vi.fn().mockReturnValue({ cancel: vi.fn() });
+  main.animate = animate;
+  const draft = screen.getByRole("textbox", { name: "Draft" });
+  fireEvent.change(draft, { target: { value: "Edited" } });
+
+  s.path = "/explorer";
+  view.rerender(<PageFrame><input aria-label="Draft" defaultValue="Original" /></PageFrame>);
+  expect(animate).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("textbox", { name: "Draft" })).toBe(draft);
+  expect((draft as HTMLInputElement).value).toBe("Edited");
+
+  motion.mockReturnValue({ matches: false });
+  s.path = "/connect";
+  view.rerender(<PageFrame><input aria-label="Draft" defaultValue="Original" /></PageFrame>);
+  expect(animate).toHaveBeenCalledTimes(1);
+  expect(motion).toHaveBeenCalledWith("(prefers-reduced-motion: no-preference)");
+});
+
 it("gates loading, signed-out and sessions without workspace access while always allowing access guidance", () => {
   s.loading = true;
   const view = render(

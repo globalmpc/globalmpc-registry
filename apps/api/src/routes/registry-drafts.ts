@@ -11,6 +11,10 @@ import {
   publicProjection,
   registryDraftListQuery,
   administratorProjectProjection,
+  administratorSoloProjectProjection,
+  administratorPublicKey,
+  ADMINISTRATOR_PUBLICATION_POLICY,
+  ADMINISTRATOR_PUBLICATION_SCHEMA,
   approveRegistryDraftDisclosureRequest,
   rejectRegistryDraftRequest,
 } from "@mpc/api-contract";
@@ -70,7 +74,6 @@ export interface DraftRow {
   schema_version: string;
   administrator_publication_prepared: boolean;
   disclosure_approved_by_subject_id: string | null;
-  disclosure_approval_generation: string | null;
   contains_person_level_identifier: boolean;
   lawful_basis: string | null;
   purpose: string | null;
@@ -231,6 +234,9 @@ export async function registerRegistryDraftRoutes(
 
     const response = await withActor(sql, actor, (tx) =>
       withIdempotency(tx, idempotencyKey, requestHash, async () => {
+        if (registryType === "project") {
+          await tx`SELECT id FROM core.projects WHERE id = ${projectId} FOR UPDATE`;
+        }
         const subject = await resolvePublicationSubject(
           tx,
           registryType,
@@ -262,18 +268,21 @@ export async function registerRegistryDraftRoutes(
 
         assertDraftMatchesSubject(data, subject);
 
+        const proposedAt = new Date(asOf);
+        const projection = prepareDraftProjection(data, subject, proposedAt);
+        const publicKey = registryType === "project" ? await projectDraftPublicKey(tx, data, projectId) : data.publicKey;
+        const policyVersion = data.prepareAdministratorPublication ? ADMINISTRATOR_PUBLICATION_POLICY : data.policyVersion;
+        const schemaVersion = data.prepareAdministratorPublication ? ADMINISTRATOR_PUBLICATION_SCHEMA : data.schemaVersion;
+
         // A key already published for another subject is not reused. Appending a version to
         // it would publish one subject's facts under another's key.
         const [existing] = await tx<{ subject_id: string }[]>`
           SELECT subject_id FROM core.registry_entries
-          WHERE registry_type = ${registryType} AND public_key = ${data.publicKey}
+          WHERE registry_type = ${registryType} AND public_key = ${publicKey}
         `;
         if (existing && existing.subject_id !== data.subjectId) {
           throw conflict("REGISTRY_KEY_TAKEN", "This public key belongs to another subject");
         }
-
-        const proposedAt = new Date(asOf);
-        const projection = prepareDraftProjection(data, subject, proposedAt);
 
         const id = randomUUID();
         try {
@@ -285,10 +294,10 @@ export async function registerRegistryDraftRoutes(
               lawful_basis, purpose, retention, irreversibility_acknowledged_at,
               proposed_by_subject_id, proposed_at, administrator_publication_prepared
             ) VALUES (
-              ${id}, ${registryType}, ${data.subjectId}, ${data.publicKey},
+              ${id}, ${registryType}, ${data.subjectId}, ${publicKey},
               ${tx.json(projection as never)}, ${subject.sourceSnapshotHash},
               ${subject.commercialReuse}, ${data.publishedAsCommercialBasis},
-              ${data.policyVersion}, ${data.schemaVersion}, ${data.containsPersonLevelIdentifier},
+              ${policyVersion}, ${schemaVersion}, ${data.containsPersonLevelIdentifier},
               ${record?.lawfulBasis ?? null}, ${record?.purpose ?? null},
               ${record?.retention ?? null}, ${record ? new Date() : null},
               ${proposer}, ${proposedAt}, ${data.prepareAdministratorPublication}
@@ -315,7 +324,7 @@ export async function registerRegistryDraftRoutes(
           requestIp: request.clientIp,
           detail: {
             registryType,
-            publicKey: data.publicKey,
+            publicKey,
             sourceSnapshotHash: subject.sourceSnapshotHash,
             commercialReuse: subject.commercialReuse,
             containsPersonLevelIdentifier: data.containsPersonLevelIdentifier,
@@ -511,6 +520,34 @@ function assertDraftMatchesSubject(
   }
 }
 
+async function projectDraftPublicKey(
+  tx: postgres.TransactionSql,
+  data: z.infer<typeof createRegistryDraftRequest>,
+  projectId: string,
+): Promise<string> {
+  const safeKey = administratorPublicKey(projectId);
+  const [existing] = await tx<{ public_key: string }[]>`
+    SELECT public_key FROM core.registry_entries
+    WHERE registry_type = 'project' AND subject_id = ${projectId}
+      AND public_key IN (${data.publicKey}, ${safeKey})
+    ORDER BY (public_key = ${data.publicKey}) DESC LIMIT 1
+  `;
+  if (!existing && !data.prepareAdministratorPublication
+    && /^PRJ-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(data.publicKey)) {
+    throw unprocessable("REGISTRY_PUBLIC_KEY_RESERVED", "This public key format is reserved for Registry-generated project keys");
+  }
+  if (data.prepareAdministratorPublication && existing && existing.public_key !== safeKey) {
+    throw unprocessable("ADMINISTRATOR_PUBLIC_KEY_REVIEW_REQUIRED", "This project has an existing public key. Create a reviewer publication draft to preserve its public history");
+  }
+  const [pending] = await tx`
+    SELECT id FROM core.registry_publication_drafts
+    WHERE registry_type = 'project' AND subject_id = ${projectId} AND state = 'pending'
+    LIMIT 1
+  `;
+  if (pending) throw conflict("REGISTRY_DRAFT_PENDING", "A draft for this project is already waiting. Publish or reject it first");
+  return existing?.public_key ?? (data.prepareAdministratorPublication ? safeKey : data.publicKey);
+}
+
 function prepareDraftProjection(
   data: z.infer<typeof createRegistryDraftRequest>,
   subject: PublicationSubject,
@@ -532,7 +569,22 @@ function prepareDraftProjection(
   if (!prepared.success) {
     throw unprocessable("ADMINISTRATOR_PROJECTION_INELIGIBLE", "This projection requires independent publication");
   }
-  return prepared.data;
+  const solo = administratorSoloProjectProjection.safeParse({
+    stableId: subject.projectId,
+    hostCountry: subject.identity["hostCountry"],
+    status: prepared.data.status,
+    version: prepared.data.version,
+    asOf: prepared.data.asOf,
+    sourceAge: prepared.data.sourceAge,
+    staleStatus: prepared.data.staleStatus,
+    limitations: prepared.data.limitations,
+    legalEffect: "none",
+    disclaimerCodes: prepared.data.disclaimerCodes,
+  });
+  if (!solo.success) {
+    throw unprocessable("ADMINISTRATOR_PROJECTION_INELIGIBLE", "This projection requires independent publication");
+  }
+  return solo.data;
 }
 
 function assertDraftPublishable(

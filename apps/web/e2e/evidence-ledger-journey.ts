@@ -110,6 +110,7 @@ export async function publishAndAnchor(
 ): Promise<void> {
   await connectAs(page, "Operator A");
   await page.goto(`/w/projects/${projectId}/publication`);
+  await page.getByLabel("Prepare for administrator publication").uncheck();
   await page.getByTestId("draft").click();
   await expect(page.getByTestId("pending-draft")).toBeVisible();
   await connectAs(page, "Publisher A");
