@@ -2,7 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { ResponseTooLargeError, type PinnedFetch, type PinnedRequestInit } from "@mpc/config";
-import { connectIsolated } from "./helpers/isolated-db.js";
+import { asWorker, connectIsolated } from "./helpers/isolated-db.js";
 import {
   DELIVERY_ERROR_CATEGORIES,
   deliverOnce,
@@ -108,7 +108,7 @@ describeDb("notification delivery", () => {
     await makeNotification();
     const { calls, fetchImpl } = recording();
 
-    const result = await deliverOnce(sql, { ...options, fetchImpl });
+    const result = await asWorker(sql, (worker) => deliverOnce(worker, { ...options, fetchImpl }));
 
     expect(result).toEqual({ handled: true, delivered: 1, failed: 0 });
     expect(calls[0]!.url).toBe("https://hooks.example.test/a");

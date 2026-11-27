@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
-import { connectIsolated } from "./helpers/isolated-db.js";
+import { asWorker, connectIsolated } from "./helpers/isolated-db.js";
 import {
   backlogStats,
+  createDispatcher,
   claimEvent,
   publishBatch,
   type OutboxRow,
@@ -44,6 +45,34 @@ describeDb("outbox publishing", () => {
     `;
     return rows[0]?.published_at === null;
   }
+
+  it("processes existing project and anchor events as a worker without bypassing RLS", async () => {
+    const projectEvent = await seed(`project-${randomUUID()}`);
+    const anchorEvent = randomUUID();
+    await sql`
+      INSERT INTO core.outbox (id, event_type, aggregate_id, aggregate_version, payload, correlation_id)
+      VALUES (${anchorEvent}, 'anchor.confirmed', ${randomUUID()}, 1, '{}'::jsonb, ${anchorEvent})
+    `;
+    await sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE mpc_app`;
+      expect(await tx`SELECT id FROM core.outbox WHERE id IN (${projectEvent}, ${anchorEvent})`).toEqual([]);
+    });
+
+    await asWorker(sql, async (worker) => {
+      const seen: string[] = [];
+      const dispatcher = createDispatcher(worker, [{
+        name: "rls-regression",
+        version: "1",
+        accepts: () => true,
+        handle: async (event) => { seen.push(event.id); },
+      }]);
+      expect(await backlogStats(worker)).toMatchObject({ pending: 2 });
+      expect(await publishBatch(worker, dispatcher.publish)).toMatchObject({ published: 2, failed: 0 });
+      expect(seen.sort()).toEqual([projectEvent, anchorEvent].sort());
+      expect(await backlogStats(worker)).toMatchObject({ pending: 0 });
+      expect(await worker`SELECT event_id FROM core.inbox WHERE event_id IN (${projectEvent}, ${anchorEvent})`).toHaveLength(2);
+    });
+  });
 
   it("publishes unpublished events and marks them", async () => {
     const correlationId = `pub-${randomUUID()}`;

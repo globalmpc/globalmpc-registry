@@ -14,7 +14,7 @@ export function createLedgerSweep(sql:postgres.Sql,intervalMs=DEFAULT_LEDGER_SWE
     const timestamp=now();
     if(lastAttempt!==null && timestamp-lastAttempt<intervalMs)return{ran:false,recorded:0};
     lastAttempt=timestamp;
-    // The worker role owns the every-project sweep (it bypasses RLS); the application role does not.
+    // The every-project sweep uses explicit worker RLS policies without a request actor.
     const page=async(after:string|null)=>sql<{id:string}[]>`
       SELECT p.id FROM core.projects p WHERE (${after}::uuid IS NULL OR p.id>${after}::uuid) AND (
         EXISTS (
@@ -33,7 +33,7 @@ export function createLedgerSweep(sql:postgres.Sql,intervalMs=DEFAULT_LEDGER_SWE
     for(const project of projects){
       try {
         await sql.begin(async tx=>{
-          const fresh=await computeEvidenceLedger(tx, project.id,new Date(timestamp));
+          const fresh=await computeEvidenceLedger(tx, project.id,new Date(timestamp),"worker");
           if(!fresh)return;
           const [previous]=await tx<{snapshot:LedgerSnapshot}[]>`SELECT snapshot FROM core.evidence_ledger_snapshots
             WHERE project_id=${project.id} ORDER BY created_at DESC,id DESC LIMIT 1`;

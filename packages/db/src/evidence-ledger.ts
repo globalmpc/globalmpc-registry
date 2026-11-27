@@ -113,6 +113,7 @@ export function ledgerRequirementEvidence(
 /** Only registered effective stage rules are evaluated. No rules means unknown, never a default stage. */
 export async function computeEvidenceLedger(
   tx: postgres.TransactionSql, projectId: string, evaluatedAt: Date,
+  scope: "actor" | "worker" = "actor",
 ): Promise<LedgerSnapshot | null> {
   const [project] = await tx<{ reference_status: string; host_country_iso3: string }[]>`
     SELECT reference_status, host_country_iso3 FROM core.projects
@@ -130,8 +131,9 @@ export async function computeEvidenceLedger(
       OR EXISTS (SELECT 1 FROM core.claims c WHERE c.project_id=${projectId} AND c.catalog_entry_id=ct.id AND c.superseded_by_claim_id IS NULL))
     ORDER BY ct.claim_type, ct.catalog_version
   `;
+  const claimHealth = scope === "worker" ? tx("core.worker_ledger_claim_health") : tx("core.ledger_claim_health");
   const claims = await tx<LedgerClaim[]>`
-    SELECT * FROM core.ledger_claim_health(${projectId}, ${evaluatedAt})
+    SELECT * FROM ${claimHealth}(${projectId}, ${evaluatedAt})
     WHERE NOT core.is_reserved_catalog_key(claim_type)
   `;
   const attestations = await tx<LedgerAttestation[]>`

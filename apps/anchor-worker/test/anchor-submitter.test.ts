@@ -360,6 +360,40 @@ describeDb("anchor submission and finality", () => {
   }
 
 
+  it("submits and confirms with a worker login that does not bypass row security", async () => {
+    const login = `anchor_rls_${randomUUID().replaceAll("-", "")}`;
+    const password = randomUUID();
+    const url = new URL(databaseUrl);
+    url.username = login;
+    url.password = password;
+    await sql.unsafe(`CREATE ROLE "${login}" LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${password}' IN ROLE mpc_worker`);
+    const worker = postgres(url.href, { onnotice: () => {}, prepare: false });
+    try {
+      const [role] = await worker`
+        SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user
+      `;
+      expect(role).toEqual({ rolname: login, rolsuper: false, rolbypassrls: false });
+      await sql.begin(async (tx) => {
+        await tx`SET LOCAL ROLE mpc_app`;
+        expect(await tx`SELECT id FROM chain.transactions WHERE id = ${transactionId}`).toEqual([]);
+      });
+      await expect(stepOnce(worker, chain, config, log)).resolves.toMatchObject({
+        transactionId, from: "created", to: "submitted",
+      });
+      expect(await stateOf()).toMatchObject({ state: "submitted", tx_hash: TX_HASH });
+      chain.observation = receipt(100, BLOCK_A);
+      chain.head = 102;
+      await stepOnce(worker, chain, config, log);
+      expect(await stateOf()).toMatchObject({ state: "confirmed", tx_hash: TX_HASH });
+      expect(await sql`
+        SELECT event_type FROM core.outbox WHERE aggregate_id = ${batchRowId}
+      `).toEqual([{ event_type: "anchor.confirmed" }]);
+    } finally {
+      await worker.end();
+      await sql`DROP ROLE ${sql(login)}`;
+    }
+  });
+
   it("submits created and moves it to submitted", async () => {
     const result = await step();
 

@@ -99,5 +99,8 @@ test.describe("chain confirmation", () => {
     await expect(
       page.getByText("Integrity and authority are different questions"),
     ).toBeVisible();
+    await page.goto("/");
+    const directoryRow = page.locator("article.public-project-row").filter({ hasText: publicKey });
+    await expect(directoryRow.getByText("Confirmed on-chain", { exact: true })).toBeVisible();
   });
 });

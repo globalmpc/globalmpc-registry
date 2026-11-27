@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
-import { connectIsolated } from "./helpers/isolated-db.js";
+import { asWorker, connectIsolated } from "./helpers/isolated-db.js";
 import { loadEmailWorkerConfig } from "../src/email/config.js";
 import { deliverEmailOnce } from "../src/email/delivery.js";
 import { EMAIL_TEMPLATES, maskEmail, renderEmail } from "../src/email/messages.js";
@@ -375,22 +375,6 @@ describeDb("account email delivery", () => {
     return found!;
   }
 
-  /** As the worker connects: its own role, which bypasses RLS but holds only the grants in 0113. */
-  async function asWorker<T>(body: (sql: postgres.Sql) => Promise<T>): Promise<T> {
-    const url = new URL(process.env["DATABASE_URL"]!);
-    url.pathname = `${url.pathname}_email_delivery`;
-    const worker = postgres(url.toString(), {
-      onnotice: () => {},
-      max: 1,
-      connection: { role: "mpc_worker" } as never,
-    });
-    try {
-      return await body(worker);
-    } finally {
-      await worker.end();
-    }
-  }
-
   const failing = (reason: string, retryable: boolean): EmailTransport => ({
     kind: "resend",
     send: async () => ({ ok: false, reason, retryable }),
@@ -398,7 +382,7 @@ describeDb("account email delivery", () => {
 
   it("sends through the test sink as the worker role and clears the address and code", async () => {
     const id = await queue();
-    const result = await asWorker((worker) => deliverEmailOnce(worker, createLogTransport(worker), options, emit));
+    const result = await asWorker(sql, (worker) => deliverEmailOnce(worker, createLogTransport(worker), options, emit));
     expect(result).toEqual({ handled: true, sent: 1, failed: 0 });
     expect(await row(id)).toMatchObject({ state: "sent", recipient: null, params: null, attempts: 1 });
     const [sink] = await sql<{ recipient: string; subject: string; body: string }[]>`

@@ -56,6 +56,8 @@ const CROSS_TENANT = [
   // 0170: review independence reads every affiliation of the person judged, not the caller's.
   "core.subject_affiliated_organizations(uuid)",
   "core.subject_holder_organization(uuid)",
+  // 0177: the jobs worker calculates claim health across projects without a request actor.
+  "core.worker_ledger_claim_health(uuid,timestamp with time zone)",
 ];
 
 /** Audited (0112–0130): act inside the tenant context the caller set — see 0131's header. */
@@ -186,6 +188,11 @@ describeDb("cross-tenant SECURITY DEFINER functions (0131)", () => {
       {
         fn: "core.resolve_role_bindings(uuid)",
         call: "core.resolve_role_bindings($1::uuid)",
+        arg: "00000000-0000-4000-8000-000000000000",
+      },
+      {
+        fn: "core.worker_ledger_claim_health(uuid,timestamptz)",
+        call: "core.worker_ledger_claim_health($1::uuid, now())",
         arg: "00000000-0000-4000-8000-000000000000",
       },
     ];

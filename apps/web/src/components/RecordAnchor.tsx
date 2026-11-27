@@ -35,7 +35,7 @@ export function hasConfirmedAnchor(proof: InclusionProof): boolean {
 }
 
 export function isAnchorPending(proof: InclusionProof): boolean {
-  return proof.merkleVerified && !proof.included && ["created", "signed", "submitted", "included"].includes(proof.confirmationState);
+  return proof.merkleVerified && !proof.included && ["created", "signed", "proposed", "submitted", "included"].includes(proof.confirmationState);
 }
 
 function anchorSummary(proof: InclusionProof) {
@@ -43,6 +43,7 @@ function anchorSummary(proof: InclusionProof) {
   switch (proof.confirmationState) {
     case "created":
     case "signed": return "Batch prepared · awaiting submission";
+    case "proposed": return "Anchor proposed · awaiting approval";
     case "submitted":
     case "included": return "Transaction submitted · awaiting confirmation";
     case "confirmed":
@@ -72,7 +73,9 @@ export function RecordAnchor({ lookup, retry, version }: {
   };
   return <div className="record-anchor" aria-label="On-chain record" role="status">
     <strong>On-chain record · v{version}</strong>
-    <span>{lookup.state === "ready" ? anchorSummary(lookup.proof) : messages[lookup.state]}</span>
+    <span className={proof && hasConfirmedAnchor(proof) ? "state-label state-reviewed" : "state-label"}>
+      {lookup.state === "ready" ? anchorSummary(lookup.proof) : messages[lookup.state]}
+    </span>
     {url ? <a href={url} target="_blank" rel="noreferrer">View transaction ↗</a> : null}
     {lookup.state === "unavailable" ? <button type="button" onClick={retry}>Retry status</button> : null}
   </div>;

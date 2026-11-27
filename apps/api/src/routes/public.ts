@@ -129,16 +129,27 @@ export async function registerPublicRoutes(
           sort_at: Date;
           revoked_at: Date | null;
           superseded_by_id: string | null;
+          anchor_status: "confirmed" | "pending" | "unanchored" | "unconfirmed" | "unavailable";
         }[]
       >`
-        SELECT * FROM core.public_registry_list(
+        SELECT listing.*, CASE
+          WHEN proof.batch_row_id IS NULL THEN 'unanchored'
+          WHEN proof.transaction_state = 'confirmed' AND proof.chain_id > 0
+            AND proof.transaction_hash ~* '^0x[0-9a-f]{64}$' THEN 'confirmed'
+          WHEN proof.transaction_state IS NULL OR proof.transaction_state IN ('created', 'signed', 'proposed', 'submitted', 'included') THEN 'pending'
+          WHEN proof.transaction_state IN ('failed', 'dropped', 'reverted', 'reorged', 'replaced', 'reconciliation_required') THEN 'unconfirmed'
+          ELSE 'unavailable'
+        END AS anchor_status
+        FROM core.public_registry_list(
           ${registryType},
           ${query.q ?? null},
           ${query.status ?? null},
           ${query.limit + 1},
           ${after?.at ?? null},
           ${after?.id ?? null}
-        )
+        ) AS listing
+        LEFT JOIN LATERAL core.public_inclusion_proof(listing.entry_version_id) AS proof ON true
+        ORDER BY listing.sort_at DESC, listing.entry_id DESC
       `;
 
       const page = rows.slice(0, query.limit);
@@ -158,6 +169,7 @@ export async function registerPublicRoutes(
           publishedAt: row.published_at?.toISOString() ?? null,
           revokedAt: row.revoked_at?.toISOString() ?? null,
           supersededBy: row.superseded_by_id,
+          anchorStatus: row.anchor_status,
           // The projection is not spread — whether only public-allowed fields went out must be
           // decidable from the response alone.
           projection: row.public_projection,

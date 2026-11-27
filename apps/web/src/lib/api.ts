@@ -1948,6 +1948,7 @@ export interface PublicRegistryListItem {
   publishedAt: string | null;
   revokedAt: string | null;
   supersededBy: string | null;
+  anchorStatus?: "confirmed" | "pending" | "unanchored" | "unconfirmed" | "unavailable";
   /** Contains only fields in the public allowlist. The server enforces it. */
   projection: Record<string, unknown>;
 }

@@ -48,6 +48,14 @@ function formatDate(value: string) {
   return new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
+const anchorLabels = {
+  confirmed: "Confirmed on-chain",
+  pending: "Anchor pending",
+  unanchored: "Not anchored",
+  unconfirmed: "Anchor not confirmed",
+  unavailable: "Anchor status unavailable",
+} satisfies Record<NonNullable<PublicRegistryListItem["anchorStatus"]>, string>;
+
 function PublicProjectRow({ item, hrefFor }: {
   readonly item: PublicRegistryListItem;
   readonly hrefFor: PublicRegistryBrowserProps["hrefFor"];
@@ -62,6 +70,11 @@ function PublicProjectRow({ item, hrefFor }: {
       <div>
         <h2>{hrefFor ? <Link href={hrefFor(item)}>{title}</Link> : title}{showTestBadge ? <span className="directory-test-badge">TEST DATA</span> : null}</h2>
         <p className="meta">{projectSubtitle(item.publicKey, text(item.projection, "mineral"), text(item.projection, "hostCountry"))}</p>
+        <p className="meta" aria-label="Blockchain anchor">
+          <span className={item.anchorStatus === "confirmed" ? "state-label state-reviewed" : "state-label"}>
+            {anchorLabels[item.anchorStatus ?? "unavailable"] ?? anchorLabels.unavailable}
+          </span>
+        </p>
       </div>
       <DirectoryEvidence value={item.projection.evidenceLedger} />
       <div className="directory-result-count">{count === null ? "— reviewed items" : `${count} reviewed ${count === 1 ? "item" : "items"}`}</div>

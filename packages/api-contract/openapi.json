@@ -98360,6 +98360,16 @@
                                   "null"
                                 ]
                               },
+                              "anchorStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "confirmed",
+                                  "pending",
+                                  "unanchored",
+                                  "unconfirmed",
+                                  "unavailable"
+                                ]
+                              },
                               "projection": {
                                 "type": "object",
                                 "properties": {
@@ -101160,6 +101170,7 @@
                           "enum": [
                             "created",
                             "signed",
+                            "proposed",
                             "submitted",
                             "included",
                             "confirmed",
