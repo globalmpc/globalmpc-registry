@@ -9,6 +9,9 @@ import { hashProjection, verifyMerkleProof, type Hex } from "@mpc/canonical";
 import { checkPublishable, isPublicField, sameChainEnvironment } from "@mpc/domain";
 import {
   administratorDraftEligibility,
+  administratorPublicKey,
+  ADMINISTRATOR_PUBLICATION_POLICY,
+  ADMINISTRATOR_PUBLICATION_SCHEMA,
   createProjectAnchorBatchRequest,
   PROOF_DOES_NOT_PROVE,
   PROOF_PROVES,
@@ -106,32 +109,22 @@ async function validatePublicationDraft(
     proposedAt: draft.proposed_at.toISOString(),
     projection: draft.projection,
   };
-  if (ownDraft && administratorDraftEligibility(publicationDraft) !== "eligible") {
+  if (ownDraft && (administratorDraftEligibility(publicationDraft) !== "eligible"
+    || draft.public_key !== administratorPublicKey(draft.subject_id)
+    || draft.policy_version !== ADMINISTRATOR_PUBLICATION_POLICY
+    || draft.schema_version !== ADMINISTRATOR_PUBLICATION_SCHEMA)) {
     throw unprocessable(
       "REGISTRY_DRAFT_SELF_PUBLICATION",
       "This draft must be published by a different reviewer",
     );
   }
 
-  if (ownDraft && draft.disclosure_approved_by_subject_id === null) {
-    throw unprocessable("REGISTRY_DISCLOSURE_APPROVAL_REQUIRED", "An independent reviewer must approve this draft for public disclosure");
-  }
-
-  if (ownDraft) {
-    const [approval] = await tx<{ current: boolean }[]>`
-      SELECT core.registry_disclosure_approval_is_current(
-        ${draft.disclosure_approved_by_subject_id}, ${draft.disclosure_approval_generation}
-      ) AS current
-    `;
-    if (!approval?.current) throw invalidDisclosureApproval();
-  }
-
   /**
    * The draft is re-checked against the subject as it is **now**.
    *
    * Between drafting and publishing, evidence can be added, a source's terms can change
-   * and the project can be suspended. The approver approves what the draft shows; if
-   * that is no longer true, publishing it would anchor a stale statement.
+   * and the project can be suspended. Publishing a stale draft would put an outdated
+   * statement in the public record.
    */
   if (draft.projection["evidenceLedger"] !== undefined) {
     await lockEvidenceLedgerPublicationInputs(tx, draft.subject_id);
@@ -173,13 +166,6 @@ async function validatePublicationDraft(
   return subject;
 }
 
-function invalidDisclosureApproval() {
-  return conflict(
-    "REGISTRY_DISCLOSURE_APPROVAL_INVALID",
-    "The disclosure approval is no longer valid. Discard the draft and obtain a new review",
-  );
-}
-
 /** Record the decision under the same transaction and actor as the public version. */
 async function recordPublishedDraft(
   tx: postgres.TransactionSql,
@@ -206,8 +192,8 @@ async function recordPublishedDraft(
     `;
   } catch (error) {
     const failure = error as { code?: string; constraint_name?: string } | null;
-    if (failure?.code === "23514" && failure.constraint_name === "registry_draft_disclosure_reviewer_current") {
-      throw invalidDisclosureApproval();
+    if (failure?.code === "23514" && failure.constraint_name === "registry_draft_solo_projection") {
+      throw unprocessable("REGISTRY_DRAFT_SELF_PUBLICATION", "This draft requires independent publication");
     }
     if (failure?.code === "23514" && failure.constraint_name === "registry_draft_two_person") {
       throw forbidden(

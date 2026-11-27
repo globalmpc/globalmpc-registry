@@ -18,6 +18,8 @@
 :root {
   --page-gutter: 24px;
   --page-content-max: 1248px;
+  --topbar-height: 64px;
+  scroll-padding-top: calc(var(--topbar-height) + 12px);
 }
 
 @media (min-width: 1024px) {
@@ -81,6 +83,9 @@ code,
 }
 
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -106,6 +111,19 @@ code,
   flex: 0 0 auto;
   flex-wrap: nowrap;
   justify-content: flex-end;
+}
+
+.topbar-active-roles {
+  max-width: min(16rem, 55vw);
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .topbar a,
+  .topbar summary,
+  .public-project-header a {
+    transition: color 160ms ease-out;
+  }
 }
 
 @media (max-width: 640px) {

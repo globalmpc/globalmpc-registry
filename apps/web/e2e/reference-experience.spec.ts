@@ -216,6 +216,8 @@ test("visual disclosure preview becomes an anonymous public project without expo
     page.getByRole("region", { name: "Public disclosure preview" }),
   ).toContainText("Draft preview · not published");
   await publishAndAnchor(page, id, key);
+  await page.goto(`/explorer/projects/${key}`);
+  await expect(page.getByRole("banner").getByText(/Active roles · administrator/)).toBeVisible();
   await page.context().clearCookies();
   const reads: string[] = [];
   page.on("request", (request) => {
@@ -231,6 +233,15 @@ test("visual disclosure preview becomes an anonymous public project without expo
   await page.getByRole("link", { name, exact: true }).click();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   await expect(page.getByTestId("evidence-ledger")).toBeVisible();
+  const summary = page.getByRole("complementary", { name: "Project summary" });
+  await expect(summary).toContainText(name);
+  await expect(summary).toContainText("None listed in this version");
+  await expect(page.getByText(/Active roles ·/)).toHaveCount(0);
+  await page.evaluate(() => window.scrollTo(0, 350));
+  await expect.poll(async () => (await page.getByRole("banner").boundingBox())?.y).toBe(0);
+  await expect.poll(() => summary.evaluate((element) =>
+    Math.round(element.getBoundingClientRect().top - document.querySelector(".topbar")!.getBoundingClientRect().bottom),
+  )).toBe(16);
   await expect(page.getByTestId("record-details")).not.toHaveAttribute("open", "");
   await expect(page.getByTestId("shared-limitations")).toBeVisible();
   await expect(page.getByTestId("shared-legal-effect")).toBeVisible();
@@ -243,6 +254,7 @@ test("visual disclosure preview becomes an anonymous public project without expo
     ),
   ).toBe(true);
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(summary).toHaveCSS("position", "static");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

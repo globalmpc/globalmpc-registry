@@ -1418,24 +1418,6 @@ export async function publishRegistryDraft(
   return parse<PublishedVersion>(response);
 }
 
-export async function approveRegistryDraftDisclosure(
-  token: string,
-  draft: { id: string; version: number },
-  key: string,
-): Promise<RegistryDraft> {
-  const response = await apiFetch(`/api/v1/registry-entries/drafts/${draft.id}/approve-disclosure`, {
-    method: "POST",
-    headers: {
-      ...authHeader(token),
-      "content-type": "application/json",
-      "idempotency-key": key,
-      "if-match": `"${draft.version}"`,
-    },
-    body: JSON.stringify({ disclosureReviewed: true }),
-  });
-  return parse<RegistryDraft>(response);
-}
-
 export async function discardRegistryDraft(
   token: string,
   draft: { id: string; version: number },

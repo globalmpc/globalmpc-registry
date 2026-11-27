@@ -539,14 +539,7 @@ describeDb("Registry publication and public lookup", () => {
       payload: { disclosureReviewed: true },
     });
 
-    async function approveDisclosure(target: { id: string; version: number }) {
-      const approved = await submitDisclosureApproval(tokens.disclosureApproverA, target);
-      expect(approved.statusCode, approved.body).toBe(200);
-      expect(approved.json()).toMatchObject({ disclosureApproved: true, state: "pending", version: target.version + 1 });
-      return approved.json();
-    }
-
-    it("refuses a pending disclosure approval after reviewer suspension and reinstatement", async () => {
+    it("publishes an eligible draft after an optional reviewer approval becomes historical", async () => {
       const projectId = await projectWithKey(`SUSPENDED-DISCLOSURE-${randomUUID()}`);
       const reviewer = await addGovernanceAccount(fx, "reviewer", { projectId, assurance: "high_assurance" });
       const [holder] = await fx.sql<{ subject_id: string }[]>`
@@ -559,8 +552,6 @@ describeDb("Registry publication and public lookup", () => {
       });
       expect(prepared.statusCode, prepared.body).toBe(200);
       const reviewerToken = await signIn(app, reviewer);
-      const published = await publish(tokens.operatorA);
-      expect(published.statusCode, published.body).toBe(200);
       const secondAdmin = await addGovernanceAccount(fx, "administrator", {
         scopeKind: "registry", assurance: "high_assurance",
       });
@@ -584,6 +575,12 @@ describeDb("Registry publication and public lookup", () => {
       const pending = await withActor(fx.appSql, { subjectId: decider!.subject_id }, async (tx) => {
         const approval = await submitDisclosureApproval(reviewerToken, prepared.json());
         expect(approval.statusCode, approval.body).toBe(200);
+        expect(approval.json()).toMatchObject({
+          disclosureApproved: true,
+          state: "pending",
+          version: prepared.json().version + 1,
+          projection: prepared.json().projection,
+        });
         await tx`
           SELECT * FROM core.decide_subject_suspension(
             ${suspension.id}, ${decider!.subject_id}, true, 'Independent suspension decision', ${suspension.version}
@@ -598,27 +595,25 @@ describeDb("Registry publication and public lookup", () => {
       `;
       expect(ordering?.suspension_clock_started_first).toBe(true);
 
-      for (const state of ["suspended", "reinstated"] as const) {
-        if (state === "reinstated") {
-          const { id, version } = await propose("reinstate");
-          const decided = await app.inject({
-            method: "POST", url: `/api/v1/admin/subject-suspensions/${id}/decision`,
-            headers: { authorization: `Bearer ${secondAdminToken}`, "idempotency-key": idempotencyKey(), "if-match": `"${version}"` },
-            payload: { decision: "approve", reason: "Independent reinstatement decision" },
-          });
-          expect(decided.statusCode, decided.body).toBe(200);
-        }
+      const { id, version } = await propose("reinstate");
+      const decided = await app.inject({
+        method: "POST", url: `/api/v1/admin/subject-suspensions/${id}/decision`,
+        headers: { authorization: `Bearer ${secondAdminToken}`, "idempotency-key": idempotencyKey(), "if-match": `"${version}"` },
+        payload: { decision: "approve", reason: "Independent reinstatement decision" },
+      });
+      expect(decided.statusCode, decided.body).toBe(200);
 
-        const result = await publishDraft(app, tokens.operatorA, pending);
-        expect(result.statusCode, result.body).toBe(409);
-        expect(result.json().code).toBe("REGISTRY_DISCLOSURE_APPROVAL_INVALID");
-        await expect(withPublishingSession(tokens.operatorA, fx.operatorSubjectA, (tx) => tx`
-          UPDATE core.registry_publication_drafts
-          SET state = 'published', decided_by_subject_id = proposed_by_subject_id,
-              decided_at = now(), entry_version_id = ${published.json().id}, version = version + 1
-          WHERE id = ${pending.id}
-        `)).rejects.toMatchObject({ code: "23514", constraint_name: "registry_draft_disclosure_reviewer_current" });
-      }
+      const result = await publishDraft(app, tokens.operatorA, pending);
+      expect(result.statusCode, result.body).toBe(200);
+      const [historical] = await fx.sql`
+        SELECT disclosure_approved_by_subject_id FROM core.registry_publication_drafts WHERE id = ${pending.id}
+      `;
+      expect(historical?.disclosure_approved_by_subject_id).toBe(reviewerId);
+      const [approvalEvent] = await fx.sql`
+        SELECT project_id FROM audit.events
+        WHERE resource_id = ${pending.id} AND command = 'registry.version.draft_disclosure_approved'
+      `;
+      expect(approvalEvent?.project_id).toBe(projectId);
     });
 
     it("lists drafts only in the administrator's jurisdiction", async () => {
@@ -700,7 +695,7 @@ describeDb("Registry publication and public lookup", () => {
         subjectId: projectId, prepareAdministratorPublication: true, projection: await projectProjection(fx.sql, projectId, administratorCopy),
       });
       expect(prepared.statusCode, prepared.body).toBe(200);
-      const original = await approveDisclosure(prepared.json());
+      const original = prepared.json();
       await fx.sql`UPDATE core.projects SET version = version + 1 WHERE id = ${projectId}`;
       const stale = await publishDraft(app, tokens.operatorA, original);
       expect(stale.statusCode, stale.body).toBe(409);
@@ -720,7 +715,7 @@ describeDb("Registry publication and public lookup", () => {
         subjectId: projectId, prepareAdministratorPublication: true, projection: await projectProjection(fx.sql, projectId, administratorCopy),
       });
       expect(replacement.statusCode, replacement.body).toBe(200);
-      const published = await publishDraft(app, tokens.operatorA, await approveDisclosure(replacement.json()));
+      const published = await publishDraft(app, tokens.operatorA, replacement.json());
       expect(published.statusCode, published.body).toBe(200);
     });
 
@@ -779,7 +774,7 @@ describeDb("Registry publication and public lookup", () => {
           subjectId: projectId, prepareAdministratorPublication: true, projection: await projectProjection(fx.sql, projectId, administratorCopy),
         });
         expect(prepared.statusCode, prepared.body).toBe(200);
-        const pending = await approveDisclosure(prepared.json());
+        const pending = prepared.json();
         const subjectId = pending.proposedBySubjectId as string;
         const other = await publish(tokens.operatorA);
         expect(other.statusCode, other.body).toBe(200);
@@ -848,30 +843,34 @@ describeDb("Registry publication and public lookup", () => {
       const [runtime] = await fx.appSql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
       expect(runtime).toEqual({ rolsuper: false, rolbypassrls: false });
       const projectId = await projectWithKey(`ADMIN-PUBLISH-${randomUUID()}`);
+      const [internal] = await fx.sql`
+        UPDATE core.projects SET name = 'Internal project name', minerals = ARRAY['Internal mineral text']
+        WHERE id = ${projectId} RETURNING project_key
+      `;
       const admin = await signIn(app, await addGovernanceAccount(fx, "administrator", {
         projectId, assurance: "high_assurance",
       }));
       const prepared = await draft(admin, {
         subjectId: projectId, prepareAdministratorPublication: true, projection: await projectProjection(fx.sql, projectId, {
-          ...administratorCopy, version: "999", sourceAge: "0", asOf: "2099-01-01T00:00:00.000Z",
+          ...administratorCopy, projectName: "Internal project name", mineral: ["Internal mineral text"],
+          projectKey: internal!.project_key, version: "999", sourceAge: "0", asOf: "2099-01-01T00:00:00.000Z",
         }),
+        policyVersion: "Internal policy text", schemaVersion: "Internal schema text",
       });
       expect(prepared.statusCode, prepared.body).toBe(200);
-      const beforeApproval = prepared.json();
-      const refused = await publishDraft(app, admin, beforeApproval);
-      expect(refused.statusCode).toBe(422);
-      expect(refused.json().code).toBe("REGISTRY_DISCLOSURE_APPROVAL_REQUIRED");
-      expect((await submitDisclosureApproval(admin, beforeApproval)).statusCode).toBe(403);
-      await expect(withPublishingSession(admin, beforeApproval.proposedBySubjectId, (tx) => tx`
+      const draftRow = prepared.json();
+      expect(draftRow).toMatchObject({
+        disclosureApproved: false, publicKey: `PRJ-${projectId}`, policyVersion: "1.0.0", schemaVersion: "1",
+      });
+      for (const privateField of ["projectName", "projectKey", "mineral", "evidenceLedger"]) {
+        expect(draftRow.projection).not.toHaveProperty(privateField);
+      }
+      expect((await submitDisclosureApproval(admin, draftRow)).statusCode).toBe(403);
+      await expect(withPublishingSession(admin, draftRow.proposedBySubjectId, (tx) => tx`
         UPDATE core.registry_publication_drafts
         SET disclosure_approved_by_subject_id = proposed_by_subject_id, version = version + 1
-        WHERE id = ${beforeApproval.id}
+        WHERE id = ${draftRow.id}
       `)).rejects.toMatchObject({ code: "23514", constraint_name: "registry_draft_disclosure_approval_authority" });
-      const draftRow = await approveDisclosure(beforeApproval);
-      expect(draftRow.projection).toEqual(beforeApproval.projection);
-      const [approvalEvent] = await fx.sql`SELECT project_id FROM audit.events
-        WHERE resource_id = ${draftRow.id} AND command = 'registry.version.draft_disclosure_approved'`;
-      expect(approvalEvent?.project_id).toBe(projectId);
       const published = await publishDraft(app, admin, draftRow);
       expect(published.statusCode, published.body).toBe(200);
       const [entry] = await fx.sql`SELECT public_projection FROM core.registry_entry_versions WHERE id = ${published.json().id}`;
@@ -879,6 +878,13 @@ describeDb("Registry publication and public lookup", () => {
         version: "1", sourceAge: null, staleStatus: "unknown", asOf: draftRow.proposedAt,
       });
       expect(entry?.public_projection).toMatchObject(draftRow.projection);
+      const publicResponse = await app.inject({
+        method: "GET", url: `/api/v1/public/registries/project/${draftRow.publicKey}`,
+      });
+      expect(publicResponse.statusCode, publicResponse.body).toBe(200);
+      expect(publicResponse.json()).toMatchObject({ stableId: projectId, hostCountry: "MNG" });
+      expect(publicResponse.body).not.toContain("Internal");
+      expect(publicResponse.json()).not.toHaveProperty("projectKey");
       expect(new Date(draftRow.proposedAt).getTime()).toBeLessThanOrEqual(Date.now());
       const [audit] = await fx.sql`SELECT detail FROM audit.events
         WHERE resource_id = ${published.json().id} AND command = 'registry.version.published'`;
@@ -893,6 +899,15 @@ describeDb("Registry publication and public lookup", () => {
       });
       expect(batch.statusCode, batch.body).toBe(200);
       expect(batch.json()).toMatchObject({ recordCount: 1, confirmationState: "created" });
+
+      const reviewed = await draft(admin, {
+        subjectId: projectId, projection: await projectProjection(fx.sql, projectId),
+      });
+      expect(reviewed.statusCode, reviewed.body).toBe(200);
+      expect(reviewed.json().publicKey).toBe(draftRow.publicKey);
+      const reviewedVersion = await publishDraft(app, tokens.disclosureApproverA, reviewed.json());
+      expect(reviewedVersion.statusCode, reviewedVersion.body).toBe(200);
+      expect(reviewedVersion.json()).toMatchObject({ entryId: published.json().entryId, version: 2 });
     });
 
     it("an administrator cannot publish a draft by another person without reviewer authority", async () => {

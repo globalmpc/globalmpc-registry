@@ -279,9 +279,9 @@ unchanged, forward again); it does not, and cannot, run the old image against th
 
 ### Coordinated Registry disclosure cutover (0173)
 
-Migration 0173 enforces independent disclosure approval for administrator publication at
-the database as soon as it applies. Older API images cannot record that approval. Quiesce
-publication traffic before migration, take a pre-migration backup, deploy the matching API
+Migrations 0173 and 0174 required independent disclosure approval for administrator
+publication. Older API images cannot record that approval. Quiesce publication traffic
+before migrating to those versions, take a pre-migration backup, deploy the matching API
 and web together, and then verify with a reviewer approval followed by an administrator
 publication before reopening publication traffic. Keep the database guard active during
 cutover.
@@ -291,6 +291,18 @@ If reverting to an older image is necessary, use the coordinated database restor
 above, with publication and anchor processing paused. First reconcile any publications or
 external anchor transactions made after the backup. An on-chain anchor cannot be undone
 by restoring PostgreSQL. Prefer rolling forward once this release has processed records.
+
+### Administrator project publication (0175)
+
+Migration 0175 allows scoped administrators to publish their own eligible project drafts
+with a generated public key and basic structured registry facts. Project names, internal
+keys, minerals and evidence assessments can be published through the independent reviewer
+flow. Projects with an existing legacy public key also use that flow to keep their public
+history together. Apply the migration before enabling the new API and web.
+Verify that the same administrator can draft, acknowledge disclosure, publish and create
+the project anchor batch. Existing drafts with project text can be published by an independent reviewer. To use
+administrator publication for a project without a legacy public key, discard the old
+draft and create a prepared project draft.
 
 **Deploy the jobs worker with the API, or right after it and the migration.** The worker renders
 the outbox mail the database writes, and 0127 adds two templates (`account_suspended_notice`,

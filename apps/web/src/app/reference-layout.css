@@ -299,6 +299,46 @@ body:has(.workspace-shell) .topbar-start > nav {
 .evidence-browser-item > :not(summary) {
   margin: 14px 20px;
 }
+.public-project-detail {
+  display: grid;
+  gap: 24px;
+  align-items: start;
+}
+
+.public-project-record,
+.public-project-summary {
+  min-width: 0;
+}
+
+.public-project-summary {
+  overflow-wrap: anywhere;
+}
+
+.public-project-summary .dl {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.public-project-summary dd + dt {
+  margin-top: 8px;
+}
+
+@media (min-width: 1200px) {
+  .public-project-detail {
+    grid-template-columns: minmax(0, 1fr) 15rem;
+  }
+
+  .public-project-summary {
+    position: sticky;
+    top: calc(var(--topbar-height) + 16px);
+    grid-area: 1 / 2;
+  }
+
+  .public-project-record {
+    grid-area: 1 / 1;
+  }
+}
+
 .public-project-header {
   margin-bottom: 30px;
 }
@@ -585,4 +625,17 @@ body:has(.workspace-shell) .topbar-start > nav {
 }
 .audit-timeline p {
   margin: 6px 0;
+}
+
+.publication-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-block: 0 12px;
+}
+
+.publication-checkbox > input[type="checkbox"] {
+  flex: none;
+  width: auto;
+  margin: 3px 0 0;
 }
