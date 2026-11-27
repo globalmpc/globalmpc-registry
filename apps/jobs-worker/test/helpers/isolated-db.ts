@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { runMigrations } from "@mpc/db";
 
@@ -39,4 +40,30 @@ export async function connectIsolated(suffix: string): Promise<postgres.Sql> {
   await sql`TRUNCATE core.outbox, core.inbox`;
 
   return sql;
+}
+
+/** Execute against a real deployment-style login with inherited grants and RLS enforced. */
+export async function asWorker<T>(
+  admin: postgres.Sql,
+  body: (worker: postgres.Sql) => Promise<T>,
+): Promise<T> {
+  const [database] = await admin<{ name: string }[]>`SELECT current_database() AS name`;
+  const url = new URL(process.env["DATABASE_URL"]!);
+  const login = `jobs_rls_${randomUUID().replaceAll("-", "")}`;
+  const password = randomUUID();
+  url.pathname = `/${encodeURIComponent(database!.name)}`;
+  url.username = login;
+  url.password = password;
+  await admin.unsafe(`CREATE ROLE "${login}" LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${password}' IN ROLE mpc_worker`);
+  const worker = postgres(url.href, { onnotice: () => {} });
+  try {
+    const [role] = await worker`SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
+    if (role?.rolname !== login || role.rolsuper !== false || role.rolbypassrls !== false) {
+      throw new Error("Worker regression must run with RLS enforced");
+    }
+    return await body(worker);
+  } finally {
+    await worker.end();
+    await admin.unsafe(`DROP ROLE "${login}"`);
+  }
 }

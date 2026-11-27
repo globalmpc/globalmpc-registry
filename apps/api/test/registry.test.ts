@@ -1904,6 +1904,17 @@ describeDb("Registry publication and public lookup", () => {
     it("AC-23: included is false unless confirmed", async () => {
       const publicKey = `PRF-${randomUUID().slice(0, 8)}`;
       const published = (await publish(tokens.operatorA, { publicKey })).json();
+      const listedAnchor = async () => {
+        const result = await app.inject({
+          method: "GET",
+          url: `/api/v1/public/registries/project?q=${publicKey}`,
+        });
+        expect(result.statusCode, result.body).toBe(200);
+        expect(result.json().items.map((item: { entryVersionId: string }) => item.entryVersionId))
+          .toEqual([published.id]);
+        return result.json().items[0].anchorStatus;
+      };
+      expect(await listedAnchor()).toBe("unanchored");
       await app.inject({
         method: "POST",
         url: "/api/v1/anchor-batches",
@@ -1919,6 +1930,16 @@ describeDb("Registry publication and public lookup", () => {
       // The Merkle proof holds, but the chain has not finalized, so it is not marked included.
       expect(proof.merkleVerified).toBe(true);
       expect(proof.included).toBe(false);
+      expect(await listedAnchor()).toBe("pending");
+      await fx.sql`
+        UPDATE chain.transactions t
+        SET state = 'confirmed', tx_hash = ${`0x${"a1".repeat(32)}`},
+            block_number = 100, block_hash = ${`0x${"b2".repeat(32)}`},
+            confirmations = 12, confirmed_at = now(), reorg_watch_until = now() + interval '1 hour'
+        FROM chain.anchor_batches b
+        WHERE t.batch_id = b.id AND b.batch_id = ${proof.batchId}
+      `;
+      expect(await listedAnchor()).toBe("confirmed");
     });
 
     it("AC-23: states what the proof does not prove", async () => {

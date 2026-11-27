@@ -1288,6 +1288,7 @@ export const inclusionProofResponse = z.object({
   confirmationState: z.enum([
     "created",
     "signed",
+    "proposed",
     "submitted",
     "included",
     "confirmed",
@@ -1349,6 +1350,7 @@ export const publicRegistryListItem = z
     publishedAt: isoDateTime.nullable(),
     revokedAt: isoDateTime.nullable(),
     supersededBy: z.string().nullable(),
+    anchorStatus: z.enum(["confirmed", "pending", "unanchored", "unconfirmed", "unavailable"]).optional(),
     projection: publicProjection,
   })
   .strict();

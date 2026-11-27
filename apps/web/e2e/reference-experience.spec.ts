@@ -226,6 +226,8 @@ test("visual disclosure preview becomes an anonymous public project without expo
   });
   await page.goto("/");
   await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
+  const directoryRow = page.locator("article.public-project-row").filter({ hasText: name });
+  await expect(directoryRow.getByText(/^(Anchor pending|Confirmed on-chain)$/)).toBeVisible();
   await page.screenshot({
     path: "test-results/reference-public-desktop.png",
     fullPage: true,

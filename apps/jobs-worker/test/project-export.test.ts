@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type postgres from "postgres";
 import { buildMerkleTree, canonicalize, verifyMerkleProof, type Hex } from "@mpc/canonical";
-import { connectIsolated } from "./helpers/isolated-db.js";
+import { asWorker, connectIsolated } from "./helpers/isolated-db.js";
 import {
   assembleExportPackage,
   buildProjectExport,
@@ -188,15 +188,9 @@ describeDb("export build", () => {
   it("builds a package whose anchor proof verifies against the batch root", async () => {
     const id = await newJob();
 
-    // Built as the worker role: the grants in 0067 are what production has.
-    const role = await sql.reserve();
-    try {
-      await role`SET ROLE mpc_worker`;
-      expect(await buildProjectExport(role as unknown as postgres.Sql, id)).toBe("built");
-    } finally {
-      await role`RESET ROLE`;
-      role.release();
-    }
+    await asWorker(sql, async (worker) => {
+      expect(await buildProjectExport(worker, id)).toBe("built");
+    });
 
     const [stored] = await sql<{ state: string; package: Record<string, any>; manifest_hash: string }[]>`
       SELECT state, package, manifest_hash FROM core.project_export_jobs WHERE id = ${id}

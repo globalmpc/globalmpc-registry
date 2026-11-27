@@ -558,6 +558,27 @@ it("lets anonymous visitors discover named project cards with revocation and sha
   expect(calls.every((call) => call.url.includes("/public/"))).toBe(true);
 });
 
+ it("distinguishes anchor states on the anonymous directory in one list request", async () => {
+  const { PublicProjectDirectory } = await import("../src/components/PublicProjectDirectory");
+  const statuses = ["confirmed", "pending", "unanchored", "unconfirmed", undefined] as const;
+  const calls = mockHttp({
+    "GET /api/v1/public/registries/project?limit=20": {
+      items: statuses.map((anchorStatus, index) => ({
+        ...listItem, publicKey: `MPC-${index}`, entryVersionId: `version-${index}`, anchorStatus,
+      })),
+      nextCursor: null,
+    },
+  });
+  render(<PublicProjectDirectory />);
+  for (const label of [
+    "Confirmed on-chain", "Anchor pending", "Not anchored",
+    "Anchor not confirmed", "Anchor status unavailable",
+  ]) {
+    await screen.findByText(label);
+  }
+  expect(calls).toHaveLength(1);
+});
+
  it("uses the flattened public detail name and safely falls back for non-string names", async () => {
   const calls = mockHttp({
     "GET /api/v1/public/registries/project/MPC-1": { ...entry, projectName: "Copper Hills" },

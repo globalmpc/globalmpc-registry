@@ -412,9 +412,11 @@ describeDb('computed ledger API and approved public boundary',()=>{
     const {createLedgerSweep}=await import(new URL('../../jobs-worker/src/evidence-ledger.ts',import.meta.url).href);
     await fx.sql`INSERT INTO core.jurisdiction_profiles(id,jurisdiction,profile_version,state,environmental_requirement_basis,effective_from)
       VALUES(${randomUUID()},'MNG',1,'approved','Registry basis','2020-01-01')`;
+    await expect(fx.appSql`SELECT id FROM core.worker_ledger_claim_health(${fx.projectA},now())`)
+      .rejects.toMatchObject({code:'42501'});
     let now=Date.now();
-    const worker=postgres(process.env['DATABASE_URL']!,{max:1,connection:{options:'-c role=mpc_worker'},onnotice:()=>{}});
-    try{
+    const {asWorker}=await import(new URL('../../jobs-worker/test/helpers/isolated-db.ts',import.meta.url).href);
+    await asWorker(fx.sql,async(worker:postgres.Sql)=>{
       const sweep=createLedgerSweep(worker,1000,()=>now);
       const first=await sweep();expect(first.ran).toBe(true);
       expect(await sweep()).toEqual({ran:false,recorded:0});
@@ -437,7 +439,7 @@ describeDb('computed ledger API and approved public boundary',()=>{
       const [latest]=await fx.sql`SELECT snapshot FROM core.evidence_ledger_snapshots
         ORDER BY created_at DESC,id DESC LIMIT 1`;
       expect(latest!.snapshot.inputBasis.profile).toEqual([{state:'approved',environmental_requirement_basis:'Registry basis',profile_version:'1'}]);
-    }finally{await worker.end();}
+    });
   });
   it('worker revisits recorded projects without structured claims after catalog changes',async()=>{
     const projectId=randomUUID();
